@@ -25,7 +25,7 @@ entrances, and keeps them in time.
 
 Agents are getting good at *playing*. Nobody is *conducting*. Partitur is the layer that:
 
-- **casts** — assigns each agent the part it plays best
+- **casts** — binds each part to the performer the user judges most suitable
 - **cues** — dispatches work and triggers entrances at the right moment
 - **keeps time** — coordinates concurrency and hand-offs between parts
 - **holds the score** — owns the single, declarative plan every part derives from
