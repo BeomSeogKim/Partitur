@@ -4,3 +4,23 @@ dist/
 .env.*
 *.log
 .DS_Store
+
+# Secrets & credentials — never commit these
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_dsa
+*.pkcs12
+secrets.*
+.secrets/
+credentials.json
+service-account*.json
+.claude/settings.local.json
+.codex/*.local.*
+
+# Local-only git hook config (personal denylist patterns)
+.githooks/deny.local
+.githooks/*.local

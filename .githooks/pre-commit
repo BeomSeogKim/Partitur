@@ -1,0 +1,62 @@
+#!/bin/sh
+# Partitur pre-commit secret guard.
+# Blocks staged content that looks like a credential, token, or private URL.
+# Vendor-neutral: no external tools required (POSIX sh + grep only).
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Extend locally with a git-ignored .githooks/deny.local (one regex per line,
+# '#' comments allowed) for personal identifiers you never want in history.
+#
+# False positive? Re-run the commit with --no-verify after you have confirmed
+# there is genuinely no secret.
+
+set -eu
+
+root="$(git rev-parse --show-toplevel)"
+
+# Added lines in the staged diff, minus the '+++' file headers.
+added="$(git diff --cached --unified=0 --diff-filter=ACM | grep -E '^\+' | grep -Ev '^\+\+\+' || true)"
+[ -z "$added" ] && exit 0
+
+# Structural secret shapes — safe to commit, they contain no personal data.
+patterns='-----BEGIN [A-Z ]*PRIVATE KEY-----
+AKIA[0-9A-Z]{16}
+sk-ant-[A-Za-z0-9_-]{20,}
+sk-[A-Za-z0-9]{32,}
+gh[pousr]_[A-Za-z0-9]{20,}
+github_pat_[A-Za-z0-9_]{20,}
+AIza[0-9A-Za-z_-]{35}
+xox[baprs]-[0-9A-Za-z-]{10,}
+claude\.ai/code/session_[A-Za-z0-9]+'
+
+# Optional local denylist (git-ignored) for personal identifiers.
+if [ -f "$root/.githooks/deny.local" ]; then
+  extra="$(grep -vE '^[[:space:]]*(#|$)' "$root/.githooks/deny.local" || true)"
+  [ -n "$extra" ] && patterns="$patterns
+$extra"
+fi
+
+found=""
+old_ifs="$IFS"
+IFS='
+'
+for pat in $patterns; do
+  [ -z "$pat" ] && continue
+  m="$(printf '%s\n' "$added" | grep -nE -e "$pat" || true)"
+  if [ -n "$m" ]; then
+    found="$found
+  [pattern] $pat
+$(printf '%s\n' "$m" | sed 's/^/    /')"
+  fi
+done
+IFS="$old_ifs"
+
+if [ -n "$found" ]; then
+  echo "✖ pre-commit: potential secret detected in staged changes:" >&2
+  printf '%s\n' "$found" >&2
+  echo "" >&2
+  echo "Commit blocked. Remove the secret, or use --no-verify for a verified false positive." >&2
+  exit 1
+fi
+
+exit 0
