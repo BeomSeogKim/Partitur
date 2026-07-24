@@ -24,3 +24,6 @@ service-account*.json
 # Local-only git hook config (personal denylist patterns)
 .githooks/deny.local
 .githooks/*.local
+
+# Partitur run state (local execution data — see docs/DESIGN.md §1)
+.partitur/runs/
