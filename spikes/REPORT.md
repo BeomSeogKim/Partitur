@@ -226,6 +226,18 @@ The complete matrix produced identical tree OIDs and conflicted-path sets on:
 - Linux/arm64 Git 2.49.1;
 - macOS/arm64 Apple Git 2.50.1.
 
+Two further configurations were recorded later, once CI began running this module with `-v` (#18):
+
+- Linux/x86_64 Git 2.54.0;
+- macOS/arm64 Git 2.55.0.
+
+Their `FANIN_RESULT` payloads were compared programmatically: all 17 cases agree on both result tree
+and clean/conflict outcome, and those outcomes match the matrix above. Two limits on what that shows.
+The comparison moves OS and architecture together with the Git version, so it does not isolate a
+Git-version effect. And it is a comparison *within* that pair — the raw OIDs from the original three
+runs were not retained, so these trees cannot be said to equal the ones 2.47.3/2.49.1/2.50.1
+produced. Each group is internally consistent; the two groups have not been compared to each other.
+
 Alpine 3.19 Git 2.43.7 returned success with empty output for the explicit tree-input invocation. Testing both NUL and legacy newline output and toggling messages did not change that result. The precise first compatible version between 2.43.7 and 2.47.3 was not bisected.
 
 The version dependency is therefore load-bearing even though the three supported versions produced identical trees. More importantly, the custom-driver experiment proves Git version alone is not enough: repository config and the executable behind the driver can change the tree for identical base/ours/theirs trees.
@@ -368,7 +380,7 @@ false. The weaker statement is the one recovery actually needs, and it is what t
 
 1. **All 100 million published number records.** The RFC Appendix B table, the pinned canonicalization vector, and the published first-1,000 checksum passed. Running all 100 million requires generating or downloading roughly 4 GB uncompressed data and adds little boundary coverage beyond the deterministic prefix and Appendix B.
 2. **Exact Git compatibility floor.** Git 2.43.7 failed and 2.47.3 passed. A build-and-test bisect of upstream Git 2.44–2.47 would identify the first compatible release.
-3. **Tree divergence across Git versions.** No divergence appeared across 2.47.3, 2.49.1, and Apple 2.50.1. Version-dependent operability did appear. A larger historical/future CI matrix and real repositories would be needed to prove whether a specific Git upgrade changes a clean result tree.
+3. **Tree divergence across Git versions.** No divergence appeared within the original 2.47.3 / 2.49.1 / Apple 2.50.1 comparison, or between the later Linux/x86_64 Git 2.54.0 and macOS/arm64 Git 2.55.0 runner results. Version-dependent operability did appear. The later comparison changes OS and architecture together with the Git version, and CI records current-runner results without pinning historical versions or comparing outputs across jobs — a changed tree would appear in a job log without failing anything. A controlled same-environment Git-version matrix and real repositories are still needed to determine whether a specific Git upgrade changes a clean result tree.
 4. **Absolute macOS descendant containment.** No unprivileged cgroup-equivalent primitive was found. Establishing an absolute guarantee would require a separately evaluated privileged/launchd/Endpoint-Security containment design, not another process-group tweak.
 5. **Kernel-forced PID reuse.** The exact safety condition was exercised with a live reused PID value and a mismatched recorded start identity, but the host kernel was not churned until it reassigned a killed holder’s PID. A Linux PID namespace with a deliberately low PID limit would make that stress test practical.
 6. **Intel macOS execution.** The public `proc_bsdinfo` layout and syscall are shared, but the no-cgo start-identity code was executed only on arm64 macOS.
