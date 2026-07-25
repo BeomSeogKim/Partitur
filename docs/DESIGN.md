@@ -297,7 +297,8 @@ bindings:
 ## 4. Adapter protocol v0.1
 
 **Packaging.** An adapter is an executable `partitur-adapter-<id>` found on `PATH` or via
-explicit config. Adapters are explicitly enabled; nothing is auto-discovered.
+explicit config. Adapters are explicitly enabled; nothing is auto-discovered. v0.1
+supports macOS and Linux; Windows is out of scope.
 
 **Process model and framing.** The core spawns the adapter **per attempt**. Transport is
 JSON-RPC 2.0 messages as **UTF-8 JSON Lines on stdout**: one request, response, or
@@ -315,7 +316,9 @@ the journal, manifest, or protocol trace; they live in `runs/<id>/session/` with
 `0600` and are deleted with the run. Adapter conformance requires that hints carry no
 long-lived credentials and that diagnostics never echo them.
 
-**Methods.**
+**Methods.** On the wire, `run_id`, `movement_id`, and `attempt_id` are opaque JSON
+strings; the journal's numeric attempt counter (§6) is a core-internal projection, not
+the protocol identifier.
 
 ```text
 probe() -> {
@@ -343,9 +346,13 @@ execute(request) -> streams `event` notifications, then returns result
       instruction,
       verification_expectation, # user intent, forwarded to relevant parts; whether it
       acceptance,               # was met is judged by acceptance, never by the adapter
-      global_invariants         # deterministic projection computed by the core from
-    },                          # goal, finalized resolutions, and policy — not a
+      global_invariants,        # deterministic projection computed by the core from
+                                # goal, finalized resolutions, and policy — not a
                                 # separate score field
+      outputs: [                # this movement's declared outputs — the only
+        { artifact_id, kind }   # artifact ids the attempt may emit
+      ]
+    },
     inputs: [ { artifact_id, kind, path, hash } ],
     feedback: [                 # diagnostics from prior failed attempts (see §7):
       { previous_attempt_id, kind, artifact_id }
@@ -388,7 +395,8 @@ artifact   { artifact_id, path }        # path must be inside output_dir; the co
                                         # immediately copies the file into
                                         # runs/<id>/artifacts/ (see §1 atomicity) and
                                         # treats only that immutable copy as recorded
-proposal   { amendment }                # structured amendment (§2 format); core validates
+proposal   { id, amendment,             # structured amendment (§2 format); core
+             requires_decision }        # validates; id is stable within the attempt
 question   { id, question }             # see blocking handshake below
 ```
 
@@ -399,8 +407,10 @@ from the worktree as a `change_set` (§5). Draft movements may not emit `artifac
 in memory for a human:
 
 - An adapter that needs answers emits `question`(s) (or a `proposal` it cannot proceed
-  without), returns `outcome: waiting_human` with `pending_decision_ids`, and exits. The
-  attempt ends `BLOCKED` (a terminal attempt state — no process stays alive).
+  without, marked `requires_decision: true`), returns `outcome: waiting_human` with
+  `pending_decision_ids`, and exits. A blocking proposal's `id` is a valid member of
+  `pending_decision_ids`, alongside question ids. The attempt ends `BLOCKED` (a terminal
+  attempt state — no process stays alive).
 - The core records `decision.requested` per question and sets the movement to
   `WAITING_HUMAN`.
 - When the human has answered **all** pending decisions (or the amendment is decided),
@@ -425,6 +435,9 @@ enforcement, which is why `probe` reports `enforcement`. If an adapter cannot en
 constraint a movement's grants require, the core **fails closed** — unless the resolved
 cast sets `allow_advisory_enforcement: true` for that performer, in which case the run
 proceeds and the manifest records, per attempt, which constraints were advisory.
+`grants.network` governs the agent's data-plane access — tools, spawned commands, web
+search, MCP and similar — never the vendor's own control-plane connection to its model
+provider, which is always permitted.
 
 ## 5. Workspace model v0.1
 
