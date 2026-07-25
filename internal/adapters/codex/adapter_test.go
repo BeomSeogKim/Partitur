@@ -279,7 +279,8 @@ func TestProbePresentAndMissingBinary(t *testing.T) {
 	if result.Protocol != protocol.ProtocolVersion || result.Adapter.ID != adapterID || result.Adapter.Version != "0.144.4" {
 		t.Fatalf("unexpected probe result: %#v", result)
 	}
-	if result.Enforcement.PathGrants || !result.Enforcement.ReadOnly || !result.Enforcement.NetworkGrants {
+	if result.Enforcement.PathGrants || !result.Enforcement.ReadOnly || !result.Enforcement.NetworkGrants ||
+		result.Enforcement.ShellGrants || result.Enforcement.ReadGrants {
 		t.Fatalf("unexpected enforcement: %#v", result.Enforcement)
 	}
 	if len(result.Capabilities.Models) != 2 {
@@ -289,6 +290,32 @@ func TestProbePresentAndMissingBinary(t *testing.T) {
 	t.Setenv(binaryEnv, filepath.Join(t.TempDir(), "missing-codex"))
 	if _, err := New(io.Discard).Probe(context.Background()); err == nil {
 		t.Fatal("missing binary probe succeeded")
+	}
+}
+
+func TestDiagnosticWriterBuffersSanitizesAndBounds(t *testing.T) {
+	var target bytes.Buffer
+	writer := newDiagnosticWriter(&target)
+	input := []byte("before late-session\n" + strings.Repeat("x", maxDiagnostic*2))
+
+	written, err := writer.Write(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != len(input) {
+		t.Fatalf("written = %d, want %d", written, len(input))
+	}
+	if target.Len() != 0 {
+		t.Fatalf("diagnostics persisted before sanitization: %q", target.String())
+	}
+	if err := writer.Flush("late-session"); err != nil {
+		t.Fatal(err)
+	}
+	if target.Len() > maxDiagnostic {
+		t.Fatalf("persisted diagnostic size = %d", target.Len())
+	}
+	if strings.Contains(target.String(), "late-session") || !strings.Contains(target.String(), "[REDACTED]") {
+		t.Fatalf("diagnostic was not sanitized: %q", target.String())
 	}
 }
 
@@ -552,13 +579,37 @@ func TestExecuteStaleResumeRetriesFresh(t *testing.T) {
 	}
 }
 
+func TestRetryDiagnosticsAreAttemptBoundedAndSanitizedOnce(t *testing.T) {
+	workdir := t.TempDir()
+	outputDir := t.TempDir()
+	configureHelper(t, "stale-sensitive-then-success", outputDir, "", "")
+
+	request := testRequest(workdir, outputDir)
+	request.SessionHint = json.RawMessage(`{"session_id":"stale-session"}`)
+	var diagnostics bytes.Buffer
+	result, err := New(&diagnostics).Execute(context.Background(), request, &recordingSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != protocol.OutcomeCompleted {
+		t.Fatalf("execute result = %#v", result)
+	}
+	if diagnostics.Len() > maxDiagnostic {
+		t.Fatalf("attempt diagnostics size = %d", diagnostics.Len())
+	}
+	if strings.Contains(diagnostics.String(), "future-session") || !strings.Contains(diagnostics.String(), "[REDACTED]") {
+		t.Fatalf("retry diagnostics were not sanitized with final session values: %q", diagnostics.String())
+	}
+}
+
 func TestCapturedSessionIsRedacted(t *testing.T) {
 	workdir := t.TempDir()
 	outputDir := t.TempDir()
 	configureHelper(t, "sensitive", outputDir, "", "")
 
 	sink := &recordingSink{}
-	result, err := New(io.Discard).Execute(context.Background(), testRequest(workdir, outputDir), sink)
+	var diagnostics bytes.Buffer
+	result, err := New(&diagnostics).Execute(context.Background(), testRequest(workdir, outputDir), sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,6 +628,9 @@ func TestCapturedSessionIsRedacted(t *testing.T) {
 	}
 	if !strings.Contains(string(result.SessionHint), "sensitive-session") {
 		t.Fatalf("session hint missing captured ID: %s", result.SessionHint)
+	}
+	if strings.Contains(diagnostics.String(), "sensitive-session") || !strings.Contains(diagnostics.String(), "[REDACTED]") {
+		t.Fatalf("session leaked through diagnostics: %q", diagnostics.String())
 	}
 }
 
@@ -723,8 +777,12 @@ func runHelper() int {
 		}
 	}
 
-	if mode == "stale-then-success" && slices.Contains(os.Args[1:], "resume") {
-		fmt.Fprintln(os.Stderr, "Thread not found")
+	if (mode == "stale-then-success" || mode == "stale-sensitive-then-success") && slices.Contains(os.Args[1:], "resume") {
+		message := "Thread not found"
+		if mode == "stale-sensitive-then-success" {
+			message += " future-session " + strings.Repeat("x", maxDiagnostic)
+		}
+		fmt.Fprintln(os.Stderr, message)
 		return 1
 	}
 	if mode == "failure" {
@@ -739,6 +797,11 @@ func runHelper() int {
 	sessionID := "helper-session"
 	if mode == "sensitive" {
 		sessionID = "sensitive-session"
+		fmt.Fprintln(os.Stderr, "diagnostic before session discovery: "+sessionID)
+	}
+	if mode == "stale-sensitive-then-success" {
+		sessionID = "future-session"
+		fmt.Fprintln(os.Stderr, strings.Repeat("y", maxDiagnostic))
 	}
 	fmt.Printf("{\"type\":\"thread.started\",\"thread_id\":%q}\n", sessionID)
 	fmt.Println(`{"type":"turn.started"}`)

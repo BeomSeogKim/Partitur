@@ -76,6 +76,8 @@ func TestDecodeRequestStrictness(t *testing.T) {
 	}{
 		{"malformed", []byte(`{"jsonrpc":`), ErrParseRequest},
 		{"invalid UTF-8", append([]byte(`{"jsonrpc":"2.0","id":"`), 0xff), ErrParseRequest},
+		{"duplicate top-level key", []byte(`{"jsonrpc":"2.0","id":1,"method":"probe","method":"cancel"}`), ErrInvalidRequest},
+		{"duplicate nested key", []byte(`{"jsonrpc":"2.0","id":1,"method":"cancel","params":{"attempt_id":"x","attempt_id":"y"}}`), ErrInvalidRequest},
 		{"unknown field", []byte(`{"jsonrpc":"2.0","id":1,"method":"probe","extra":true}`), ErrInvalidRequest},
 		{"missing id", []byte(`{"jsonrpc":"2.0","method":"probe"}`), ErrInvalidRequest},
 		{"null id", []byte(`{"jsonrpc":"2.0","id":null,"method":"probe"}`), ErrInvalidRequest},
@@ -88,6 +90,45 @@ func TestDecodeRequestStrictness(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDecodeStrictRejectsDuplicateKeysAndInvalidUTF8(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "top-level duplicate", data: []byte(`{"key":1,"key":2}`)},
+		{name: "nested duplicate", data: []byte(`{"outer":[{"key":1,"key":2}]}`)},
+		{name: "escaped equivalent duplicate", data: []byte(`{"key":1,"\u006bey":2}`)},
+		{name: "invalid UTF-8", data: append([]byte(`{"key":"`), 0xff, '"', '}')},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var value any
+			if err := DecodeStrict(test.data, &value); err == nil {
+				t.Fatal("expected strict decoding error")
+			}
+		})
+	}
+
+	var value any
+	if err := DecodeStrict([]byte(`{"outer":[{"key":1},{"key":2}]}`), &value); err != nil {
+		t.Fatalf("valid nested object rejected: %v", err)
+	}
+}
+
+func TestEnforcementExtensionDefaultsFailClosed(t *testing.T) {
+	var enforcement Enforcement
+	if err := DecodeStrict([]byte(`{"path_grants":true,"read_only":true,"network_grants":true}`), &enforcement); err != nil {
+		t.Fatal(err)
+	}
+	if !enforcement.PathGrants || !enforcement.ReadOnly || !enforcement.NetworkGrants ||
+		enforcement.ShellGrants || enforcement.ReadGrants {
+		t.Fatalf("unexpected enforcement defaults: %#v", enforcement)
+	}
+	if ProtocolVersion != 1 {
+		t.Fatalf("protocol version = %d, want 1", ProtocolVersion)
 	}
 }
 

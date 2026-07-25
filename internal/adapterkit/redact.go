@@ -9,6 +9,7 @@ import (
 )
 
 const MaxEventMessageBytes = 4 << 10
+const MaxDiagnosticBytes = 64 << 10
 
 var (
 	bearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
@@ -18,6 +19,15 @@ var (
 // SanitizeMessage redacts common credential shapes and known sensitive values,
 // then returns valid UTF-8 capped to the event message limit.
 func SanitizeMessage(message string, sensitive ...string) string {
+	return TruncateUTF8(sanitize(message, sensitive...), MaxEventMessageBytes)
+}
+
+// SanitizeDiagnostic redacts diagnostics and caps their persisted size.
+func SanitizeDiagnostic(message string, sensitive ...string) string {
+	return TruncateUTF8(sanitize(message, sensitive...), MaxDiagnosticBytes)
+}
+
+func sanitize(message string, sensitive ...string) string {
 	message = strings.ToValidUTF8(message, "\uFFFD")
 	message = bearerPattern.ReplaceAllString(message, "Bearer [REDACTED]")
 	message = secretPattern.ReplaceAllString(message, "$1$2[REDACTED]")
@@ -26,7 +36,7 @@ func SanitizeMessage(message string, sensitive ...string) string {
 			message = strings.ReplaceAll(message, value, "[REDACTED]")
 		}
 	}
-	return TruncateUTF8(message, MaxEventMessageBytes)
+	return message
 }
 
 // TruncateUTF8 caps a string by bytes without splitting a UTF-8 encoding.

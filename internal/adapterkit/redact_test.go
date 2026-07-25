@@ -20,6 +20,23 @@ func TestSanitizeMessageRedactsAndCaps(t *testing.T) {
 	}
 }
 
+func TestSanitizeDiagnosticRedactsAndKeepsDiagnosticBound(t *testing.T) {
+	message := "late-session Authorization: Bearer abc123 " + strings.Repeat("界", MaxDiagnosticBytes)
+	got := SanitizeDiagnostic(message, "late-session")
+	if strings.Contains(got, "late-session") || strings.Contains(got, "abc123") {
+		t.Fatalf("diagnostic leaked sensitive data: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("diagnostic redaction marker missing: %q", got)
+	}
+	if len(got) > MaxDiagnosticBytes {
+		t.Fatalf("diagnostic length = %d", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("diagnostic is not valid UTF-8")
+	}
+}
+
 func TestTruncateUTF8SmallLimits(t *testing.T) {
 	for limit := 0; limit < 16; limit++ {
 		got := TruncateUTF8("界界界界界界", limit)
