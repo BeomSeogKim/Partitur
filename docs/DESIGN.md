@@ -2589,15 +2589,35 @@ no insignificant whitespace, ES6 number serialization.
   output. Sorting is by UTF-16 code unit per JCS, not by code point.
 - **YAML → JSON mapping.** `yamlsafe` parses one YAML 1.2 representation graph, then rejects —
   **at its own API boundary, before constructing the JSON AST** — duplicate keys, anchors,
-  aliases, merge keys, custom tags, and every resolved scalar tag other than `!!str`, `!!bool`,
-  `!!null`, `!!int`, or `!!float`. It validates numeric scalars as finite representable binary64
-  values. These are `yamlsafe` decode errors: a general-purpose YAML parser builds its
+  aliases, merge-tagged keys, custom tags, and every resolved scalar tag other than `!!str`,
+  `!!bool`, `!!null`, `!!int`, or `!!float`. A quoted or explicitly `!!str`-tagged `<<` is an
+  ordinary string key and remains legal. It validates numeric scalars as finite representable
+  binary64 values. These are `yamlsafe` decode errors: a general-purpose YAML parser builds its
   representation graph first and need not fail on them itself, so "rejected at parse time" would
   be unimplementable as literally stated.
 
   YAML 1.2 resolves a sexagesimal-looking plain scalar such as `12:34:56` as a **string**, not a
-  numeric tag, so tag filtering alone does not catch it — `yamlsafe` rejects that lexical form
-  explicitly.
+  numeric tag, so tag filtering alone does not catch it. The rejected form is specifically **YAML
+  1.1's base-60 integer shape** — `[-+]?[1-9][0-9_]*(:[0-5]?[0-9])+` — and not any string containing
+  a colon: `12:99` and `0:00` are ordinary strings and stay legal. Naming the shape matters, because
+  "sexagesimal-looking" read literally would reject ordinary data. Underscores are legal only in
+  the first component, so `1_2:34` is rejected while `12:3_4` remains an ordinary string.
+
+  **Plain timestamps are an additional Partitur lexical restriction, not an inherited resolver
+  choice.** An unquoted scalar is rejected when it is a calendar-valid `YYYY-M-D` date, or that
+  date followed by either `T`/`t` plus `HH:M:S[.fraction]` and `Z` or a `±HH:MM` offset, or a
+  space plus `HH:M:S[.fraction]` without an offset. This rule is applied independently of the tag
+  assigned by the YAML library. Timestamp-shaped string data must therefore be quoted or explicitly
+  tagged `!!str`.
+
+  **Tag filtering alone is insufficient for range errors, too.** A YAML implementation may resolve an
+  overflowing plain scalar such as `1e9999` to `!!str` *after* its own binary64 conversion fails, so
+  it arrives as a legal string rather than a rejected number. `yamlsafe` therefore additionally range-
+  checks plain scalars that *look* numeric, rather than trusting the resolved tag.
+
+  **Collection tags** are filtered on the same principle as scalars: explicit `!!seq` and `!!map` are
+  permitted because they denote exactly what the JSON AST already has, and every other collection tag —
+  `!!set`, `!!omap`, `!!pairs` — is rejected, since none has a JSON counterpart.
 
   Block scalars keep their chomping semantics: clip (`|`, `>`) preserves the final newline, strip
   (`|-`) removes it, keep (`|+`) preserves additional trailing newlines.
@@ -2688,9 +2708,11 @@ version alongside the result would not achieve this — the hash itself must dep
 
 **Recomputation across versions.** When the core recomputes a historical identity — the
 executed-dependency check of §9 is the main case — it uses the **version tuple recorded with
-that attempt**, not the current one. If the running binary no longer implements that tuple, the
-run fails closed with `unsupported_run_format` rather than silently comparing hashes computed
-under different rules.
+that attempt**, not the current one. It dispatches the projector identified by
+`(domain, projection_version)` and hashes that projector's result; no generic API may pair a
+caller-supplied projection AST with a historical version label. If the running binary cannot
+dispatch either the recorded projector or canonical encoder, the run fails closed with
+`unsupported_run_format` rather than silently comparing hashes computed under different rules.
 
 ## A.3 Independent versions
 
