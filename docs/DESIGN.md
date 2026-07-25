@@ -23,9 +23,8 @@ for *why* a rule exists, never for what the rule is.
 | Adapter protocol (`protocol:`) | `1` | monotonically extended in §4; absent booleans decode as `false`, so no bump |
 | Adapter result envelope | `1` | unchanged (adapter-internal) |
 
-**Rules awaiting a bounded implementation spike.** Three rules below are specified as
-the intended contract but must be confirmed against real behaviour before they are
-frozen; each is marked **[SPIKE]** at its definition:
+**Three rules were gated on a bounded implementation spike.** All three have now run against real
+behaviour:
 
 1. **Canonical encoding and numeric range** (Appendix A.1) — against JCS conformance vectors
    and a YAML corpus.
@@ -34,8 +33,19 @@ frozen; each is marked **[SPIKE]** at its definition:
 3. **Execution-driver lease, wake-up, and process supervision** (§6, §4) — lease owner
    verification, mid-`execute` interruption, and portable vendor-descendant cleanup.
 
-A spike that contradicts the specified rule amends this document before implementation
-proceeds.
+Each is now stated as its spike confirmed or corrected it, and the `[SPIKE]` markers are gone.
+Full method, matrices, and reproduction: [`spikes/REPORT.md`](../spikes/REPORT.md).
+
+What the spikes **changed** rather than confirmed: A.1's YAML
+rejection point and its negative-zero/underflow ingress policy; §5's merge invocation, Git floor,
+custom-driver policy, and the fact that Git version alone does not determine the composed tree;
+§6's fencing, which requires a per-mutation compare-and-swap rather than a single act; and §4's
+descendant-cleanup claim, which was absolute and is now correctly scoped to conforming adapters.
+
+Six questions remain undetermined and are recorded as such rather than assumed: the exact Git
+compatibility floor between 2.43 and 2.47, whether any Git upgrade changes a clean result tree,
+absolute macOS descendant containment, kernel-forced PID reuse under churn, Intel-macOS execution
+of the start-identity path, and the full 100-million-record JCS number corpus.
 
 **Sections not yet exhaustive.** The places below state their contracts in prose sufficient to
 review the design but **not** sufficient to implement serialization against. They are completed
@@ -68,7 +78,6 @@ contract that is still moving:
 - Two compiler rules the identity work depends on: at most one declared `artifact` criterion per
   ordinary output within a movement, and rejection of an `artifact` criterion referencing a
   `change_set` output.
-- Numeric admissibility for raw RFC 6902 patch-operation JSON (A.1).
 
 ## 0. Ground rules inherited from the concept
 
@@ -111,6 +120,10 @@ corrupt evidence by writing where evidence lives:
                                # below); a retry never overwrites earlier evidence
       session/                 # session hints, mode 0600 (see §4 privacy)
       driver.lease             # execution-driver lease (§6); absent when no driver runs
+      authority.json           # execution-authority checkpoint: current epoch + token (§6).
+                               #   A PROJECTION of authority.granted / run.* events, like the
+                               #   manifest — rebuildable, never the authority itself. The
+                               #   token is the one value not journaled (§6)
       attempts/<attempt-id>/
         stderr                 # sanitized vendor/adapter diagnostics (§4 privacy)
         trace.jsonl            # protocol trace
@@ -700,8 +713,9 @@ will not change" — **not** "every line already exists". Implementation status:
 - Most rules below are implemented and conformance-tested in the adapter kit.
 - The two marked ⚠ are specified target behaviour on the §4 code follow-up.
 - The **core-side client is not implemented at all yet.**
-- Other known adapter-side follow-ups: `shell_grants` / `read_grants` reporting, and
-  pre-persistence stderr sanitization. Process supervision remains a spike, not a follow-up.
+- Adapter-side follow-ups are closed: `shell_grants` / `read_grants` reporting and
+  pre-persistence stderr sanitization are implemented. Process supervision is settled below —
+  session ownership plus conformance, not containment.
 
 `stderr` is diagnostics only and never carries protocol.
 
@@ -1006,18 +1020,44 @@ So "diagnostics never enter the journal" means the raw stream. Typed, sanitized,
 protocol events are journaled deliberately, because a later GUI needs them; they carry no
 authority and no projection ever reads them.
 
-**Process supervision. [SPIKE]** The adapter and the vendor process it spawns are separate
-process groups, so hard-killing a wedged adapter can orphan the vendor group. Termination is
-layered: the adapter MUST handle `SIGTERM` by terminating its vendor process group before
-exiting, and the core's outer grace period MUST exceed the adapter's own
-`SIGTERM`→`SIGKILL` grace.
+**Process supervision.** The adapter and the vendor process it spawns are separate process
+groups, so hard-killing a wedged adapter can orphan the vendor group. Termination is layered:
+the adapter MUST handle `SIGTERM` by terminating its vendor process group before exiting, and the
+core's outer grace period MUST exceed the adapter's own `SIGTERM`→`SIGKILL` grace.
 
-The **requirement** is that no vendor descendant survives outer termination — an orphaned
-agent holding repository authority is not an acceptable end state. The **mechanism** is
-deliberately not pinned here: the core cannot enumerate descendants at spawn time (the
-vendor process does not exist yet), and macOS offers no cgroup-equivalent ownership
-primitive. The portable discovery and ownership mechanism is settled by the
-execution-driver/process-supervision spike (§6).
+Ownership is established by **session**, which the core can do at spawn time even though it
+cannot enumerate descendants that do not exist yet:
+
+1. The core starts each adapter as a **new POSIX session leader** (`setsid`).
+2. A conforming adapter may put the vendor in its own **process group**, but MUST NOT create —
+   or permit a vendor descendant to create — another **session**.
+3. On outer termination the core enumerates processes, selects the adapter's session by SID,
+   signals `SIGTERM` to every group and verified PID, waits the outer grace, then repeatedly
+   `SIGKILL`s and re-enumerates until no live session member remains.
+4. PID and start identity (§6) are re-checked before each individual signal, to narrow the
+   PID-reuse race.
+
+**This is conformance cleanup, not containment — stated honestly because the difference matters.**
+A descendant that calls `setsid()` receives a new SID and drops out of the outer session's
+selectable set on both platforms; process enumeration cannot close that race once a child has
+daemonized and lost its ancestry relationship. So:
+
+- Against a **conforming** adapter chain — including a wedged adapter whose vendor sits in a
+  separate process group — the sweep leaves zero survivors on macOS and Linux.
+- Against a descendant that deliberately escapes its session, it does not. That is not a gap to
+  patch with another process-group tweak: it is the trust boundary this section already states.
+  Adapters are trusted executables running with the user's privileges, so **an adapter that
+  deliberately escapes supervision is malicious adapter behaviour, which is explicitly outside
+  the core's security boundary.** Rule 2 above is therefore an adapter *conformance* requirement.
+- Where an absolute ownership set is available it should be used: Linux **cgroup v2**, when
+  Partitur has permission to create one. macOS has no unprivileged equivalent, so an absolute
+  guarantee there would need a separately designed privileged containment backend — out of scope
+  for v0.2 (§10).
+- **Unverifiable state fails closed for that execution.** If process enumeration or start-identity
+  verification is unavailable — sandbox policy, cross-user restriction, a read that errors — the
+  core reports the sweep as *incomplete* and fails the attempt rather than claiming zero survivors.
+  Conformance cleanup being the design's ceiling is one thing; asserting a clean result from state
+  the core could not read would be another, and it is the assertion that would be dangerous.
 
 ## 5. Workspace model v0.2
 
@@ -1063,7 +1103,7 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   recorded together with the producing attempt id and the ref that pins the commit
   (`refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset`, §1). A patch may be
   exported for inspection or application, but it is never the identity.
-- **Fan-in. [SPIKE]** When a movement depends on several movements, contributing change
+- **Fan-in.** When a movement depends on several movements, contributing change
   sets are composed in a deterministic order — topological, ties broken by declaration
   order in the score — each merged **against its own recorded base**, not against a shared
   common base, because a dependency's change set was itself produced on top of its
@@ -1090,13 +1130,67 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   be a wait with no decision to answer and no resolution event, so v0.2 fails deterministically
   instead. Changes from failed, cancelled, or superseded attempts are never candidates.
 
-  Because `candidate_id` is a *content* identity (§8), the composition algorithm and the
-  Git merge implementation version are recorded in
-  `candidate_composition_dependency_hash` — otherwise a Git upgrade could silently alter
-  the candidate tree for identical inputs. **[SPIKE]** the exact merge invocation must be
-  confirmed against rename/rename, rename/delete, file modes, symlinks, submodules,
-  `.gitattributes`, binary files, configured merge drivers, and macOS/Linux consistency
-  before this rule is frozen.
+  **The exact invocation is normative**, because the composed tree depends on it. Each step runs,
+  in a **non-bare** repository with system and global Git config isolated:
+
+  ```sh
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_ATTR_SOURCE=<T> \
+  git --git-dir=<composition-git-dir> --work-tree=<empty-work-tree> \
+      merge-tree --write-tree --merge-base=<C.base_tree> \
+      --name-only -z --no-messages <T> <C.result_tree>
+  ```
+
+  - Exit `0`: the first NUL-delimited field is the result tree.
+  - Exit `1`: the first field is Git's conflict tree, the rest are the exact conflicted paths —
+    NUL delimiting is required because a path may contain a newline.
+  - Any other exit is an **infrastructure failure**, not a composition conflict, and must not be
+    reported as one.
+
+  `GIT_ATTR_SOURCE=<T>` is required so attributes are read from the composed *ours* tree rather
+  than an unrelated checkout. The repository must be **non-bare** — a bare one fails this
+  invocation outright (`BUG: attr.c: non-INDEX attr direction in a bare repo`) — and it is always
+  the **core-created temporary** repository described below, never the source repository, whose
+  configuration must never be consulted. `git read-tree -m` is **not** sufficient: it provides
+  neither the modern content merge and rename handling nor conflict evidence.
+
+  The supported **Git floor is 2.47** until a narrower floor is separately proved.
+
+  **External custom merge drivers are rejected, and the rejection is enforced at runtime.** A
+  repository-configured driver changes the result tree for identical base/ours/theirs trees, and it
+  makes composition execute an arbitrary command named by repository configuration — from outside
+  the input trees entirely. v0.2 refuses rather than trying to pin driver identity.
+
+  Isolating system and global config is **not sufficient**: repository-local `.git/config` and its
+  includes, worktree config, and `$GIT_DIR/info/attributes` are all still consulted, and the last
+  takes precedence over in-tree `.gitattributes`. Git also lets `merge.default` select a driver
+  where an attribute is unspecified. So a validation-time check followed by a merge in the live
+  source repository would be a TOCTOU hole — a driver added mid-run would apply.
+
+  The enforcement is therefore structural rather than a check:
+
+  1. **Composition never reads the live repository's configuration.** Each step runs in a
+     core-created non-bare temporary repository with core-owned local config, populated only with
+     the objects it needs. `.git/config`, its includes, worktree config, and
+     `$GIT_DIR/info/attributes` are the core's, not the project's.
+  2. `merge.default` is forced to an allowed built-in or left unset.
+  3. Over the **union of paths** in `C.base_tree`, `T`, and `C.result_tree`, the core runs
+     `git check-attr --source=<T> --stdin -z merge` and permits only *unspecified*, *set*, *unset*,
+     and the built-ins `text`, `binary`, `union`. Any other value is rejected before the merge
+     runs.
+  4. The normative merge then runs against exactly that immutable configuration.
+
+  Consequently a driver added to the project **after** run start cannot affect the current
+  composition at all, because the live config is never consulted. `validate` and run-start report
+  any `merge.<name>.driver`, unsafe `merge.default`, or non-built-in `merge=<name>` they find, but
+  that report is **early feedback, not the enforcement** — the enforcement is that the value could
+  never have been read.
+
+  Because `candidate_id` is a *content* identity (§8), the composition dependency records **more
+  than the Git version**: the exact Git build, object format, merge invocation and strategy
+  options, `merge.renormalize`, and every applicable repository merge-config input. Version alone
+  is demonstrably insufficient — `merge.renormalize` alone changes the result tree for identical
+  inputs.
 - Partial changes from failed, cancelled, or superseded attempts are discarded — they
   never leak into the next attempt. A fallback performer starts from the same clean
   base, never from the failed performer's dirty workspace.
@@ -1260,10 +1354,62 @@ share a mechanism:
   updates, snapshot writes, CAS operations. It is held only for the duration of a mutation,
   never across a human wait and never across an adapter execution.
 - A per-run **execution-driver lease** (`runs/<run-id>/driver.lease`, §1) is held for the
-  whole active execution episode by whichever process is driving attempts. **[SPIKE]** A
-  PID alone is insufficient — PIDs are reused and a stale file would masquerade as a live
-  owner — so the lease records verified owner identity: PID plus process-start identity
-  plus a random incarnation token, all re-verified before the lease is honoured.
+  whole active execution episode by whichever process is driving attempts. A PID alone is
+  insufficient — PIDs are reused and a stale file would masquerade as a live owner — so the lease
+  records PID, **process-start identity**, a random **incarnation token**, and a monotonic
+  **authority epoch**, all re-verified before it is honoured.
+
+  Process-start identity, portable and without cgo:
+
+  | Platform | Source |
+  |---|---|
+  | Linux | `/proc/sys/kernel/random/boot_id` **plus** `/proc/<pid>/stat` field 22 (start ticks). The boot id is required because a lease can outlive a reboot, where PID + start ticks alone can collide. Field 22 must be parsed after the final `)`, since the command name may contain spaces and parentheses. |
+  | macOS | `proc_pidinfo(pid, PROC_PIDTBSDINFO)` → `pbi_start_tvsec` / `pbi_start_tvusec`. |
+
+  Sandbox or cross-user policy can deny process inspection. **Failure to read or re-verify
+  identity is "owner not safely verifiable" — never proof that the recorded owner is live.**
+
+  **Fencing is a compare-and-swap on every *driver-authorized* mutation, not a one-time act.**
+  The scope matters: `answer`, gate and amendment approvals, `amend`, `cancel`, `apply`, and
+  `promote-score` legitimately mutate state **without** holding the lease (§7 command authority),
+  so a universal lease check would forbid the commands the design depends on. What requires the
+  CAS is exactly the set of mutations that constitute execution — attempt lifecycle, evidence,
+  change sets, acceptance, candidate materialization, budget intervals.
+
+  For those, while holding the repository state lock, the core checks: the run is nonterminal, the
+  authority epoch and token match the durable authority record, and the PID and start identity
+  still match. Non-driver commands take the same state lock but authorize against run lifecycle
+  instead.
+
+  **The epoch is journaled; the token never is.** `driver.lease` is removable — that is the point
+  of reclamation — so an epoch held only there could be reused by a fenced incarnation after the
+  lease vanished. The monotonic `authority_epoch` is therefore recorded in the journal by
+  `authority.granted`, and every event that fences carries the epoch it moved to, so the current
+  epoch is a **projection** like every other state (§1). `runs/<run-id>/authority.json` is a
+  fsynced checkpoint of that projection, not its authority.
+
+  The **token** is deliberately excluded from the journal: it exists to prove that a process is the
+  same incarnation that acquired the lease, so journaling it would let any journal reader forge
+  authority. It lives in `driver.lease` and in the owner's memory only.
+
+  Consequently the CAS checks four things together, and **`driver.lease` must exist and match** —
+  otherwise a driver whose lease was released but whose process is still live would remain
+  authorized:
+
+  ```text
+  run is nonterminal
+  AND authority_epoch == the current epoch projected from the journal
+  AND driver.lease exists, and its epoch and token match
+  AND the recorded PID and process-start identity still match
+  ```
+
+  **Fencing and terminalization are one transition, under the canceller's authority.** Revoking
+  the epoch and then appending `run.cancelled` as a second step is impossible: the canceller does
+  not hold the driver authority the CAS demands, and the fenced driver no longer does either, so
+  the append could never pass. Instead, holding the state lock, the canceller performs a single
+  transition — increment the epoch, revoke the token, append `run.cancelled` — authorized by run
+  lifecycle rather than by the lease. There is never an intermediate state in which the run is
+  fenced but not terminal.
 
 A run is *active* while nonterminal (`RUNNING` or `WAITING_HUMAN`). v0.2 allows one active
 run per repository: `partitur run` refuses to start while one exists (resume or cancel it
@@ -1280,7 +1426,7 @@ lease, `partitur cancel` completes `run.cancelled` itself rather than leaving a 
 active until someone happens to `resume`. Recovery is therefore only needed for a crash
 between the request and its terminalization.
 
-**The control channel. [SPIKE]** With no daemon, nothing waits in memory, so out-of-band
+**The control channel.** With no daemon, nothing waits in memory, so out-of-band
 control — cancellation, and revision approval that supersedes a nonterminal attempt — needs a
 durable path that reaches a driver mid-execution:
 
@@ -1288,22 +1434,28 @@ durable path that reaches a driver mid-execution:
    (`cancel.requested`, or `amendment.approved` for a supersede).
 2. It then wakes the verified current lease holder as a **best-effort latency
    optimization** — never as the mechanism of record.
-3. The driver watches control state continuously while an adapter execution is pending.
-   Polling only between criteria cannot interrupt a long `execute`, so this is a
-   continuous watch, not a checkpoint.
+3. The driver watches control state continuously while an adapter execution is pending —
+   a separate goroutine tailing the authoritative journal while the stdout reader stays blocked.
+   Polling only between criteria cannot interrupt a long `execute`, so this is a continuous
+   watch, not a checkpoint. Measured append-to-detection latency at a 20 ms poll interval was
+   22 ms on macOS and 24 ms on Linux, bounded by poll interval plus scheduling. A signal can
+   prompt an immediate read; correctness never depends on it.
 4. On observing the request the driver issues protocol `cancel`, awaits the `execute`
    response, then applies the outer termination grace and process-tree sweep (§4).
 5. If no driver is alive, the cancelling command itself completes the terminalization; a
    later `resume` observes an already-terminal run and launches nothing.
 6. **A live but wedged owner** — lease verified, yet the driver never acknowledges the journal —
-   is the case a responsive/dead dichotomy misses. The *safety contract* is fixed here even
-   though the mechanism belongs to the lease spike: after a bounded acknowledgement deadline the
-   canceller re-verifies the lease owner, terminates it and its process tree (§4), **fences that
-   lease incarnation out of all further mutation**, closes any open budget interval by the
-   recovery rule above, and only then appends `run.cancelled` if the owner has not already. The
-   invariant that must never break: **the run is never declared cancelled while the old
-   execution authority could still mutate it.** Fencing is what makes that safe — without it a
-   revived driver could append after terminalization.
+   is the case a responsive/dead dichotomy misses. After a bounded acknowledgement deadline the
+   canceller re-verifies the lease owner and terminates it and its process tree (§4). Then,
+   **holding the repository state lock, it performs one transition**: increment the authority
+   epoch, revoke the token, close any open budget interval, remove the lease, and append
+   `run.cancelled` — all authorized by run lifecycle, not by the lease (§6 fencing).
+
+   It must be one transition, not a sequence. Fencing first and appending afterwards cannot work:
+   once the epoch is bumped, neither the canceller nor the fenced driver holds driver authority,
+   so a subsequent append would fail its own check. The invariant this preserves: **the run is
+   never declared cancelled while the old execution authority could still mutate it, and never
+   left fenced without being terminal.**
 
 The journal is the authority; the signal only reduces latency. Because supersede needs the
 identical mechanism, this is one general control channel rather than a cancel-only feature.
@@ -1593,6 +1745,9 @@ movement, deduplicated, in the deterministic fan-in order of §5, into
 `(base_tree, result_tree)`:
 
 ```text
+# The candidate additionally records candidate_composition_dependency_hash, which binds the
+# composition ENVIRONMENT (A.4) — the same trees composed under a different Git build or merge
+# configuration are not the same composition (§5).
 candidate_id = H("partitur/candidate",
                  { base_tree, result_tree, ordered_change_sets })      # Appendix A
 ```
@@ -1860,7 +2015,8 @@ candidate-compatible iff
        candidate_composition_dependency_hash =
          H("partitur/candidate-composition",
            { base_tree, ordered contributing movement ids,
-             corresponding change_set_ids, composition_algorithm_version })
+             corresponding change_set_ids, composition_algorithm_version,
+             composition_environment_hash })          # A.4 — Git build and merge config
      must equal the hash recorded with the candidate. Changes altering the composition —
      movement order, `needs`, contributor membership — are incompatible even if the
      resulting tree would coincidentally be identical;
@@ -1948,8 +2104,11 @@ commands), lifecycle hooks, vector stores, nested delegation, secret storage
 (meaning: no vault; opaque session state is still handled per §4 privacy), prompt
 libraries, dirty-source runs, non-empty `side_effects`, run deletion and ref pruning (§1),
 reopening a terminal run, invalidation-and-replay of successful attempts (§9), widening the
-auto-approval envelope with glob-subset or criterion-strengthening proofs, and an OS-sandbox
-wrapper for enforcement (a separate security milestone — §4 fails closed without it). See
+auto-approval envelope with glob-subset or criterion-strengthening proofs, an OS-sandbox
+wrapper for enforcement (a separate security milestone — §4 fails closed without it), external
+custom merge drivers (§5), and a **privileged containment backend for absolute descendant
+ownership on macOS** — Linux cgroup v2 covers this where permission allows, but macOS has no
+unprivileged equivalent, so §4's supervision is conformance cleanup rather than containment. See
 CONCEPT's minimal-harness test; each of these fails it or belongs to score/extension space.
 
 ---
@@ -1960,7 +2119,7 @@ Normative. Every identity in Partitur is a hash of a canonical encoding of an ex
 specified projection. Two implementations of the encoding is a silent correctness bug, so
 there is one encoder and every caller names a domain.
 
-## A.1 Canonical encoding **[SPIKE]**
+## A.1 Canonical encoding
 
 Canonical JSON is **RFC 8785 (JCS)**: UTF-8, object keys sorted by UTF-16 code unit,
 no insignificant whitespace, ES6 number serialization.
@@ -1979,14 +2138,42 @@ no insignificant whitespace, ES6 number serialization.
     unhashable.
 - **Unicode.** No normalization is applied; byte-identical input yields byte-identical
   output. Sorting is by UTF-16 code unit per JCS, not by code point.
-- **YAML → JSON mapping.** `yamlsafe` decoding produces only strings, numbers, booleans, null,
-  sequences, and mappings. **Schema-controlled numeric fields** then validate as integers in the
-  safe range (rule 13); **opaque `extensions` subtrees** are not schema-controlled, so they
-  preserve any JCS/I-JSON-admissible number, fractions included. Block scalars keep YAML clip
-  semantics for the trailing newline and become plain JSON strings. Timestamp, binary,
-  sexagesimal, and every other implicit tag is **rejected at parse time**, so no
-  ambiguously typed value ever reaches the encoder. Duplicate keys, anchors, aliases, merge
-  keys, and custom tags are rejected (§1).
+- **YAML → JSON mapping.** `yamlsafe` parses one YAML 1.2 representation graph, then rejects —
+  **at its own API boundary, before constructing the JSON AST** — duplicate keys, anchors,
+  aliases, merge keys, custom tags, and every resolved scalar tag other than `!!str`, `!!bool`,
+  `!!null`, `!!int`, or `!!float`. It validates numeric scalars as finite representable binary64
+  values. These are `yamlsafe` decode errors: a general-purpose YAML parser builds its
+  representation graph first and need not fail on them itself, so "rejected at parse time" would
+  be unimplementable as literally stated.
+
+  YAML 1.2 resolves a sexagesimal-looking plain scalar such as `12:34:56` as a **string**, not a
+  numeric tag, so tag filtering alone does not catch it — `yamlsafe` rejects that lexical form
+  explicitly.
+
+  Block scalars keep their chomping semantics: clip (`|`, `>`) preserves the final newline, strip
+  (`|-`) removes it, keep (`|+`) preserves additional trailing newlines.
+- **Numeric ingress.** The split between schema-controlled and opaque values happens **before**
+  encoding, so one encoder serves both:
+
+  This applies to **every** JSON or YAML ingress path that feeds a hash — score and cast YAML,
+  opaque `extensions` subtrees, and the raw RFC 6902 operations hashed pre-validation for
+  `partitur/patch-operations`. A patch is untrusted input, so it gets the strictest treatment, not
+  an exemption.
+
+  1. Decode every number to a finite IEEE-754 binary64 value.
+  2. At schema-controlled paths, validate integral and within `[-(2^53 - 1), 2^53 - 1]`
+     (compiler rule 13).
+  3. Leave opaque `extensions` values as finite binary64, fractions and out-of-safe-range
+     magnitudes included.
+
+  **Rejected at ingress, never encoded:** NaN, ±Infinity, overflow (`1e9999`), non-zero values
+  that underflow to zero (`1e-9999`), lone UTF-16 surrogates, and **negative-zero spellings**.
+  JCS maps negative zero to `0`, and RFC 8785 verified erratum 7920 advises rejecting `-0` at the
+  parser; Partitur follows the stricter rule, because otherwise `-0` and `0` would silently share
+  an identity. A programmatic negative zero that reaches the encoder still serializes as `0`.
+
+  Decimal lexical precision is **not** preserved — JCS canonicalizes the parsed binary64 value.
+  A value needing precision beyond binary64 must be carried as a string.
 - **Omitted vs explicit defaults.** A projection is built from the **validated AST after
   defaults are applied**, so an omitted field and an explicitly written default produce the
   identical hash. Optional fields with no default are omitted from the projection entirely
@@ -2008,9 +2195,12 @@ no insignificant whitespace, ES6 number serialization.
   distinct collection-order change when the movement sequence differs — so a pure reorder is
   neither invisible to the hash nor misattributed to a content edit.
 
-**[SPIKE]** the encoder must be validated against the published JCS conformance vectors and
-against a YAML corpus exercising block scalars, quoting forms, and the rejected tag set
-before this section is frozen.
+**Confirmed by spike.** A Go JCS encoder reproduced RFC 8785's Appendix B vectors, the published
+canonical file vectors, and the published first-1,000-number checksum. The UTF-16 ordering rule is
+observably load-bearing: for keys `U+E000` and `U+10000`, naive Go string comparison yields
+`U+E000, U+10000` while JCS yields `U+10000, U+E000`, because `U+10000` begins with UTF-16 unit
+`D800`. Sorting by Go string order would silently produce a different identity. Composed `Å` and
+decomposed `A + U+030A` likewise produced different canonical bytes, confirming no normalization.
 
 ## A.2 Hash construction
 
@@ -2056,7 +2246,8 @@ Every journal event that records an identity also records the versions it used.
 | `partitur/acceptance-spec` | ⚠ *provisional* — the **effective compiled acceptance plan** (§7): declared criteria with replacements applied, plus core-generated integrity checks, in declaration order, plus `human_gate`. Exact projection deferred. |
 | `partitur/change-set` | `{base_tree, result_tree}` |
 | `partitur/candidate` | `{base_tree, result_tree, ordered_change_sets: [change_set_id]}` |
-| `partitur/candidate-composition` | `{base_tree, ordered_contributing_movement_ids, ordered_change_set_ids, composition_algorithm_version}` |
+| `partitur/candidate-composition` | `{base_tree, ordered_contributing_movement_ids, ordered_change_set_ids, composition_algorithm_version, composition_environment_hash}` |
+| `partitur/composition-environment` | `{git_build, object_format, merge_invocation, strategy_options, merge_renormalize, effective_merge_config}` — §5. Separate because both the candidate-level and the movement-level composition identity need it, and because the environment can change while every tree stays the same. |
 | `partitur/execution-dependency` | ⚠ *provisional* — A.5 |
 | `partitur/patch-operations` | The raw RFC 6902 operations array, for pre-validation rejection records only (§9). |
 
@@ -2167,7 +2358,7 @@ Each synthesized event is keyed so a repeated recovery is a no-op.
 | `run.started` | ✓ | run_id | — | Run → `RUNNING`; records base commit/tree, score snapshot hash, resolved-cast hash, root-score hash for CAS |
 | `run.succeeded` | ✓ | run_id | Run `RUNNING` | Run → `SUCCEEDED`. On the **waived** path also carries the full candidate payload and binding (§8) |
 | `run.failed` | ✓ | run_id | Run `RUNNING`/`WAITING_HUMAN` | Run → `FAILED`; carries reason (Appendix D) |
-| `run.cancelled` | ✓ | run_id | Run nonterminal | Run → `CANCELLED`. Carries the affected movement and attempt ids and projects their cancellation **atomically**, so a crash mid-cancel cannot leave a cancelled run with a running attempt |
+| `run.cancelled` | ✓ | run_id | Run nonterminal | Run → `CANCELLED`. When it terminalizes a fenced driver it also carries `fenced_epoch`, the epoch the authority moved to, so recovery projects the fence rather than inferring it (§6). Carries the affected movement and attempt ids and projects their cancellation **atomically**, so a crash mid-cancel cannot leave a cancelled run with a running attempt |
 | `movement.ready` | | movement_id | Movement `PENDING`, deps succeeded | Movement → `READY` |
 | `movement.started` | ✓ | movement_id | Movement `READY` | Movement → `RUNNING` |
 | `movement.succeeded` | ✓ | movement_id + attempt_id | Attempt `COMPLETED` | Movement → `SUCCEEDED`; approves its artifacts and change set. Requires `attempt.completed` first — the completion order is always attempt, then movement. For the **final movement** this same event carries the run's `SUCCEEDED` transition (§8) |
@@ -2237,6 +2428,7 @@ Each synthesized event is keyed so a repeated recovery is a no-op.
 
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
+| `authority.granted` | ✓ | `authority_epoch` | Run nonterminal | Records that a driver acquired or reclaimed execution authority at a new monotonic epoch, with the owner's PID and process-start identity. Makes the current epoch a journal projection (§6) so it survives lease removal. The incarnation **token is never journaled** — journaling it would let any reader forge authority |
 | `cancel.requested` | ✓ | run_id | Run nonterminal | The durable, **run-scoped** cancellation authority (§6) — never keyed by attempt, because there is no attempt-scoped cancel. Observed by a live driver mid-execution; otherwise the canceller itself terminalizes |
 | `journal.tail_truncated` | ✓ | truncated seq | recovery | Records that an unparseable final line was discarded (§1) |
 | `log` | | — | — | Mirrored adapter diagnostics; sanitized (§4) |
