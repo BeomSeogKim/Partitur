@@ -25,10 +25,50 @@ for *why* a rule exists, never for what the rule is.
 
 **Rules awaiting a bounded implementation spike.** Three rules below are specified as
 the intended contract but must be confirmed against real behaviour before they are
-frozen; each is marked **[SPIKE]** at its definition: canonical encoding and numeric
-range (Appendix A), fan-in tree composition (§5), and the execution-driver lease and
-wake-up mechanism (§6). A spike that contradicts the specified rule amends this document
-before implementation proceeds.
+frozen; each is marked **[SPIKE]** at its definition:
+
+1. **Canonical encoding and numeric range** (Appendix A.1) — against JCS conformance vectors
+   and a YAML corpus.
+2. **Fan-in tree composition** (§5) — against renames, modes, symlinks, submodules,
+   `.gitattributes`, binaries, merge drivers, and macOS/Linux consistency.
+3. **Execution-driver lease, wake-up, and process supervision** (§6, §4) — lease owner
+   verification, mid-`execute` interruption, and portable vendor-descendant cleanup.
+
+A spike that contradicts the specified rule amends this document before implementation
+proceeds.
+
+**Sections not yet exhaustive.** The places below state their contracts in prose sufficient to
+review the design but **not** sufficient to implement serialization against. They are completed
+in a follow-up PR, which is a **hard merge gate before any score/compiler, identity, journal,
+recovery, acceptance, or orchestration implementation begins** — that PR defines compiler rules
+and orchestration-critical payloads, so starting any of those first would build against a
+contract that is still moving:
+
+- Appendix A.4/A.5 — the `partitur/criterion-spec`, `partitur/acceptance-spec`, and
+  `partitur/execution-dependency` projections, as exact tagged unions.
+- Appendix A.4 — the missing `partitur/resolved-cast` and `partitur/score-subtree` domains, and
+  qualifying Git-native identities by object format (`git-sha1:` / `git-sha256:`) so a
+  repository-format migration cannot silently alias two different trees.
+- Appendix A — criterion generation and ordering (§7) as a hashed projection, and the effective
+  `may_propose` value plus the score-base dependency it implies.
+- **Runtime emitted-id scoping** — question and proposal ids are only guaranteed unique
+  *within an attempt* by the adapter kit, so decision ids must be scoped
+  `(attempt_id, emitted_id)` or mapped to core-generated ids. Nothing may key a decision on the
+  raw emitted id alone.
+- Appendix B — per-event payload schemas, and structured handling of `protocol_error`
+  sub-reasons.
+- The **movement fan-in** `composition_dependency_hash` (§5), which the candidate-level hash
+  does not cover.
+- The deliberate difference between the candidate's two contributor lists, which a no-op change
+  set makes observable: `candidate.ordered_change_sets` is the **content-deduplicated applied
+  sequence** (a no-op appears once), while the candidate-composition dependency hashes the
+  **full pre-dedup ordered `(movement_id, change_set_id)` sequence**, so deleting or reordering
+  an identical or no-op writer stays detectable (§8, §9).
+- The **effective acceptance-plan projection** that `acceptance_spec_hash` now names (§7).
+- Two compiler rules the identity work depends on: at most one declared `artifact` criterion per
+  ordinary output within a movement, and rejection of an `artifact` criterion referencing a
+  `change_set` output.
+- Numeric admissibility for raw RFC 6902 patch-operation JSON (A.1).
 
 ## 0. Ground rules inherited from the concept
 
@@ -48,27 +88,37 @@ rejected; anchors, aliases, merge keys, and custom tags rejected; no implicit ty
 coercion where a string is expected. Run state is **JSONL** (event log) plus YAML
 manifests.
 
+**Authoritative state and writable staging are separate roots.** Anything an attempt can
+write must sit outside authoritative run storage, so a misbehaving performer cannot
+corrupt evidence by writing where evidence lives:
+
 ```text
 <repo>/
   partitur.yaml                # the score (committed)
   .partitur/
-    .gitignore                 # created by `partitur init`; contains `runs/`
+    .gitignore                 # created by `partitur init`; contains `runs/` and `work/`
+                               #   (both are run-local; neither is ever committed)
     cast.yaml                  # project cast override (committed or ignored, user's choice)
-    runs/<run-id>/             # ignored by default
+
+    runs/<run-id>/             # AUTHORITATIVE — core-written only, never agent-writable
       journal.jsonl            # append-only event log (single writer: core)
       manifest.yaml            # rebuildable projection: score revision + hash, resolved
                                # cast pins, per-attempt enforcement record, artifact index
       scores/revision-<n>.yaml # immutable score snapshots (see below)
       resolved-cast.yaml       # the fully resolved cast used by this run
       artifacts/<logical-output-id>/<attempt-id>
-                               # immutable artifact instances (§2 identity, hashed at
-                               # record time); a retry never overwrites earlier evidence
+                               # immutable artifact instances (identity and atomicity
+                               # below); a retry never overwrites earlier evidence
       session/                 # session hints, mode 0600 (see §4 privacy)
       driver.lease             # execution-driver lease (§6); absent when no driver runs
       attempts/<attempt-id>/
         stderr                 # sanitized vendor/adapter diagnostics (§4 privacy)
         trace.jsonl            # protocol trace
-        output/                # the attempt's always-writable output_dir (§5)
+
+    work/<run-id>/<attempt-id>/   # NON-AUTHORITATIVE staging — agent-writable
+      output/                  # the attempt's output_dir (§5); artifacts are copied out
+                               # of here into runs/.../artifacts/ and only the copy counts
+
 ~/.config/partitur/cast.yaml   # user-global cast override
 <install>/default-cast.yaml    # first-party factory cast (versioned data file with
                                # metadata: date, tested adapters/models, rationale)
@@ -80,6 +130,23 @@ the run exists:
 ```text
 refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset   # storage handle (§5)
 ```
+
+**Identifier grammar.** Run ids, attempt ids, and score-declared ids are interpolated into
+filesystem paths, Git ref names, and semantic selectors (§9), so an unconstrained string
+would permit traversal, ref-injection, and selector collisions. Ids are constrained at the
+source rather than escaped at each use site:
+
+- **Score-declared ids** (movement, part, output, criterion, rubric, decision-facing ids)
+  match `[A-Za-z0-9][A-Za-z0-9_-]{0,127}` — a bounded ASCII slug. Anything else is a
+  compiler error (§2 rule 16). This grammar is simultaneously path-safe, ref-safe, and
+  selector-safe, so no escaping layer is needed anywhere.
+- **`run_id` and `attempt_id`** are **core-generated** UUIDv7 — time-ordered, collision-free
+  without coordination, and trivially path- and ref-safe. They remain opaque strings on the
+  wire (§4): the protocol never constrains their form, and the core never parses meaning out
+  of them.
+- The reserved `partitur.` prefix (containing a `.`, hence outside the slug grammar) is
+  therefore unusable as a score-declared id by construction, which is what makes the
+  core-supplied inputs of §4 unspoofable.
 
 **Run data retention.** v0.2 defines no run-deletion command. Run directories and
 `refs/partitur/**` are retained; pruning is future scope. When pruning is specified it
@@ -112,40 +179,67 @@ that authorizes an irreversible effect or that a recovery rule keys on; ordinary
 **Artifact instances.** Score-declared output ids are *logical* ids. Each emission is a
 distinct immutable instance identified by `(logical_output_id, attempt_id)` — the
 `artifact_instance_id` — stored at
-`artifacts/<logical-output-id>/<attempt-id>`. A logical output may be emitted **at most
-once per attempt**; a second emission is the deterministic protocol error
-`duplicate_artifact_instance`. A declared output never emitted is caught by the
+`artifacts/<logical-output-id>/<attempt-id>` — both components are safe path segments by
+the identifier grammar above, so no encoding layer intervenes. A logical output may be
+emitted **at most once per attempt**; a second notification for the same logical id is
+rejected before any append, and the attempt fails with `protocol_error`
+(`duplicate_artifact_instance`). A declared output never emitted is caught by the
 artifact-integrity criterion (§7). Journal entries, hashes, marks, and finding overrides
 reference instances. A downstream movement's logical input resolves to the instance from
 the **completing successful, non-superseded attempt**, so retries and revision re-runs
 never collide with earlier immutable evidence.
 
+`kind: change_set` is the one exception: it is never an artifact instance. See §5.
+
+**Artifact publication and immutability.** The file at an announced path must be complete and
+must not change afterwards. Concretely, in the merged design the vendor process closes its
+files before exiting, the adapter validates and emits `artifact` events only after that exit,
+and the core then performs a stable-stat copy. The conformance obligation is therefore stated
+as an outcome — *an announced artifact path is complete and immutable from the moment it is
+announced* — rather than as an atomic-publish step the adapter does not currently perform. The
+core's stable-stat/hash copy stays an independent defensive check regardless.
+
 **Artifact recording atomicity.** Recording an artifact follows a fixed order: copy to a
 temporary file → compute hash (`sha256:<hex>`) and durably flush → atomic rename into
 `artifacts/<logical-output-id>/<attempt-id>` → append `artifact.recorded` (fsynced) →
 update the manifest projection. The core copies with a stable-stat check and rejects an
-artifact notification that is undeclared, duplicated, or whose file changes during
-copying. On recovery, an orphan artifact file without an event is quarantined; an event
-whose file is missing is a recovery error that halts the run.
+artifact notification that is undeclared, duplicated, whose path escapes `output_dir`, is
+not a regular file, or whose file changes during copying. On recovery, an orphan artifact
+file without an event is quarantined; an event whose file is missing is a recovery error
+that halts the run.
 
 **Ref/journal ordering.** A change-set ref (§5) is created before its authorizing event
 is appended. On recovery, a ref with no authorizing event is quarantined and cleaned; an
 event whose ref is absent is a recovery error that halts the run — symmetric with
 artifacts and snapshots.
 
+**Two kinds of score hash — never interchanged.** A score has a *meaning* and a *file*, and
+conflating them would let the core silently destroy a user's comments or formatting:
+
+| Hash | Over | Used for |
+|---|---|---|
+| `score_hash` (semantic) | the canonical score **AST** (`partitur/score`, Appendix A) | `base_revision`/`base_hash` staleness, snapshot identity, amendment no-op detection, `execution_dependency_hash` |
+| `score_file_hash` (raw) | the **exact bytes** of the file (`sha256:<hex>`) | the `promote-score` compare-and-swap and the byte-exact write |
+
+The semantic hash deliberately ignores comments and formatting, which is correct for
+"did the meaning change?" and **wrong** for "may I overwrite this file?". Promotion
+therefore compares `expected_root_file_hash` and writes the pinned snapshot's exact bytes
+(§8), so a user's formatting-only edit surfaces as a conflict rather than being clobbered.
+
 **Score snapshots and the root score.** `partitur.yaml` stays editable by the user, so a
 revision number alone cannot reproduce a run:
 
-- At run start the core snapshots the full score (and its hash) into
-  `scores/revision-<n>.yaml`. Every approved amendment produces a new immutable snapshot.
+- At run start the core snapshots the full score into `scores/revision-<n>.yaml` and records
+  **both** hashes: the snapshot's semantic `score_hash` and the root file's
+  `score_file_hash` at that moment.
 - Amendments modify **only the run's snapshot chain** — the root `partitur.yaml` is never
   overwritten automatically. The explicit `promote-score` command copies a run revision
-  back to the root score; promotion is a compare-and-swap against the root hash recorded
-  at run start, and surfaces a conflict if the root has changed since.
+  back to the root score; promotion is a compare-and-swap against the recorded root
+  **file** hash, and surfaces a conflict if the root file has changed since.
 - Resume works from the run's snapshot, never from the current root `partitur.yaml`.
-  If the root score claims the same revision number but its hash differs from the
+  If the root score claims the same revision number but its semantic hash differs from the
   snapshot, the core refuses to auto-resume and asks the user.
-- The manifest records both the source revision and the content hash.
+- The manifest records the source revision and both hashes.
 
 **Cast layering.** Resolution order is **project → user-global → factory default**, with
 deliberately simple merge rules (no deep merge):
@@ -244,8 +338,9 @@ movements:                      # units of work; DAG via `needs`; each played by
       Implement the reminder flow per the design note.
     inputs: [design-note]
     outputs:
-      - id: change-set
-        kind: change_set
+      - id: change-set         # kind: change_set is CORE-SYNTHESIZED — the performer never
+        kind: change_set       #   emits it as an artifact; the core captures it from the
+                               #   worktree. See §5.
     acceptance:                 # a movement with a repo_write grant MUST have ≥1
       hard:                     # hard criterion or human_gate: always
         - id: unit-tests        # explicit, unique within the movement — marks bind to it
@@ -299,10 +394,19 @@ literal character — which is what makes element removal a monotone narrowing (
 
 **Protected paths.** Independent of `allowed_paths`, no change set may modify the source
 score, any cast file, anything under `.partitur/**`, the journal, `refs/partitur/**`, or
-any control artifact. This is enforced **post hoc** on every candidate change set even
-when an `allowed_paths` glob would admit the path; a violation fails the attempt in the
-`grant_denied` class with no quality retry and no fallback. Without this, a score could
-authorize movements that rewrite the authority that governs them.
+any control artifact. Without this, a score could authorize movements that rewrite the
+authority that governs them.
+
+Two different mechanisms, because a tree comparison cannot see everything:
+
+- **Tracked paths inside the worktree** are rejected from candidate change sets, checked post
+  hoc even when an `allowed_paths` glob would admit them. A violation fails the attempt in the
+  `grant_denied` class (`protected_path_violation`) with no quality retry and no fallback.
+- **Shared Git refs and authoritative run state** live outside the worktree, so no candidate
+  check can detect a `git update-ref` or a direct journal write. These are guarded by
+  *isolation* — the worktree and its staging root are separate from run storage (§1) — plus
+  integrity and CAS checks at every core read and write. Under an unconfined advisory adapter
+  (§4), physical prevention is **not** claimed; detection and fail-closed recovery are.
 
 **DRAFT phase contract.** While `status: draft`, only the movement named by
 `draft.interview_movement` may run. It is read-only (no write grant permitted). It may
@@ -327,6 +431,59 @@ direct score mutation:
 5. When every open question and the verification expectation are materialized, the human
    explicitly approves the `draft → finalized` transition — finalization is itself a
    human decision, never automatic.
+
+**Finalization is an amendment, not a bare flag flip.** `status` lives in the score, so
+changing it must produce a snapshot and a revision like any other score change; otherwise
+the run would carry a `finalized` status that no snapshot records and no revision explains.
+Finalization therefore reuses the amendment transaction (§9) rather than inventing a parallel
+one:
+
+1. The core — not a performer — constructs a **reserved finalization amendment** whose patch
+   changes only `/status` from `draft` to `finalized`.
+2. It routes to the human with `decision_type: finalization` (reason `draft_phase`, since the
+   base is still a draft, so it is never envelope-eligible).
+3. Human approval is recorded as `amendment.approved {mode: human}`, which atomically writes
+   the new snapshot, increments the revision, and **resolves the finalization decision
+   itself** — no separate `decision.resolved` is appended, exactly as for every other
+   amendment path.
+4. **The same event closes the draft phase**, projecting the interview movement to
+   `SUCCEEDED`. Without this the movement would return to `RUNNING` when its last blocking
+   decision resolved while all its attempts stayed terminal `BLOCKED`, and the run could
+   finish with a nonterminal draft movement. This projection manufactures **no** evidence: no
+   `attempt.completed`, no VERIFIED, no APPROVED. The interview movement succeeds because the
+   draft phase is over, not because anything was verified.
+5. Rejection is `amendment.human_rejected`; the score stays a draft and the interview may
+   continue.
+
+The interview movement can never have a *successful completed* attempt before finalization.
+This is **enforced**, not merely expected, because if it had one the finalization patch to
+`/status` would change that attempt's `execution_dependency_hash` and finalization would reject
+itself under §9's executed-dependency rule. While `status: draft`:
+
+- A draft attempt's result **must block**: at least one `question`, or a `proposal` with
+  `requires_decision: true`.
+- A `proposal` with `requires_decision: false` from a draft movement is **rejected**
+  (`protocol_error`). Non-blocking proposals exist to let an ordinary movement suggest
+  something without stopping; in draft the interview's entire purpose is to reach a human, and
+  every draft amendment routes to one anyway (§9).
+- A result that is otherwise `completed` with no blocking semantic output is the quality failure
+  `draft_no_blocking_output` — a valid zero-output envelope is `completed` in general (§4), and
+  without this rule that would walk the interview movement straight into ordinary acceptance.
+  The event path is explicit, and **acceptance never starts**:
+
+  ```text
+  performer.completed
+  → attempt.failed { kind: task_failed, reason: draft_no_blocking_output,
+                     recorded quality disposition }
+  ```
+
+  If a retry is admissible it proceeds as an ordinary `quality_retry`; otherwise the movement
+  and run fail without charging past the cap (§3).
+- **Ordinary acceptance can never make the interview movement succeed.** Only the finalization
+  amendment projects it to `SUCCEEDED`.
+
+A patch touching anything besides `/status` is not a finalization amendment and is rejected as
+an ordinary proposal would be.
 
 **Amendment format v0.2.** A `proposal` carries:
 
@@ -354,9 +511,12 @@ reported together; validation is not short-circuited at the first error.
 
 1. `status: finalized` requires every open question resolved or waived,
    `verification.expectation.intent` present, and a well-formed `apply_gate`.
-2. A movement that requests a `repo_write` grant must carry ≥1 `hard` criterion or
-   `human_gate: always`. (Keyed on the movement's grant, not the part's capability —
-   a write-capable part may still play read-only movements.) This is a per-movement
+2. A movement that requests a `repo_write` grant must **declare** ≥1 `hard` criterion or
+   `human_gate: always`. Core-generated integrity checks (§7) never satisfy this — the
+   score itself has to say what counts as done. An explicitly declared `artifact`
+   criterion does count. (Keyed on the movement's grant, not the part's capability —
+   a write-capable part may still play read-only movements.)
+   This is a per-movement
    **floor**; the ship judgment is made on the application candidate, never summed over
    movements (§8).
 3. `grants` ⊆ the part's `capabilities`. A `read_only` part can never receive
@@ -364,7 +524,10 @@ reported together; validation is not short-circuited at the first error.
    (`policy` scopes *where* an authority applies — `allowed_paths`, `side_effects` — and
    never grants or withholds a grant kind; v0.1's "∩ what `policy` allows" referenced a
    ceiling the schema does not define.)
-4. `needs` must form a DAG; part references must exist; every `inputs` entry must be an
+4. **Movement ids are unique**, as are part ids and score-declared question/decision ids —
+   uniqueness is per collection and checked explicitly, since ids are the matching key for
+   typed comparison and hashing (§9, Appendix A). `needs` must form a DAG; part references
+   must exist; every `inputs` entry must be an
    `outputs` id of a movement reachable through `needs`; **logical** output ids are unique
    within the score. (Runtime emissions are instances, §1 — uniqueness is a declaration
    rule, not a storage rule.) No output id may use the reserved `partitur.` prefix, which
@@ -377,10 +540,12 @@ reported together; validation is not short-circuited at the first error.
    movement.
 8. Exactly one movement carries `phase: draft`, and it is the one
    `draft.interview_movement` names. A draft movement may not hold `repo_write`.
-9. Every acceptance criterion carries an `id` unique within its movement.
+9. Every **score-declared** acceptance criterion carries an `id` unique within its movement.
+   Core-generated integrity checks (§7) live in the reserved `partitur.` namespace and are
+   outside this uniqueness scope by construction.
 10. `allowed_paths` contains no duplicate pattern.
 11. **Apply-gate achievability** — a finalized score whose gate can never be satisfied is
-    rejected (§8): `require ∋ verified` ⇒ the final movement declares ≥1 hard criterion;
+    rejected (§8): `require ∋ verified` ⇒ the final movement **declares** ≥1 hard criterion;
     `require ∋ reviewed` or any predicate present ⇒ it declares ≥1 review criterion with a
     typed `findings` output; `require ∋ approved` ⇒ it declares `human_gate: always`.
 12. **Final-movement closure** — `apply_gate.waived` ⇒ `verification.final_movement` must
@@ -389,6 +554,50 @@ reported together; validation is not short-circuited at the first error.
     movement, and no non-draft movement may sit outside its dependency closure.
 13. No numeric value anywhere in the score falls outside the canonical safe range
     (Appendix A).
+14. A `phase: draft` movement declares **no ordinary artifact outputs** — draft movements may
+    not emit `artifact` at all (§2 draft contract), so declaring one would be unsatisfiable.
+    It may declare no `change_set` output either, since it holds no `repo_write`.
+15. A movement's `repo_write` grant and its `change_set` output must agree: a movement holding
+    `repo_write` declares **exactly one** `kind: change_set` output, and a movement without
+    `repo_write` declares none. This is what makes "which movements contribute to the
+    candidate" a compile-time fact rather than a runtime discovery (§8).
+16. Every score-declared id matches the identifier grammar of §1
+    (`[A-Za-z0-9][A-Za-z0-9_-]{0,127}`), which excludes the reserved `partitur.` prefix by
+    construction.
+17. `may_propose` (below) defaults to `false` and is permitted on **any** movement. The
+    draft interview movement has it implicitly. The effective value — including that
+    implicit default — is materialized in the canonical AST, so it is visible to hashing.
+
+**Amendment-proposal authority.** A performer can only propose an amendment if it has been
+given the base score to patch, and receiving the base score has a cost: the score becomes
+part of that attempt's execution dependencies, so **any** later amendment invalidates the
+attempt (§9). If every movement received it, no amendment could ever be approved mid-run
+after any movement succeeded — the envelope would be dead on arrival.
+
+Proposal authority is therefore opt-in per movement:
+
+```yaml
+  - id: design
+    part: plan
+    may_propose: true           # default false. Receives the reserved
+                                #   partitur.score-base input (§4); its
+                                #   execution dependency includes the score base, so a
+                                #   later amendment invalidates this attempt.
+```
+
+It is permitted on **any** movement, write-capable included. A proposal carries no mutation
+authority of its own — approval is a separate human or envelope decision that supersedes the
+active attempt anyway — so barring write movements would only silence the performers most
+likely to discover a score defect while implementing against it. The cost is the invalidation
+above, and the score author decides whether to pay it.
+
+The draft interview movement carries it implicitly, since proposing is its entire purpose,
+and draft-phase amendments always route to a human anyway.
+
+The field governs **adapter-originated** proposals only: a movement without it receives no
+`partitur.score-base`, and a `proposal` event from such an attempt is a `protocol_error`
+(`proposal_without_authority`). A proposal a human submits through `partitur amend` needs no
+movement authority — the human already has it.
 
 ## 3. Cast schema v0.1 (`cast.yaml`)
 
@@ -412,6 +621,14 @@ bindings:
   verify:    { performer: sol }
 ```
 
+> **This example is illustrative, not runnable.** Under the fail-closed predicate of §4 it
+> does not pass `partitur validate`: `fable` (claude) reports all-false enforcement, and
+> `sol` (codex) cannot enforce glob-granularity path grants. A runnable cast must either set
+> `allow_advisory_enforcement: true` on the affected performers — accepting that the
+> manifest records which constraints were advisory per attempt — or bind write movements to
+> a performer whose enforcement covers the movement's grants. What the factory cast ships is
+> deliberately left open until the §4 enforcement dimensions are implemented.
+
 - `partitur validate` checks every bound performer's probed capabilities against the
   part's `capabilities`, and the adapter's enforcement against the movement's grants
   (see §4, trust boundary).
@@ -426,8 +643,9 @@ bindings:
   `provider_timeout`, `rate_limited`, `authentication`): move to the next fallback
   performer; no retry is consumed. `protocol_error` does **not** trigger fallback in
   v0.2 (uniform rule; a cast-level opt-in may come later).
-- **Quality failure** (`task_failed` or acceptance failure): consume one retry and try
-  again with the **same** performer from a clean base. Quality failures never trigger
+- **Quality failure** (`task_failed` or acceptance failure): consume one retry **if another
+  quality attempt is admissible** and try again with the **same** performer from a clean base;
+  otherwise terminalize the movement without charging past the cap. Quality failures never trigger
   fallback — a different model is not the fix for a failed test; amendments and humans
   are.
 - The movement fails when quality retries are exhausted, or when the fallback chain is
@@ -439,13 +657,23 @@ bindings:
                  + quality retries consumed          (≤ retries_per_movement)
                  + infrastructure fallbacks consumed (≤ fallback_count)
                  + revision-triggered superseded restarts   (unbounded by retry policy)
+                 + decision resumes                        (unbounded by retry policy)
   ```
 
-  Revision-triggered restarts (§9) consume no quality retry and are limited **only by the
-  remaining active wall-clock budget**. `remaining_retries == 0` forbids only new
+  Revision-triggered restarts (§9) and **decision resumes** (§4) consume neither a quality
+  retry nor a fallback and are limited **only by the remaining active wall-clock budget**. A
+  decision resume additionally preserves the blocked attempt's performer and its position in
+  the fallback chain — answering a question is not evidence that the performer was wrong. `remaining_retries == 0` forbids only new
   *quality-retry* attempts; `remaining_time == 0` starts **no** new attempt of any kind.
 - `retries_per_movement` is a per-movement total shared across the fallback chain — a
   fallback performer does not receive a fresh retry budget.
+- **A failure charges only if it authorizes another attempt.** A quality failure consumes a
+  retry only when a further quality attempt is actually available; an infrastructure failure
+  advances the fallback position only when a further fallback exists. Otherwise the failure
+  terminalizes the movement **without** consuming past the cap, and the failure event records
+  that disposition atomically. Charging the terminal failure too would let
+  `retries_consumed` exceed `retries_per_movement`, making the projection contradict its own
+  bound.
 - Every retry and fallback starts from the same clean base and the same input artifact
   instances.
 - `grant_denied` (including `candidate_mismatch` and protected-path violations), review
@@ -459,16 +687,77 @@ explicit config. Adapters are explicitly enabled; nothing is auto-discovered. v0
 supports macOS and Linux; Windows is out of scope.
 
 **Process model and framing.** The core spawns the adapter **per attempt**. Transport is
-JSON-RPC 2.0 messages as **UTF-8 JSON Lines on stdout**: one request, response, or
-notification per line; newlines inside values are escaped; control frames have a fixed
+JSON-RPC 2.0 messages as **UTF-8 JSON Lines**, one per line, directional: **requests travel on
+the adapter's stdin; responses and event notifications travel on its stdout.** newlines inside values are escaped; control frames have a fixed
 size cap — large content travels as artifact files, never inline. `stderr` is
 diagnostics only, captured to the attempt directory. The adapter must keep reading stdin
 during `execute` so a `cancel` request can be received; after a grace timeout the core
 terminates the process, and force-kills after a further timeout. No daemon in v0.2.
 
+**Frozen wire rules.** These are normative for both sides, and "frozen" means "the contract
+will not change" — **not** "every line already exists". Implementation status:
+
+- Most rules below are implemented and conformance-tested in the adapter kit.
+- The two marked ⚠ are specified target behaviour on the §4 code follow-up.
+- The **core-side client is not implemented at all yet.**
+- Other known adapter-side follow-ups: `shell_grants` / `read_grants` reporting, and
+  pre-persistence stderr sanitization. Process supervision remains a spike, not a follow-up.
+
+`stderr` is diagnostics only and never carries protocol.
+
+- **Frame cap 1 MiB** (1048576 bytes) per line, both directions, and the behaviour is
+  **directional**:
+  - core → adapter oversized: the adapter answers `-32001` with `id: null`, then **skips the
+    frame and continues**. Not fatal.
+  - adapter → core oversized: the core **terminalizes the attempt** as `protocol_error`. The
+    core cannot skip content it was supposed to act on, and large content is supposed to
+    travel as an artifact file.
+- **Strict decoding.** Unknown fields are rejected, trailing content after the JSON value is
+  rejected, and every frame must be valid UTF-8. Malformed JSON is `-32700`.
+- ⚠ **Duplicate JSON keys are rejected.** *Not yet implemented:*
+  `protocol.DecodeStrict` currently rejects unknown fields and trailing values but accepts
+  duplicate keys, because Go's `encoding/json` silently keeps the last one. Closing this is on
+  the §4 code follow-up — duplicate-key tolerance is a parser-differential hazard, and the
+  result-envelope parser already rejects them, so the two paths must agree.
+- **Event caps.** At most 10,000 events per attempt; `log`/`progress` messages are truncated
+  to 4 KiB on a valid UTF-8 boundary.
+- **EOF behaviour**, stated once, per direction:
+  - *Clean* EOF on the adapter's stdin — the core is done. The adapter cancels in-flight work,
+    drains, exits **zero**.
+  - *Partial frame* at EOF on the adapter's stdin — the core died mid-write. The adapter
+    cancels, drains, exits **nonzero**.
+  - *Partial frame* at EOF on the adapter's stdout — the adapter died mid-write. **Fatal to the
+    attempt:** `protocol_error` (`partial_frame_eof`). This is deliberately stricter than the
+    oversized-frame rule, because a truncated frame carries unknown content, whereas an
+    oversized one is at least fully delimited.
+- **`cancel` params are exactly `{attempt_id}`**, and the success result is an empty object —
+  including for an unknown or already-finished attempt, which is what makes it idempotent.
+- **Blank lines are skipped**, not errors.
+- **Request `id` may be a string or a number** and is echoed back **verbatim** — never
+  reformatted, never renumbered.
+- **One concurrent `execute` per adapter process.** A second `execute` while one is in
+  flight is `-32000`.
+- **`cancel` is idempotent** and always acknowledged, including after the target has already
+  finished — the core may legitimately race a cancel against completion.
+- **Events precede the response.** Every `event` notification for an `execute` is emitted
+  before that call's response; no event is emitted afterwards. This is what lets the core
+  treat the response as a completeness marker.
+- **Events use the single JSON-RPC method `"event"`** with flat params and a required
+  `type` discriminant. There is no per-event-type method name.
+- Error codes: `-32700` parse, `-32600` invalid request, `-32601` method not found,
+  `-32602` invalid params, `-32603` internal error, `-32000` execute already in progress,
+  `-32001` frame too large.
+
 **Session hints and privacy.** Session continuity across attempts is carried by an
 opaque `session_hint` the adapter may return and the core may pass back — always an
 optimization, never required state (conformance test: resume with the hint removed).
+
+Hints are stored and retrieved under a **compatibility key** of
+`(performer, adapter id, model)`. A hint is never passed across an adapter fallback or to a
+different model: a resume token from one vendor's session is meaningless — at best — to
+another. If no compatible hint exists, or the adapter rejects a stale one, the attempt
+proceeds with a single fresh invocation. Because a hint is never required state, none of
+this can affect correctness, only latency and cost.
 Because hints are opaque they may contain resume tokens: the core never writes them to
 the journal, manifest, or protocol trace; they live in `runs/<id>/session/` with mode
 `0600` and are deleted with the run. Adapter conformance requires that hints carry no
@@ -563,7 +852,8 @@ question   { id, question }             # see blocking handshake below
 ```
 
 Code changes are never communicated as `artifact` events — the core itself captures them
-from the worktree as a `change_set` (§5). Draft movements may not emit `artifact` at all.
+from the worktree as a `change_set` (§5), and `change_set` outputs never appear in
+`brief.outputs`. Draft movements may not emit `artifact` at all.
 
 **Blocking handshake for questions and proposals.** v0.2 has no daemon, so nothing waits
 in memory for a human:
@@ -573,14 +863,30 @@ in memory for a human:
   `pending_decision_ids`, and exits. A blocking proposal's `id` is a valid member of
   `pending_decision_ids`, alongside question ids. The attempt ends `BLOCKED` (a terminal
   attempt state — no process stays alive).
-- The core records `decision.requested` per question and sets the movement to
-  `WAITING_HUMAN`.
-- When the human has answered **all** pending decisions (or the amendment is decided),
-  the core records `decision.resolved` events and starts a **new attempt**, passing the
-  resolutions in `resolved_decisions` (plus `session_hint` if available).
-- An **auto-approved** proposal also changes the score revision, so the current attempt
-  is superseded and restarted against the new revision — an attempt never keeps running
-  across a revision change.
+- The core records `decision.requested` per pending decision. An unresolved blocking
+  decision projects the movement and the run to `WAITING_HUMAN` (§6) — it is a projection
+  of the outstanding decision, not a separately appended state event.
+- **Resolution makes execution eligible; it never launches it.** The two decision kinds
+  resolve differently and neither starts an adapter:
+  - A *question* resolves through `decision.resolved`.
+  - An *amendment* (including a blocking `proposal`) resolves through its own amendment
+    terminal event — `amendment.approved`, `amendment.human_rejected`, or a decision-time
+    `amendment.rejected`. **No `decision.resolved` is ever appended on an amendment path**
+    (§9).
+
+  When the last blocking decision is resolved or obsoleted, the movement and run project
+  back to `RUNNING`, and the resume reason depends on whether the revision moved:
+
+  | Resolution | Reason | Effect on the blocked attempt |
+  |---|---|---|
+  | No revision change (questions answered) | `decision_resume` | It stays terminal `BLOCKED` history — a terminal attempt is never superseded |
+  | Approved amendment, revision changed | `revision_restart` | Also supersedes every **nonterminal** attempt (§9); the `BLOCKED` one is already terminal and stays history |
+  | Finalization approved | — | Completes the draft movement (§2); **no new attempt is launched** |
+
+  In the first two cases a live driver continues into a new attempt — `performer.selected`
+  first, then `attempt.started`, as for every attempt — passing the resolutions in
+  `resolved_decisions` (plus a compatible `session_hint`); if no driver holds the lease, a
+  later `resume` does it (§7 command authority).
 
 **Core protocol and state limits.** The core never requests wider grants than the
 score's `policy` allows; run state lives outside the attempt workspace and the protocol
@@ -625,42 +931,93 @@ are delivered through the existing `inputs` mechanism rather than as new wire fi
 the frame stays small and the 1 MiB cap is never at risk. Both are read-only, live outside
 the worktree, and are never declared in the score:
 
-```text
-artifact_id: partitur.score-base
-kind:        partitur/score-canonical+json;v=1
-hash:        <base_hash>            # the snapshot head's canonical hash
-                                    # Supplied to any movement that may propose an
-                                    # amendment. A proposal's base_revision/base_hash
-                                    # MUST be the ones carried here — this is what makes
-                                    # a proposal stale-checkable (§9).
+`inputs[].hash` always means **raw file integrity** — the SHA-256 of the exact bytes at
+`path` — for reserved inputs exactly as for ordinary artifacts. A *semantic* hash is never
+placed there; when a semantic identity must reach the performer it is a field **inside**
+the file:
 
-artifact_id: partitur.subject-tree
-kind:        partitur/subject-tree+json;v=1
-                                    # Supplied to any movement with a review criterion.
-                                    # Carries the CORE-OBSERVED subject tree hash, the
-                                    # findings schema version, and the rubric ids with
-                                    # their required coverage. A review performer cannot
-                                    # compute the tree itself — especially with no shell.
+```text
+artifact_id: partitur.score-base           # supplied to any movement whose `may_propose`
+kind:        partitur/score-base+json;v=1  #   is true (§2)
+hash:        <sha256 of the file bytes>
+file content:
+  { schema: "partitur/score-base+json;v=1",
+    base_revision,                  # a proposal's base_revision MUST equal this
+    base_hash,                      # ... and its base_hash MUST equal this — semantic
+                                    #     (partitur/score, Appendix A), which is what
+                                    #     makes the proposal stale-checkable (§9)
+    score }                         # the canonical JSON score at that revision
+
+artifact_id: partitur.subject-tree          # supplied to any movement declaring a review
+kind:        partitur/subject-tree+json;v=1 #   criterion
+hash:        <sha256 of the file bytes>
+file content:
+  { schema: "partitur/subject-tree+json;v=1",
+    subject_tree,                   # the CORE-OBSERVED tree — a review performer cannot
+                                    #   compute this itself, especially with no shell
+    findings_schema: "partitur/findings+json;v=1",
+    rubrics: [{ id, required_coverage: true }] }
 ```
 
-The reserved `partitur.` artifact-id prefix is forbidden to score-declared outputs. The
-core-observed subject tree is always authoritative; a findings artifact's own claim is
-compared against it and never trusted in its place (§8).
+The reserved `partitur.` prefix is unusable as a score-declared output id by construction
+(§1 identifier grammar), so these inputs cannot be spoofed. The core-observed subject tree
+is always authoritative; a findings artifact's own claim is compared against it and never
+trusted in its place (§8).
+
+**Result envelope v1 (adapter-internal, normative).** The kit-level contract between an
+adapter and its vendor process is not part of the JSON-RPC wire, but it is a conformance
+surface every adapter shares, so it is specified rather than left implicit:
+
+- The adapter instructs its vendor to write exactly one strict JSON file named
+  `partitur-result.json` in `output_dir` before exiting. The name is reserved: it can never
+  itself be a declared artifact.
+- Shape: `{ version: 1, artifacts, questions, proposal, summary }`. All four payload members
+  must be **present**; absent is malformed. Only `proposal` may be `null` — `artifacts` and
+  `questions` must be present arrays (possibly empty) and `summary` a present string. Strict
+  decoding: unknown fields and duplicate keys are rejected. Maximum 1 MiB. ⚠ *Valid-UTF-8
+  rejection is target behaviour, not yet implemented* — on the §4 follow-up with duplicate-key
+  rejection.
+- `artifacts[].path` is a **non-empty relative** path containing no `..` segment, which must
+  still resolve inside `output_dir` **after symlink resolution**, and must name a **regular
+  file**. Ids across `artifacts`, `questions`, and `proposal` are all non-empty and mutually
+  unique.
+- Question text is non-blank; `proposal` is `null` or an object
+  `{id, amendment, requires_decision: bool}`. The envelope file itself must be a regular file,
+  not a symlink.
+- Whether an artifact id was *declared* is checked by the **core** at the event boundary, not
+  by the kit while parsing — the kit does not know the score.
+- A **valid envelope with empty outputs is `completed`** — producing nothing is a legitimate
+  result. A **missing or invalid envelope is `task_failed`**, never `protocol_error`: the
+  adapter spoke correctly, the vendor did not deliver.
 
 **Diagnostics privacy.** Vendor and adapter `stderr` may contain a session id the adapter
 has not yet recognized, so raw passthrough would violate the guarantee that diagnostics
 never echo hints. Adapters MUST buffer `stderr` to a bounded size and sanitize it against
-every known sensitive value **before** it is written anywhere the core persists. The core
-treats received diagnostics as sensitive regardless, and never copies them into the
-journal, the manifest, or the protocol trace.
+every known sensitive value **before** it is written anywhere the core persists.
 
-**Process supervision.** The adapter and the vendor process it spawns are separate process
-groups, so hard-killing a wedged adapter can orphan the vendor group. Termination is
-therefore layered: the adapter MUST handle `SIGTERM` by terminating its vendor process
-group before exiting, and the core's outer grace period MUST exceed the adapter's own
-`SIGTERM`→`SIGKILL` grace. If the adapter is fully wedged and is force-killed, the core
-performs a documented process-tree sweep of the descendants it recorded at spawn time —
-an orphaned vendor agent holding repository authority is not an acceptable end state.
+Two channels with different rules, which v0.2 keeps strictly apart:
+
+| Channel | Destination | In the journal? |
+|---|---|---|
+| Raw `stderr` | `attempts/<id>/stderr`, sanitized | **Never** |
+| Protocol `log` / `progress` events | mirrored | Yes, as **non-authoritative observations** (Appendix B `authority` column) — sanitized and bounded |
+
+So "diagnostics never enter the journal" means the raw stream. Typed, sanitized, bounded
+protocol events are journaled deliberately, because a later GUI needs them; they carry no
+authority and no projection ever reads them.
+
+**Process supervision. [SPIKE]** The adapter and the vendor process it spawns are separate
+process groups, so hard-killing a wedged adapter can orphan the vendor group. Termination is
+layered: the adapter MUST handle `SIGTERM` by terminating its vendor process group before
+exiting, and the core's outer grace period MUST exceed the adapter's own
+`SIGTERM`→`SIGKILL` grace.
+
+The **requirement** is that no vendor descendant survives outer termination — an orphaned
+agent holding repository authority is not an acceptable end state. The **mechanism** is
+deliberately not pinned here: the core cannot enumerate descendants at spawn time (the
+vendor process does not exist yet), and macOS offers no cgroup-equivalent ownership
+primitive. The portable discovery and ownership mechanism is settled by the
+execution-driver/process-supervision spike (§6).
 
 ## 5. Workspace model v0.2
 
@@ -674,9 +1031,26 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
 
 - Each attempt gets a fresh worktree built from the **approved results of its dependency
   movements** (the clean base), plus an always-writable `output_dir` at
-  `runs/<run-id>/attempts/<attempt-id>/output/` — outside the worktree — for declared
+  `.partitur/work/<run-id>/<attempt-id>/output/` — outside both the worktree and
+  authoritative run storage (§1) — for declared
   artifacts. `read_only` means the repository worktree is read-only; ordinary artifacts
   (documents, findings) are written to `output_dir` only.
+- **`kind: change_set` is a core-synthesized logical output, never an artifact.** A
+  performer cannot emit one and must never be asked to. Concretely:
+
+  - It is **excluded** from `brief.outputs`, so the performer is never told to produce it.
+  - It is **excluded** from the adapter result envelope and from `artifact.recorded`; an
+    `artifact` event naming a `change_set` output is a `protocol_error`.
+  - It is **excluded** from the artifact-integrity criterion (§7). The declaration is
+    satisfied only by `change_set.recorded`, which the core appends after capturing the
+    worktree.
+  - A downstream movement consuming it receives the **composed worktree** built from it
+    (§5 fan-in) — not a file path in `inputs`. Its `inputs` entry is a dependency
+    declaration, not an artifact delivery.
+
+  Declaring it in `outputs` remains how a score states "this movement produces repository
+  changes", which is what makes it available to `needs`/`inputs` and to candidate
+  composition. Only the delivery mechanism differs from ordinary artifacts.
 - **Change-set identity.** A `change_set` is captured as a **core-created Git checkpoint
   commit** in the isolated worktree, but the commit OID is only a *storage handle*: commit
   metadata (timestamps, message, parents) makes it a non-content identity. The semantic
@@ -706,10 +1080,15 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   checkpoint commits are storage artifacts whose topology may carry unrelated history.
   READY-movement scheduling likewise follows declaration order.
 
-  A merge conflict yields exactly one outcome: the core records
-  `composition.conflicted` and puts the movement in `WAITING_HUMAN`. It never merges
-  silently and never picks a side. Changes from failed, cancelled, or superseded attempts
-  are never candidates.
+  A merge conflict yields exactly one outcome, and it is **terminal, not a wait**: the core
+  records `composition.conflicted` with the conflicting contributors and the conflicted paths
+  as **evidence only**, then fails the affected movement — or, for candidate composition, the
+  run — through the ordinary `movement.failed` / `run.failed` path with reason
+  `composition_unresolvable`, so the conflict never bypasses the normal lifecycle and recovery
+  cascade. It never merges silently and never picks a side.
+  Interactive resolution of tree conflicts is future scope — a `WAITING_HUMAN` here would
+  be a wait with no decision to answer and no resolution event, so v0.2 fails deterministically
+  instead. Changes from failed, cancelled, or superseded attempts are never candidates.
 
   Because `candidate_id` is a *content* identity (§8), the composition algorithm and the
   Git merge implementation version are recorded in
@@ -723,15 +1102,17 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   base, never from the failed performer's dirty workspace.
 - **Read-only post-hoc verification.** For every movement whose effective grants exclude
   `repo_write`, the core verifies at adapter exit that the worktree is unchanged. A Git
-  tree comparison alone is insufficient: the check covers tracked content, untracked
-  files, symlink targets, file modes, and the protected paths of §2. A violation is
+  tree comparison alone is insufficient: the check covers tracked content, **non-ignored
+  untracked files, symlink targets, and file modes**, plus the protected paths of §2. A violation is
   classified in the `grant_denied` class with no quality retry and no fallback. For the
   final movement the same check is expressed as `candidate_mismatch` against the recorded
   candidate `result_tree` (§8).
-- A movement that produces no repository changes records no change set. The final
-  verification movement and other read-only movements therefore never produce a
-  provisional change set — the acceptance chain of §7 captures one only for movements
-  holding `repo_write`.
+- **Every successful `repo_write` attempt records exactly one change set**, including a
+  **no-op** one where `base_tree == result_tree` — a movement that was authorized to write and
+  chose to change nothing still declared a `change_set` output (§2 rule 15), and that
+  declaration must be satisfied rather than silently vanishing. Movements without `repo_write`
+  record none, so the final verification movement and other read-only movements never produce a
+  provisional change set.
 - Applying the final result to the user's checkout is the explicit `apply` command —
   never a side effect of a movement finishing (§8).
 
@@ -764,12 +1145,32 @@ Promotion:   NOT_PROMOTED | PROMOTING | PROMOTED | RECOVERY_REQUIRED
 - `BLOCKED` is a **terminal** attempt state: the attempt exited while waiting on human
   decisions; the follow-up work happens in a **new** attempt. Only movements and runs
   use `WAITING_HUMAN`.
-- A movement failure fails the run only when retries and fallbacks are exhausted;
+- A movement fails when **no further execution path is authorized** — retries and fallbacks
+  exhausted, budget exhausted, or an immediate terminal cause such as `grant_denied`,
+  `protocol_error`, human-gate rejection, or `composition_unresolvable`;
   `SUPERSEDED` exists only at the attempt level (steer, instruction revision, or an
   approved amendment → new attempt).
 - `CONTESTED` is **not** a state at any level. It is a value of the `review_outcome`
   projection (§8); a contested movement reaches `WAITING_HUMAN` through its human gate
   like any other.
+
+**`WAITING_HUMAN` is a projection, and it has a defined exit.** There is no
+`movement.waiting_human` event: a separate state event would be a second authority
+competing with the decisions themselves, and a crash between the two would leave the run
+stuck in a state no decision explains. Instead:
+
+- **Entry** — a movement or run is `WAITING_HUMAN` exactly while it has ≥1 **unresolved
+  blocking decision** (a `decision.requested` with no terminal counterpart), together with
+  `attempt.blocked` where an attempt raised it.
+- **Exit** — when the last blocking decision becomes terminal, whether by
+  `decision.resolved`, by `decision.obsoleted`, or by an amendment terminal event that
+  resolves its own decision (§9), the movement and run project back to `RUNNING`. A
+  subsequent `attempt.started` is therefore legal without any intervening event.
+- A decision that opens a gate but cannot be answered — for example a *rejected* gate —
+  terminalizes through the movement's failure instead, so no decision is left dangling.
+
+This is why terminal run events must obsolete every remaining pending decision: otherwise a
+terminal run would still project `WAITING_HUMAN`.
 
 **Attempt identity.** `attempt_id` is an opaque string, unique within the run, and is the
 identifier used on the wire (§4), in journal events, and in every mark binding.
@@ -778,22 +1179,79 @@ never interchanged: v0.1's journal example implied a numeric `attempt_id`, which
 contradicts the protocol's opaque-string requirement.
 
 **Budget accounting.** `active_wall_clock_min` bounds active execution only — adapter runs,
-acceptance, retries, fallbacks, and revision restarts — excluding `WAITING_HUMAN` and
-stopped time. Because revision restarts are bounded by time alone (§3), the accounting must
-be exact and crash-safe:
+acceptance, **composition**, retries, fallbacks, revision restarts, and decision resumes —
+excluding `WAITING_HUMAN` and stopped time. The three phases of Appendix D (`adapter`,
+`acceptance`, `composition`) are exactly the phases that consume it; composition counts because
+a large fan-in is real work the run must be able to run out of time during. Because revision
+restarts and decision resumes are bounded by time alone (§3), the accounting must be
+**replay-stable** — every projection of the journal yields the same consumption — and crash-safe.
+It is deliberately *not* claimed to be exact: an uncertain interval is bounded best-effort, per
+the recovery rule below.
 
 - Active time is delimited by paired, fsynced `execution.started` / `execution.stopped`
-  events carrying a monotonic-clock reading and a wall-clock timestamp. Consumption is the
-  sum of completed intervals; an in-flight interval is charged against the remainder for
-  admission decisions.
+  events. Because v0.2 is sequential, **at most one interval is open at any time**.
+- A **monotonic clock is used only within the living process** that opened the interval.
+  Monotonic readings are not comparable across a restart — different boot epochs, different
+  process lifetimes — so they are never persisted as an identity. What the journal stores is:
+  `execution.started {wall_start, remaining_at_start}` and
+  `execution.stopped {charged_duration}`, where `charged_duration` is computed by the
+  opening process from its own monotonic clock.
+- Consumption is the sum of `charged_duration` over closed intervals. An open interval is
+  charged against the remainder for admission decisions using the current process's
+  monotonic reading.
 - Consumed history is never retroactively edited. A budget decrease (§9) yields
-  `remaining_time = max(0, new_cap − consumed)`.
-- On recovery, an `execution.started` with no matching `execution.stopped` is an uncertain
-  interval. It is closed with `execution.stopped {reason: recovered, charged: conservative}`
-  and charged at its **maximum plausible duration** — the wall-clock gap to the recovery
-  moment. Fail-closed: an uncertain crash interval costs budget rather than silently
-  granting free execution time.
+  `remaining_time = max(0, new_time_cap − consumed)` and
+  `remaining_retries = max(0, new_retry_cap − retries_consumed)` — two independent caps, so a
+  budget amendment that changes only one leaves the other untouched.
+- On recovery, an `execution.started` with no matching `execution.stopped` is an **uncertain
+  interval**: the process that held the monotonic reference is gone, and wall-clock cannot
+  substitute for it because clocks jump — NTP steps, suspend/resume, and manual changes all
+  make a wall gap an unreliable upper bound. It is closed deterministically with
+  `execution.stopped {reason: recovered, charged: clamped}` where
+
+  ```text
+  charged_duration = min( max(0, observed_at − wall_start), remaining_at_start )
+  ```
+
+  `observed_at` is **sampled at recovery** — it is not journaled state — so recovery records
+  both `observed_at` and the resulting `charged_duration` in the fsynced `execution.stopped`.
+  Every later replay reads the recorded charge and never recomputes it, which is what makes
+  the projection stable. Honestly labelled, this is **bounded best-effort accounting, not
+  fail-closed**: a backward clock jump between `wall_start` and recovery can undercharge. The
+  clamp guarantees only the upper bound — an uncertain interval never costs more than the
+  budget that was actually available when it opened.
 - Each attempt receives the remainder at its start (`request.budget`).
+- **Exhaustion mid-flight has an explicit terminal path.** If the budget runs out while an
+  adapter or an acceptance command is running, the attempt must be terminalized before the
+  movement can fail — otherwise `movement.failed {budget_exhausted}` would leave a live
+  `RUNNING`/`VERIFYING` attempt behind, and the derived `attempt.cancelled` cannot be used
+  because it belongs solely to run cancellation:
+
+  ```text
+  stop/cancel the active process (§4 termination, §6 control channel)
+  → execution.stopped {reason: budget_exhausted}
+  → attempt.failed {kind: budget_exhausted}      # core-determined, not a vendor failure
+  → movement.failed {budget_exhausted}
+  → run.failed {budget_exhausted}
+  ```
+
+  This is distinct from a **criterion timeout**: a per-criterion `timeout_min` reached while run
+  budget remains yields criterion `ERROR` on the ordinary quality path (§7). Only exhaustion of
+  the *run's remaining budget* takes the budget path, which consumes no quality retry — there is
+  nothing left to fund one.
+
+  **Composition exhaustion needs no attempt event**, because fan-in and candidate composition
+  run *between* attempts, not inside one (§5, §8) — there is no live attempt to terminalize:
+
+  ```text
+  movement fan-in:          stop composition → execution.stopped {budget_exhausted}
+                            → movement.failed {budget_exhausted} → run.failed {budget_exhausted}
+  candidate composition:    stop composition → execution.stopped {budget_exhausted}
+                            → run.failed {budget_exhausted}
+  ```
+
+  Candidate composition is run-scoped by definition, so it fails the run directly with no
+  movement in between.
 
 **Active-run exclusivity and the two locks.** These are different concerns and must not
 share a mechanism:
@@ -812,8 +1270,18 @@ run per repository: `partitur run` refuses to start while one exists (resume or 
 first). Commands accept an explicit run id or select the unique active run. The nonterminal
 journal state is the logical guard; the lease guards concurrent *drivers* of the same run.
 
+**Cancellation is run-scoped.** `partitur cancel` cancels the *run*, not a single attempt.
+An attempt-scoped cancel would leave the movement `RUNNING` with no selection reason for what
+comes next — not a retry, not a fallback, not a restart — so v0.2 does not offer one. The
+protocol-level `cancel` (§4) still targets the current attempt, because that is the process
+that must stop; the *authority* is the run-scoped request. `run.cancelled` atomically projects
+every nonterminal movement and attempt to `CANCELLED` (Appendix B), and if no driver holds the
+lease, `partitur cancel` completes `run.cancelled` itself rather than leaving a cancelled run
+active until someone happens to `resume`. Recovery is therefore only needed for a crash
+between the request and its terminalization.
+
 **The control channel. [SPIKE]** With no daemon, nothing waits in memory, so out-of-band
-control — cancellation, and revision approval that supersedes a running attempt — needs a
+control — cancellation, and revision approval that supersedes a nonterminal attempt — needs a
 durable path that reaches a driver mid-execution:
 
 1. The requesting command appends the authoritative control event under the state lock
@@ -825,8 +1293,17 @@ durable path that reaches a driver mid-execution:
    continuous watch, not a checkpoint.
 4. On observing the request the driver issues protocol `cancel`, awaits the `execute`
    response, then applies the outer termination grace and process-tree sweep (§4).
-5. If no driver is alive, the next `resume` observes the durable request and closes the
-   attempt out terminally **without launching another attempt**.
+5. If no driver is alive, the cancelling command itself completes the terminalization; a
+   later `resume` observes an already-terminal run and launches nothing.
+6. **A live but wedged owner** — lease verified, yet the driver never acknowledges the journal —
+   is the case a responsive/dead dichotomy misses. The *safety contract* is fixed here even
+   though the mechanism belongs to the lease spike: after a bounded acknowledgement deadline the
+   canceller re-verifies the lease owner, terminates it and its process tree (§4), **fences that
+   lease incarnation out of all further mutation**, closes any open budget interval by the
+   recovery rule above, and only then appends `run.cancelled` if the owner has not already. The
+   invariant that must never break: **the run is never declared cancelled while the old
+   execution authority could still mutate it.** Fencing is what makes that safe — without it a
+   revived driver could append after terminalization.
 
 The journal is the authority; the signal only reduces latency. Because supersede needs the
 identical mechanism, this is one general control channel rather than a cancel-only feature.
@@ -842,9 +1319,10 @@ Event envelope (`journal.jsonl`, control-grade for a later GUI):
 
 - `movement_id`, `part_id`, `attempt_id` are optional — run-level events omit them.
 - `attempt_id` is an opaque string, never the ordinal.
-- `causation_id` references another event's `event_id`, and is the **idempotency key** for
-  every derived or recovery-synthesized event (Appendix B): appending a derived event twice
-  for the same causation id is a no-op, which is what makes recovery replayable.
+- `causation_id` references another event's `event_id` and names the **source authority** for
+  a derived or recovery-synthesized event. It is the idempotency key only where Appendix B
+  says so — one source event can legitimately derive several distinct events, so it is not
+  universally sufficient on its own.
 - `event_id` and `seq` are allocated together by the single writer; `seq` is contiguous and
   strictly increasing within the run.
 - Pending decisions are represented as an append-only pair — `decision.requested` /
@@ -853,9 +1331,10 @@ Event envelope (`journal.jsonl`, control-grade for a later GUI):
   events resolve their own decision directly and no separate `decision.resolved` is ever
   appended on any amendment path (§9).
 
-The complete registry of authoritative events — payload, fsync requirement, idempotency
-key, legal source state, and resulting projection — is **Appendix B**, which is normative.
-An event type absent from Appendix B does not exist.
+The complete registry of **event types and their state effects** — fsync requirement,
+idempotency key, legal source state, and resulting projection — is **Appendix B**, which is
+normative. An event type absent from Appendix B does not exist. Appendix B is *not* yet a
+complete payload registry; per-event field schemas are completed in the follow-up PR.
 
 ## 7. Acceptance runner and CLI v0.2
 
@@ -878,9 +1357,11 @@ performer.completed                       (vendor execution ended — not succes
 **Criterion identity.** Every criterion carries an explicit `id`, unique within its
 movement (§2 rule 9). Its `criterion_spec_hash` is the canonical hash of the criterion's
 semantic fields — id, kind, argv, timeout, artifact reference or `expected_hash`, rubric,
-as applicable. The movement's `acceptance_spec_hash` is the canonical hash of the whole
-acceptance block: ordered criteria plus `human_gate`. Both are recorded with the evidence
-so a mark says exactly which specification it proved (Appendix A).
+as applicable. The movement's `acceptance_spec_hash` is the canonical hash of the **effective
+compiled acceptance plan** — declared criteria with any replacements applied, plus
+core-generated integrity checks, in the deterministic order below, plus `human_gate` — not of
+the raw acceptance block as written. A mark must bind to what actually ran. Both hashes are
+recorded with the evidence so a mark says exactly which specification it proved (Appendix A).
 
 **Subject binding.** `acceptance.started` records the `subject_tree` — the tree hash the
 acceptance runs against — before any criterion runs, and every criterion event repeats it.
@@ -898,21 +1379,63 @@ though it remains in the journal as history.
   `min(criterion timeout, remaining active budget)`. Output is captured with bounded
   streaming into the attempt directory and the event log. A failing criterion records
   `acceptance.failed` — it is the core's judgment, never the adapter's `task_failed`.
-  If an acceptance command mutates tracked files in the worktree, the criterion fails
-  with `acceptance_mutated_workspace` (ignored caches/outputs are permitted) — the
-  change set that was verified must be the change set that ships.
+  If an acceptance command mutates the worktree — measured by the **full invariant**: tracked
+  content, non-ignored untracked files, symlink targets, file modes, and protected-path
+  integrity — the criterion fails with `acceptance_mutated_workspace` (ignored caches and
+  outputs are permitted). The change set that was verified must be the change set that ships.
 - `artifact` — the declared output was emitted, its `kind` matches, and its recorded hash
   matches the immutable instance (manifest integrity). An optional `expected_hash` is
   allowed for pre-known content. A declared output never emitted fails here.
 
-**Acceptance runner authority.** The runner is core-executed and its environment is fixed
-by the core, not inherited from the user's shell: the working directory is the attempt
-worktree; the environment is a minimal allowlist plus the criterion's declared additions;
-network access follows the movement's `network` grant; no shell interpretation occurs;
-temporary files go under the attempt directory. The runner holds **no repository write
-authority** beyond what the criterion command itself does, and its own side effects are
-never classified as the movement's. A criterion that cannot be spawned, times out, or
-whose runner crashes yields `ERROR`, not `FAIL`.
+  **Integrity checks are core-generated.** The compiler generates one artifact check for
+  **every** ordinary declared output, so "declared but never emitted" is always caught without
+  the user having to remember a criterion per output:
+
+  - Reserved id `partitur.artifact.<logical_output_id>` — in the core namespace, hence outside
+    the score's identifier grammar (§1), so it can never collide with a declared criterion.
+  - `kind: change_set` outputs are excluded: they are core-synthesized (§5) and satisfied by
+    `change_set.recorded`.
+  - **Replacement is keyed by the referenced output, not by criterion id.** An explicitly
+    declared `artifact` criterion referencing the same output suppresses the generated check
+    for it — that is how an `expected_hash` is supplied.
+  - **Deterministic order:** declared hard criteria in declaration order, then generated
+    checks in output-declaration order. Generated checks participate in
+    `acceptance_spec_hash`, so adding or removing an output correctly changes the effective
+    acceptance specification and cannot silently alter what a mark proved.
+
+  **Declared vs generated is the line that matters.** A generated check proves the performer
+  *delivered*, never that the work is *correct*, so it can never on its own earn a mark:
+  §2 rule 2, VERIFIED, and the `require ∋ verified` achievability rule all require the score
+  to **declare** a hard criterion. An explicitly declared `artifact` criterion is a declared
+  hard criterion and does count — the score chose it. Without this distinction, any write
+  movement declaring an output would auto-satisfy its verification floor and could be marked
+  VERIFIED because a file exists, which is the overstatement V-001 forbids.
+
+**Acceptance runner authority — a deterministic invocation shape, not confinement.** A
+criterion command is declared *in the score*, which the user authors and approves, so it runs
+under the user's own authority. Confining it is therefore **not** the security boundary that
+confining an agent is, and v0.2 does not pretend to sandbox it. What the core fixes is the
+*shape of the invocation* — deliberately not "a reproducible environment", which a fixed argv
+cannot deliver: toolchain versions, filesystem contents, and external services all remain
+outside Partitur's control.
+
+- **Fixed by the core:** working directory is the attempt worktree; the argv array is executed
+  directly with **no shell interpretation**; the environment is a core-defined allowlist;
+  temporary files default under the attempt's staging directory; output is bounded; the
+  timeout is `min(criterion timeout, remaining active budget)`.
+- **Advisory only:** filesystem and network restrictions. The core neither claims nor
+  attempts physical confinement of an acceptance command.
+- **Post-hoc detection is the control, and its reach is limited.** After the command runs, the
+  core compares the worktree across tracked content, **non-ignored untracked files, symlink
+  targets, and file modes**; divergence fails the criterion `acceptance_mutated_workspace`
+  (ignored caches and outputs permitted), and protected paths (§2) are checked exactly as for
+  a change set. This is what enforces "the change set that was verified is the change set that
+  ships". It **cannot** detect network effects, writes outside the worktree, or mutation of
+  shared Git refs and run state — those are guarded by isolation and integrity/CAS checks
+  (§1), not by this comparison.
+
+A criterion that cannot be spawned, times out, or whose runner crashes yields `ERROR`, not
+`FAIL` — the criterion produced no verdict.
 
 **Criterion outcomes and the no-override rule.** `ERROR` means the criterion produced no
 verdict — spawn failure, timeout, runner crash. Both `FAIL` and `ERROR` block movement
@@ -964,9 +1487,11 @@ mistake blind.
 
 **Recovery.** Acceptance is interruptible at every step, so its resumption is governed by
 the normative table in **Appendix C**, evaluated top-down with the first matching row
-winning. It is fail-closed: before resuming any criterion the core verifies the worktree
-tree still equals the `subject_tree` recorded in `acceptance.started`, and on mismatch
-records `acceptance.failed {reason: recovery_subject_mismatch}`.
+winning. It is fail-closed: before resuming any criterion the core re-verifies the worktree against the
+**full invariant** — tracked content equal to the `subject_tree` recorded in
+`acceptance.started`, plus non-ignored untracked files, symlink targets, modes, and
+protected-path integrity — and on any mismatch records
+`acceptance.failed {reason: recovery_subject_mismatch}`.
 
 **Command authority.** Exactly one process drives attempts. The distinction is between
 *recording a transition* and *launching execution* — several commands legitimately mutate
@@ -974,11 +1499,12 @@ state, but only two ever start an adapter:
 
 | Command | May mutate state | May launch an attempt |
 |---|---|---|
-| `init`, `validate`, `status`, `logs` | no | no |
+| `validate`, `status`, `logs` | no | no |
+| `init` | creates `.partitur/` and, when absent, a draft score — never overwrites either | no |
 | `answer` | records `decision.resolved` only | no |
-| `approve` (gate) | records the gate transition; may atomically complete or fail an already-evaluated movement | no |
+| `approve` (gate) | records the gate `decision.resolved`; the resulting completion or failure follows the Appendix C event sequence (`attempt.completed` then `movement.succeeded`, or `movement.failed`) — approval does not manufacture one atomic completion event | no |
 | `approve` / `amend` (amendment) | may atomically write a snapshot and supersede attempts (§9) | no |
-| `cancel` | appends the durable cancel request (§6) | no |
+| `cancel` | appends the durable run-scoped cancel request, and — after verifying no valid lease owner remains — may append `run.cancelled` itself (§6) | no |
 | `apply`, `promote-score` | own transactions (§8) | no |
 | `run`, `resume` | full | **yes** — acquires the driver lease |
 
@@ -989,7 +1515,7 @@ later `resume` does. `answer` never blocks waiting for work to finish.
 **CLI v0.2.**
 
 ```text
-partitur init            # create .partitur/, its .gitignore (runs/), and — only when no
+partitur init            # create .partitur/, its .gitignore (runs/ and work/), and — when no
                          #   score exists — a minimal draft partitur.yaml with an
                          #   interview movement. Never overwrites an existing score.
 partitur validate        # compile the score (§2) AND resolve the cast and probe its
@@ -1000,7 +1526,8 @@ partitur logs --jsonl    # stream the journal
 partitur answer          # answer pending questions
 partitur approve         # approve/reject amendments, gates, finalization
 partitur amend           # propose an amendment from the CLI
-partitur cancel          # cancel an attempt or the run (§6 control channel)
+partitur cancel          # cancel the RUN (run-scoped; §6 control channel). There is no
+                         #   attempt-scoped cancel — see §6
 partitur resume          # resume after interruption; takes the lease
 partitur apply           # apply the candidate to the checkout (§8)
 partitur apply --recover           # only from APPLYING | RECOVERY_REQUIRED
@@ -1021,13 +1548,18 @@ never drift from the evidence.
 **Three grades, a set and never a ladder.** No ordering, no substitution: REVIEWED never
 counts toward anything that asks for VERIFIED or APPROVED.
 
-- **VERIFIED** — the attempt has `acceptance.evaluation_completed`, the movement declares
-  ≥1 `hard` criterion, and every declared hard criterion is `PASS`. Zero hard criteria can
-  never yield VERIFIED.
+- **VERIFIED** — the attempt has `acceptance.evaluation_completed`, the movement
+  **declares** ≥1 `hard` criterion, and every hard check — declared *and* core-generated —
+  is `PASS`. Zero *declared* hard criteria can never yield VERIFIED: core-generated
+  integrity checks close the "declared but never emitted" hole (§7) but can never by
+  themselves earn a mark, or a movement would be VERIFIED because a file exists.
 - **APPROVED** — a `decision.resolved` with `decision_type: human_gate` approves this
   movement, carrying `gate_id`, movement/attempt/`score_revision`, the exact `subject_tree`,
-  the approval scope, and any overridden finding instance ids. An approval never carries
-  over to another attempt, revision, or subject tree.
+  the approval scope, and any overridden finding instance ids. Whenever
+  `overridden_finding_instance_ids` is non-empty the event **must** carry a non-empty
+  `override_reason`; an override with no recorded reason is invalid, because overriding a
+  reviewer's blocking judgment is exactly the decision that must stay auditable. An approval
+  never carries over to another attempt, revision, or subject tree.
 - **REVIEWED** — the movement declares ≥1 `review` criterion (compiler-enforced, §2 rule
   11, so it can never hold by vacuous truth) and every declared review criterion is
   satisfied by a well-formed, subject-bound findings artifact (§7). REVIEWED means "typed
@@ -1066,8 +1598,9 @@ candidate_id = H("partitur/candidate",
 ```
 
 It is a **content** identity, independent of score revision. A run with no write movements
-records `result_tree == base_tree`. A composition conflict is handled **before** recording —
-`WAITING_HUMAN` per §5 — never discovered at `apply` time.
+records `result_tree == base_tree`. A composition conflict is handled **before** recording,
+and terminally: it fails the run with `composition_unresolvable` per §5 — never discovered at
+`apply` time.
 
 Materialization is always **one authoritative journal event**, never a batch that could
 tear on crash:
@@ -1095,8 +1628,11 @@ attempts regardless of the part's capabilities. Its worktree *is* the candidate
 run's transition to `SUCCEEDED`** — one atomic journal transition. There is consequently no
 window in which the final movement has succeeded while the run is still amendable.
 
-At adapter exit the core verifies the movement's worktree tree equals the recorded candidate
-`result_tree`; a mismatch is `candidate_mismatch`, classified in the `grant_denied` class —
+At adapter exit the core applies the full read-only post-hoc invariant of §5 — tracked content,
+non-ignored untracked files, symlink targets, modes, protected paths — and additionally verifies
+that the worktree tree equals the recorded candidate `result_tree`. `subject_tree` equality
+alone would miss an untracked file or a mode change that a later step could observe. Any
+mismatch is `candidate_mismatch`, classified in the `grant_denied` class —
 an unauthorized write to the tree under verification — failing the attempt with no quality
 retry and no fallback. If the core's own composition disagrees with what it recorded, that
 is internal corruption handled by recovery, never attributed to the performer.
@@ -1159,13 +1695,13 @@ precondition. Promotion is its own journaled transaction with a projection symme
 application (§6):
 
 ```text
-score.promotion_started { expected_root_hash, target_snapshot_hash, candidate_id }
+score.promotion_started { expected_root_file_hash, target_snapshot_file_hash, candidate_id }
 → temp write + fsync + atomic rename of the root score
 → score.promoted + fsync
 ```
 
-`promote-score --recover`, under the lock: root hash == target → complete `score.promoted`
-idempotently under the original transaction id; root hash == expected → resume the *same*
+`promote-score --recover`, under the lock: root **file** hash == target → complete
+`score.promoted` idempotently under the original transaction id; root file hash == expected → resume the *same*
 transaction (a repeated `score.promotion_started` is an idempotent resume, never a second
 promotion); anything else stays `RECOVERY_REQUIRED`, because the root was changed by
 something else and the CAS can no longer decide.
@@ -1185,9 +1721,13 @@ wins:
    with `run_terminal`. Score changes after a run ends happen by editing the root score or
    starting a new run; reopening a terminal run is out of scope.
 2. **Stale re-check** — `base_revision` / `base_hash` must match the snapshot head.
-3. **Reserved fields** — the v0.2 reserved set is exactly `{ /revision }`. An operation
-   *touches* it if its `path` (or `from` for `move`/`copy`) equals it, descends from it, or
-   is an ancestor of it. `test` operations on reserved pointers are permitted.
+3. **Reserved fields** — the v0.2 reserved set is `{ /revision, /status }`. An operation
+   *touches* a reserved pointer if its `path` (or `from` for `move`/`copy`) equals it,
+   descends from it, or is an ancestor of it. `test` operations on reserved pointers are
+   permitted. `/status` is reserved because the **core alone** may construct the
+   `draft → finalized` transaction (§2); an ordinary adapter or CLI proposal touching
+   `/status` rejects as `reserved_field`, which is what stops a performer from finalizing a
+   score on its own.
 4. **Patch application** to the canonical JSON; any RFC 6902 error rejects.
 5. **No-op check** — canonical equality of before/after rejects.
 6. **Compiler validation** of the patched score (§2); invalid rejects.
@@ -1215,17 +1755,25 @@ decision time**, because the head, the compiler result, and the runtime state ca
 changed while the proposal waited. The envelope guards are recomputed *for the audit record
 only*: they never re-route or block a human approval — routing a guard failure back to the
 deciding human would loop. Rejection is permanent; a corrected proposal is a new proposal.
-The proposal's origin (adapter or CLI) never affects any rule.
+The proposal's origin (adapter or CLI) never affects any rule — with the single, explicit
+exception that only the core may construct the reserved `/status` finalization amendment, which
+still always requires human approval.
 
 **Typed comparison, never a JSON diff.** Neither classification nor impact computation
 inspects RFC 6902 operations or a generic diff — array-index ambiguity would make the same
 before/after pair yield different results per diff algorithm. The core compares the two
 validated score **ASTs**:
 
-- `movements` and `parts` are matched by immutable id; criteria by their `id`. For envelope
-  classification, movement count, ids, and order must be identical or the change is
-  unclassified.
-- `policy.allowed_paths`: only order-preserving element removal qualifies.
+- `movements` and `parts` are matched by immutable id; criteria by their `id`. **Content
+  comparison is by id; sequence is compared separately.** A.1 hashes movement and criterion
+  *declaration order* because that order is semantic (§5 tie-breaking, §7 short-circuiting), so
+  a reorder is a real change and is recorded as an explicit collection-order change — never
+  silently absorbed into a content diff, and never invisible. For envelope classification,
+  movement count, ids, **and** order must all be identical, or the change is unclassified.
+- `policy.allowed_paths`: strict **set** removal qualifies — the resulting set must be a
+  proper subset. Order is not considered, because the field is declared an unordered union of
+  positive patterns (§2) and A.1 hashes it sorted; requiring "order-preserving" removal here
+  would contradict both.
 - `movements[].grants`: a duplicate-free set; only a strict subset qualifies.
 - `budget.active_wall_clock_min`, `budget.retries_per_movement`: only a strict decrease
   between valid integers qualifies.
@@ -1248,8 +1796,10 @@ actual_impact = {
 
 `selector` is a **stable semantic selector**, not a raw numeric JSON Pointer: id-keyed
 collections are addressed by id (`/movements[id=build]/grants`), because a numeric pointer
-becomes ambiguous the moment a collection is reordered. Id-keyed collections are sorted by id
-before diffing and hashing. An id-less array that differs in any way is recorded as a single
+becomes ambiguous the moment a collection is reordered. Items are matched **by id** for
+deterministic content comparison, while semantic **sequence** is compared and hashed
+independently in declaration order (A.1) — so a reorder is neither absorbed into a content diff
+nor lost from the hash. An id-less array that differs in any way is recorded as a single
 `replace` of the whole field — one coarse selector, so a movement reorder is one `replace` of
 `/movements`. Where raw order is semantically meaningful, the schema carries an explicit
 order field rather than relying on position.
@@ -1266,7 +1816,7 @@ set does not un-produce it:
 
 | Class | Structural rule | State guard |
 |---|---|---|
-| `NARROW_PATHS` | Order-preserving removal of an `allowed_paths` entry | No attempt of **any** movement whose effective `paths_ro` or `paths_rw` would change has started — `allowed_paths` scopes reads as well as writes |
+| `NARROW_PATHS` | Strict **set** removal of an `allowed_paths` entry | No attempt of **any** movement whose effective `paths_ro` or `paths_rw` would change has started — `allowed_paths` scopes reads as well as writes |
 | `NARROW_GRANTS` | Removal of a grant from one movement | That movement **and its transitive downstream** have not started |
 | `BUDGET_DECREASE` | Strict decrease of a budget cap | Always allowed; remainders per §3 and §6 |
 
@@ -1281,13 +1831,13 @@ not abstractly to the movement:
 ```text
 attempt.execution_dependency_hash =
   H("partitur/execution-dependency",
-    { projection_version, actual_adapter_id,
+    { actual_adapter_id,                    # H() already injects the version tuple (A.2)
       canonical score-derived semantic execute-request projection,
         using extensions.<actual_adapter_id> })
 ```
 
-The projection is **exhaustively enumerated in Appendix A** — "includes at least" is not an
-identity definition. It is keyed by the adapter that actually served the attempt (primary or
+The projection is defined in Appendix A.5, whose shape is **provisional until the follow-up PR**
+— "includes at least" is not an identity definition, and A.5 is not yet one either. It is keyed by the adapter that actually served the attempt (primary or
 fallback), so changing `extensions.<fallback>` after a fallback attempt succeeded is detected.
 It excludes per-attempt values: runtime identity, filesystem paths, `session_hint`,
 `request.feedback`, and remaining budget.
@@ -1335,10 +1885,12 @@ changes; and changes to not-yet-started read-only movements.
 `base_revision + 1`. An approved revision change invalidates the **current execution
 episode**, not merely running attempts:
 
-- RUNNING attempts are superseded: the core records the approval, cancels/terminates the
-  adapter through the §6 control channel, accepts no further protocol or artifact output
-  from the superseded attempt once the new head is recorded, and charges the time until
-  actual termination against the active budget.
+- **Every nonterminal attempt** — `STARTING`, `RUNNING`, or `VERIFYING` — is superseded, not
+  only running ones: a human gate can leave an old-revision attempt sitting in `VERIFYING`,
+  and letting it complete would attach evidence to a revision that no longer exists. The core
+  records the approval, cancels/terminates the adapter through the §6 control channel, accepts
+  no further protocol or artifact output from the superseded attempt once the new head is
+  recorded, and charges the time until actual termination against the active budget.
 - In `WAITING_HUMAN`, terminal attempts keep their history, but every pending decision or
   gate raised on the old revision is closed with `decision.obsoleted`. Gate approvals never
   carry across revisions.
@@ -1365,6 +1917,21 @@ own decision in projection. No separate `decision.resolved` is appended on any a
 path. Every event records the base hash and the classifier version. The canonical typed delta
 is recorded only once a validated patched AST exists (step 6 on); earlier rejections record
 the patch-operations hash and the error location instead.
+
+**Deterministic first failure.** "First failure wins" is only meaningful if ties are broken
+deterministically, so that the same proposal always yields the same rejection reason and the
+same audit delta:
+
+1. The pipeline order of steps 1–9 above decides *which* check reports.
+2. Within a check, typed `score_changes` are ordered by **stable selector**, then by
+   `operation` (`add` < `remove` < `replace`).
+3. `authority` entries are ordered by `movement_id`, then by pattern string.
+
+No step depends on map iteration order, nor on the order in which a *generic diff* would emit
+changes. Proposer operation order is **not** irrelevant, though: RFC 6902 application is
+order-sensitive by definition, and the `partitur/patch-operations` identity (Appendix A) hashes
+the operations as written. What is order-independent is the typed comparison and the impact
+report derived from the before/after ASTs.
 
 **Persistence.** The approved snapshot is written temp → fsync → atomic rename; then the
 single `amendment.approved` event is appended and fsynced — head change and logical supersede
@@ -1398,17 +1965,24 @@ there is one encoder and every caller names a domain.
 Canonical JSON is **RFC 8785 (JCS)**: UTF-8, object keys sorted by UTF-16 code unit,
 no insignificant whitespace, ES6 number serialization.
 
-- **Numeric range.** Every number in a hashed value must be an integer in the I-JSON safe
-  range `[-(2^53 - 1), 2^53 - 1]`. Score-schema numbers are restricted to that range by
-  compiler rule 13. Adapter `extensions` namespaces participate in
-  `execution_dependency_hash` and may legitimately contain fractional numbers, so the
-  encoder implements **full JCS number serialization** for them rather than rejecting
-  non-integers outright — a blanket integer-only rule would make legal extension payloads
-  unhashable.
+- **Numeric range.** Two different rules, deliberately, because the two sources have
+  different authors:
+  - **Score-schema numbers** must be integers in the I-JSON safe range
+    `[-(2^53 - 1), 2^53 - 1]` (compiler rule 13). Partitur authors the schema, so it can
+    simply forbid the ambiguous cases.
+  - **`extensions.<adapter-id>` payloads** are authored in the score or cast — by the user,
+    for a vendor to consume — are opaque to the core, participate in
+    `execution_dependency_hash`, and may legitimately contain fractional numbers. They are
+    encoded under the **full JCS/I-JSON number rule**, whose exact boundary behaviour the
+    A.1 spike confirms, as do the raw RFC 6902 operations hashed pre-validation for
+    `partitur/patch-operations`. Rejecting them outright would make legal payloads
+    unhashable.
 - **Unicode.** No normalization is applied; byte-identical input yields byte-identical
   output. Sorting is by UTF-16 code unit per JCS, not by code point.
-- **YAML → JSON mapping.** `yamlsafe` decoding produces only strings, integers within the
-  range above, booleans, null, sequences, and mappings. Block scalars keep YAML clip
+- **YAML → JSON mapping.** `yamlsafe` decoding produces only strings, numbers, booleans, null,
+  sequences, and mappings. **Schema-controlled numeric fields** then validate as integers in the
+  safe range (rule 13); **opaque `extensions` subtrees** are not schema-controlled, so they
+  preserve any JCS/I-JSON-admissible number, fractions included. Block scalars keep YAML clip
   semantics for the trailing newline and become plain JSON strings. Timestamp, binary,
   sexagesimal, and every other implicit tag is **rejected at parse time**, so no
   ambiguously typed value ever reaches the encoder. Duplicate keys, anchors, aliases, merge
@@ -1417,10 +1991,22 @@ no insignificant whitespace, ES6 number serialization.
   defaults are applied**, so an omitted field and an explicitly written default produce the
   identical hash. Optional fields with no default are omitted from the projection entirely
   rather than encoded as `null`.
-- **Ordered lists vs id-keyed sets.** Id-keyed collections (`movements`, `parts`, acceptance
-  criteria) are **sorted by id** before encoding, so a reorder cannot change an identity
-  that does not depend on order. Genuinely ordered lists (`allowed_paths`,
-  `ordered_change_sets`) keep their order, and that order is part of the identity.
+- **Ordered sequences vs unordered sets.** The rule is *semantic*, not structural: a
+  collection is sorted only when its order genuinely carries no meaning. Sorting a
+  collection whose order is meaningful would let two different scores share a `base_hash`.
+
+  | Collection | Encoding | Why |
+  |---|---|---|
+  | `movements` | **declaration order preserved** | Order breaks topological ties and can change the fan-in result (§5); §9 treats a reorder as a real change |
+  | `acceptance.hard`, `acceptance.review` | **declaration order preserved** | Criteria run in declaration order and short-circuit on the first failure (§7) |
+  | `ordered_change_sets` | order preserved | It is the composition order (§5) |
+  | `parts` | sorted by id | A mapping; order is not observable |
+  | `allowed_paths` | sorted, duplicate-free | Declared an unordered union of positive patterns (§2), so reordering must **not** change the hash |
+  | `needs`, `grants`, `capabilities`, rubric id sets | sorted, duplicate-free | Sets by definition |
+
+  Correspondingly, typed comparison (§9) matches movement *content* by id but records a
+  distinct collection-order change when the movement sequence differs — so a pure reorder is
+  neither invisible to the hash nor misattributed to a content edit.
 
 **[SPIKE]** the encoder must be validated against the published JCS conformance vectors and
 against a YAML corpus exercising block scalars, quoting forms, and the rejected tag set
@@ -1430,14 +2016,22 @@ before this section is frozen.
 
 ```text
 H(domain, value) = "sha256:" + hex(sha256(JCS({
-  "domain":  <domain>,
-  "version": <that domain's projection version>,
-  "value":   <the exact normalized projection>
+  "domain":                     <domain>,
+  "canonical_encoding_version": <A.3>,
+  "projection_version":         <that domain's projection version, A.3>,
+  "value":                      <the exact normalized projection>
 })))
 ```
 
-The domain and version are **inside** the hashed value, so a domain confusion or a
-projection change can never produce a colliding identity.
+Every version that can change the bytes is **inside** the preimage, so a domain confusion, an
+encoder change, or a projection change can never produce a colliding identity. Recording a
+version alongside the result would not achieve this — the hash itself must depend on it.
+
+**Recomputation across versions.** When the core recomputes a historical identity — the
+executed-dependency check of §9 is the main case — it uses the **version tuple recorded with
+that attempt**, not the current one. If the running binary no longer implements that tuple, the
+run fails closed with `unsupported_run_format` rather than silently comparing hashes computed
+under different rules.
 
 ## A.3 Independent versions
 
@@ -1458,22 +2052,30 @@ Every journal event that records an identity also records the versions it used.
 | Domain | Projection |
 |---|---|
 | `partitur/score` | The whole validated score AST after defaults. Used for `base_hash` and snapshot hashes. |
-| `partitur/criterion-spec` | `{id, kind, argv?, timeout_min?, artifact_ref?, expected_hash?, rubric?}` — exactly the semantic fields of that criterion kind; nothing positional. |
-| `partitur/acceptance-spec` | `{criteria: [criterion-spec hashes in declaration order], human_gate}` |
+| `partitur/criterion-spec` | ⚠ *provisional* — an exact tagged union over criterion kinds (`hard.run`, `hard.artifact`, `review`), carrying only that kind's semantic fields. The field names here are indicative, not final. |
+| `partitur/acceptance-spec` | ⚠ *provisional* — the **effective compiled acceptance plan** (§7): declared criteria with replacements applied, plus core-generated integrity checks, in declaration order, plus `human_gate`. Exact projection deferred. |
 | `partitur/change-set` | `{base_tree, result_tree}` |
 | `partitur/candidate` | `{base_tree, result_tree, ordered_change_sets: [change_set_id]}` |
 | `partitur/candidate-composition` | `{base_tree, ordered_contributing_movement_ids, ordered_change_set_ids, composition_algorithm_version}` |
-| `partitur/execution-dependency` | A.5 — exhaustively enumerated |
+| `partitur/execution-dependency` | ⚠ *provisional* — A.5 |
 | `partitur/patch-operations` | The raw RFC 6902 operations array, for pre-validation rejection records only (§9). |
 
-Artifact and tree hashes are **not** in this registry: artifact instances are hashed as raw
-file bytes (`sha256:<hex>`, §1) and tree ids are Git-native. Mixing a canonical-AST hash
+This registry is **incomplete** — `partitur/resolved-cast` and `partitur/score-subtree` are
+missing and are added by the follow-up PR, along with object-format qualification for
+Git-native ids.
+
+Artifact and tree hashes are **not** canonical-AST identities: artifact instances are hashed as
+raw file bytes (`sha256:<hex>`, §1) and tree/commit ids are Git-native and must carry their
+object format (`git-sha1:<hex>`, `git-sha256:<hex>`) rather than a bare hex string. Mixing a canonical-AST hash
 with a raw-byte hash is a category error; each identity states which kind it is.
 
 ## A.5 The execution-dependency projection
 
-Exhaustive. "Includes at least" is not an identity definition — a field absent from this
-list is absent from the hash, and adding one is a `projection_version` bump.
+**Provisional shape — not implementation-ready.** This states the intended content well
+enough to review the design; it is *not* yet the exhaustive projection an implementation can
+serialize against, and the follow-up PR completes it (see the header note). What is already
+binding: a field absent from the final projection is absent from the hash, and adding one is a
+`projection_version` bump.
 
 ```text
 {
@@ -1484,9 +2086,12 @@ list is absent from the hash, and adding one is a `projection_version` bump.
     instruction,
     needs                             # sorted
     inputs,                           # sorted logical output ids
-    outputs,                          # sorted {artifact_id, kind}
+    outputs,                          # {artifact_id, kind} in DECLARATION order — output
+                                      #   order controls generated-check order (§7)
     grants,                           # effective grants, as a sorted set
-    acceptance                        # the acceptance AST (id-keyed, sorted per A.1)
+    acceptance                        # the EFFECTIVE compiled acceptance plan (§7), in
+                                      #   declaration order — never id-sorted, since
+                                      #   criteria short-circuit in order (A.1)
   },
   part: { capabilities, read_only },   # capabilities sorted
   score: {
@@ -1500,7 +2105,7 @@ list is absent from the hash, and adding one is a `projection_version` bump.
 ```
 
 Explicitly **excluded**, because they vary per attempt without changing what the score asked
-for: `run_id`, `movement_id`'s attempt ordinal, `attempt_id`, filesystem paths (`workdir`,
+for: `run_id`, `attempt_number`, `attempt_id`, filesystem paths (`workdir`,
 `output_dir`), `session_hint`, `request.feedback`, remaining budget, and wall-clock time.
 
 ---
@@ -1513,6 +2118,48 @@ append a no-op — essential for the derived and recovery-synthesized events. De
 (marked *derived*) are never appended independently; they are projected idempotently from
 their source event, including at recovery.
 
+**Authority.** Every **non-derived** event in B.1–B.6 is **authoritative**: it is the record
+that constitutes a transition, and projections read it. Rows marked *derived* — cancellation,
+supersession, obsoletion — are projected idempotently from an authoritative source event and are
+never appended on their own. The `log` and `progress` events of B.7 are
+**observational**: sanitized, bounded, journaled for later display, and read by no projection
+(§4 diagnostics privacy). Nothing observational can change state.
+
+**Idempotency semantics.** Effective uniqueness is the pair `(event_type, idem_key)`:
+
+- Same key, equivalent payload → **no-op**. This is what makes recovery replayable.
+- Same key, *differing* payload → `journal_idempotency_conflict`, a recovery halt. Two
+  different facts claiming one identity is corruption, not something to merge.
+- `causation_id` names the *source authority* for a derived or recovery-synthesized event. It
+  is the idempotency key only where this table says so — it is not universally sufficient,
+  because one source event can legitimately derive several distinct events.
+
+**Every event whose projection makes the run terminal obsoletes all remaining pending
+decisions.** That is broader than the three `run.*` events: the final movement's
+`movement.succeeded` carries the run's `SUCCEEDED` transition, and a final-movement
+`movement.failed {human_gate_rejected}` carries its `FAILED` transition (§8). Keying the rule
+to event *names* rather than to *projected run terminality* would leave those two paths
+projecting `WAITING_HUMAN` forever (§6). Correspondingly, `decision.obsoleted` derives from any
+such event, not from `amendment.approved` alone.
+
+**Crash between cascading failures.** Attempt failure, movement failure, and run failure are
+separate appends. Recovery **replays the disposition recorded on the failure event** and never
+recomputes admissibility — recomputation could reach a different answer than the live process
+did, which would make the projection depend on when it was replayed:
+
+- Recorded disposition names a scheduled successor that is missing → synthesize it.
+- Recorded disposition is *terminal* → synthesize `movement.failed`, and `run.failed` if that
+  terminalizes the run. This holds even though a terminal failure is **uncharged** (§3) — being
+  uncharged is precisely what marks it terminal.
+
+Each synthesized event is keyed so a repeated recovery is a no-op.
+
+> **Deferred to the follow-up PR:** exhaustive per-event payload schemas — required and
+> optional fields, field types, closed enums, and subject/identity binding per event. The
+> `Projection effect` column below states each event's *effect* and its binding obligations in
+> prose, which is sufficient to review the state machine but **not** sufficient to implement
+> serialization against. Appendix A's A.4/A.5 exhaustiveness is deferred with it.
+
 ## B.1 Run and movement lifecycle
 
 | Type | sync | idem key | Legal from | Projection effect |
@@ -1520,28 +2167,27 @@ their source event, including at recovery.
 | `run.started` | ✓ | run_id | — | Run → `RUNNING`; records base commit/tree, score snapshot hash, resolved-cast hash, root-score hash for CAS |
 | `run.succeeded` | ✓ | run_id | Run `RUNNING` | Run → `SUCCEEDED`. On the **waived** path also carries the full candidate payload and binding (§8) |
 | `run.failed` | ✓ | run_id | Run `RUNNING`/`WAITING_HUMAN` | Run → `FAILED`; carries reason (Appendix D) |
-| `run.cancelled` | ✓ | run_id | Run nonterminal | Run → `CANCELLED` |
+| `run.cancelled` | ✓ | run_id | Run nonterminal | Run → `CANCELLED`. Carries the affected movement and attempt ids and projects their cancellation **atomically**, so a crash mid-cancel cannot leave a cancelled run with a running attempt |
 | `movement.ready` | | movement_id | Movement `PENDING`, deps succeeded | Movement → `READY` |
 | `movement.started` | ✓ | movement_id | Movement `READY` | Movement → `RUNNING` |
-| `movement.waiting_human` | ✓ | causation_id | Movement `RUNNING` | Movement → `WAITING_HUMAN`; Run → `WAITING_HUMAN` |
-| `movement.succeeded` | ✓ | movement_id + attempt_id | Attempt `COMPLETED` | Movement → `SUCCEEDED`; approves its artifacts and change set. For the **final movement** this same event carries the run's `SUCCEEDED` transition (§8) |
-| `movement.failed` | ✓ | movement_id | Movement `RUNNING`/`WAITING_HUMAN` | Movement → `FAILED`; reason ∈ Appendix D. `human_gate_rejected` is keyed on the gate decision id |
-| `movement.cancelled` | ✓ | movement_id | Movement nonterminal | Movement → `CANCELLED` |
+| `movement.succeeded` | ✓ | movement_id + attempt_id | Attempt `COMPLETED` | Movement → `SUCCEEDED`; approves its artifacts and change set. Requires `attempt.completed` first — the completion order is always attempt, then movement. For the **final movement** this same event carries the run's `SUCCEEDED` transition (§8) |
+| `movement.failed` | ✓ | movement_id | Movement `RUNNING`/`WAITING_HUMAN` | Movement → `FAILED`; reason ∈ Appendix D. For `human_gate_rejected` this **one** event atomically projects Attempt → `FAILED`, Movement → `FAILED`, and — for the final movement — Run → `FAILED`, charging no retry and no fallback. The idempotency key is always `movement_id`; the gate decision id is carried as causation and evidence, not as the key |
+| `movement.cancelled` *derived* | — | source event_id + movement_id | — | Movement → `CANCELLED`; projected idempotently from `run.cancelled`. Not independently authoritative — an independent append would compete with `run.cancelled`'s atomic projection |
 
 ## B.2 Attempt lifecycle and performer selection
 
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
-| `performer.selected` | ✓ | attempt_id | before `attempt.started` | Records the chosen performer, adapter id/version, model, enforcement posture and advisory dimensions for this attempt (§1); records whether this attempt consumes a quality retry, a fallback, or neither |
-| `attempt.started` | ✓ | attempt_id | Movement `RUNNING` | Attempt → `STARTING`→`RUNNING`; records `attempt_number`, `execution_dependency_hash`, granted authority |
+| `performer.selected` | ✓ | attempt_id | before `attempt.started` | Records the chosen performer, adapter id/version, model, enforcement posture and advisory dimensions for this attempt (§1), and **why** this attempt exists (`initial`, `quality_retry`, `fallback`, `revision_restart`, `decision_resume`). **Creates the attempt in `STARTING`**, which is what makes that state reachable and lets a spawn failure be attributed to a chosen performer. It records the *reason*; it never charges the budget — charging belongs to the failure event that caused it, so a retry cannot be double-counted |
+| `attempt.started` | ✓ | attempt_id | Attempt `STARTING` | Attempt `STARTING → RUNNING`; records `attempt_number`, `execution_dependency_hash`, granted authority |
 | `performer.completed` | ✓ | attempt_id | Attempt `RUNNING` | Attempt → `VERIFYING`. **Vendor execution ended; says nothing about success** (§6) |
 | `attempt.completed` | ✓ | attempt_id | Attempt `VERIFYING`, acceptance and gate passed | Attempt → `COMPLETED` |
 | `attempt.blocked` | ✓ | attempt_id | Attempt `RUNNING` | Attempt → `BLOCKED` (terminal); carries `pending_decision_ids` |
-| `attempt.failed` | ✓ | attempt_id | Attempt `RUNNING`/`VERIFYING` | Attempt → `FAILED`; carries the failure kind (Appendix D) |
-| `attempt.cancelled` | ✓ | attempt_id | Attempt nonterminal | Attempt → `CANCELLED` |
+| `attempt.failed` | ✓ | attempt_id | Attempt `STARTING`/`RUNNING`/`VERIFYING` | Attempt → `FAILED`; carries the failure kind (Appendix D). Legal from `STARTING` so spawn and startup failures are representable. **Charges at most once, and only if it authorizes another attempt** (§3): a quality kind (`task_failed`) may consume one quality retry; an infrastructure kind may advance the fallback chain; `grant_denied` and `protocol_error` charge neither and terminalize the movement immediately |
+| `attempt.cancelled` *derived* | — | source event_id + attempt_id | — | Attempt → `CANCELLED`; projected idempotently from `run.cancelled`, for the same reason |
 | `attempt.superseded` *derived* | — | source event_id + attempt_id | — | Attempt → `SUPERSEDED`; projected from `amendment.approved` (§9) |
-| `execution.started` | ✓ | attempt_id + phase | — | Opens a budget interval; carries monotonic + wall-clock readings (§6) |
-| `execution.stopped` | ✓ | matching `execution.started` event_id | open interval | Closes the interval and charges it. `{reason: recovered, charged: conservative}` closes an uncertain crash interval at maximum plausible duration |
+| `execution.started` | ✓ | `interval_id` | no interval open | Opens the (single) budget interval; carries `interval_id`, `phase`, `wall_start`, `remaining_at_start` (§6). Keyed on `interval_id` because one attempt legitimately opens several intervals |
+| `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration`. `{reason: recovered, charged: clamped}` closes an uncertain crash interval by the deterministic clamp formula of §6 |
 
 ## B.3 Evidence
 
@@ -1549,12 +2195,12 @@ their source event, including at recovery.
 |---|---|---|---|---|
 | `artifact.recorded` | ✓ | `(logical_output_id, attempt_id)` | Attempt `RUNNING`/`VERIFYING` | Registers the immutable instance and its byte hash (§1). A second append for the same key is `duplicate_artifact_instance` |
 | `change_set.recorded` | ✓ | attempt_id | Attempt `VERIFYING` | Records `change_set_id`, `base_tree`, `result_tree`, and the pinning ref (§5). Only for `repo_write` movements |
-| `composition.conflicted` | ✓ | movement_id + ordered contributors | fan-in or candidate composition | Movement → `WAITING_HUMAN`; records the conflicting contributors (§5) |
+| `composition.conflicted` | ✓ | `scope` + `target_id` + `composition_dependency_hash` | fan-in or candidate composition | **Evidence only — it projects no state.** Records `scope`, `target_id`, the ordered contributors and the conflicted paths. `scope: movement` ⇒ `target_id = movement_id`, and the terminal event is `movement.failed {composition_unresolvable}` — legal from `RUNNING`, since fan-in happens after `movement.started`. `scope: candidate` ⇒ `target_id = run_id` (**not** a `candidate_id`: composition failed, so no candidate exists), and the terminal event is `run.failed {composition_unresolvable}`. Recovery synthesizes the missing terminal event if a crash lands between the two appends. The key includes `target_id` because two movements can conflict over the same contributor list |
 | `application_candidate.recorded` | ✓ | candidate_id | every `repo_write` movement succeeded | Records the candidate and **constitutes its initial binding** (§8) |
 | `acceptance.started` | ✓ | attempt_id | Attempt `VERIFYING` | Binds `subject_tree` + `acceptance_spec_hash` before any criterion runs (§7) |
 | `criterion.started` | ✓ | attempt_id + criterion_id | after `acceptance.started` | Carries `criterion_spec_hash` and the same subject binding |
 | `criterion.completed` | ✓ | attempt_id + criterion_id | matching `criterion.started` | `outcome` ∈ `{PASS, FAIL, ERROR}` |
-| `acceptance.failed` | ✓ | attempt_id | any `FAIL`/`ERROR`, or recovery | Terminal for this acceptance; reason ∈ Appendix D. Projects retry consumption exactly once, keyed on this event's causation id |
+| `acceptance.failed` | ✓ | attempt_id | any `FAIL`/`ERROR`, or recovery | Terminal for this acceptance **and for the attempt**: projects Attempt `VERIFYING → FAILED` in the same transition, so no attempt is ever left stranded in `VERIFYING`. Reason ∈ Appendix D. Always terminalizes the attempt; charges a quality retry **only if another quality attempt is admissible** (§3), otherwise leads to terminal `movement.failed` without charging past the cap. The disposition is recorded in the event, and recovery replays it rather than recomputing. No separate `attempt.failed` is appended on this path |
 | `acceptance.evaluation_completed` | ✓ | attempt_id | all criteria `PASS` | The **only** gateway to grade derivation (§8) |
 
 ## B.4 Decisions
@@ -1563,7 +2209,7 @@ their source event, including at recovery.
 |---|---|---|---|---|
 | `decision.requested` | ✓ | decision_id | — | Adds to pending; `decision_type ∈ {question, human_gate, amendment, finalization}` |
 | `decision.resolved` | ✓ | decision_id | pending | Removes from pending. Carries the answer, or for `human_gate` the `gate_id`, `subject_tree`, scope, and overridden finding instance ids (§8). **Never appended on any amendment path** (§9) |
-| `decision.obsoleted` *derived* | — | source event_id + decision_id | — | Terminally closes a pending decision raised on a superseded revision; projected from `amendment.approved` |
+| `decision.obsoleted` *derived* | — | source event_id + decision_id | — | Terminally closes a pending decision — either raised on a superseded revision, or outstanding when the run went terminal. Derives from `amendment.approved` **or** from any event whose projection makes the run terminal |
 
 ## B.5 Amendments
 
@@ -1571,7 +2217,7 @@ their source event, including at recovery.
 |---|---|---|---|---|
 | `amendment.rejected` | ✓ | proposal_id | Run nonterminal | Terminal. Reason ∈ Appendix D. Records base hash and classifier version; records the typed delta only from pipeline step 6 on, else the patch-operations hash and error location |
 | `amendment.routed_human` | ✓ | proposal_id | admissible | **Non-terminal** routing marker; appends `decision.requested` for the amendment |
-| `amendment.approved` | ✓ | proposal_id | passed 1–9 | The **single authoritative transition**: new snapshot head, new revision, superseded attempt ids, obsoleted decision ids, re-bound `candidate_id`. Resolves its own decision directly |
+| `amendment.approved` | ✓ | proposal_id | passed 1–9 | The **single authoritative transition**: new snapshot head, new revision, superseded attempt ids, obsoleted decision ids, re-bound `candidate_id`. Resolves its own decision directly. **Finalization special case** (`/status: draft → finalized`, §2): the same event additionally closes the draft phase and projects the interview movement to `SUCCEEDED`, manufacturing no `attempt.completed` and no VERIFIED/APPROVED evidence |
 | `amendment.human_rejected` | ✓ | proposal_id | routed | Terminal; carries proposal id, decision id, human reason; resolves its own decision |
 
 ## B.6 Shipping
@@ -1591,7 +2237,7 @@ their source event, including at recovery.
 
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
-| `cancel.requested` | ✓ | run_id or attempt_id | Run nonterminal | The durable cancellation authority (§6). Observed by a live driver mid-execution, or by the next `resume` |
+| `cancel.requested` | ✓ | run_id | Run nonterminal | The durable, **run-scoped** cancellation authority (§6) — never keyed by attempt, because there is no attempt-scoped cancel. Observed by a live driver mid-execution; otherwise the canceller itself terminalizes |
 | `journal.tail_truncated` | ✓ | truncated seq | recovery | Records that an unparseable final line was discarded (§1) |
 | `log` | | — | — | Mirrored adapter diagnostics; sanitized (§4) |
 | `progress` | | — | — | Mirrored adapter progress |
@@ -1601,22 +2247,25 @@ their source event, including at recovery.
 # Appendix C — Acceptance recovery table
 
 Normative (§7). Rows are evaluated **top-down; the first matching row wins**. Before
-resuming any criterion the core verifies that the worktree's current tree still equals the
-`subject_tree` recorded in `acceptance.started`; on mismatch it records
-`acceptance.failed {reason: recovery_subject_mismatch}`, consuming exactly one quality
-retry keyed on that event's causation id.
+resuming any criterion the core re-verifies the worktree against the **full invariant** —
+tracked content equal to the `subject_tree` recorded in `acceptance.started`, plus non-ignored
+untracked files, symlink targets, modes, and protected-path integrity; on any mismatch it
+records
+`acceptance.failed {reason: recovery_subject_mismatch}`, which charges one quality retry only
+if another quality attempt is admissible (§3). The event is keyed on `attempt_id` (Appendix B);
+the causation id is evidence, not the key.
 
 | Last durable state | Recovery action |
 |---|---|
-| `acceptance.failed` present | Terminal — synthesize no further criterion results; project retry consumption and scheduling exactly once, keyed on that event's causation id |
-| Any `criterion.completed` is `FAIL` or `ERROR`, no `acceptance.failed` | Append `acceptance.failed` idempotently; start no further criterion |
+| `acceptance.failed` present | Terminal — synthesize no further criterion results. The attempt is already `FAILED` by that event's own projection (B.3); replay the **recorded** disposition (charged or not, §3) and its scheduling exactly once — never recompute admissibility at recovery |
+| Any `criterion.completed` is `FAIL` or `ERROR`, no `acceptance.failed` | Append `acceptance.failed` idempotently — which terminalizes the attempt as `FAILED` — and start no further criterion |
 | `criterion.started` without `criterion.completed` | Close it as `ERROR` — **including when the command in fact passed but crashed before the event was written** — then append `acceptance.failed` |
 | All criteria completed, all `PASS`, no `acceptance.evaluation_completed` | Append `acceptance.evaluation_completed` idempotently |
 | `acceptance.evaluation_completed`, required human gate not yet requested | Resume at the gate step; append one `decision.requested` idempotently |
-| `decision.requested` (gate) unresolved | Restore the `WAITING_HUMAN` projection; append nothing |
-| Gate resolved approve, movement success event missing | Complete the movement success idempotently — including, for the final movement, the run's `SUCCEEDED` transition |
-| Gate resolved reject, terminal failure event missing | Record `movement.failed {reason: human_gate_rejected, decision_id, subject_tree}` idempotently, keyed on the gate decision id |
-| `acceptance.evaluation_completed`, no gate required, movement success event missing | Complete the movement idempotently |
+| `decision.requested` (gate) unresolved | Append nothing. The unresolved decision **is** the `WAITING_HUMAN` projection (§6) — there is no state event to restore |
+| Gate resolved approve, `attempt.completed` missing | Append `attempt.completed`, then `movement.succeeded` — in that order (B.1/B.2) — idempotently, including for the final movement the run's `SUCCEEDED` transition |
+| Gate resolved reject, terminal failure event missing | Append `movement.failed {reason: human_gate_rejected, decision_id, subject_tree}` idempotently, keyed on `movement_id` (Appendix B) with the gate decision id carried as causation and evidence; that one event terminalizes attempt, movement, and — for the final movement — the run |
+| `acceptance.evaluation_completed`, no gate required, `attempt.completed` missing | Append `attempt.completed`, then `movement.succeeded`, idempotently |
 | `acceptance.started`, no criterion events | Resume with the first criterion |
 | Some `criterion.completed` (all `PASS`), none in flight, criteria remaining | Resume with the next unstarted criterion |
 
@@ -1644,9 +2293,14 @@ cancelled → adapter_unavailable → protocol_error → grant_denied
 
 **Infrastructure vs quality** (§3): infrastructure = `adapter_unavailable`,
 `model_unavailable`, `provider_timeout`, `rate_limited`, `authentication` → advance the
-fallback chain, consume no retry. Quality = `task_failed` or any acceptance failure →
-consume one retry, same performer, clean base. `protocol_error` triggers **neither** in
+fallback chain **if a further fallback exists**, consuming no retry. Quality = `task_failed`
+or any acceptance failure → consume one retry **if another quality attempt is admissible**,
+same performer, clean base. When neither is available the failure terminalizes the movement
+without charging past its cap. `protocol_error` triggers **neither** in
 v0.2.
+
+**Quality-failure reasons beyond acceptance:** `draft_no_blocking_output` (§2 draft
+contract) joins `task_failed` as a quality failure the core itself determines.
 
 **`acceptance.failed` reasons:** `criterion_failed`, `criterion_errored`,
 `acceptance_mutated_workspace`, `artifact_missing`, `artifact_kind_mismatch`,
@@ -1654,9 +2308,19 @@ v0.2.
 `findings_rubric_incomplete`, `recovery_subject_mismatch`.
 
 **`movement.failed` reasons:** `retries_exhausted`, `fallbacks_exhausted`,
-`budget_exhausted`, `human_gate_rejected`, `grant_denied`, `composition_unresolvable`.
+`budget_exhausted`, `human_gate_rejected`, `grant_denied`, `protocol_error`,
+`composition_unresolvable`. `protocol_error` and `grant_denied` need their own terminal path
+because they trigger neither retry nor fallback (§3) — without it the movement would have no
+way to end.
 
-**`run.failed` reasons:** `movement_failed`, `budget_exhausted`, `recovery_halted`.
+**`run.failed` reasons:** `movement_failed`, `budget_exhausted`, `composition_unresolvable`,
+`recovery_halted`.
+
+**Core-determined attempt failure kinds** — failures the core attributes to itself rather than to
+a vendor, alongside the wire kinds above: `budget_exhausted` (§6 mid-flight exhaustion).
+
+**`execution.stopped` reasons** (§6): `normal`, `cancelled`, `superseded`, `budget_exhausted`,
+`recovered`.
 
 **`amendment.rejected` reasons:** `run_terminal`, `stale`, `patch_error`, `invalid_score`,
 `reserved_field`, `no_op`, `claim_narrower`, `executed_dependency_changed`,
@@ -1684,9 +2348,59 @@ v0.2.
 
 **Decision types** (Appendix B): `question`, `human_gate`, `amendment`, `finalization`.
 
-**Artifact kinds** (§2): `document`, `findings`, `change_set`.
+**Output kinds** (§2) — **not a closed enum**, and the name is `output`, not `artifact`,
+because one of the reserved kinds is deliberately never an artifact:
 
-**Protocol error codes** (§4): `-32700` parse error, `-32600` invalid request, `-32601`
-method not found, `-32602` invalid params, `-32000` duplicate `execute`, `-32001` frame too
-large (skip the frame and continue; `id` is null), `-32002`
-`duplicate_artifact_instance`.
+| Kind | Class |
+|---|---|
+| `findings` | reserved **artifact** output kind — the core validates its schema and subject binding (§7) |
+| `change_set` | reserved **core-synthesized** output kind — never an artifact, never emitted by a performer (§5) |
+| `document` | conventional; the core gives it no special handling |
+| any other non-empty string | an ordinary artifact kind |
+
+The protocol carries `kind` as a free string, so closing this set would break scores that name
+domain-specific kinds for no benefit.
+
+**Protocol error codes** (§4) — exactly the implemented set: `-32700` parse error, `-32600`
+invalid request, `-32601` method not found, `-32602` invalid params, `-32603` internal error,
+`-32000` execute already in progress, `-32001` frame too large (answer with `id: null`, skip
+the frame, continue). There is **no** code for a duplicate artifact: a duplicate or undeclared
+artifact notification is rejected before any append and fails the attempt as
+`protocol_error` with sub-reason `duplicate_artifact_instance`. Duplicate ids *inside*
+`partitur-result.json` are an invalid envelope, hence `task_failed` (§4).
+
+**`protocol_error` sub-reasons** — *provisional until the follow-up PR completes structured
+protocol-error handling:* `duplicate_artifact_instance`, `undeclared_artifact`,
+`artifact_path_escape`, `change_set_emitted_as_artifact`, `proposal_without_authority`,
+`partial_frame_eof`, `strict_decode_failed`, `frame_too_large`, `event_limit_exceeded`.
+
+**Findings coverage conclusions** (§7): `examined_none_found`, `findings_raised`.
+
+**Impact operations** (§9): `add`, `remove`, `replace`.
+
+**Amendment approval modes** (§9): `auto`, `human`.
+
+**Attempt selection reasons** (Appendix B, `performer.selected`): `initial`, `quality_retry`,
+`fallback`, `revision_restart`, `decision_resume`. The last covers the case a purely
+retry/fallback vocabulary cannot express: a `BLOCKED` attempt is terminal, and answering its
+questions authorizes a **fresh** attempt without changing the score revision — so it is neither
+a quality retry, nor a fallback, nor a revision restart.
+
+**Execution phases** (`execution.started`): `adapter`, `acceptance`, `composition`.
+
+**Charging modes** (`execution.stopped`): `measured`, `clamped`.
+
+**Decision dispositions** (`decision.resolved`): `answered` (questions), `approved`,
+`rejected` (gates). Amendment decisions never use `decision.resolved` at all (§9).
+
+**Recovery outcomes** (`apply.recovery_resolved`): `rolled_back`.
+
+**Composition scopes** (`composition.conflicted`): `movement`, `candidate`.
+
+**Score status** (§2): `draft`, `finalized`.
+
+**Amendment auto modes** (§2): `off`, `envelope`.
+
+**Recovery halts** — conditions that stop a run rather than repairing it:
+`journal_idempotency_conflict`, `unsupported_run_format`, `missing_artifact_file`,
+`missing_snapshot_file`, `missing_changeset_ref`, `journal_corrupt`.
