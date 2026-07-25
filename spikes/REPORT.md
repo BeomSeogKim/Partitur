@@ -12,6 +12,9 @@ Normative input: `docs/DESIGN.md` at DESIGN v0.2. This report does not amend it.
 | §5 fan-in composition | **The merge loop survives; §5 must change.** `git merge-tree --write-tree` is the correct checkout-free primitive on supported Git, but the exact invocation, `GIT_ATTR_SOURCE`, minimum Git version, merge options/config, and custom-driver policy are identity dependencies. Git version alone is insufficient. |
 | §6 lease and wake-up | **Survives with an amendment.** PID plus process-start identity works, and journal polling interrupts a blocked stdout reader. Fencing only works if every mutation checks the incarnation token and a monotonic authority epoch under the state lock. |
 | §4 process supervision | **Must change.** A new adapter session plus repeated session sweep cleans a conforming adapter→vendor chain on macOS and Linux, including separate process groups. It is not absolute portable containment: a descendant can call `setsid()` and leave the outer session’s selectable set. |
+| §6 quiesce handshake (SPIKE-4 Q1) | **The intended sequence must change.** An acknowledgement cannot be an append, and a plain ACK is not a disposition — an ACKing-then-wedging driver still passed the mutation CAS. A durable prepare plus a prepare-bound lease CAS-move survived every measured race. `amendment.approved` stays the only event that changes the head; it stops being the only durable event on the approval path. No post-approval fencing event is needed. |
+| §4/§6 adapter spawn window (SPIKE-4 Q2) | **Raw spawn-first must change; the taxonomy need not.** A gated session-leader trampoline whose identity is fsynced into `attempt.started` before the gate opens makes event-before-execution an invariant rather than a timing bet. Parent attribution is unusable — an ungated orphan reparents to PPID 1 — and an inherited lock marker detects a holder without identifying it. |
+| §7 acceptance subprocess identity (SPIKE-4 Q3) | **The payload and the recovery rule must change.** A criterion needs the same gated handoff and the same verified session sweep as an adapter, and recovery must sweep before synthesizing a completion it never observed. Start identity alone is insufficient: 500 rapid launches yielded 10 distinct start identities on Linux, 490 observations repeating an earlier one. |
 
 ## Reproduction
 
@@ -48,6 +51,20 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
 docker run --rm \
   -v /private/tmp/supervision-linux-arm64.test:/supervision.test:ro \
   alpine:3.22 /supervision.test -test.v
+```
+
+SPIKE-4 ran later, on the same host, against the same module:
+
+```sh
+cd spikes
+GOCACHE=/private/tmp/pt-spike4-go-cache go test -v ./process-identity
+
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+  GOCACHE=/private/tmp/pt-spike4-go-cache \
+  go test -c -o /private/tmp/process-identity-linux-arm64.test ./process-identity
+docker run --rm \
+  -v /private/tmp/process-identity-linux-arm64.test:/process-identity.test:ro \
+  alpine:3.22 /process-identity.test -test.v
 ```
 
 The spike is a nested Go module so its YAML dependency does not alter the production module.
@@ -314,6 +331,39 @@ Replace the portable absolute-cleanup implication in §4 with:
 
 > Core starts each adapter as a new POSIX session. A conforming adapter may create vendor process groups but MUST NOT create or permit vendor descendants to create another session. Outer termination repeatedly enumerates and terminates every verified member of the adapter session after the adapter grace period. This is portable cleanup for conforming descendants, not an OS containment boundary: Linux uses cgroup v2 when available for an absolute ownership set; macOS requires a future containment backend. If “no descendant survives” is an absolute enforcement requirement rather than an adapter conformance requirement, v0.2 must fail closed on macOS because POSIX process/session primitives cannot guarantee it.
 
+## Spike 4 — process-identity handoff
+
+Run after DESIGN v0.2 froze three surfaces as `[SPIKE-4]`. Unlike spikes 1–3 it answered three
+separate questions, each with its own required replacements, so the detail lives in three reports
+beside the code rather than being restated here:
+
+| Question | Report |
+|---|---|
+| Q1 — quiesce handshake (§6) | [`process-identity/REPORT-Q1-QUIESCE.md`](process-identity/REPORT-Q1-QUIESCE.md) |
+| Q2 — adapter spawn window (§4) | [`process-identity/REPORT-Q2-SPAWN-WINDOW.md`](process-identity/REPORT-Q2-SPAWN-WINDOW.md) |
+| Q3 — acceptance subprocess identity (§7) | [`process-identity/REPORT-Q3-CRITERION-IDENTITY.md`](process-identity/REPORT-Q3-CRITERION-IDENTITY.md) |
+
+All three changed the document rather than confirming it. Two results cut across the questions and
+are worth stating once.
+
+**Start identity is not an identifier by itself.** Immediate identity reads after spawning 500
+`true` children succeeded 500/500 on both platforms, but on Linux those 500 launches yielded only
+10 distinct start identities — 490 observations repeated one already seen, because start ticks are
+too coarse to separate rapid spawns. So start identity cannot stand alone and PID must remain in the
+tuple. The converse half is untested here: same-PID reuse was never forced (item 5 below), so this
+spike shows why PID is necessary without showing it is sufficient.
+
+**The gate replaces a timing bet with an invariant.** Ungated children remained inspectable only
+because an unreaped child retains a zombie record — which is not an ordering the core may rely on,
+since a criterion may mutate before its event is fsynced and a different supervisor may reap it.
+Blocking a trusted trampoline on an inherited gate makes "identity durable before any adapter or
+criterion code executes" structural instead of probable.
+
+One place where the folded design is deliberately narrower than this report: Q2 states that a free
+marker means "no launch process survives". DESIGN §4 scopes that to **"no *released mutator*
+survives"**, because the window before the trampoline takes its marker makes the stronger reading
+false. The weaker statement is the one recovery actually needs, and it is what the gate earns.
+
 ## Not determined
 
 1. **All 100 million published number records.** The RFC Appendix B table, the pinned canonicalization vector, and the published first-1,000 checksum passed. Running all 100 million requires generating or downloading roughly 4 GB uncompressed data and adds little boundary coverage beyond the deterministic prefix and Appendix B.
@@ -322,6 +372,10 @@ Replace the portable absolute-cleanup implication in §4 with:
 4. **Absolute macOS descendant containment.** No unprivileged cgroup-equivalent primitive was found. Establishing an absolute guarantee would require a separately evaluated privileged/launchd/Endpoint-Security containment design, not another process-group tweak.
 5. **Kernel-forced PID reuse.** The exact safety condition was exercised with a live reused PID value and a mismatched recorded start identity, but the host kernel was not churned until it reassigned a killed holder’s PID. A Linux PID namespace with a deliberately low PID limit would make that stress test practical.
 6. **Intel macOS execution.** The public `proc_bsdinfo` layout and syscall are shared, but the no-cgo start-identity code was executed only on arm64 macOS.
+7. **Power-loss durability of rename plus directory fsync.** SPIKE-4 killed processes; it did not cut power. The orderings it did exercise — the lease move and the handoff publication — assume those primitives are durable as measured. The prewritten snapshot and plan record are *not* in that list: they are folded-design dependencies with no counterpart in this harness, so their durability is assumed rather than measured on both counts. This needs the fault-injection harness, not more process-kill tests.
+8. **Acknowledgement deadline and adapter drain grace.** The safety construction does not determine either value. What avoids fencing a merely slow driver is a measurement against real adapters.
+9. **Mapping a held inherited lock back to its holder on macOS.** A marker can be observed as held without identifying who holds it. Native `proc_pidinfo` FD enumeration could be spiked, but the gate makes it unnecessary for execution safety: an absent published identity already fails closed as `spawn_handoff_unverifiable`.
+10. **Whether existing criterion commands satisfy the no-`setsid()` conformance rule.** Q3 makes it normative for §7. A deliberate session escape was confirmed to defeat portable session enumeration on both platforms, so the rule is load-bearing rather than advisory — but no compatibility survey of real-world test commands was run.
 
 ## Primary references
 
