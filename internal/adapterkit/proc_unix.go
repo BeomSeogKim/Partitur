@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +21,9 @@ func runProcess(ctx context.Context, spec ProcessSpec, onStdoutLine func([]byte)
 	}
 	if onStdoutLine == nil {
 		onStdoutLine = func([]byte) error { return nil }
+	}
+	if err := ctx.Err(); err != nil {
+		return ProcessResult{}, err
 	}
 
 	command := exec.Command(spec.Path, spec.Args...)
@@ -68,43 +70,86 @@ func runProcess(ctx context.Context, spec ProcessSpec, onStdoutLine func([]byte)
 		stderrDone <- err
 	}()
 
+	stdoutWait := (<-chan error)(stdoutDone)
+	stderrWait := (<-chan error)(stderrDone)
+	ctxDone := ctx.Done()
+	var terminationWait <-chan error
+	terminationStarted := false
+	startTermination := func() {
+		if terminationStarted {
+			return
+		}
+		terminationStarted = true
+		done := make(chan error, 1)
+		terminationWait = done
+		go func() {
+			done <- terminateProcessGroup(processGroup, grace)
+		}()
+	}
+
+	var groupErr error
+	cancelled := false
+	var readerErr error
+	var readerOperation string
+	for stdoutWait != nil || stderrWait != nil {
+		select {
+		case err := <-stdoutWait:
+			stdoutWait = nil
+			if err != nil && readerErr == nil {
+				readerErr = err
+				readerOperation = "read vendor stdout"
+				startTermination()
+			}
+		case err := <-stderrWait:
+			stderrWait = nil
+			if err != nil && readerErr == nil {
+				readerErr = err
+				readerOperation = "copy vendor stderr"
+				startTermination()
+			}
+		case <-ctxDone:
+			cancelled = true
+			ctxDone = nil
+			startTermination()
+		case err := <-terminationWait:
+			terminationWait = nil
+			groupErr = err
+			if stdoutWait != nil {
+				_ = stdout.Close()
+			}
+			if stderrWait != nil {
+				_ = stderr.Close()
+			}
+		}
+	}
+
 	waitDone := make(chan error, 1)
 	go func() {
 		waitDone <- command.Wait()
 	}()
 
 	var waitErr error
-	var groupErr error
-	cancelled := false
-	stdoutRead := false
-	var stdoutErr error
-	var stderrErr error
-	select {
-	case waitErr = <-waitDone:
-	case lineErr := <-stdoutDone:
-		stdoutRead = true
-		stdoutErr = lineErr
-		if lineErr != nil {
-			waitErr, groupErr = terminateProcessGroup(processGroup, grace, waitDone)
-			_, _ = drainProcessPipes(stdoutDone, stderrDone, stdoutRead, stdoutErr)
-			if groupErr != nil {
-				return processResult(command, waitErr), fmt.Errorf("read vendor stdout: %w; %v", lineErr, groupErr)
-			}
-			return processResult(command, waitErr), fmt.Errorf("read vendor stdout: %w", lineErr)
-		}
+	if terminationStarted {
 		waitErr = <-waitDone
-	case <-ctx.Done():
-		cancelled = true
-		waitErr, groupErr = terminateProcessGroup(processGroup, grace, waitDone)
+	} else {
+		select {
+		case waitErr = <-waitDone:
+		case <-ctxDone:
+			cancelled = true
+			ctxDone = nil
+			startTermination()
+			waitErr = <-waitDone
+		}
 	}
-
+	if terminationWait != nil {
+		groupErr = <-terminationWait
+	}
 	if cleanupErr := killRemainingProcessGroup(processGroup); groupErr == nil {
 		groupErr = cleanupErr
 	}
-	stdoutErr, stderrErr = drainProcessPipes(stdoutDone, stderrDone, stdoutRead, stdoutErr)
 	result := processResult(command, waitErr)
 
-	if cancelled {
+	if cancelled || ctx.Err() != nil {
 		if groupErr != nil {
 			return result, fmt.Errorf("%w: %v", ctx.Err(), groupErr)
 		}
@@ -113,11 +158,8 @@ func runProcess(ctx context.Context, spec ProcessSpec, onStdoutLine func([]byte)
 	if groupErr != nil {
 		return result, groupErr
 	}
-	if stdoutErr != nil {
-		return result, fmt.Errorf("read vendor stdout: %w", stdoutErr)
-	}
-	if stderrErr != nil {
-		return result, fmt.Errorf("copy vendor stderr: %w", stderrErr)
+	if readerErr != nil {
+		return result, fmt.Errorf("%s: %w", readerOperation, readerErr)
 	}
 	if waitErr != nil {
 		return result, fmt.Errorf("vendor process exited: %w", waitErr)
@@ -125,9 +167,9 @@ func runProcess(ctx context.Context, spec ProcessSpec, onStdoutLine func([]byte)
 	return result, nil
 }
 
-func terminateProcessGroup(processGroup int, grace time.Duration, waitDone <-chan error) (error, error) {
+func terminateProcessGroup(processGroup int, grace time.Duration) error {
 	if !processGroupExists(processGroup) {
-		return <-waitDone, nil
+		return nil
 	}
 	_ = syscall.Kill(-processGroup, syscall.SIGTERM)
 	deadline := time.NewTimer(grace)
@@ -135,28 +177,16 @@ func terminateProcessGroup(processGroup int, grace time.Duration, waitDone <-cha
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
-	var waitErr error
-	waited := false
 	for {
 		select {
-		case waitErr = <-waitDone:
-			waited = true
-			waitDone = nil
 		case <-deadline.C:
-			_ = syscall.Kill(-processGroup, syscall.SIGKILL)
-			if !waited {
-				waitErr = <-waitDone
+			if processGroupExists(processGroup) {
+				_ = syscall.Kill(-processGroup, syscall.SIGKILL)
 			}
-			if !waitForProcessGroupExit(processGroup, time.Second) {
-				return waitErr, errors.New("vendor process group survived SIGKILL")
-			}
-			return waitErr, nil
+			return nil
 		case <-ticker.C:
 			if !processGroupExists(processGroup) {
-				if !waited {
-					waitErr = <-waitDone
-				}
-				return waitErr, nil
+				return nil
 			}
 		}
 	}
@@ -195,23 +225,4 @@ func processResult(command *exec.Cmd, waitErr error) ProcessResult {
 		}
 	}
 	return ProcessResult{ExitCode: exitCode}
-}
-
-func drainProcessPipes(stdoutDone, stderrDone <-chan error, stdoutRead bool, stdoutErr error) (error, error) {
-	var stderrErr error
-	var wait sync.WaitGroup
-	if !stdoutRead {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			stdoutErr = <-stdoutDone
-		}()
-	}
-	wait.Add(1)
-	go func() {
-		defer wait.Done()
-		stderrErr = <-stderrDone
-	}()
-	wait.Wait()
-	return stdoutErr, stderrErr
 }

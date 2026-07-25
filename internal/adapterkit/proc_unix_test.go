@@ -3,6 +3,7 @@
 package adapterkit
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,50 @@ import (
 	"testing"
 	"time"
 )
+
+const burstLines = 512
+
+func TestRunProcessDrainsFastExitPipesBeforeWait(t *testing.T) {
+	const iterations = 24
+	for iteration := 0; iteration < iterations; iteration++ {
+		var stderr bytes.Buffer
+		stdoutLines := 0
+		result, err := runProcess(context.Background(), ProcessSpec{
+			Path:   os.Args[0],
+			Args:   []string{"-test.run=TestProcessHelper"},
+			Env:    processHelperEnv("burst"),
+			Stderr: &stderr,
+		}, func([]byte) error {
+			stdoutLines++
+			return nil
+		}, 200*time.Millisecond)
+		if err != nil {
+			t.Fatalf("iteration %d: %v", iteration, err)
+		}
+		if result.ExitCode != 0 || stdoutLines != burstLines || bytes.Count(stderr.Bytes(), []byte{'\n'}) != burstLines {
+			t.Fatalf(
+				"iteration %d: result=%+v stdout_lines=%d stderr_lines=%d",
+				iteration,
+				result,
+				stdoutLines,
+				bytes.Count(stderr.Bytes(), []byte{'\n'}),
+			)
+		}
+	}
+}
+
+func TestRunProcessCancelledBeforeStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := runProcess(ctx, ProcessSpec{
+		Path: os.Args[0],
+		Args: []string{"-test.run=TestProcessHelper"},
+		Env:  processHelperEnv("output"),
+	}, nil, 200*time.Millisecond)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v", err)
+	}
+}
 
 func TestRunProcessTerminatesProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -60,6 +105,40 @@ func TestRunProcessTerminatesProcessGroup(t *testing.T) {
 	}
 }
 
+func TestRunProcessCallbackErrorTerminatesProcessGroup(t *testing.T) {
+	callbackErr := errors.New("stop reading")
+	var grandchildPID int
+	_, err := runProcess(context.Background(), ProcessSpec{
+		Path: os.Args[0],
+		Args: []string{"-test.run=TestProcessHelper"},
+		Env:  processHelperEnv("parent"),
+	}, func(line []byte) error {
+		text := string(line)
+		if !strings.HasPrefix(text, "grandchild:") {
+			return nil
+		}
+		pid, parseErr := strconv.Atoi(strings.TrimPrefix(text, "grandchild:"))
+		if parseErr != nil {
+			return parseErr
+		}
+		grandchildPID = pid
+		return callbackErr
+	}, 200*time.Millisecond)
+	if !errors.Is(err, callbackErr) {
+		t.Fatalf("run error = %v", err)
+	}
+	if grandchildPID == 0 {
+		t.Fatal("grandchild did not start")
+	}
+	deadline := time.Now().Add(time.Second)
+	for processExists(grandchildPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processExists(grandchildPID) {
+		t.Fatalf("grandchild process %d survived callback failure", grandchildPID)
+	}
+}
+
 func TestRunProcessScansLinesAndPassesStderr(t *testing.T) {
 	var lines []string
 	var stderr strings.Builder
@@ -88,6 +167,12 @@ func TestProcessHelper(t *testing.T) {
 		fmt.Println("one")
 		fmt.Println("two")
 		fmt.Fprintln(os.Stderr, "diagnostic")
+		os.Exit(0)
+	case "burst":
+		for index := 0; index < burstLines; index++ {
+			fmt.Fprintf(os.Stdout, "stdout-%03d-abcdefghijklmnopqrstuvwxyz0123456789\n", index)
+			fmt.Fprintf(os.Stderr, "stderr-%03d-abcdefghijklmnopqrstuvwxyz0123456789\n", index)
+		}
 		os.Exit(0)
 	case "parent":
 		command := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
