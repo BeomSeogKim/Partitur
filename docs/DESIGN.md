@@ -23,40 +23,24 @@ for *why* a rule exists, never for what the rule is.
 | Adapter protocol (`protocol:`) | `2` | **bumped.** `probe.features` and the tagged `resolved_decisions` cannot be added under 1: strict decoding is symmetric, so a protocol-1 *core* rejects an unknown `features` field from a new adapter exactly as a protocol-1 *adapter* rejects an unknown `kind`. Feature negotiation cannot be introduced by a field that itself needs negotiating. The enforcement dimensions added earlier remain compatible because absent booleans decode `false` |
 | Adapter result envelope | `1` | unchanged (adapter-internal) |
 
-**A fourth spike is open: process-identity handoff.** Three questions resist prose because the answer
-is whatever the OS actually permits, and the first three spikes settled their equivalents by
-measurement rather than argument. Marked **[SPIKE-4]** at each definition:
+**A fourth spike has run: process-identity handoff.** Three questions resisted prose because the
+answer is whatever the OS actually permits, and all three **changed the document** rather than
+confirming it:
 
-- **Quiesce handshake.** Supersession must settle a driver's disposition before its single approval
-  append (§9), but holding the state lock prevents the driver from appending its own acknowledgement,
-  and releasing it makes the lease observation stale. A responsive driver can also wedge *after*
-  acknowledging. This needs a measured design — a durable prepare/quiesce/ack transition, or a second
-  fencing event — not a chosen one.
-- **Spawn window.** An adapter's session id and start identity are knowable only *after* spawn, but
-  `attempt.started` is what records them. Spawn-first can leave an unrecorded survivor; append-first
-  cannot carry the identity. Which ordering is recoverable depends on what can be observed about a
-  process between `fork` and the first write.
-- **Acceptance subprocess identity.** `criterion.started` records no PID or session, so recovery can
-  synthesize `ERROR` while an orphaned criterion process is still mutating the worktree. The same
-  identity machinery §6 uses for the driver may or may not apply to a short-lived subprocess.
+- **Quiesce handshake** (§6) — an acknowledgement cannot be an append, because the approver holds the
+  state lock. It is a **lease move** bound to a new durable `amendment.approval_prepared`. No second
+  fencing event is needed, so §9's single-transition rule survives intact.
+- **Spawn window** (§4) — neither spawn-first nor append-first is recoverable. A **gated
+  session-leader trampoline** records identity before any adapter code executes, so an unrecorded
+  *trampoline* may survive a crash but an unrecorded **mutator** cannot.
+- **Acceptance subprocess** (§7) — `criterion.started` needed the same identity, and recovery must
+  sweep before synthesizing `ERROR`, or it would verify a worktree an orphan is still mutating. A
+  synthesized completion omits `duration_ms` rather than fabricating one.
 
-**Until [SPIKE-4] lands, the surfaces below are explicitly NON-NORMATIVE and must not be
-implemented.** Saying "provisional" while Appendix B calls itself exhaustive would claim more than the
-document delivers, so the exclusions are named:
-
-| Surface | Why it is not yet implementable |
-|---|---|
-| `attempt.started`'s adapter session id and start identity | §6 requires persisting them; B.2's exact payload does not carry them, and whether spawn-first or append-first is recoverable is what the spike decides |
-| `criterion.started`'s subprocess identity | Not in the payload at all; recovery cannot prove a criterion process is gone without it |
-| The supersession quiesce sequence (§6) | May require an additional durable event, so **the event taxonomy itself is provisional here** |
-| Appendix C.2 rows involving a live or recently-dead adapter, and C.3's `ERROR` synthesis | They depend on the two identity payloads above |
-
-Rather than claim the rest is "independent", the whitelist is narrow and explicit. **Implementable
-now:** Appendix A.1–A.3 — the JCS encoder, the versioned `H(domain, value)` construction, the domain
-registry constants, and their conformance vectors. Nothing SPIKE-4 can decide reaches them. The
-complete domain *projectors* — A.4's per-domain shapes and A.5 end-to-end — are **not** on that
-whitelist: several of this revision's own fixes changed A.5, so they need the review pass that follows,
-not the substrate's.
+One measurement is worth keeping in view while implementing: on Linux, start ticks are coarse enough
+that 500 rapidly-spawned children yielded only **10 distinct start identities** — 490 of the 500
+observations repeated an identity already seen. Start identity alone does not distinguish processes;
+PID must remain in the tuple, exactly as §6 has it.
 
 **Three earlier rules were gated on a bounded implementation spike.** All three have run against real
 behaviour:
@@ -82,11 +66,29 @@ compatibility floor between 2.43 and 2.47, whether any Git upgrade changes a cle
 absolute macOS descendant containment, kernel-forced PID reuse under churn, Intel-macOS execution
 of the start-identity path, and the full 100-million-record JCS number corpus.
 
-**Implementation readiness.** Appendices A and B are exhaustive **except** for the surfaces the
-[SPIKE-4] table above excludes, which are non-normative until that spike lands. A.4/A.5 give the
-canonical-AST identity domains and the execution-dependency projection; B.0–B.7 give each
-authoritative event's payload. What may be implemented today is the A.1–A.3 substrate on the
-whitelist above — not the whole document.
+**Implementation readiness.** All four spikes have run and their findings are folded in, so no surface
+of this document is marked non-normative. A.4/A.5 give the canonical-AST identity domains and the
+execution-dependency projection; B.0–B.7 give each authoritative event's payload; Appendix C covers
+run, attempt, and acceptance recovery.
+
+**Normative does not mean proved.** Each residual risk now has a forcing function other than another
+prose pass, and they are at different stages:
+
+| Risk | Forcing function | Status |
+|---|---|---|
+| JSON canonicalization (A.1) | RFC 8785 vectors and the published ES6 first-1,000 checksum, both carried by CI | **proved against those published expectations; the full 100-million-record corpus stays open (above).** `internal/canonical` checks Appendix B's numbers against their published strings, and regenerates the upstream first 1,000 ES6 records by upstream's own networkless method — its published static prefix, then the published serial continuation from `0x0010000000000000` — serializes them with the production encoder, and matches upstream's published SHA-256. The expectation is external in both cases, so a systematically wrong encoder fails rather than pinning its own output |
+| Domain-separated `H()` construction (A.2) | its own separation tests | proved for the substrate; **each A.4 projector is proved only when it exists** |
+| Process primitives — trampoline gate, session sweep, start identity | SPIKE-4 measurement | measured |
+| The prepare / ACK / quiesce protocol built on them (§6) | replay and fault-injection tests | **not proved** — designed against the measurements, not measured itself |
+| Recovery — pending-prepare, cancellation precedence, live criterion sweeping | replay and fault-injection tests | **not proved** |
+| Forced PID reuse, Intel macOS, power-loss durability | targeted testing | open |
+| Safety-policy choices | specification review | reviewed, and review is the only instrument they admit |
+
+Two things the table deliberately does not say. It does not claim every residual risk has a
+*non-review* forcing function — safety-policy choices are value judgements and review is the
+appropriate instrument, not a fallback. And it does not claim the contracts are proved sufficient to
+implement against; it claims they are stated exactly enough to *attempt* an implementation, which is
+what will produce the next round of corrections.
 
 ## 0. Ground rules inherited from the concept
 
@@ -123,6 +125,11 @@ corrupt evidence by writing where evidence lives:
       manifest.yaml            # rebuildable projection: score revision + hash, resolved
                                # cast pins, per-attempt enforcement record, artifact index
       scores/revision-<n>.yaml # immutable score snapshots (see below)
+      prepares/<prepare-id>.json
+                               # the complete planned amendment.approved payload, written and
+                               #   fsynced BEFORE the prepare event (§6). Recovery replays this
+                               #   plan rather than recomputing one — an auto approval has no
+                               #   proposal record to rebuild from
       proposals/<proposal-id>.json
                                # immutable routed-proposal record, schema
                                #   partitur/proposal-record+json;v=1 (§9). Decision-time
@@ -1307,6 +1314,58 @@ So "diagnostics never enter the journal" means the raw stream. Typed, sanitized,
 protocol events are journaled deliberately, because a later GUI needs them; they carry no
 authority and no projection ever reads them.
 
+**Spawn is gated, so identity is recorded before any adapter code runs.** The core cannot record an
+adapter's session id before it exists, and cannot record it after without leaving a window in which a
+crash strands an unrecorded process. The spike settled the ordering: the core starts a **trusted launch
+trampoline** as a new POSIX session leader; while the trampoline blocks on an **inherited gate**, the
+core records and fsyncs its PID, session id, and process-start identity in `attempt.started`; only then
+does it release the gate, and the trampoline `exec`s the adapter **in place**. EOF on the gate before
+release makes the trampoline exit **without executing adapter code at all**.
+
+That is what closes the dangerous ambiguity rather than merely narrowing it, stated as narrowly as it
+was measured: an unrecorded *trampoline* may briefly survive a crash, but it **contains no adapter code
+and has no worktree mutation path before the gate opens**, and it never opens unless its identity is
+already durable. The claim is deliberately not "it holds no authority" — the process still has the
+ambient OS permissions of whoever launched it. What it lacks is any code that would use them.
+
+`pid == session_id` is validated at handoff, since the trampoline is the session leader. PGID is not
+persisted: §4 enumerates the recorded session and discovers its current process groups at sweep time.
+
+The handoff contract, since recovery depends on reading it (Appendix C.2):
+
+- Both files live under the attempt's **staging** root (`.partitur/work/…`, §1), never under
+  authoritative run state.
+- **Keyed per launch, not per attempt** — `<attempt_id>/<launch_id>`. The reason is *successive*
+  launches, not concurrent ones: criteria run sequentially and short-circuit (§7), so nothing races,
+  but one attempt performs many launches — the adapter, then one trampoline per external criterion,
+  plus retries — and a per-attempt key would let a **stale handoff from an earlier launch** be
+  mistaken for the current one.
+- The trampoline **publishes its identity, fsyncs it, then blocks** on the gate. The core reads the
+  published identity, records it in the journal, fsyncs that, and only then releases the gate. So a
+  published identity always precedes a released gate.
+- Both carry a **nonce created with the launch**, and a file whose nonce does not match is stale and is
+  ignored rather than trusted.
+- Exact shapes, since recovery parses them: `<launch_id>/identity.json` carries
+  `{nonce, pid, session_id, start_identity}` and is written-then-renamed with a directory fsync;
+  `<launch_id>/marker` is an advisory-locked file containing **only the nonce** — not empty, since an
+  empty file could not carry one — that the trampoline holds for its lifetime. Both files carry the same
+  nonce and recovery compares the copies: a mismatch means one of the pair is from an earlier launch, and
+  both are ignored.
+- Recovery discovers **unjournaled** `launch_id` directories by listing the attempt's staging root:
+  a directory with no corresponding journal event is precisely the crash-inside-the-window case C.2's
+  first row handles.
+- **The marker is acquired before the identity is published**, and released only at trampoline exit.
+  The other order would leave a window where an identity exists but nothing holds the marker. With this
+  order the residual window is *before* the marker is taken, when the trampoline has published nothing
+  and still contains no adapter code.
+
+  So the property recovery may rely on is precisely **"marker free ⇒ no *released mutator* survives"** —
+  not "no launch process survives", which the pre-marker window makes false. The weaker statement is the
+  one that matters: an unreleased trampoline holds no adapter or criterion code and will exit on gate
+  EOF without executing any.
+- These are coordination files, not journal identity: the journal's copy is authoritative and the files
+  are removed with the run's staging root.
+
 **Process supervision.** The adapter and the vendor process it spawns are separate process
 groups, so hard-killing a wedged adapter can orphan the vendor group. Termination is layered:
 the adapter MUST handle `SIGTERM` by terminating its vendor process group before exiting, and the
@@ -1748,13 +1807,17 @@ share a mechanism:
   **token** comes from `driver.lease` and nowhere else. `authority.json` is never consulted for the
   token, and never authoritative for the epoch.
 
-  **Fencing and terminalization are one transition, under the canceller's authority.** Revoking
-  the epoch and then appending `run.cancelled` as a second step is impossible: the canceller does
-  not hold the driver authority the CAS demands, and the fenced driver no longer does either, so
-  the append could never pass. Instead, holding the state lock, the canceller performs a single
-  transition — increment the epoch, revoke the token, append `run.cancelled` — authorized by run
-  lifecycle rather than by the lease. There is never an intermediate state in which the run is
-  fenced but not terminal.
+  **Fencing and terminalization are one transition, under the canceller's authority.** Fencing and
+  then appending `run.cancelled` as a *separately authorized* step is impossible: the canceller does
+  not hold the driver authority the CAS demands, and the fenced driver no longer does either, so the
+  append could never pass. Instead the canceller holds the state lock across the whole sequence and is
+  authorized by **run lifecycle** rather than by the lease. There is never an intermediate state in
+  which the run is fenced but not terminal.
+
+  The steps inside that transition are the cancellation oracle in the control channel — this paragraph
+  establishes
+  *whose authority* they run under and deliberately does not restate their order, since a fourth copy
+  of the sequence would be a fourth chance to disagree with the other three.
 
 A run is *active* while nonterminal (`RUNNING` or `WAITING_HUMAN`). v0.2 allows one active
 run per repository: `partitur run` refuses to start while one exists (resume or cancel it
@@ -1775,8 +1838,56 @@ between the request and its terminalization.
 control — cancellation, and revision approval that supersedes a nonterminal attempt — needs a
 durable path that reaches a driver mid-execution:
 
-1. The requesting command appends the authoritative control event under the state lock
-   (`cancel.requested`, or `amendment.approved` for a supersede).
+1. The requesting command appends the authoritative control event under the state lock —
+   `cancel.requested` for a cancellation, or **`amendment.approval_prepared`** for a supersede.
+   Cancellation's remaining steps happen in the order below, and the order matters because
+   `approval_abandoned` is what **lifts the barrier**: everything the barrier was protecting must be
+   done before it is appended, or a crash immediately after its fsync leaves the barrier lifted with
+   the immutable revision path still occupied.
+
+   ```text
+   (a) sweep every recorded adapter and criterion session to verified empty
+       └ sweep_unverifiable → halt
+   (b) if a prepare is pending:
+         quarantine the prewritten snapshot, remove the plan and sidecar,
+         then append amendment.approval_abandoned {reason: cancelled}   # barrier lifts here
+   (c) if ANY execution interval is open:
+         append execution.stopped {reason: cancelled, charging: clamped}
+   (d) if a lease matching observed_authority_epoch still exists:
+         advance the authority epoch to observed + 1 and revoke the token
+         — but do NOT remove the lease yet
+   (e) append run.cancelled, carrying fenced_epoch iff (d) advanced it
+   (f) only now remove the stale lease
+   ```
+
+   Two of these separations are load-bearing rather than stylistic.
+
+   **(c) and (d) have independent predicates.** An interval can be open whether or not the owner needed
+   fencing — a responsive driver that died after closing writers, or a verifiably dead owner, both leave
+   one — so gating the close on fencing would let `run.cancelled` be appended with an interval still
+   open, and the budget projection would then read a run that never stopped consuming.
+
+   **(d)'s predicate is the surviving lease, not the owner's liveness.** "The owner was live and must be
+   fenced" is not replayable: after `(d)` advances the epoch and crashes, recovery observes a *verifiably
+   dead* owner, so a liveness-based predicate is false, `(d)` is skipped, and `(e)` appends without the
+   `fenced_epoch` that was already advanced — the fence is lost exactly as it would have been the other
+   way. Keying it on **a lease still matching `observed_authority_epoch`** makes it durable and
+   idempotent: advancing to `observed + 1` twice yields the same epoch, and `(f)` removing that lease is
+   what finally makes the predicate false.
+
+   **(f) comes after (e), not inside (d).** The advanced epoch is authoritative only once journaled, and
+   removing the lease is what makes the old incarnation unable to act. Removing it first would destroy
+   the very state `(d)`'s predicate reads. Journaling first and cleaning after makes the stale lease a
+   consequence of a durable fact rather than its precondition.
+
+   **This list is the single oracle for cancellation.** Appendix C.1 and step 6 both *reference*
+   it rather than restating it, and the live path executes these steps in this order. A paraphrase that
+   dropped the conditional (c), or inverted the order inside it — earlier drafts did both — leaves two
+   normative sequences,
+   and no amount of testing can adjudicate between contradictory normative text: a harness only tests
+   whichever reading the implementation happened to choose.
+   Supersession's durable request is the *prepare*, not the approval: the approval is what the
+   handshake ends with, so it cannot also be what starts it (§6 quiesce).
 2. It then wakes the verified current lease holder as a **best-effort latency
    optimization** — never as the mechanism of record.
 3. The driver watches control state continuously while an adapter execution is pending —
@@ -1791,13 +1902,13 @@ durable path that reaches a driver mid-execution:
    later `resume` observes an already-terminal run and launches nothing.
 6. **A live but wedged owner** — lease verified, yet the driver never acknowledges the journal —
    is the case a responsive/dead dichotomy misses. After a bounded acknowledgement deadline the
-   canceller re-verifies the lease owner and terminates it and its process tree (§4). Then,
-   **holding the repository state lock, it performs one transition**: increment the authority
-   epoch, revoke the token, remove the lease, and append — in this order, both fsynced — an
-   `execution.stopped {reason: cancelled, charging: clamped}` for any open interval — clamped by
-   the §6 formula above, since the canceller is not the process that opened it — then
-   `run.cancelled` carrying `fenced_epoch`. Both are authorized by run lifecycle, not by the
-   lease (§6 fencing).
+   canceller re-verifies the lease owner and terminates it and its process tree (§4), and then
+   **executes the cancellation oracle** with its conditional phase (d) taken, authorized by run
+   lifecycle rather than by the lease.
+
+   This step deliberately does not restate the order. An earlier draft did, and inverted it — advancing
+   the epoch before closing the interval — which is precisely the kind of second normative sequence that
+   leaves an implementation free to pick either.
 
    The interval closure is its own append rather than a field of `run.cancelled` because budget
    consumption is projected from paired `execution.started` / `execution.stopped` events and
@@ -1816,28 +1927,101 @@ supersede every nonterminal attempt (§9), and the driver holding that attempt c
 as it can be during cancellation — so the two are not different mechanisms, only different terminal
 intents:
 
-**Driver disposition is settled before the approval is appended, never after. [SPIKE-4]** — the
-quiesce handshake below is provisional: how a driver acknowledges without holding the lock, and what
-happens when it wedges after acknowledging, is what the spike settles. `amendment.approved`
-is a single fsynced event carrying `fenced_epoch` when a fence was needed — and an fsynced event
-cannot be amended or re-appended. So the approving command must know, *before* it appends, whether
-the current driver has to be fenced. It therefore resolves the driver first and appends once:
+**Driver disposition is settled before the approval is appended, never after**, and the handshake that
+makes it possible is now measured rather than assumed. The difficulty was real: holding the state lock
+prevents the driver from appending an acknowledgement, releasing it makes the lease observation stale,
+and a driver can wedge *after* acknowledging. The resolution is a durable prepare plus an
+acknowledgement that is a **lease move rather than an append**, so the driver never needs the lock *for
+the duration of the drain* — it takes it only briefly to make the move a compare-and-swap (step 2):
 
-1. Under the state lock, read the lease and verify its owner (§6).
-2. Decide the driver's disposition from what it just observed:
+> Before an approval may change the score head, the core appends and fsyncs
+> `amendment.approval_prepared`, bound to the proposal, base head, target attempts, and observed
+> authority epoch. A quiesce ACK is accepted only when the driver has verified the adapter session
+> empty, closed its interval, stopped every driver-authorized writer, and atomically moved its exact
+> matching `driver.lease` to the prepare-bound quiesced path. The approving command then revalidates
+> the prepare and base head under the state lock and appends `amendment.approved` once; on timeout it
+> fences the still-matching incarnation and carries that epoch in the same approval event.
 
-   | Observed | Disposition | Effect on the approval append |
-   |---|---|---|
-   | No lease, or owner verifiably gone | terminalize the superseded attempt directly | no fence; `fenced_epoch` omitted |
-   | Owner live and acknowledges within the deadline | it drains, terminalizes its own attempt, and continues on the new revision | no fence; `fenced_epoch` omitted |
-   | Owner live but **wedged** past the deadline | terminate it and its process tree (§4), close any open interval with `execution.stopped {reason: superseded, charging: clamped}`, increment the epoch, revoke the token, remove the lease | `fenced_epoch` **present** |
+**No second fencing event is needed**, which is why §9's single-transition rule survives: the prepare
+is a control request that changes nothing, and a wedge discovered at timeout is carried by the one
+approval event that was going to be appended anyway.
 
-3. Append `amendment.approved` **once**, with `superseded_attempt_ids` covering every nonterminal
-   attempt and `fenced_epoch` set iff step 2 fenced.
+Two design choices make the interval between prepare and commit safe, and they matter more than the
+step list:
 
-Waking a responsive driver is therefore part of step 2, before the append — not a step that follows
-it. The alternative would need a second durable event to carry a fence discovered later, and the
-approval is defined as the single authoritative transition (§9).
+- **The snapshot and the complete approval payload are written *before* the prepare.** Recording only
+  a semantic hash would be unrecoverable: `amendment.approved` also needs `new_snapshot_file_hash`, the
+  typed delta, `actual_impact`, obsoleted decision ids, candidate binding, and finalization state — and
+  an **auto** proposal has no durable proposal record to rebuild them from. So the snapshot file is
+  written and fsynced first, the full planned approval payload is persisted beside it as
+  `prepares/<prepare-id>.json`, and the prepare event references both by raw hash. Recovery then
+  *replays* a plan rather than recomputing one.
+- **A pending prepare is a mutation barrier.** Between prepare and commit the only mutations permitted
+  are the drain itself: closing an execution interval, sweeping sessions, the lease rename, and
+  cancellation — and because cancellation is admitted through the barrier, **every step that follows
+  must re-check `cancel.requested` and yield to it.** Otherwise the live pipeline and recovery would
+  implement opposite orderings: recovery gives cancellation precedence and abandons the prepare, while
+  a live approver could observe a matching sidecar and approve a run that was already cancelled. Everything else — `attempt.started`, acceptance events, candidate materialization,
+  opening or resolving decisions — is refused with `prepare_pending`. Without the barrier, commit
+  would have to re-run every runtime guard, because a `NARROW_GRANTS` guard that passed at prepare
+  time can be falsified by the driver starting that very movement before it notices the prepare.
+  Freezing the run is simpler than re-deriving what changed, and it is what makes "revalidate the
+  prepare" sufficient.
+
+The procedure:
+
+1. **Plan and prepare.** Under the state lock, having established approval intent (§9 policy, not
+   merely admissibility): write and fsync the new snapshot; write and fsync
+   `prepares/<prepare-id>.json` carrying the complete approval payload; then append and fsync
+   `amendment.approval_prepared` referencing both. At most one prepare may be pending per run. Release
+   the lock — the driver cannot acknowledge while it is held.
+2. **Quiesce or expire.** The driver, on observing the prepare, sweeps its adapter session **and every
+   recorded criterion launch** to verified empty (§4), closes its execution interval, and stops every
+   driver-authorized writer. It then **briefly takes the state lock**, revalidates that this exact
+   prepare is still pending, that **no `cancel.requested` is present**, and that its lease still
+   matches, renames `driver.lease` to
+   `driver.quiesced.<prepare_id>`, fsyncs the directory, and releases.
+
+   The lock is required and the rename alone is not sufficient: POSIX rename is atomic but it is not a
+   compare-and-swap — it cannot mean "rename only if the contents still hold this epoch and token".
+   Without the brief lock, cancellation or reclamation races the check-to-rename interval. The
+   approver still does not hold the lock while *waiting*, which is what the deadlock required.
+3. **Commit.** Re-acquire the lock and revalidate — in this order, so cancellation outranks approval
+   exactly as it does in recovery (Appendix C.1): **`cancel.requested` absent**; the prepare still
+   pending; the prewritten snapshot present with its recorded raw *and* semantic hashes and bound to the
+   plan; the base head unchanged; and then the sidecar or deadline.
+
+   | Observed at commit | Action |
+   |---|---|
+   | `cancel.requested` present | **Do not approve.** Hand off to the cancellation oracle **from step (a)** with (b) taken — not from (c). Restating (b) here and skipping (a) would let a cancellation arriving after the quiesce deadline terminalize the run without ever sweeping its sessions, which is the one thing (a) exists to prevent |
+   | Snapshot missing, or either hash mismatched, or not bound to the plan | Halt `missing_snapshot_file` — the approval names bytes that no longer exist |
+   | Quiesced sidecar present and matching | append `amendment.approved` **once** from the persisted plan, `fenced_epoch` omitted |
+   | Deadline passed, lease still present and matching | sweep every recorded adapter and criterion session to verified empty, terminate the owner and its process tree (§4), close its open interval with `execution.stopped {reason: superseded, charging: clamped}`, advance the epoch and revoke the token, append `amendment.approved` with that `fenced_epoch` — **and only then** remove the now-stale lease, since the journaled epoch advance is what makes it stale |
+   | No sidecar, lease present, owner **verifiably gone** | the driver died mid-drain. Sweep as above, then treat exactly as the fenced case: advance the epoch, append with `fenced_epoch`, clean the lease. No deadline wait is needed — a dead owner will not acknowledge |
+   | No lease and no sidecar at all | nothing to quiesce: append `amendment.approved`, `fenced_epoch` omitted, no deadline wait |
+   | Base head changed, or the plan fails validation below | quarantine the prewritten snapshot and remove the plan and sidecar, **then** append `amendment.approval_abandoned {reason: base_head_changed \| plan_invalidated}` — that order, since the event lifts the barrier. §9 may then be re-run from step 1 |
+
+**Plan validation is a closed predicate**, not a judgement. Commit verifies the plan bytes against
+`plan_record_hash` — a mismatch or missing file halts `missing_prepare_plan`, exactly as recovery does —
+and then requires equality on every field the prepare and the plan both carry:
+
+```text
+plan.proposal_id            == prepare.proposal_id
+plan.base_revision          == prepare.base_revision
+plan.base_hash              == prepare.base_hash
+plan.new_revision           == prepare.new_revision
+plan.new_snapshot_hash      == prepare.new_snapshot_hash
+plan.new_snapshot_file_hash == prepare.new_snapshot_file_hash
+plan.superseded_attempt_ids == prepare.target_attempt_ids
+plan.mode                   == prepare.mode
+  and, per mode: decision_id present iff human; envelope_class present iff auto
+```
+
+Any inequality is `plan_invalidated`. Duplicating these fields is deliberate: the equality check is what
+makes a plan and a prepare provably the same operation rather than two that merely look alike.
+
+4. **Clean up idempotently.** Remove the quiesced sidecar and the plan file. A leftover sidecar with no
+   pending prepare is inert and removed on sight; it authorizes nothing.
 
 The run stays nonterminal throughout: supersession fences an *incarnation*, not the run, so a new
 driver acquires authority at the incremented epoch via `authority.granted` and continues on the new
@@ -1949,6 +2133,19 @@ though it remains in the journal as history.
   hard criterion and does count — the score chose it. Without this distinction, any write
   movement declaring an output would auto-satisfy its verification floor and could be marked
   VERIFIED because a file exists, which is the overstatement V-001 forbids.
+
+**Every external criterion command is launched through the gated session-leader trampoline** (§4).
+`criterion.started` records the trampoline's PID, session id, and process-start identity before the
+gate is released; the trampoline then `exec`s the criterion in place. Criterion commands and their
+descendants MUST NOT create another POSIX session — the same conformance requirement §4 places on
+adapters, and for the same reason: a session escape leaves a process recovery cannot name.
+
+**The session is swept to verified empty on every external-command outcome**, not only during
+recovery. A command's leader can exit while a same-session descendant survives, so recording
+`PASS`/`FAIL`/timeout and then running the post-hoc worktree check would verify a tree that descendant
+can still mutate. The order is therefore fixed: command exits → **sweep the recorded session to
+verified empty** → post-hoc verification → `criterion.completed`. `sweep_unverifiable` fails the
+criterion as `ERROR` rather than reporting a verdict the core could not isolate.
 
 **Acceptance runner authority — a deterministic invocation shape, not confinement.** A
 criterion command is declared *in the score*, which the user authors and approves, so it runs
@@ -2299,8 +2496,11 @@ concern: a malformed proposal is rejected no matter who would approve it.
 **Admissibility pipeline**, under the repository state lock, in this order — first failure
 wins:
 
-1. **Run lifecycle** — the run must be `RUNNING` or `WAITING_HUMAN`; a terminal run rejects
-   with `run_terminal`. Score changes after a run ends happen by editing the root score or
+1. **Run lifecycle** — the run must be `RUNNING` or `WAITING_HUMAN` **and have no pending
+   `cancel.requested`**; a terminal run rejects with `run_terminal`, and a cancelling one with
+   `run_cancelling`. Nonterminality alone is insufficient: a cancellation is durable but not yet
+   terminal, so without this an amendment could be admitted after the barrier lifted and before
+   `run.cancelled` landed. Score changes after a run ends happen by editing the root score or
    starting a new run; reopening a terminal run is out of scope.
 2. **Stale re-check** — `base_revision` / `base_hash` must match the snapshot head.
 3. **Reserved fields** — the v0.2 reserved set is `{ /revision, /status }`. An operation
@@ -2482,10 +2682,12 @@ episode**, not merely running attempts:
 
 - **Every nonterminal attempt** — `STARTING`, `RUNNING`, or `VERIFYING` — is superseded, not
   only running ones: a human gate can leave an old-revision attempt sitting in `VERIFYING`,
-  and letting it complete would attach evidence to a revision that no longer exists. The core
-  records the approval, cancels/terminates the adapter through the §6 control channel, accepts
-  no further protocol or artifact output from the superseded attempt once the new head is
-  recorded, and charges the time until actual termination against the active budget.
+  and letting it complete would attach evidence to a revision that no longer exists.
+- **Termination precedes the approval, not the reverse.** The quiesce handshake of §6 drains or
+  fences the driver *before* `amendment.approved` is appended, because that event is the single
+  transition and cannot be appended twice. So the ordering is: prepare → the driver quiesces or the
+  deadline passes and it is fenced → approve. Time until actual termination is charged against the
+  active budget by the interval close that quiescing performs.
 - In `WAITING_HUMAN`, terminal attempts keep their history, but every pending decision or
   gate raised on the old revision is closed with `decision.obsoleted`. Gate approvals never
   carry across revisions.
@@ -2498,8 +2700,10 @@ episode**, not merely running attempts:
   permission by itself**.
 - Revision-triggered restarts consume no quality retry (§3).
 
-**Journal taxonomy.** Routing is not an outcome; approval is a single authoritative event.
-`amendment.approved {mode: auto | human}` is the **only** authoritative transition, carrying
+**Journal taxonomy.** Routing is not an outcome, and neither is preparation.
+`amendment.approval_prepared` is the durable control request of §6 and changes no score or lifecycle
+projection whatsoever. So the single-transition rule is unchanged by the quiesce handshake —
+`amendment.approved {mode: auto | human}` is still the **only** authoritative transition, carrying
 the proposal id (and the human decision id when `mode: human`), base and new snapshot
 hashes, the new revision, superseded attempt ids, obsoleted decision ids, and the re-bound
 `candidate_id` where one exists. `attempt.superseded`, `decision.obsoleted`, and any
@@ -2538,11 +2742,46 @@ requires quoting, no flow collections, no anchors or aliases, LF endings, one tr
 *root* score is never reformatted by the core — only `promote-score` writes it, and it writes the
 snapshot's exact bytes.
 
+**The plan is the invariant part plus an enumerated overlay.** `prepares/<prepare-id>.json` cannot
+literally contain the whole approval, because `fenced_epoch` is decided at commit — so it carries
+`{schema: "partitur/approval-plan+json;v=1", …}` with every field fixed at prepare time, and commit
+adds exactly one enumerated overlay from its outcome table — and **both its presence and its value are
+bound**, so the overlay carries no freedom at all:
+
+```text
+present   iff this transition advances the authority epoch
+value     fenced_epoch = observed_authority_epoch + 1
+          (precondition: the current epoch still equals observed_authority_epoch, which
+           commit revalidates; otherwise the prepare is invalid and is abandoned)
+```
+
+"Advance the epoch" alone would have left the number unbound, which is a second degree of freedom
+masquerading as one. With both fixed, "recovery replays the plan" is literally true: recovery
+reconstructs the same bytes the original approver would have written. The record is
+written temp → fsync → rename → directory-fsync, like every other authoritative sidecar (§1).
+
+**Snapshot lifecycle.** Because a snapshot is now written *before* its approval (§6), "a snapshot with
+no `amendment.approved`" is no longer sufficient to condemn it. A prewritten snapshot occupies the
+immutable path `scores/revision-<base+1>.yaml`, so leaving an abandoned one there would collide with the
+next attempt at the same revision, which may legitimately need different bytes. Four states, and
+recovery decides by which events reference it:
+
+| State | Recognised by | Action |
+|---|---|---|
+| Unreferenced pre-prepare | no `approval_prepared` names it | quarantine — a crash before the prepare |
+| *(plan records follow the same states)* | an orphan `prepares/<prepare-id>.json` with no `approval_prepared`, or one whose prepare is already terminal | **removed on sight.** A plan authorizes nothing by itself — only a pending prepare gives it force — so an orphan is inert and needs no quarantine, unlike a snapshot that occupies an immutable path |
+| Pending prepare | a pending `approval_prepared` names it | **retain**, and verify both hashes before commit |
+| Approved | `amendment.approved` names it | authoritative snapshot |
+| Abandoned | `approval_abandoned` closed the prepare that named it | quarantine **before appending that event**, since appending it is what lifts the barrier. A crash between the two would leave the barrier lifted with the immutable revision path still occupied, and a retry needing different bytes at that same path would have nowhere to write |
+
 **Persistence.** The approved snapshot is written temp → fsync → atomic rename; then the
 single `amendment.approved` event is appended and fsynced — head change and logical supersede
 become visible together as one replayable transition — and only then is the manifest
-projection updated. A snapshot file with no corresponding `amendment.approved` event is
-quarantined at recovery and never becomes head. An `amendment.approved` event with no
+projection updated. An **amendment** snapshot with no corresponding `amendment.approved` event is quarantined at recovery
+and never becomes head — unless a pending `approval_prepared` names it, which is the one legitimate case
+for such a snapshot to exist (snapshot lifecycle above). The rule is scoped to amendment snapshots
+deliberately: the run's **initial** snapshot is authorized by `run.started`, not by any approval, and
+read unscoped this rule would condemn it. An `amendment.approved` event with no
 snapshot file is a recovery halt: the journal is the authority and this is corruption, not
 something to repair.
 
@@ -3228,6 +3467,15 @@ performer.selected {
 attempt.started {
   attempt_number,                 # per-movement display ordinal — never the identifier (§6)
   execution_dependency_hash,      # A.5
+  adapter_process: {              # recorded BEFORE the trampoline's gate is released, so an
+    pid,                          #   unrecorded process can never have executed adapter code (§4)
+    session_id,                   #   == pid; the trampoline is the session leader
+    start_identity: (
+        {platform: "linux",  boot_id, start_ticks}
+      | {platform: "darwin", start_tvsec, start_tvusec}
+    )
+  },                              # PGID is deliberately absent: §4 enumerates the recorded session
+                                  #   and discovers its process groups at sweep time
   base_composition_hash?,         # movement_composition_dependency_hash (A.4); present iff the
                                   #   movement has dependencies. Journaled here because §5
                                   #   records it and §9 checks it — a declared identity that is
@@ -3386,6 +3634,18 @@ acceptance.started {
 criterion.started {
   criterion_id, criterion_spec_hash,
   subject_tree,                   # repeated: every criterion event repeats the binding (§7)
+  criterion_process?: {           # present IFF this criterion is an external command that spawned
+    pid, session_id,              #   successfully. `artifact` and `review` criteria evaluate
+    start_identity: (             #   in-process and have no PID at all, and a command that failed
+        {platform: "linux",  boot_id, start_ticks}      # to spawn never had one — so requiring it
+      | {platform: "darwin", start_tvsec, start_tvusec} # unconditionally would make those cases
+    )                             #   unrepresentable. Same trampoline handoff as an attempt (§4),
+  },                              #   recorded before the gate is released: without it recovery
+                                  #   could synthesize ERROR while an orphan still mutates the
+                                  #   worktree, then verify that worktree as if it were quiet
+  spawn_failed?: bool,            # present and true iff an external command could not be spawned.
+                                  #   Its `criterion.completed` is ERROR with no process identity,
+                                  #   and recovery has nothing to sweep
   identity_versions
 }
 
@@ -3395,7 +3655,9 @@ criterion.completed {
                                   #   from the event that constitutes it, without joining
   outcome,                        # PASS | FAIL | ERROR
   exit_code?,                     # present for a spawned command that ran to completion
-  duration_ms,
+  duration_ms?,                   # present for an OBSERVED completion; absent only when recovery
+                                  #   synthesized the completion without observing process exit
+                                  #   (Appendix C.3) — a fabricated duration would be evidence
   output_ref?,                    # attempt-directory path to the bounded captured output;
                                   #   the output itself is never inlined (§7)
   error_detail?,                  # required iff outcome = ERROR — what produced no verdict
@@ -3497,8 +3759,10 @@ decision.obsoleted {
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
 | `amendment.rejected` | ✓ | proposal_id | **Any** run state — `reason: run_terminal` exists precisely for a terminal run (§9 step 1), so restricting this event to nonterminal runs would make that reason unreachable | Terminal. Reason ∈ Appendix D. Records base hash and classifier version; records the typed delta only for failures at step 7 or later, since a validated AST exists only once step 6 has passed and `invalid_score` is step 6 failing; otherwise the patch-operations hash and error location |
+| `amendment.approval_prepared` | ✓ | `prepare_id`; **at most one prepare may be pending per run**, since two concurrent quiesces would race for one lease | **approval intent established** — for `auto`, after envelope classification and state guards pass; for `human`, after the decision is approve and steps 1–9 have been re-run. Not merely "passed 1–9", which precedes approval policy and would let a merely-routable proposal reserve a prepare | **Changes nothing**, and **raises the mutation barrier** (§6). The durable quiesce request: binds the proposal, the base head, the already-written snapshot, the persisted approval plan, the target attempts, and the observed authority epoch, so a driver's lease-move ACK matches a specific prepare rather than "some approval". A repeat with the same `prepare_id` is an idempotent re-request |
+| `amendment.approval_abandoned` | ✓ | `prepare_id` | a pending prepare | Terminally closes the prepare and **lifts the barrier**. Required because the journal is append-only: removing the sidecar cannot clear a pending `approval_prepared`, so without this event the prepare stays pending on every replay, "at most one pending prepare" blocks every retry, and the run wedges permanently |
 | `amendment.routed_human` | ✓ | proposal_id | admissible | **Non-terminal** routing marker; appends `decision.requested` for the amendment |
-| `amendment.approved` | ✓ | proposal_id | passed 1–9 | The **single authoritative transition**: new snapshot head, new revision, superseded attempt ids, obsoleted decision ids, re-bound `candidate_id`. Resolves its own decision directly. **Finalization special case** (`/status: draft → finalized`, §2): the same event additionally closes the draft phase and projects the interview movement to `SUCCEEDED`, manufacturing no `attempt.completed` and no VERIFIED/APPROVED evidence |
+| `amendment.approved` | ✓ | proposal_id | **a matching commit-ready prepare** (§6 step 3) — not merely "passed 1–9", which would let an implementation bypass preparation and quiescence entirely | The **single authoritative transition**: new snapshot head, new revision, superseded attempt ids, obsoleted decision ids, re-bound `candidate_id`. Resolves its own decision directly. **Finalization special case** (`/status: draft → finalized`, §2): the same event additionally closes the draft phase and projects the interview movement to `SUCCEEDED`, manufacturing no `attempt.completed` and no VERIFIED/APPROVED evidence |
 | `amendment.human_rejected` | ✓ | proposal_id | routed | Terminal; carries proposal id, decision id, human reason; resolves its own decision |
 
 **Payloads.** Every amendment event carries `base_hash` and `classifier_version` (§9).
@@ -3593,16 +3857,50 @@ amendment.approved {              # the SINGLE authoritative transition (§9)
     guard_passed: bool,           #   evaluation is already fsynced and cannot be mutated or
     guard_failure_reason?         #   re-appended, so the later evaluation needs its own carrier
   },                              #   here or it is simply lost
-  fenced_epoch?,                  # present iff this transition also fenced a wedged driver
-                                  #   (§6). Every fencing event journals the epoch authority
-                                  #   moved to, and supersession fences exactly as cancellation
-                                  #   does — so the same field appears on both terminals
+  fenced_epoch?,                  # present **iff this transition advances the authority epoch**
+                                  #   (§6) — which covers a wedged driver AND a driver that died
+                                  #   mid-drain, both of which need the advance. Keying it on
+                                  #   "wedged" alone contradicted the commit table, which gives the
+                                  #   fenced branch to a verifiably dead owner too. Value is always
+                                  #   `observed_authority_epoch + 1`
   finalization: bool,             # true iff this is the reserved /status draft→finalized
                                   #   amendment (§2). When true this event ALSO closes the
                                   #   draft phase and projects the interview movement to
                                   #   SUCCEEDED — manufacturing no attempt.completed and no
                                   #   VERIFIED/APPROVED evidence
   identity_versions
+}
+
+amendment.approval_abandoned {    # lifts the barrier; changes no score or lifecycle projection
+  prepare_id, proposal_id,
+  reason,                         # base_head_changed | plan_invalidated | cancelled
+  base_revision, base_hash,       # every amendment event carries these (§9)
+  classifier_version
+}
+
+amendment.approval_prepared {     # changes nothing; it RESERVES and RECORDS an approval operation
+  prepare_id,                     # names the quiesced sidecar path `driver.quiesced.<prepare_id>`,
+                                  #   so a driver's lease move is bound to THIS prepare
+  proposal_id,
+  mode,                           # auto | human — the approval intent, so recovery knows which
+                                  #   policy path produced it
+  decision_id?,                   # required iff mode = human: the decision already approved
+  envelope_class?,                # required iff mode = auto: the class that justified it
+  base_revision, base_hash,       # the head this prepare is bound to; a head change invalidates it
+  new_revision,
+  new_snapshot_hash,              # semantic (partitur/score)
+  new_snapshot_file_hash,         # sha256: raw bytes of the snapshot ALREADY WRITTEN (§6 step 1)
+  plan_record_hash,               # sha256: raw bytes of prepares/<prepare-id>.json (§9), which
+                                  #   carries every amendment.approved field that is INVARIANT at
+                                  #   prepare time — typed delta, actual_impact, obsoleted decision
+                                  #   ids, candidate binding, finalization state. A semantic hash
+                                  #   alone would be unrecoverable, since an AUTO proposal has no
+                                  #   durable proposal record to rebuild those from
+  target_attempt_ids: [attempt_id],   # sorted; the nonterminal attempts to be quiesced
+  observed_authority_epoch,       # the epoch seen when preparing — the ACK must still match it
+  quiesce_deadline,               # RFC 3339 ms; after it, the approver fences instead of waiting
+  classifier_version,             # every amendment event carries it (§9)
+  identity_versions               # it carries canonical hashes (B.0)
 }
 
 amendment.human_rejected {
@@ -3743,11 +4041,20 @@ Normative. Recovery replays the journal, rebuilds every projection, and then res
 **last durable state**. It is organised top-down over the whole run, and within each table rows are
 evaluated **top-down; the first matching row wins**.
 
-**Before any table below runs, recovery closes any open execution interval.** §6 requires it and
-every row would otherwise have to remember it: an `execution.started` with no matching stop is closed
-with `execution.stopped {reason: recovered, charging: clamped}` first, so budget consumption is
-correct before any admission decision reads it. A row that computes a disposition against a stale
-remainder would charge the wrong thing.
+**Before any table below runs, recovery closes any open execution interval — unless a C.1 row will
+close it with a more specific reason.** §6 requires the close, and every row would otherwise have to
+remember it: an `execution.started` with no matching stop is closed with
+`execution.stopped {reason: recovered, charging: clamped}` first, so budget consumption is correct
+before any admission decision reads it. A row that computes a disposition against a stale remainder
+would charge the wrong thing.
+
+The exception matters, because closing it here would record the wrong reason and the wrong order.
+**Cancellation** closes its interval in step (c) of the §6 oracle with `reason: cancelled`, whenever one
+is open and independently of whether (d) fences anything; **supersession** closes it with
+`reason: superseded`. So recovery checks C.1's
+control rows *first* and performs the generic close only for an interval no row claims. The reason is
+not cosmetic: it is how a later reader distinguishes a run that was cancelled from one that merely
+crashed.
 
 Two further rules govern everything below, and every row obeys them rather than restating them:
 
@@ -3764,9 +4071,10 @@ resuming work:
 
 | Last durable state | Recovery action |
 |---|---|
-| Run is terminal | Complete any derived projections idempotently (`movement.cancelled`, `attempt.cancelled`, `decision.obsoleted`). Launch nothing |
+| Run is terminal | Complete any derived projections idempotently (`movement.cancelled`, `attempt.cancelled`, `decision.obsoleted`), **and finish any residual non-journal cleanup**: remove a stale `driver.lease` or quiesced sidecar, an orphan plan record, and the run's staging root. This is what makes `(f)` crash-closed — a crash between `(e)` and `(f)` makes this row win, and the cancellation row can no longer match because the run is now terminal, so without cleanup here `(f)` would never be retried. Terminality protects the driver CAS; it must not also strand the filesystem. Launch nothing |
 | An `authority.granted` epoch exists and its owner is **unverifiable** | Halt `owner_unverifiable`. This outranks even a pending cancellation: cancellation outranks *resumption*, never the safety check that terminalizing requires. Declaring a run cancelled while a possibly-live owner could still mutate it is the one thing §6 forbids outright |
-| `cancel.requested` present, run nonterminal, owner verifiably gone or successfully terminated | **Cancellation takes precedence over resumption.** Append `run.cancelled` carrying the affected movement and attempt ids — and `fenced_epoch` if a lease incarnation had to be fenced. Resume nothing |
+| `cancel.requested` present, run nonterminal | **Cancellation takes precedence over resumption and over a pending prepare.** Execute **steps (a)–(f) of the §6 cancellation oracle exactly** — the whole list, including `(e)`'s `run.cancelled` and `(f)`'s lease cleanup; an earlier draft stopped at `(d)`, which left recovery unable to terminalize a cancelling run at all — including the conditional `(c)` and `(d)` — this row deliberately does not restate them, because two copies of a sequence are two chances to disagree. Three notes specific to recovery: `sweep_unverifiable` in (a) halts, since C.1 runs before C.2/C.3 and would otherwise terminalize without consulting the process identities those tables rely on; (c)'s interval close — which has its own predicate, independent of whether (d) fences — is why the generic pre-table close skips a cancelled run; and **no replacement driver is launched** |
+| `amendment.approval_prepared` pending, no matching `amendment.approved` or `amendment.approval_abandoned`, no cancellation | **Complete or abandon the prepare — never step past it**, and the **mutation barrier stays in force** while doing so. Verify **both** referenced files, because first-match ordering means the generic missing-file checks below are never reached: `prepares/<prepare-id>.json` against its recorded hash (`missing_prepare_plan`), and the prewritten snapshot against its recorded raw *and* semantic hashes and its binding to that plan (`missing_snapshot_file`). Sweep every recorded adapter and criterion launch to verified empty (`sweep_unverifiable` halts). Then run §6's commit table exactly as the original approver would have, appending `amendment.approved` **from the persisted plan** — or `amendment.approval_abandoned` if the head changed or the plan no longer validates. Reclaiming authority or entering C.2 while a prepare is pending would let a new driver run against a revision that was about to change |
 | An `authority.granted` epoch exists with no live owner | Reclaim per §6 |
 | `root_snapshot_divergence` — the root score claims the snapshot's revision with a different semantic hash | Halt (§1). Resume is impossible until an operator resolves it |
 | A run-level snapshot, artifact, proposal record, ref, or `resolved-cast.yaml` named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
@@ -3774,20 +4082,14 @@ resuming work:
 
 ## C.2 Attempt lifecycle recovery
 
-**[SPIKE-4]** The rows involving a live or recently-dead adapter process are provisional pending the
-process-identity handoff spike (header): specifically the spawn/`attempt.started` ordering and what a
-recovering process can verify about a surviving session. The rows that depend only on journal
-contents are settled.
-
 The window between `performer.selected` and `acceptance.started` was previously undefined, which
 left those states permanently stranded. `attempt_terminated_incomplete` is a quality failure whose
 disposition follows §3, recorded on the synthesized event so C.3's replay rule holds.
 
 | Last durable state | Recovery action |
 |---|---|
-| `performer.selected`, no `attempt.started` | The attempt never began: no adapter was spawned, so nothing external needs cleanup. Append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and schedule per §3 |
-| `attempt.started`, **no** `performer.completed`, adapter process not live | The adapter died mid-execution. Sweep its session per §4 — halting `sweep_unverifiable` if the sweep cannot be verified — then append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: after it, adapter exit is *expected*, and without the exclusion this row would capture every normal completion before the rows that handle it |
-| `attempt.started`, adapter process **still live** | The driver died but its adapter did not. Sweep the recorded adapter session before doing anything else — a surviving vendor still holds repository authority — then treat as the row above |
+| `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). If a trampoline handoff identity was published, verify and sweep that session. If the inherited marker is *held* but no identity can be read, halt `spawn_handoff_unverifiable` — the holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name. If the marker is free, **no released mutator survives** — an unreleased trampoline may still be in its pre-marker window but contains no adapter code (§4) — so append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and schedule per §3 |
+| `attempt.started`, **no** `performer.completed` | Sweep the **recorded** adapter session to verified empty **before** any failure or retry — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. Then append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: after it, adapter exit is *expected*, and without the exclusion this row would capture every normal completion before the rows that handle it |
 | `performer.completed`, movement holds `repo_write`, no `change_set.recorded` | The worktree still exists and its tree is authoritative: capture the change set idempotently, then continue at the next row. If the worktree is gone, the candidate cannot be reconstructed — append `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}` |
 | `performer.completed`, no `verification.passed` | Re-run the **full** §5 post-hoc verification — protected paths for every movement, plus the read-only invariant where the movement holds no `repo_write` — against the surviving worktree; if it is gone, `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}`. A durable `verification.passed` event marks the boundary, because without one a crash after `change_set.recorded` but before the check would let recovery start acceptance having verified nothing |
 | `change_set.recorded` or `verification.passed`, no `acceptance.started` | Begin acceptance: append `acceptance.started` and proceed to C.3 |
@@ -3796,11 +4098,6 @@ disposition follows §3, recorded on the synthesized event so C.3's replay rule 
 | Gate resolved reject on the **final** movement, no terminal event | Append `movement.failed {reason: human_gate_rejected, run_failed: true, decision_id, subject_tree}` — one atomic transition (§8), so no separate `run.failed` follows |
 
 ## C.3 Acceptance recovery
-
-**[SPIKE-4]** Synthesizing `criterion.completed {outcome: ERROR}` is provisional: `criterion.started`
-records no subprocess identity, so recovery cannot currently prove that the criterion process is gone
-before declaring it errored. The spike settles whether §6's identity machinery applies to a
-short-lived subprocess.
 
 Before resuming any criterion **or synthesizing any event that claims acceptance succeeded** —
 `acceptance.evaluation_completed`, `attempt.completed`, or a post-gate `movement.succeeded` — the core
@@ -3820,13 +4117,14 @@ the movement failure follows.
 |---|---|
 | `acceptance.failed` present | Terminal — synthesize no further criterion results. The attempt is already `FAILED` by that event's own projection (B.3); replay the **recorded** disposition (charged or not, §3) and its scheduling exactly once — never recompute admissibility at recovery |
 | Any `criterion.completed` is `FAIL` or `ERROR`, no `acceptance.failed` | Append `acceptance.failed` idempotently — which terminalizes the attempt as `FAILED` — and start no further criterion |
-| `criterion.started` without `criterion.completed` | Close it as `ERROR` — **including when the command in fact passed but crashed before the event was written** — then append `acceptance.failed` |
+| `criterion.started` without `criterion.completed` | **First sweep the recorded criterion session to verified empty** (nothing to sweep when `spawn_failed`) — otherwise an orphan could still be mutating the worktree about to be verified; unverifiable process state halts recovery. Then re-verify the worktree, and branch on the result: a **mismatch** is `acceptance.failed {reason: recovery_subject_mismatch}`, because the tree no longer matches what acceptance bound and no verdict about it is meaningful; only a **clean** re-verification synthesizes `criterion.completed {outcome: ERROR, error_detail: "recovered_without_observed_completion"}` with `exit_code`, `duration_ms`, and `output_ref` **absent**, followed by `acceptance.failed`. Either way it closes as a failure even when the command in fact passed but crashed before its event was written: recovery reports what it observed, and it observed no completion |
 | All criteria completed, all `PASS`, no `acceptance.evaluation_completed` | Append `acceptance.evaluation_completed` idempotently |
 | `acceptance.evaluation_completed`, required human gate not yet requested | Resume at the gate step; append one `decision.requested` idempotently |
 | `decision.requested` (gate) unresolved | Append nothing. The unresolved decision **is** the `WAITING_HUMAN` projection (§6) — there is no state event to restore |
 | Gate resolved approve, `attempt.completed` missing | Append `attempt.completed`, then `movement.succeeded` — in that order (B.1/B.2) — idempotently, including for the final movement the run's `SUCCEEDED` transition |
 | Gate resolved reject, terminal failure event missing | Append `movement.failed {reason: human_gate_rejected, decision_id, subject_tree}` idempotently, keyed on `movement_id` (Appendix B) with the gate decision id carried as causation and evidence; that one event terminalizes attempt, movement, and — for the final movement — the run |
 | `acceptance.evaluation_completed`, no gate required, `attempt.completed` missing | Append `attempt.completed`, then `movement.succeeded`, idempotently |
+| `acceptance.started`, an **unjournaled** `launch_id` directory present | A criterion launch crashed between taking its marker and its `criterion.started` append. Correlate it by the launch nonce, sweep that session to verified empty (`sweep_unverifiable` halts), remove the directory, and only then continue with the rows below — the criterion never started as far as the journal is concerned, but its process may still exist |
 | `acceptance.started`, no criterion events | Resume with the first criterion |
 | Some `criterion.completed` (all `PASS`), none in flight, criteria remaining | Resume with the next unstarted criterion |
 
@@ -3887,9 +4185,12 @@ a vendor, alongside the wire kinds above: `budget_exhausted` (§6 mid-flight exh
 **`execution.stopped` reasons** (§6): `normal`, `cancelled`, `superseded`, `budget_exhausted`,
 `recovered`.
 
-**`amendment.rejected` reasons:** `run_terminal`, `stale`, `patch_error`, `invalid_score`,
+**`amendment.rejected` reasons:** `run_terminal`, `run_cancelling`, `stale`, `patch_error`,
+`invalid_score`,
 `reserved_field`, `no_op`, `claim_narrower`, `executed_dependency_changed`,
 `candidate_incompatible`.
+
+**`amendment.approval_abandoned` reasons** (§6): `base_head_changed`, `plan_invalidated`, `cancelled`.
 
 **`amendment.routed_human` reasons:** `draft_phase`, `auto_disabled`,
 `unclassified_change`, `recognized_non_monotone`, `runtime_scope_started`.
@@ -3900,6 +4201,10 @@ a vendor, alongside the wire kinds above: `budget_exhausted` (§6 mid-flight exh
 **Envelope classes** (§9): `NARROW_PATHS`, `NARROW_GRANTS`, `BUDGET_DECREASE`.
 
 **Criterion outcomes** (§7): `PASS`, `FAIL`, `ERROR`.
+
+**Synthesized-completion detail** (Appendix C.3): `recovered_without_observed_completion` — the only
+`error_detail` recovery originates, so a synthesized `ERROR` is always distinguishable from an observed
+runner failure.
 
 **Review outcomes** (§8): `CLEAN`, `CONTESTED`, `OVERRIDDEN`.
 
@@ -3975,7 +4280,7 @@ a quality retry, nor a fallback, nor a revision restart.
 **Recovery halts** — conditions that stop a run rather than repairing it:
 `journal_idempotency_conflict`, `unsupported_run_format`, `missing_artifact_file`,
 `missing_snapshot_file`, `missing_changeset_ref`, `missing_proposal_record`,
-`missing_resolved_cast`, `owner_unverifiable`, `sweep_unverifiable`, `root_snapshot_divergence`,
-`journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
+`missing_resolved_cast`, `missing_prepare_plan`, `owner_unverifiable`, `sweep_unverifiable`,
+`spawn_handoff_unverifiable`, `root_snapshot_divergence`, `journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
 bytes do not match the recorded hash is no more usable than one that is gone, and splitting them
 would double the enum without changing any action.
