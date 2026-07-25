@@ -169,6 +169,7 @@ func TestFastCriterionIdentityAndPIDChurn(t *testing.T) {
 	seen := map[int]startIdentity{}
 	reusedPIDs := 0
 	duplicateStartOnly := 0
+	observed := 0
 	seenStarts := map[startIdentity]bool{}
 	for trial := 0; trial < churnTrials; trial++ {
 		command := exec.Command("true")
@@ -178,8 +179,20 @@ func TestFastCriterionIdentityAndPIDChurn(t *testing.T) {
 		record, err := processByPID(command.Process.Pid)
 		if err != nil {
 			_ = command.Wait()
+			// A child already gone before inspection is a censored sample, not
+			// evidence against PID/start-identity separation. These children are
+			// ungated on purpose — this loop exists to show why the gate above is
+			// needed — and Q3 records their inspectability as an unsafe ordering
+			// that only held because an unreaped child retains a zombie record.
+			// It is not retried: the PID may already be reused, so a second look
+			// could attribute a different process's identity to it. Any other
+			// inspection error is still a real failure.
+			if isProcessGone(err) {
+				continue
+			}
 			t.Fatalf("inspect fast child %d: %v", command.Process.Pid, err)
 		}
+		observed++
 		if previous, ok := seen[record.PID]; ok {
 			reusedPIDs++
 			if previous == record.Start {
@@ -196,8 +209,8 @@ func TestFastCriterionIdentityAndPIDChurn(t *testing.T) {
 		}
 	}
 	t.Logf(
-		"FAST_CRITERION_RESULT os=%s gated=%d identity_failures=0 churn=%d pid_reuse=%d duplicate_start_without_pid=%d",
-		runtime.GOOS, gatedTrials, churnTrials, reusedPIDs, duplicateStartOnly,
+		"FAST_CRITERION_RESULT os=%s gated=%d identity_failures=0 attempted=%d observed=%d unobservable=%d pid_reuse=%d duplicate_start_without_pid=%d",
+		runtime.GOOS, gatedTrials, churnTrials, observed, churnTrials-observed, reusedPIDs, duplicateStartOnly,
 	)
 }
 
