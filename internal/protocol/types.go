@@ -35,6 +35,8 @@ type Enforcement struct {
 	PathGrants    bool `json:"path_grants"`
 	ReadOnly      bool `json:"read_only"`
 	NetworkGrants bool `json:"network_grants"`
+	ShellGrants   bool `json:"shell_grants"`
+	ReadGrants    bool `json:"read_grants"`
 }
 
 type AdapterIdentity struct {

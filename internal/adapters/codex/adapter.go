@@ -22,7 +22,7 @@ const (
 	adapterID        = "codex"
 	binaryEnv        = "PARTITUR_CODEX_BIN"
 	probeTimeout     = 10 * time.Second
-	maxDiagnostic    = 64 << 10
+	maxDiagnostic    = adapterkit.MaxDiagnosticBytes
 	maxFailureDetail = 512
 )
 
@@ -70,6 +70,9 @@ func (a *Adapter) Probe(ctx context.Context) (*protocol.ProbeResult, error) {
 		}
 		return nil
 	})
+	if flushErr := diagnostic.Flush(); err == nil {
+		err = flushErr
+	}
 	if err != nil {
 		return nil, fmt.Errorf("probe Codex CLI: %w", err)
 	}
@@ -104,16 +107,19 @@ func (a *Adapter) Probe(ctx context.Context) (*protocol.ProbeResult, error) {
 		// Read-only movements keep the repository outside the writable
 		// workspace. Network is disabled in both command and web-search paths.
 		// Path grants remain advisory because writable roots are directory-grain
-		// while Partitur grants may be glob-grain.
+		// while Partitur grants may be glob-grain. Repository reads cannot be
+		// denied, and disabling shell_tool leaves unified_exec available.
 		Enforcement: protocol.Enforcement{
 			PathGrants:    false,
 			ReadOnly:      true,
 			NetworkGrants: true,
+			ShellGrants:   false,
+			ReadGrants:    false,
 		},
 	}, nil
 }
 
-func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest, sink adapterkit.EventSink) (*protocol.ExecuteResult, error) {
+func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest, sink adapterkit.EventSink) (result *protocol.ExecuteResult, err error) {
 	if ctx.Err() != nil {
 		return cancelled(), nil
 	}
@@ -127,7 +133,16 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 		return failed(protocol.FailureProtocolError, err.Error()), nil
 	}
 
-	invocation := a.invoke(ctx, binary, command, sink)
+	diagnostic := newDiagnosticWriter(a.stderr)
+	var sensitive []string
+	defer func() {
+		if flushErr := diagnostic.Flush(sensitive...); err == nil {
+			err = flushErr
+		}
+	}()
+
+	invocation := a.invoke(ctx, binary, command, sink, diagnostic)
+	sensitive = unique(append(sensitive, invocation.stream.sensitive...))
 	if ctx.Err() != nil {
 		return withSession(cancelled(), invocation.stream.sessionID), nil
 	}
@@ -140,13 +155,14 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 		if err != nil {
 			return failed(protocol.FailureProtocolError, err.Error()), nil
 		}
-		invocation = a.invoke(ctx, binary, command, sink)
+		invocation = a.invoke(ctx, binary, command, sink, diagnostic)
+		sensitive = unique(append(sensitive, invocation.stream.sensitive...))
 		if ctx.Err() != nil {
 			return withSession(cancelled(), invocation.stream.sessionID), nil
 		}
 	}
 
-	result := invocation.result()
+	result = invocation.result()
 	if result == nil {
 		result = adapterkit.CollectResult(request.OutputDir, sessionRedactingSink{
 			EventSink: sink,
@@ -156,12 +172,12 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 	return withSession(result, invocation.stream.sessionID, invocation.stream.sensitive...), nil
 }
 
-func (a *Adapter) invoke(ctx context.Context, binary string, command commandSpec, sink adapterkit.EventSink) invocationResult {
+func (a *Adapter) invoke(ctx context.Context, binary string, command commandSpec, sink adapterkit.EventSink, diagnostic *diagnosticWriter) invocationResult {
 	state := streamState{sink: sink}
 	if command.resumeID != "" {
 		state.sensitive = []string{command.resumeID}
 	}
-	diagnostic := newDiagnosticWriter(a.stderr)
+	diagnosticStart := len(diagnostic.data)
 	process, err := adapterkit.RunProcess(ctx, adapterkit.ProcessSpec{
 		Path:   binary,
 		Args:   command.args,
@@ -173,7 +189,7 @@ func (a *Adapter) invoke(ctx context.Context, binary string, command commandSpec
 	return invocationResult{
 		process: process,
 		err:     err,
-		stderr:  diagnostic.String(),
+		stderr:  string(diagnostic.data[diagnosticStart:]),
 		stream:  state,
 	}
 }
@@ -239,7 +255,6 @@ func newDiagnosticWriter(target io.Writer) *diagnosticWriter {
 }
 
 func (w *diagnosticWriter) Write(p []byte) (int, error) {
-	written, err := w.target.Write(p)
 	if remaining := maxDiagnostic - len(w.data); remaining > 0 {
 		if len(p) > remaining {
 			w.data = append(w.data, p[:remaining]...)
@@ -247,7 +262,16 @@ func (w *diagnosticWriter) Write(p []byte) (int, error) {
 			w.data = append(w.data, p...)
 		}
 	}
-	return written, err
+	return len(p), nil
+}
+
+func (w *diagnosticWriter) Flush(sensitive ...string) error {
+	sanitized := adapterkit.SanitizeDiagnostic(string(w.data), sensitive...)
+	written, err := io.WriteString(w.target, sanitized)
+	if err == nil && written != len(sanitized) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func (w *diagnosticWriter) String() string {

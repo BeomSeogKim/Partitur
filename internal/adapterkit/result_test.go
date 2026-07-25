@@ -104,6 +104,10 @@ func TestLoadResultValidationMatrix(t *testing.T) {
 			content: `{"version":1,"version":1,"artifacts":[],"questions":[],"proposal":null,"summary":""}`,
 		},
 		{
+			name:    "nested duplicate JSON key",
+			content: `{"version":1,"artifacts":[],"questions":[],"proposal":{"id":"p","amendment":{"base_hash":"a","base_hash":"b"},"requires_decision":false},"summary":""}`,
+		},
+		{
 			name:    "duplicate result id",
 			content: `{"version":1,"artifacts":[{"artifact_id":"same","path":"file"}],"questions":[{"id":"same","question":"Q?"}],"proposal":null,"summary":""}`,
 			setup: func(t *testing.T, outputDir string) string {
@@ -119,6 +123,18 @@ func TestLoadResultValidationMatrix(t *testing.T) {
 			content: `{"version":1,"artifacts":[],"questions":[],"proposal":null}`,
 		},
 		{
+			name:    "null artifacts",
+			content: `{"version":1,"artifacts":null,"questions":[],"proposal":null,"summary":""}`,
+		},
+		{
+			name:    "null questions",
+			content: `{"version":1,"artifacts":[],"questions":null,"proposal":null,"summary":""}`,
+		},
+		{
+			name:    "null summary",
+			content: `{"version":1,"artifacts":[],"questions":[],"proposal":null,"summary":null}`,
+		},
+		{
 			name:    "unsupported version",
 			content: `{"version":2,"artifacts":[],"questions":[],"proposal":null,"summary":""}`,
 		},
@@ -129,6 +145,21 @@ func TestLoadResultValidationMatrix(t *testing.T) {
 		{
 			name:    "parent escape",
 			content: `{"version":1,"artifacts":[{"artifact_id":"file","path":"../outside"}],"questions":[],"proposal":null,"summary":""}`,
+		},
+		{
+			name:    "empty artifact path",
+			content: `{"version":1,"artifacts":[{"artifact_id":"file","path":""}],"questions":[],"proposal":null,"summary":""}`,
+		},
+		{
+			name:    "empty artifact id",
+			content: `{"version":1,"artifacts":[{"artifact_id":"","path":"file"}],"questions":[],"proposal":null,"summary":""}`,
+			setup: func(t *testing.T, outputDir string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(outputDir, "file"), []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
 		},
 		{
 			name:    "absolute outside",
@@ -173,6 +204,18 @@ func TestLoadResultValidationMatrix(t *testing.T) {
 			content: `{"version":1,"artifacts":[],"questions":[{"id":"q","question":" "}],"proposal":null,"summary":""}`,
 		},
 		{
+			name:    "empty question id",
+			content: `{"version":1,"artifacts":[],"questions":[{"id":"","question":"Q?"}],"proposal":null,"summary":""}`,
+		},
+		{
+			name:    "empty proposal id",
+			content: `{"version":1,"artifacts":[],"questions":[],"proposal":{"id":"","amendment":{},"requires_decision":false},"summary":""}`,
+		},
+		{
+			name:    "duplicate question and proposal id",
+			content: `{"version":1,"artifacts":[],"questions":[{"id":"same","question":"Q?"}],"proposal":{"id":"same","amendment":{},"requires_decision":false},"summary":""}`,
+		},
+		{
 			name:    "invalid amendment",
 			content: `{"version":1,"artifacts":[],"questions":[],"proposal":{"id":"p","amendment":[],"requires_decision":false},"summary":""}`,
 		},
@@ -199,6 +242,18 @@ func TestLoadResultValidationMatrix(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestLoadResultRejectsInvalidUTF8(t *testing.T) {
+	outputDir := t.TempDir()
+	data := append([]byte(`{"version":1,"artifacts":[],"questions":[],"proposal":null,"summary":"`), 0xff)
+	data = append(data, []byte(`"}`)...)
+	if err := os.WriteFile(filepath.Join(outputDir, ResultFilename), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadResult(outputDir); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
