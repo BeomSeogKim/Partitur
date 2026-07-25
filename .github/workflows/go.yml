@@ -37,3 +37,44 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  # `spikes` is a nested module, so the root job's `./...` never reaches it.
+  # The suites are compatibility probes, not just a compile check: they assert
+  # the platform behaviour the design rests on — session sweeping, fencing,
+  # Git merge semantics. A failure here means an assumption stopped holding on
+  # this runner, which is a different signal from a production regression.
+  spikes:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: spikes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: spikes/go.mod
+          # v5 keys the cache off the root go.sum by default; point it at the
+          # nested module so invalidation stays aligned if the two diverge.
+          cache-dependency-path: spikes/go.sum
+
+      # The fanin spike measured a Git floor of 2.47; recorded so a failure
+      # below it is legible as a host shortfall rather than a regression.
+      - name: Git version
+        run: git --version
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # `-count=1` because setup-go restores GOCACHE and Go caches successful
+      # test results: a probe that replays a cached pass has not probed this
+      # runner. `-v` so the harness's measurements reach the job log.
+      - name: Test
+        run: go test -count=1 -v ./...
