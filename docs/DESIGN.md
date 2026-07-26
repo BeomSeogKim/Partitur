@@ -4423,7 +4423,7 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 
 | Edge | Left | Right | Owning clause | Assertion across a crash |
 |---|---|---|---|---|
-| `supersede.swept_to_approved` | survivor sweep verified empty `B` | `amendment.approved` appended `R` | §6 step 3 commit table | The deadline and dead-owner branches sweep before fencing and approving, and **nothing else in this group attests that**. If the interval was already closed before the driver died, neither of the two edges below is even reachable, so without this one an approval could follow an unswept survivor |
+| `supersede.swept_to_approved` | survivor sweep verified empty `B` | `amendment.approved` appended `R` | §6 step 3 commit table | The deadline and dead-owner branches sweep before fencing and approving, and **nothing else in this group attests that**: the edge below attests an interval close and the one after it an epoch advance, neither of which is the sweep. Without this edge an approval could follow an unswept survivor on either branch. Note it is the sweep that is unattested elsewhere, not the branch that is rare — both lower edges are absent only when the driver quiesced normally, which leaves the matching-sidecar branch and not this group at all |
 | `supersede.interval_stopped_to_approved` | `execution.stopped {reason: superseded}` appended `R` | `amendment.approved` appended `R` | §6 step 3 commit table | Same obligation as `cancel.interval_stopped_to_terminal`. It arises only on the branches where the approver closes the interval; a driver that quiesced normally closed its own in step 2 |
 | `supersede.fence_decided_to_approved` | fence branch taken with the lease still matching — no durable output `B` | `amendment.approved` carrying `fenced_epoch` appended `R` | §6 step 3 commit table | E.3's shape on the supersession path. Nothing durable records the advance until the approval carries it, so recovery must re-derive the same branch from the retained lease. The commit table gives this branch to a verifiably dead owner as well as a wedged one, which is why the field is keyed on *advancing the epoch* rather than on wedging |
 | `supersede.approved_to_lease_removed` | `amendment.approved` durable `R` | stale lease removed `R` | §6 step 3 commit table; C.1 stale-lease row | The journaled advance is what makes the lease stale, so removal follows the append and never precedes it. A lease stranded here is at a superseded epoch, so C.1's stale-lease row removes it and re-evaluates. Freezing this edge is what showed that row had to exist: the unscoped `owner_unverifiable` check halted on this state, which is provably safe |
@@ -4487,20 +4487,23 @@ it is **forbidden evidence, not a skeleton to copy**.
 
 ## E.4 Obligations on what implements this
 
-**Prospective.** Nothing in the repository implements this appendix yet: there are no signal types,
-no code carries these edge IDs, and the harness specification is an external working note that
-describes its boundaries in prose and restates their invariants. This section states what must be
-true of that work when it exists, not what is true now — the whole point of freezing the contract
-first is that `runstore` is written against it rather than retrofitted.
+**Prospective.** No code implements this appendix yet: there are no signal types and nothing carries
+these edge IDs. This section states what must be true of that work when it exists, not what is true
+now — the whole point of freezing the contract first is that `runstore` is written against it rather
+than retrofitted. [`HARNESS.md`](HARNESS.md) is the one part that does exist, and it selects from
+E.2 rather than describing boundaries of its own.
 
 - The Go types implement E.1's semantics and carry E.2's edge IDs verbatim.
 - They **do not restate the assertions.** An invariant in a doc comment is a second normative text,
   and this document has paid for that mistake more than once. A comment may name the edge and point
   here; it may not paraphrase what must hold.
 - The edge IDs are not a numbered enum. Adding a newly discovered window must not renumber anything.
-- The harness specification selects edges by ID and cites the owning clause instead of paraphrasing
-  it. Its present prose boundaries are superseded by E.2, and reconciling it is a prerequisite of
-  building the harness, not of landing this appendix.
+- [`HARNESS.md`](HARNESS.md) selects edges by ID and cites the owning clause instead of paraphrasing
+  it. It gives every edge an explicit disposition, so a new one is a visible omission there rather
+  than a silent gap. If it and this appendix ever disagree, this appendix governs and that file is
+  the defect.
+- **An edge that proves impossible to inject at is a defect in this appendix**, to be revised here
+  explicitly. It is not licence for `HARNESS.md` to reword the seam or drop it.
 
 **Completeness is checked by branch expansion, not by inspection.** Reading for missing pairs is what
 produced three rounds of additions. The check that terminates is:
