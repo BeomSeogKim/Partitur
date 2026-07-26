@@ -528,13 +528,17 @@ func environmentEntryName(entry string) string {
 func runFakeAdapter(mode string) {
 	adapterID := strings.TrimPrefix(filepath.Base(os.Args[0]), "partitur-adapter-")
 	marker := os.Getenv(fakeMarkerEnv)
-	if mode != "premature_eof" {
-		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-	}
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	writeValid := func(id string) {
 		_, _ = os.Stdout.Write(append(validProbeFrame(id, 2, "", `{}`), '\n'))
 	}
 	waitEOF := func() { _, _ = io.Copy(io.Discard, os.Stdin) }
+	closeOutputAndWaitEOF := func() {
+		// Deliver read-side EOF without exiting first: the core must finish
+		// the request-side close before Wait can close its stdin pipe.
+		_ = os.Stdout.Close()
+		waitEOF()
+	}
 
 	switch mode {
 	case "environment":
@@ -568,8 +572,10 @@ func runFakeAdapter(mode string) {
 		writeValid(adapterID)
 		waitEOF()
 	case "premature_eof":
+		closeOutputAndWaitEOF()
 	case "partial_eof":
 		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0"`)
+		closeOutputAndWaitEOF()
 	case "malformed_then_valid":
 		_, _ = os.Stdout.WriteString("{bad}\n")
 		writeValid(adapterID)
@@ -602,6 +608,7 @@ func runFakeAdapter(mode string) {
 	case "partial_after_response":
 		writeValid(adapterID)
 		_, _ = os.Stdout.WriteString(`{"jsonrpc"`)
+		closeOutputAndWaitEOF()
 	case "nonzero_after_response":
 		writeValid(adapterID)
 		waitEOF()
