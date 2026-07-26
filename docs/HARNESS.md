@@ -42,9 +42,8 @@ on.
 
 The evidence and lifecycle chains are **out of scope** — `attempt.completed` → `movement.succeeded`,
 `movement.failed` → `run.failed`, a criterion's error completion → `acceptance.failed`,
-`acceptance.evaluation_completed` → `decision.requested`. E defers them because C.2 and C.3 still
-express steps as `schedule per §3` and `proceed`, which branch expansion cannot terminate on. This
-harness does not cover them and must not be described as covering §7 acceptance or Appendix C
+`acceptance.evaluation_completed` → `decision.requested`. E defers them, and cites its own reason;
+this harness does not cover them and must not be described as covering §7 acceptance or Appendix C
 generally.
 
 ## Selection manifest
