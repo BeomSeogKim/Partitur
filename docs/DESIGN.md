@@ -83,7 +83,7 @@ prose pass, and they are at different stages:
 | The prepare / ACK / quiesce protocol built on them (§6) | replay and fault-injection tests (Appendix E) | **not proved** — designed against the measurements, not measured itself |
 | Recovery — pending-prepare, cancellation precedence, live criterion sweeping | replay and fault-injection tests (Appendix E) | **not proved** |
 | Forced PID reuse, Intel macOS, power-loss durability | targeted testing | open |
-| Safety-policy choices | specification review | reviewed, and review is the only instrument they admit |
+| Safety-policy choices, including the factory cast's enforcement posture (§3) | specification review | reviewed, and review is the only instrument they admit |
 
 Two things the table deliberately does not say. It does not claim every residual risk has a
 *non-review* forcing function — safety-policy choices are value judgements and review is the
@@ -820,14 +820,40 @@ bindings:
   verify:    { performer: sol }
 ```
 
-> **This example is illustrative, not runnable.** Under the fail-closed predicate of §4 it
-> does not pass `partitur validate`: `fable` (claude) reports all-false enforcement, and
-> `sol` (codex) cannot enforce glob-granularity path grants. A runnable cast must either set
+> **This example is illustrative, not runnable.** Under the fail-closed predicate of §4 it does not
+> pass `partitur validate`, for the reasons the paragraphs below record. A runnable cast must either set
 > `allow_advisory_enforcement: true` on the affected performers — accepting that the
 > manifest records which constraints were advisory per attempt — or bind write movements to
-> a performer whose enforcement covers the movement's grants. What the factory cast ships is
-> deliberately left open — a product decision, not a blocked one: all five enforcement dimensions
-> are implemented and both first-party adapters report them.
+> a performer whose enforcement covers the movement's grants.
+
+**What the factory cast ships.** Enforcement is reported by the adapter's `probe` and recorded per
+attempt (§1, §4); the cast neither supplies nor overrides it. Within enforcement posture, the factory
+cast decides only where it opts into advisory execution:
+
+> The factory cast does not duplicate or override adapter enforcement reports. It opts into advisory
+> execution only through dedicated performer entries, **never globally**. Parts intended to remain
+> strict use distinct strict entries for both their primary performer and **every fallback**, even
+> where the adapter and model are identical.
+
+Opting in globally would make advisory execution habitual — the failure that would leave all five
+dimensions implemented and meaningless.
+
+The binding granularity is what forces the last clause: `bindings.<part>` selects a primary performer
+and fallback chain for a **part**, while `grants` are declared per **movement**, and one part may play
+several movements with different grants. An advisory-enabled entry can therefore allow an unmet
+enforcement dimension to proceed in any movement in which that entry is selected, including a
+movement holding no `repo_write`; the exact advisory dimensions remain movement- and attempt-specific
+under §4. Distinct entries are necessary but not sufficient: a part remains strict only when its
+primary and every fallback are strict entries.
+
+Whether an attempt fails closed or proceeds with recorded advisory dimensions is governed solely by
+§4's per-movement predicate. Both outcomes are legitimate; what the factory cast must not do is
+authorize the second through a global opt-in.
+
+*Non-normative observation, 2026-07-26.* Of the first-party adapters, `codex` reports only
+`read_only` and `network_grants` as `true`, and `claude` reports none of the five. That is why the
+rule above is a live constraint on the factory cast rather than a hypothetical one; it is not a claim
+this document freezes, and the probe governs.
 
 - `partitur validate` checks every bound performer's probed capabilities against the
   part's `capabilities`, and the adapter's enforcement against the movement's grants
