@@ -650,8 +650,10 @@ in §9. Approved patches apply only to the run's snapshot chain (see §1 for pro
 the root score). The full admissibility pipeline, the auto-approval envelope, and the
 effects of approval on a running episode are §9.
 
-**Rules enforced by `partitur validate` (the score compiler).** All rules are checked and
-reported together; validation is not short-circuited at the first error.
+**Rules enforced by `partitur validate` (the score compiler).** All active rules are checked and
+reported together; validation is not short-circuited at the first error. Rule numbers are stable
+contract identifiers: a retired number remains as a tombstone and is never reused or silently
+assigned to a later rule.
 
 1. `status: finalized` requires every open question resolved or waived,
    `verification.expectation.intent` present, and a well-formed `apply_gate`.
@@ -676,8 +678,14 @@ reported together; validation is not short-circuited at the first error.
    within the score. (Runtime emissions are instances, §1 — uniqueness is a declaration
    rule, not a storage rule.) No output id may use the reserved `partitur.` prefix, which
    belongs to core-supplied inputs (§4).
-5. Artifact paths are canonicalized inside the attempt's writable areas (§5); `..`,
-   symlinks escaping them, and absolute paths outside them are rejected.
+5. **Retired — artifact-path containment is a runtime ingest invariant, not a score rule.**
+   The score declares logical output ids and kinds, but no artifact path, so the compiler has no
+   source pointer on which to enforce this check. The adapter rejects an absolute path, a `..`
+   segment, a post-symlink escape from `output_dir`, or a non-regular file when it validates the
+   result envelope (§4). The core independently repeats the same post-symlink containment and
+   regular-file validation while recording the artifact (§1); the adapter-side check cannot
+   discharge the core-side one because the adapter is across the trust boundary. Rule number 5 is
+   not reused.
 6. Unknown fields in the core namespace are an error; adapter-specific data lives only
    under `extensions.<adapter-id>`.
 7. An `acceptance.review` entry must reference a `findings`-kind output of the same
@@ -697,8 +705,10 @@ reported together; validation is not short-circuited at the first error.
     be omitted; otherwise it must be declared, must not hold `repo_write`, must
     transitively depend on every non-draft movement via `needs`, must have no downstream
     movement, and no non-draft movement may sit outside its dependency closure.
-13. No numeric value anywhere in the score falls outside the canonical safe range
-    (Appendix A).
+13. Every numeric value at a **schema-controlled path** is an integer in the canonical safe range
+    (Appendix A). Numeric values below `extensions.<adapter-id>` are opaque and instead follow
+    A.1's full finite-binary64 ingress rule; applying the schema range to them would collapse the
+    deliberate split between core-authored schema and user-authored adapter-namespaced payloads.
 14. A `phase: draft` movement declares **no ordinary artifact outputs** — draft movements may
     not emit `artifact` at all (§2 draft contract), so declaring one would be unsatisfiable.
     It may declare no `change_set` output either, since it holds no `repo_write`.
