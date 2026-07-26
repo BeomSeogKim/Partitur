@@ -728,6 +728,9 @@ assigned to a later rule.
 19. `may_propose` (below) defaults to `false` and is permitted on **any** movement. The
     draft interview movement has it implicitly. The effective value — including that
     implicit default — is materialized in the canonical AST, so it is visible to hashing.
+    An explicit `may_propose: false` on the draft interview movement is a compiler error:
+    the field cannot withdraw the authority that movement's purpose requires, and silently
+    ignoring it would make the projected effective value disagree with the source.
 
 **Defaults, optionality, and ranges.** The canonical AST is built *after defaults are applied*
 (A.1), so two implementations cannot agree on an identity unless they agree on the defaults. The
@@ -751,7 +754,7 @@ example above is illustrative; this table is normative:
 | `movements[].grants` | optional | `[]` | ⊆ part capabilities |
 | `movements[].inputs` / `.outputs` | optional | `[]` | §2 rules 4, 15 |
 | `movements[].phase` | optional | **absent** (non-draft) | only `draft` |
-| `movements[].may_propose` | optional | `false` | — |
+| `movements[].may_propose` | optional | `false`; `true` for the draft interview movement | — |
 | `movements[].acceptance` | optional | `{hard: [], review: [], human_gate: "never"}` | `human_gate` defaults to **`never`** — the permissive-looking default is safe because §2 rule 2 independently forces a write movement to declare a hard criterion or `always` |
 | `acceptance.hard[].timeout_min` | optional | **absent** — the effective timeout is then the remaining budget alone (§7) | integer ≥ 1 |
 | `acceptance.hard[].expected_hash` | optional | absent | `sha256:<hex>` |
