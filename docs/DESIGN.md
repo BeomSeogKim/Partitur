@@ -952,17 +952,21 @@ total attempts = initial
 
 ## 4. Adapter protocol v2
 
-**Packaging.** An adapter is an executable `partitur-adapter-<id>` found on `PATH` or via
-explicit config. Adapters are explicitly enabled; nothing is auto-discovered. v0.2
-supports macOS and Linux; Windows is out of scope.
+**Packaging.** An adapter is an executable found on `PATH` under the exact name
+`partitur-adapter-<id>`. v0.2 has no core-side adapter-path override. An adapter is explicitly
+enabled only when the resolved cast references its id; the core resolves those exact names on
+demand and never scans `PATH` for candidate adapters. v0.2 supports macOS and Linux; Windows is
+out of scope.
 
-**Process model and framing.** The core spawns the adapter **per attempt**. Transport is
-JSON-RPC 2.0 messages as **UTF-8 JSON Lines**, one per line, directional: **requests travel on
-the adapter's stdin; responses and event notifications travel on its stdout.** newlines inside values are escaped; control frames have a fixed
-size cap — large content travels as artifact files, never inline. `stderr` is
-diagnostics only, captured to the attempt directory. The adapter must keep reading stdin
-during `execute` so a `cancel` request can be received; after a grace timeout the core
-terminates the process, and force-kills after a further timeout. No daemon in v0.2.
+**Process model and framing.** Execution uses one adapter process **per attempt**; validation uses
+one standalone process per distinct adapter as specified below. Transport is JSON-RPC 2.0 messages
+as **UTF-8 JSON Lines**, one per line, directional: **requests travel on the adapter's stdin;
+responses and event notifications travel on its stdout.** Newlines inside values are escaped;
+control frames have a fixed size cap — large content travels as artifact files, never inline.
+`stderr` is diagnostics only: execution captures it to the attempt directory, while validation
+keeps only the bounded sanitized diagnostic defined below. The adapter must keep reading stdin
+during `execute` so a `cancel` request can be received; after a grace timeout the core terminates
+the process, and force-kills after a further timeout. No daemon in v0.2.
 
 **Frozen wire rules.** These are normative for both sides, and "frozen" means "the contract
 will not change" — **not** "every line already exists". Implementation status:
@@ -1129,6 +1133,61 @@ execute(request) -> streams `event` notifications, then returns result
 
 cancel(attempt_id) -> graceful stop; core terminates on grace timeout, then force-kills
 ```
+
+**Validation probing.** `partitur validate` probes each distinct adapter id referenced by a
+primary or fallback performer of a bound part exactly once, regardless of how many performers use
+that adapter. Every referenced adapter is attempted even after another adapter fails, and probe
+diagnostics are aggregated rather than short-circuited.
+
+The probe-completion deadline is **15000 integer milliseconds per distinct adapter**, covering
+process start, request write, response read, stdin close, and the adapter's clean exit. It is a
+policy ceiling derived from the first-party clean-probe path: 10000 ms for the vendor-CLI probe
+plus 5000 ms reserved for adapter startup, JSON-RPC framing, clean shutdown, and scheduling.
+Termination costs are not part of this deadline; they begin only after it expires. Durations are
+compared as integer milliseconds, consistent with §6.
+
+A successful probe is not complete at the response frame. The core closes the adapter's stdin,
+which is the clean-EOF signal above, and requires the adapter to exit zero within the remaining
+probe-completion deadline. A nonzero exit before or after a response is a probe failure.
+
+Each of the following is an adapter-environment validation diagnostic: the exact executable is
+absent from `PATH`; spawn or request/response I/O fails; EOF arrives before a complete response;
+the response is malformed, oversized, duplicate-keyed, invalid UTF-8, an error response, names the
+wrong adapter id, or cannot negotiate a supported protocol; the adapter exits nonzero; the
+probe-completion deadline expires; or cleanup cannot verify that the adapter session is empty.
+When an adapter has no valid probe result, `validate` reports that adapter-level failure and
+suppresses derivative capability and enforcement diagnostics for every performer using it:
+those predicates have no observed input and manufacturing their outcomes would not be fail-closed.
+Other adapters are still probed and their independent diagnostics are still reported.
+
+Model availability is **not** a `validate` predicate in v0.2: the command does not compare a cast's
+model with `probe.capabilities.models`, and `model_unavailable` remains an attempt failure. Adding
+that check requires a separate rule to settle id-versus-alias matching and whether a mismatch is
+fail-closed or advisory; the probe-failure suppression rule above does not create it implicitly.
+
+On timeout the core closes stdin, sends `SIGTERM` to the adapter session, waits the core's outer
+termination grace, then repeatedly sends `SIGKILL` and re-enumerates until the session is verified
+empty. Probe stderr is diagnostics only: it is buffered to at most 65536 bytes, sanitized before
+rendering, and never written to run storage.
+
+The completion deadline and outer grace run serially on the timeout path: the bounded waits before
+the first `SIGKILL` total **45000 ms per distinct adapter** (15000 ms completion plus 30000 ms
+grace). A serial implementation probing two wedged adapters may spend 90000 ms before both reach
+that point; parallel probing may reduce wall-clock time but does not change either per-adapter
+bound. The verified-empty sweep after the first `SIGKILL` is additional and has no fixed deadline,
+because returning while a session remains observable would falsely claim cleanup.
+
+The core starts a validation probe as a new POSIX session leader and keeps its identity in memory
+for the controlled-exit sweep above. It does **not** use the durable execution-launch gate: a probe
+has no attempt, receives no `execute` request, worktree, output directory, grants, or run state, and
+cannot be recovered from an attempt journal. If the core itself dies, closing its stdin pipe invokes
+the frozen EOF contract above: a conforming adapter cancels in-flight work, drains, and exits zero
+after clean EOF, or exits nonzero after a partial frame. A non-conforming adapter or a descendant
+that deliberately escapes its session remains outside the containment boundary below.
+
+The core creates no run, attempt, journal, manifest, or resolved-cast file during validation and
+mutates no repository state. Any score, cast, adapter-environment, capability, or enforcement
+diagnostic makes `partitur validate` exit 3; usage errors remain exit 1.
 
 **Event notifications** (adapter → core, during `execute`):
 
@@ -1388,13 +1447,15 @@ So "diagnostics never enter the journal" means the raw stream. Typed, sanitized,
 protocol events are journaled deliberately, because a later GUI needs them; they carry no
 authority and no projection ever reads them.
 
-**Spawn is gated, so identity is recorded before any adapter code runs.** The core cannot record an
-adapter's session id before it exists, and cannot record it after without leaving a window in which a
-crash strands an unrecorded process. The spike settled the ordering: the core starts a **trusted launch
-trampoline** as a new POSIX session leader; while the trampoline blocks on an **inherited gate**, the
-core records and fsyncs its PID, session id, and process-start identity in `attempt.started`; only then
-does it release the gate, and the trampoline `exec`s the adapter **in place**. EOF on the gate before
-release makes the trampoline exit **without executing adapter code at all**.
+**Execution spawn is gated, so identity is recorded before any execution adapter code runs.** This
+contract applies to run-scoped adapter and criterion launches, not to the standalone validation
+probe defined above. The core cannot record an execution adapter's session id before it exists, and
+cannot record it after without leaving a window in which a crash strands an unrecorded process. The
+spike settled the ordering: the core starts a **trusted launch trampoline** as a new POSIX session
+leader; while the trampoline blocks on an **inherited gate**, the core records and fsyncs its PID,
+session id, and process-start identity in `attempt.started`; only then does it release the gate, and
+the trampoline `exec`s the adapter **in place**. EOF on the gate before release makes the trampoline
+exit **without executing adapter code at all**.
 
 That is what closes the dangerous ambiguity rather than merely narrowing it, stated as narrowly as it
 was measured: an unrecorded *trampoline* may briefly survive a crash, but it **contains no adapter code
@@ -1443,7 +1504,11 @@ The handoff contract, since recovery depends on reading it (Appendix C.2):
 **Process supervision.** The adapter and the vendor process it spawns are separate process
 groups, so hard-killing a wedged adapter can orphan the vendor group. Termination is layered:
 the adapter MUST handle `SIGTERM` by terminating its vendor process group before exiting, and the
-core's outer grace period MUST exceed the adapter's own `SIGTERM`→`SIGKILL` grace.
+core's outer termination grace is **30000 integer milliseconds**. A conforming adapter MUST keep
+its own `SIGTERM`→`SIGKILL` grace strictly below 30000 ms. The direction is intentional: `probe()`
+does not report an adapter's internal grace, so the core cannot discover and compare it; publishing
+the core constant makes the same safety relation checkable where both values are known — in adapter
+conformance. The first-party adapter kit's 10000 ms internal grace satisfies that bound.
 
 Ownership is established by **session**, which the core can do at spawn time even though it
 cannot enumerate descendants that do not exist yet:
