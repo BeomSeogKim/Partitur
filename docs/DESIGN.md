@@ -348,11 +348,12 @@ rules (no deep merge):
 - Adapters are resolved on demand for the adapter ids the resolved cast references —
   the core never scans `PATH` for everything that looks like an adapter.
 
-The run manifest pins the resolved performer, adapter version, and model for every part —
-the *intended* binding. Because an infrastructure fallback changes who actually served an
-attempt, the manifest additionally records, **per attempt**, the adapter id and version
-that served it, the model used, and the enforcement posture in effect, including which
-constraints were advisory (§3, §4). Marks, execution-dependency hashes, and audit output
+The run manifest pins the resolved performer, adapter id, and model for every part — the
+*intended* binding. Adapter version is an observed fact, not cast input, so it is recorded only
+after the gated adapter for an attempt answers `probe`. Because an infrastructure fallback changes
+who actually served an attempt, the manifest additionally records, **per attempt**, that observed
+adapter version, the model used, and the capability and enforcement posture in effect, including
+which constraints were advisory (§3, §4). Marks, execution-dependency hashes, and audit output
 read the per-attempt record, never the part-level binding.
 
 ## 2. Score schema v0.2 (`partitur.yaml`)
@@ -861,9 +862,9 @@ movement holding no `repo_write`; the exact advisory dimensions remain movement-
 under §4. Distinct entries are necessary but not sufficient: a part remains strict only when its
 primary and every fallback are strict entries.
 
-Whether an attempt fails closed or proceeds with recorded advisory dimensions is governed solely by
-§4's per-movement predicate. Both outcomes are legitimate; a future factory cast must not authorize
-the second through a global opt-in.
+Whether a started adapter session is denied before `execute` or proceeds with recorded advisory
+dimensions is governed solely by §4's per-movement predicate. Both outcomes are legitimate; a
+future factory cast must not authorize the second through a global opt-in.
 
 *Non-normative observation, 2026-07-26.* Of the first-party adapters, `codex` reports only
 `read_only` and `network_grants` as `true`, and `claude` reports none of the five. That is why the
@@ -986,8 +987,9 @@ vendor-neutral core cannot enumerate. Filtering the environment would break legi
 control-plane access without creating containment, because malicious adapter behaviour is already
 outside the core's security boundary.
 
-**Process model and framing.** Execution uses one adapter process **per attempt**; validation uses
-one standalone process per distinct adapter as specified below. Transport is JSON-RPC 2.0 messages
+**Process model and framing.** Execution uses one adapter process **per attempt**; the core calls
+`probe` and then `execute` on that same process. Validation uses one standalone process per distinct
+adapter as specified below. Transport is JSON-RPC 2.0 messages
 as **UTF-8 JSON Lines**, one per line, directional: **requests travel on the adapter's stdin;
 responses and event notifications travel on its stdout.** Newlines inside values are escaped;
 control frames have a fixed size cap — large content travels as artifact files, never inline.
@@ -1244,6 +1246,49 @@ dimension set, and does not change exit 0 when no diagnostic exists. This is the
 reporting class in v0.2, required by the fail-closed predicate below; it is not a general severity
 axis, and no other finding may use it without a specification change.
 
+**Run-attempt probing.** `partitur run` does not perform or reuse a run-level validation preflight.
+Validation is a separate, optional command surface; its observation cannot truthfully describe an
+adapter process launched later, and its failure has a CLI contract of its own (§7). Instead, every
+attempt observes the peer that will execute it: after `performer.selected` creates the attempt, the
+core opens the §6 `adapter` execution interval, launches the attempt's one adapter process through
+the durable gate, appends and fsyncs `attempt.started`, releases the gate, and calls `probe` on that
+process **before** `execute`.
+
+The run probe uses the validation probe's **15000 ms probe-completion deadline**, response
+validation rules, bounded and sanitized stderr handling, probe-failure suppression rule, and
+**30000 ms outer termination grace plus verified-empty sweep by reference**; those rules are not
+redeclared for execution. For a run probe the completion deadline covers trampoline start, durable
+handoff, gate release, request write, and the complete response; for a denied admission it also
+covers the clean exit below. The standalone-probe successful shutdown step does not apply to an
+`execute` admission: the core keeps this same process open for `execute`. A denied admission has no
+next RPC, so it uses that referenced clean-EOF/zero-exit completion rule; on any failure that
+requires forced shutdown, the referenced close-stdin, `SIGTERM`, `SIGKILL`, and verified-empty
+ladder applies unchanged. The probe deadline is a ceiling, not extra budget: §6's active-wall-clock
+exhaustion can terminate the adapter interval sooner.
+
+The suppression rule is the same fact boundary in a different surface: without a valid probe
+result the core manufactures no capability, enforcement, feature, or adapter-version observation.
+It records an `attempt.failed` instead, with the failure classified under Appendix D, and sends no
+`execute`. A valid result must name the selected adapter id and advertise every capability required
+by the selected part. The core evaluates capability coverage, the fail-closed/advisory predicate,
+and feature-dependent resolution delivery. Missing required capability is
+`attempt.failed {kind: adapter_unavailable, reason: capability_unavailable}` and therefore may
+select an infrastructure fallback; strict unmet enforcement follows the existing
+`grant_denied {enforcement_unavailable}` path. Only after every pre-execute rule permits execution,
+the advisory dimensions and feature-dependent resolution omissions are fixed, and the exact
+execution request's A.5 hash is computed, may the core append and fsync `adapter.probed`.
+
+Only a durable `adapter.probed` authorizes the core to send `execute` on that same process. A denied
+probe closes and verifies the adapter session under the referenced probe rules, then follows its
+separately specified failure path; no execute request is sent. A higher-priority shutdown failure
+supersedes that intended failure under Appendix D's classification priority. Recovery therefore
+distinguishes a missing durable observation from an observed peer that had already been authorized
+for execution, without manufacturing probe facts.
+
+There is therefore no new pre-run diagnostic or exit category: a run probe failure is durable
+attempt history, §3.1 decides whether a fallback follows, and an exhausted path reaches the existing
+movement/run failure sequence and exit 4 (§7).
+
 **Event notifications** (adapter → core, during `execute`):
 
 ```text
@@ -1352,17 +1397,16 @@ in memory for a human:
   accordingly. A performer that returned `waiting_human` for a blocking proposal said it *cannot
   continue* without that disposition; telling it nothing invites it to block or re-propose forever.
   So against a protocol-1 peer the core does **not** silently omit a blocking proposal's rejection —
-  it fails the movement with `movement.failed {reason: undeliverable_resolution}` rather than
-  starting an attempt that cannot learn why it was refused. Only a **non-blocking** proposal's
-  rejection is omitted, which is safe because the performer did not claim to need it. Either way the
-  core records what it withheld (`performer.selected.withheld_resolutions`), so the loss is
-  auditable rather than silent. What closes the decision remains the journal's
-  `amendment.rejected {decision_id}`.
+  it fails the movement with `movement.failed {reason: undeliverable_resolution}` without sending
+  `execute`. Only a **non-blocking** proposal's rejection is omitted, which is safe because the
+  performer did not claim to need it; that omission is recorded in
+  `adapter.probed.withheld_resolutions`, so the loss is auditable rather than silent. What closes
+  the decision remains the journal's `amendment.rejected {decision_id}`.
 
-  In the first two cases a live driver continues into a new attempt — `performer.selected`
-  first, then `attempt.started`, as for every attempt — passing the resolutions in
-  `resolved_decisions` (plus a compatible `session_hint`); if no driver holds the lease, a
-  later `resume` does it (§7 command authority).
+  In the first two cases a live driver continues into a new attempt — `performer.selected`,
+  `attempt.started`, then `adapter.probed`, as for every executing attempt — and only then passes
+  the resolutions in `resolved_decisions` (plus a compatible `session_hint`); if no driver holds the
+  lease, a later `resume` does it (§7 command authority).
 
   **Which resolutions, and how many.** A new attempt receives every decision resolved **for its own
   movement, in this run, on the current revision**, ordered by resolving `seq`. Not just the last
@@ -1381,7 +1425,7 @@ in memory for a human:
 
   Truncation therefore removes the oldest answers, which a performer is least likely to still need,
   and the retained suffix stays in `seq` order. The omission is recorded
-  (`performer.selected.truncated_resolutions`) and reported. Truncation drops the *oldest* answers, which are the ones a performer is least likely
+  (`adapter.probed.truncated_resolutions`) and reported. Truncation drops the *oldest* answers, which are the ones a performer is least likely
   to still need, and the journal keeps all of them regardless. A session hint must never be relied on
   to carry what was dropped — hints are an optimization and never required state (§4).
 
@@ -1406,8 +1450,9 @@ provider, which is always permitted.
 
 **The fail-closed predicate.** A capability being *available* never implies its denial is
 *enforceable*, so each withheld authority names the enforcement dimension that must back
-it. For a given movement's effective grants, the attempt may start only if every row that
-applies is satisfied:
+it. The gated adapter session must start before its enforcement can be observed, but the core may
+append `adapter.probed` and send `execute` only if every row that applies to the movement's effective
+grants is satisfied:
 
 | Withheld authority | Required enforcement |
 |---|---|
@@ -1420,8 +1465,9 @@ applies is satisfied:
 
 An unsatisfied row fails closed, or — with `allow_advisory_enforcement: true` for that
 performer — proceeds with the exact unmet dimensions recorded for that attempt and
-surfaced by `validate` and `status`. `validate` evaluates this predicate against probed
-adapters, which is why genuine validation requires cast resolution and probing (§7).
+surfaced by `validate` and `status`. `validate` evaluates this predicate against its standalone
+probes; `run` evaluates it against the selected attempt's gated peer. That is why either surface
+requires cast resolution and probing (§7).
 
 **Reserved input artifacts.** Two contracts the performer cannot reconstruct on its own
 are delivered through the existing `inputs` mechanism rather than as new wire fields, so
@@ -3368,6 +3414,10 @@ same request, it is out.
 
 Note the projection is **score-and-performer derived**, not purely score-derived: `extensions`
 comes from the resolved cast, and the adapter id is the one that actually served the attempt.
+It cannot be computed at `attempt.started`: the selected peer's negotiated features determine the
+delivered `resolved_decisions` shape and omissions, which this projection binds. The core computes
+it after the gated peer answers `probe` and records it in `adapter.probed` before sending
+`execute`.
 
 ```text
 {
@@ -3734,11 +3784,12 @@ movement.cancelled {}             # derived from run.cancelled
 
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
-| `performer.selected` | ✓ | attempt_id | before `attempt.started` | Records the chosen performer, adapter id/version, model, enforcement posture and advisory dimensions for this attempt (§1), and **why** this attempt exists (`initial`, `quality_retry`, `fallback`, `revision_restart`, `decision_resume`). **Creates the attempt in `STARTING`**, which is what makes that state reachable and lets a spawn failure be attributed to a chosen performer. It records the *reason*; it never charges the budget — charging belongs to the failure event that caused it, so a retry cannot be double-counted |
-| `attempt.started` | ✓ | attempt_id | Attempt `STARTING` | Attempt `STARTING → RUNNING`; records `attempt_number`, `execution_dependency_hash`, granted authority |
-| `performer.completed` | ✓ | attempt_id | Attempt `RUNNING` | Attempt → `VERIFYING`. **Vendor execution ended; says nothing about success** (§6) |
+| `performer.selected` | ✓ | attempt_id | before `attempt.started` | Records the chosen performer, adapter id, model, and **why** this attempt exists (`initial`, `quality_retry`, `fallback`, `revision_restart`, `decision_resume`). **Creates the attempt in `STARTING`**, which is what makes that state reachable and lets a spawn failure be attributed to a chosen performer. Probe-derived facts cannot appear here: the selected adapter has not passed the durable gate yet. It records the *reason*; it never charges the budget — charging belongs to the failure event that caused it, so a retry cannot be double-counted |
+| `attempt.started` | ✓ | attempt_id | Attempt `STARTING` | Attempt `STARTING → RUNNING`; records `attempt_number`, the gated adapter process identity, and granted authority |
+| `adapter.probed` | ✓ | attempt_id | Attempt `RUNNING`, no prior `adapter.probed` | Records the valid observation from this attempt's own gated adapter peer, the resulting advisory and feature-degradation decisions, and the exact request's `execution_dependency_hash`. It is appended and fsynced before `execute`; no `execute` is legal without it |
+| `performer.completed` | ✓ | attempt_id | Attempt `RUNNING`, `adapter.probed` present | Attempt → `VERIFYING`. **Vendor execution ended; says nothing about success** (§6) |
 | `attempt.completed` | ✓ | attempt_id | Attempt `VERIFYING`, acceptance and gate passed | Attempt → `COMPLETED` |
-| `attempt.blocked` | ✓ | attempt_id | Attempt `RUNNING` | Attempt → `BLOCKED` (terminal); carries `pending_decision_ids` |
+| `attempt.blocked` | ✓ | attempt_id | Attempt `RUNNING`, `adapter.probed` present | Attempt → `BLOCKED` (terminal); carries `pending_decision_ids` |
 | `attempt.failed` | ✓ | attempt_id | Attempt `STARTING`/`RUNNING`/`VERIFYING` | Attempt → `FAILED`; carries the failure kind (Appendix D). Legal from `STARTING` so spawn and startup failures are representable. **Charges at most once, and only if it authorizes another attempt**; what it charges and what follows are §3.1's, selected by its first arm and recorded in `disposition` |
 | `attempt.cancelled` *derived* | — | source event_id + attempt_id | — | Attempt → `CANCELLED`; projected idempotently from `run.cancelled`, for the same reason |
 | `attempt.superseded` *derived* | — | source event_id + attempt_id | — | Attempt → `SUPERSEDED`; projected from `amendment.approved` (§9) |
@@ -3751,30 +3802,39 @@ movement.cancelled {}             # derived from run.cancelled
 performer.selected {
   reason,                         # closed enum: initial | quality_retry | fallback |
                                   #   revision_restart | decision_resume
-  performer_id, adapter_id, adapter_version, model,
-  enforcement: {                  # as PROBED for this attempt (§4)
-    path_grants, read_only, network_grants, shell_grants, read_grants   # all bool
-  },
-  negotiated_features: [string],  # sorted; the feature tokens this attempt's peer advertised and
-                                  #   the core therefore used (§4). Without it a historical request
-                                  #   cannot be reconstructed — the same score and adapter id can
-                                  #   yield different wire shapes across versions
-  withheld_resolutions: [{decision_id, why}],
-                                  # sorted; resolutions the core could not deliver because the peer
-                                  #   lacked the feature (§4). Empty in the ordinary case. Recorded
-                                  #   so degradation is auditable rather than invisible
-  truncated_resolutions: [decision_id],
-                                  # sorted; resolutions dropped for the frame budget (§4)
-  advisory_dimensions: [dimension] # sorted; the constraints this attempt proceeds WITHOUT
-                                  #   enforcement for, under allow_advisory_enforcement.
-                                  #   Empty means fully enforced (§4)
+  performer_id, adapter_id, model
 }
                                   # NB: no budget field. Charging belongs to the failure event
                                   #   that authorized this attempt, never to selection
 
+adapter.probed {
+  adapter_version,                # reported by this attempt's gated peer, never copied from
+                                  #   validate or an earlier attempt
+  capabilities: {
+    repo_read, repo_write, shell, network, resumable_sessions       # all bool; models are
+                                  #   intentionally absent because §4 does not evaluate them
+  },
+  enforcement: {                  # reported by this same peer (§4)
+    path_grants, read_only, network_grants, shell_grants, read_grants   # all bool
+  },
+  negotiated_features: [string],  # sorted; the advertised feature tokens the core recognized
+                                  #   for admission/request shaping (§4). Unknown tokens are
+                                  #   ignored and omitted. Without this a historical request
+                                  #   cannot be reconstructed — the same score and adapter id can
+                                  #   yield different wire shapes across versions
+  withheld_resolutions: [{decision_id, why}],
+                                  # sorted; non-blocking resolutions omitted because the peer
+                                  #   lacked the feature. Empty in the ordinary case
+  truncated_resolutions: [decision_id],
+                                  # sorted; resolutions dropped for the frame budget (§4)
+  advisory_dimensions: [dimension],
+                                  # sorted; exact constraints proceeding without enforcement
+  execution_dependency_hash,      # A.5; negotiated delivery shape is now fixed
+  identity_versions
+}
+
 attempt.started {
   attempt_number,                 # per-movement display ordinal — never the identifier (§6)
-  execution_dependency_hash,      # A.5
   adapter_process: {              # recorded BEFORE the trampoline's gate is released, so an
     pid,                          #   unrecorded process can never have executed adapter code (§4)
     session_id,                   #   == pid; the trampoline is the session leader
@@ -3873,7 +3933,7 @@ execution.stopped {
 
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
-| `artifact.recorded` | ✓ | `(logical_output_id, attempt_id)` | Attempt `RUNNING`/`VERIFYING` | Registers the immutable instance and its byte hash (§1). Two distinct rules apply and must not be conflated: a **second adapter notification** for the same logical id is rejected *before* any append (`duplicate_artifact_instance`, §1), while a **replayed append** with the same key and equivalent payload is an ordinary idempotent no-op (B.0) — replay must be safe, and a protocol violation must not be |
+| `artifact.recorded` | ✓ | `(logical_output_id, attempt_id)` | Attempt `RUNNING` with `adapter.probed` present, or `VERIFYING` | Registers the immutable instance and its byte hash (§1). Two distinct rules apply and must not be conflated: a **second adapter notification** for the same logical id is rejected *before* any append (`duplicate_artifact_instance`, §1), while a **replayed append** with the same key and equivalent payload is an ordinary idempotent no-op (B.0) — replay must be safe, and a protocol violation must not be |
 | `change_set.recorded` | ✓ | attempt_id | Attempt `VERIFYING` | Records `change_set_id`, `base_tree`, `result_tree`, and the pinning ref (§5). Only for `repo_write` movements |
 | `verification.passed` | ✓ | attempt_id | Attempt `VERIFYING` | The post-hoc verification boundary (§5): protected paths, and the read-only invariant where applicable, both held. Whether the read-only invariant applies is derived from this movement's grants in the pinned score revision identified by the envelope, never restated in the payload. Exists so recovery can tell "checked" from "not yet checked" — inferring it from `change_set.recorded` would silently skip the check |
 | `composition.conflicted` | ✓ | `scope` + `target_id` + `composition_subject_hash` | fan-in or candidate composition | **Evidence only — it projects no state.** Records `scope`, `target_id`, the ordered contributors and the conflicted paths. `scope: movement` ⇒ `target_id = movement_id`, and the terminal event is `movement.failed {composition_unresolvable}` — legal from `RUNNING`, since fan-in happens after `movement.started`. `scope: candidate` ⇒ `target_id = run_id` (**not** a `candidate_id`: composition failed, so no candidate exists), and the terminal event is `run.failed {composition_unresolvable}`. Recovery synthesizes the missing terminal event if a crash lands between the two appends, **subject to C.1's precedence** — a `cancel.requested` landing in that window outranks it. The key includes `target_id` because two movements can conflict over the same contributor list |
@@ -4431,7 +4491,8 @@ replay rule holds.
 | Last durable state | Recovery action |
 |---|---|
 | `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). If a trampoline handoff identity was published, verify and sweep that session. If the inherited marker is *held* but no identity can be read, halt `spawn_handoff_unverifiable` — the holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name. If the marker is free, **no released mutator survives** — an unreleased trampoline may still be in its pre-marker window but contains no adapter code (§4) — so append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}`, then realize it per §3.1's second arm |
-| `attempt.started`, **no** `performer.completed` | Sweep the **recorded** adapter session to verified empty **before** any failure or retry — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. Then append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: after it, adapter exit is *expected*, and without the exclusion this row would capture every normal completion before the rows that handle it |
+| `attempt.started`, no `adapter.probed` | Sweep the **recorded** adapter session to verified empty **before** any failure or fallback — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. No durable valid probe observation exists, so append `attempt.failed {kind: adapter_unavailable, reason: probe_terminated_incomplete, disposition}`, then realize it per §3.1. Recovery does not manufacture the missing observation |
+| `adapter.probed`, **no** `performer.completed` | Sweep the recorded adapter session to verified empty before any failure or retry. Inspection failure is `sweep_unverifiable`. Then append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: after it, adapter exit is *expected*, and without the exclusion this row would capture every normal completion before the rows that handle it |
 | `performer.completed`, movement holds `repo_write`, no `change_set.recorded` | The worktree still exists and its tree is authoritative: capture the change set idempotently, then continue at the next row. If the worktree is gone, the candidate cannot be reconstructed — append `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}` |
 | `performer.completed`, no `verification.passed` | Re-run the **full** §5 post-hoc verification — protected paths for every movement, plus the read-only invariant where the movement holds no `repo_write` — against the surviving worktree; if it is gone, `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}`. A durable `verification.passed` event marks the boundary, because without one a crash after `change_set.recorded` but before the check would let recovery start acceptance having verified nothing |
 | `change_set.recorded` or `verification.passed`, no `acceptance.started` | Begin acceptance: append `acceptance.started` and proceed to C.3 |
@@ -4485,6 +4546,11 @@ never reported as a task failure:
 cancelled → adapter_unavailable → protocol_error → grant_denied
           → typed vendor failure → task_failed → result-envelope validation
 ```
+
+**Core-determined `adapter_unavailable` sub-reasons:** `capability_unavailable` (§4 run probe)
+and recovery-originated `probe_terminated_incomplete` (Appendix C.2). The kind remains
+infrastructure-classified so a performer fallback may satisfy a capability the selected adapter
+does not, and so recovery does not turn an unobserved probe into a quality judgment.
 
 **`grant_denied` sub-reasons** (core-determined; §3.1 classes the kind immediately terminal):
 `candidate_mismatch`, `protected_path_violation`, `read_only_violation`,
