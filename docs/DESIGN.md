@@ -161,8 +161,6 @@ corrupt evidence by writing where evidence lives:
                                # of here into runs/.../artifacts/ and only the copy counts
 
 ~/.config/partitur/cast.yaml   # user-global cast override
-<install>/default-cast.yaml    # first-party factory cast (versioned data file with
-                               # metadata: date, tested adapters/models, rationale)
 ```
 
 Git refs the core owns — never user-visible branches, and never garbage-collected while
@@ -336,8 +334,12 @@ revision number alone cannot reproduce a run:
   was not a contract; a halt with a named reason is.
 - The manifest records the source revision and both hashes.
 
-**Cast layering.** Resolution order is **project → user-global → factory default**, with
-deliberately simple merge rules (no deep merge):
+**Cast layering.** Precedence is **project → user-global → factory default**. In v0.2 the core
+discovers only `.partitur/cast.yaml` and `~/.config/partitur/cast.yaml`; either file may be absent.
+The factory-default slot remains the lowest-precedence layer, but v0.2 ships and discovers no
+factory file. Shipping one requires a separate specification change that defines both its location
+and its content under §3's strict/advisory posture. Present layers use deliberately simple merge
+rules (no deep merge):
 
 - `performers` entries replace **whole objects** per performer id.
 - `bindings` entries replace whole objects per part id; `fallbacks` lists are replaced
@@ -839,14 +841,14 @@ bindings:
 > manifest records which constraints were advisory per attempt — or bind write movements to
 > a performer whose enforcement covers the movement's grants.
 
-**What the factory cast ships.** Enforcement is reported by the adapter's `probe` and recorded per
-attempt (§1, §4); the cast neither supplies nor overrides it. Within enforcement posture, the factory
-cast decides only where it opts into advisory execution:
+**Requirements for a future factory cast.** Enforcement is reported by the adapter's `probe` and
+recorded per attempt (§1, §4); a factory cast must neither supply nor override it. Within enforcement
+posture, any factory cast that ships decides only where it opts into advisory execution:
 
-> The factory cast does not duplicate or override adapter enforcement reports. It opts into advisory
+> A factory cast MUST NOT duplicate or override adapter enforcement reports. It may opt into advisory
 > execution only through dedicated performer entries, **never globally**. Parts intended to remain
-> strict use distinct strict entries for both their primary performer and **every fallback**, even
-> where the adapter and model are identical.
+> strict MUST use distinct strict entries for both their primary performer and **every fallback**,
+> even where the adapter and model are identical.
 
 Opting in globally would make advisory execution habitual — the failure that would leave all five
 dimensions implemented and meaningless.
@@ -860,13 +862,13 @@ under §4. Distinct entries are necessary but not sufficient: a part remains str
 primary and every fallback are strict entries.
 
 Whether an attempt fails closed or proceeds with recorded advisory dimensions is governed solely by
-§4's per-movement predicate. Both outcomes are legitimate; what the factory cast must not do is
-authorize the second through a global opt-in.
+§4's per-movement predicate. Both outcomes are legitimate; a future factory cast must not authorize
+the second through a global opt-in.
 
 *Non-normative observation, 2026-07-26.* Of the first-party adapters, `codex` reports only
 `read_only` and `network_grants` as `true`, and `claude` reports none of the five. That is why the
-rule above is a live constraint on the factory cast rather than a hypothetical one; it is not a claim
-this document freezes, and the probe governs.
+rule above constrains any factory cast that later ships rather than describing one that exists; the
+observation is not a claim this document freezes, and the probe governs.
 
 - `partitur validate` checks every bound performer's probed capabilities against the
   part's `capabilities`, and the adapter's enforcement against the movement's grants
