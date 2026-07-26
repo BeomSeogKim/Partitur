@@ -27,6 +27,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if mode := os.Getenv(sigtermVendorModeEnv); mode != "" {
+		os.Exit(runSIGTERMVendorHelper(mode))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Println("partitur-test 9.8.7")
 		os.Exit(0)

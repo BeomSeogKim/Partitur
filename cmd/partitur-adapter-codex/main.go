@@ -10,7 +10,7 @@ import (
 
 func main() {
 	handler := codex.New(os.Stderr)
-	if err := adapterkit.Serve(handler, os.Stdin, os.Stdout, os.Stderr); err != nil {
+	if err := adapterkit.ServeProcess(handler); err != nil {
 		fmt.Fprintf(os.Stderr, "partitur-adapter-codex: %v\n", err)
 		os.Exit(1)
 	}

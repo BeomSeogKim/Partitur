@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 )
@@ -54,6 +57,20 @@ type executionCompletion struct {
 // Serve runs one adapter process. It supports macOS and Linux; vendor process
 // execution is unavailable on other platforms.
 func Serve(handler Handler, stdin io.Reader, stdout, stderr io.Writer) error {
+	return serveContext(context.Background(), handler, stdin, stdout, stderr)
+}
+
+// ServeProcess runs one adapter process on the standard streams and handles
+// process termination signals.
+func ServeProcess(handler Handler) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	// Go 1.26 keeps this registration active until stop: its buffered,
+	// non-blocking relay absorbs repeated SIGTERMs while shutdown drains.
+	defer stop()
+	return serveContext(ctx, handler, os.Stdin, os.Stdout, os.Stderr)
+}
+
+func serveContext(ctx context.Context, handler Handler, stdin io.Reader, stdout, stderr io.Writer) error {
 	if handler == nil {
 		return errors.New("handler is required")
 	}
@@ -66,9 +83,25 @@ func Serve(handler Handler, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	var running *execution
 	var closing error
+	ctxDone := ctx.Done()
+	beginClosing := func(err error) bool {
+		closing = err
+		frames = nil
+		if running == nil {
+			return true
+		}
+		running.cancel()
+		return false
+	}
 
 	for {
 		select {
+		case <-ctxDone:
+			ctxDone = nil
+			if beginClosing(nil) {
+				return nil
+			}
+
 		case read := <-frames:
 			if read.err != nil {
 				switch {
@@ -86,11 +119,9 @@ func Serve(handler Handler, stdin io.Reader, stdout, stderr io.Writer) error {
 					closing = fmt.Errorf("read JSON-RPC frame: %w", read.err)
 					fmt.Fprintf(stderr, "fatal: %v\n", closing)
 				}
-				frames = nil
-				if running == nil {
+				if beginClosing(closing) {
 					return closing
 				}
-				running.cancel()
 				continue
 			}
 
@@ -116,7 +147,7 @@ func Serve(handler Handler, stdin io.Reader, stdout, stderr io.Writer) error {
 					}
 					continue
 				}
-				result, probeErr := handler.Probe(context.Background())
+				result, probeErr := handler.Probe(ctx)
 				if probeErr != nil || result == nil {
 					message := "probe failed"
 					if probeErr != nil {
@@ -146,7 +177,7 @@ func Serve(handler Handler, stdin io.Reader, stdout, stderr io.Writer) error {
 					continue
 				}
 
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithCancel(ctx)
 				current := &execution{
 					id:     append(json.RawMessage(nil), request.ID...),
 					cancel: cancel,

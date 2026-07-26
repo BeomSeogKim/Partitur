@@ -46,6 +46,8 @@ process table cannot deterministically produce the failure.
 | L8 stored leader and per-PID start identity | current PID with matching start identity | same PID with stale start identity | Delete either identity comparison → `TestSessionLeaderIdentityRejectsPIDReuse` / `TestIndividualSignalRequiresMatchingStartIdentity` |
 | L9 unverifiable cleanup fails closed | verified-empty normal probes | injected enumeration failure; native failure is not safely reproducible | Drop cleanup diagnostic → `TestCleanupUnverifiableIsAggregated` |
 | L10 stderr raw cap and sanitization | harmless stderr retained | secret plus beyond-cap sentinel | Discard, fail to redact, or buffer beyond cap → `TestStderrIsBoundedAndSanitized` |
+| L11 adapter SIGTERM reaches vendor process-group termination | `real:claude`, `real:codex` across `probe` and `execute` while stdin remains open | vendor leader and same-group child retain FIFO writers | Remove the `ServeProcess` signal registration or bypass it in either main → `TestFirstPartyAdaptersHandleSIGTERM` observes `EAGAIN` instead of FIFO EOF |
+| L12 adapter exits only after vendor process-group termination completes | `real:codex` execute with a TERM-ignoring vendor group | immediate adapter return after cancelling execute | Return from the `ctxDone` case before the execute completion → `TestFirstPartyAdapterWaitsForTermIgnoringVendor` observes `EAGAIN` instead of FIFO EOF, including at `-count=8` |
 | A1 distinct adapter exactly once | duplicate ids for `alpha`, `bad`, `zeta` | invocation marker would contain duplicates | Delete deduplication → `TestProbeAllDeduplicatesAggregatesAndOrders` |
 | A2 aggregate after failure | successful `alpha` and `zeta` | `bad` fails between them | Short-circuit → `TestProbeAllDeduplicatesAggregatesAndOrders` |
 | A3 deterministic report order | unsorted probes and diagnostics | exact id/kind/detail order is the counter-oracle | Delete either report sort → `TestSortReportDeterministic` |
@@ -54,3 +56,10 @@ process table cannot deterministically produce the failure.
 The nonzero-before-response case is already rejected by the independently required EOF rule; the
 nonzero-after-response fixture is the deletion oracle for the exit-status check, where EOF alone
 cannot mask its removal.
+
+L11 covers process-boundary registration and root-context delivery through both first-party
+adapters' `probe` and `execute` paths. L12 covers the shared execute-loop ordering with one real
+adapter; the equivalent probe ordering is structural because `Probe` runs synchronously and the
+loop cannot return on context cancellation before `Probe` and its vendor termination return. These
+rows make no claim about SIGTERM exit status, late responses, repeated-signal policy, or `SIGINT`,
+which DESIGN does not specify here.
