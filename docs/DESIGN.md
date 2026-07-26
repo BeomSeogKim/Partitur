@@ -3369,8 +3369,10 @@ paths_ro := P  if grants ∋ repo_read   else []
 - A pattern therefore **does appear in both** lists when a movement holds both grants. That is not
   redundancy: the two lists answer different questions, and the wire request carries both (§4).
 - **Empty `policy.allowed_paths` yields empty lists**, which means a movement holding `repo_write`
-  can write nothing. That is a coherent, if useless, score — and the compiler reports it rather than
-  silently widening to `**`.
+  can write nothing. That is a coherent, if useless, score; the compiler **preserves that empty
+  authority** rather than silently widening it to `**`. It is not reported: §2's rules are all
+  rejections and every validation diagnostic is fatal (§4), so there is no channel in v0.2 through
+  which a score this appendix calls coherent could be surfaced without also refusing it.
 - `["**"]` is **not** path-scoped: it is the whole repository, so the fail-closed predicate (§4) asks
   only for `read_only` where writes are withheld, and does not additionally demand `path_grants`.
   Any narrower pattern set *is* path-scoped and does demand it. Getting this backwards would either
