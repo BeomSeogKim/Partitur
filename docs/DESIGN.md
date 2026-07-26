@@ -1217,6 +1217,33 @@ The core creates no run, attempt, journal, manifest, or resolved-cast file durin
 mutates no repository state. Any score, cast, adapter-environment, capability, or enforcement
 diagnostic makes `partitur validate` exit 3; usage errors remain exit 1.
 
+Validation output is deterministic and grouped in dependency order: **score → cast →
+adapter-environment → capability → enforcement**. Score and cast diagnostics retain the ordering
+their compilers define; adapter-environment diagnostics are ordered by adapter id; capability
+results are ordered by part id, then primary followed by fallback order, then missing capability;
+and enforcement results are ordered by movement declaration order, then primary followed by
+fallback order, then unmet dimension. Diagnostics are rendered to stderr. A validation with no
+diagnostic or advisory report writes nothing to either stream; stdout is always empty for
+`validate`.
+
+The ordering reflects these suppression boundaries rather than manufacturing derivative facts.
+Score diagnostics do not prevent independent cast-layer parsing, but they suppress score-relative
+cast checks, adapter selection and probing, capability checks, and enforcement checks. A
+cast-resolution failure suppresses all derivative probing, capability, and enforcement output.
+A missing binding suppresses only the affected part: adapters reachable through other valid
+binding chains are still probed and evaluated. An unprobeable adapter suppresses capability and
+enforcement output only for performers using that adapter, as specified above; other adapters and
+performers continue. A capability diagnostic does not suppress an independently evaluable
+enforcement result.
+
+An unmet enforcement dimension for a performer whose resolved cast entry has
+`allow_advisory_enforcement: false` is an enforcement diagnostic and therefore exits 3. For a
+performer whose entry has `allow_advisory_enforcement: true`, the same unmet dimension is instead a
+non-fatal **advisory report**: it appears on stderr in the enforcement block with the exact unmet
+dimension set, and does not change exit 0 when no diagnostic exists. This is the one non-fatal
+reporting class in v0.2, required by the fail-closed predicate below; it is not a general severity
+axis, and no other finding may use it without a specification change.
+
 **Event notifications** (adapter → core, during `execute`):
 
 ```text
@@ -2499,6 +2526,13 @@ partitur promote-score --recover   # only from PROMOTING | RECOVERY_REQUIRED
 partitur version         # prints the core version; no run state is read or written
 ```
 
+For `validate`, the invocation working directory is `<repo>`: the command reads `partitur.yaml` and
+the project cast relative to that directory and performs no parent-directory or Git-root search.
+Upward discovery could silently operate on a parent's `.partitur/`, after which run-state writes,
+tree composition, and protected-path enforcement would all use an inferred root. Partitur chooses
+the predictable explicit directory over that expensive convenience. This rule does not make Git a
+`validate` precondition; commands that use Git state define their own preconditions.
+
 `--recover` is refused outside the two states that admit it, and the normal form of each
 command is refused inside them. `apply` before `promote-score` is an enforced precondition,
 not a convention (§8).
@@ -2507,6 +2541,7 @@ not a convention (§8).
 part of v0.2's surface:
 
 ```text
+partitur validate
 partitur answer  <decision-id> --answer <text> | --answer-file <path>
 partitur approve <decision-id> --approve | --reject [--reason <text>]
                  [--override <artifact-instance-id>:<finding-id>]...   # requires --reason
@@ -2526,13 +2561,21 @@ scriptable and a GUI can use the same commands (§0). An omitted `<run-id>` sele
 run and errors if there is not exactly one. `--approve`/`--reject` is mandatory rather than defaulted,
 because defaulting either direction on a human gate would be indefensible.
 
+`validate` acquires inputs before interpreting their contents. A missing or unreadable required
+`partitur.yaml`, or a discovered cast file that cannot be read, is a refused precondition and exits
+2. A missing optional project or user-global cast layer is simply absent and produces no
+diagnostic. Once an input has been read successfully, malformed or defective score or cast content
+is a validation diagnostic and exits 3. The asymmetry is deliberate: cast layers are optional and
+no layers resolve to a valid empty cast; only when an existing score declares parts does that empty
+cast produce `binding_missing`, which is a validation result about content that exists.
+
 **Exit codes** — stable categories, so a script can branch without parsing prose:
 
 | Code | Meaning |
 |---|---|
 | 0 | success |
 | 1 | usage error: unknown command, missing or malformed operand |
-| 2 | precondition refused: no active run, wrong projection state, dirty checkout, lock held |
+| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state, dirty checkout, lock held |
 | 3 | validation failed: `partitur validate`, or a rejected amendment |
 | 4 | the run reached a terminal failure |
 | 5 | recovery halt — the run cannot proceed and needs an operator (Appendix D) |
@@ -3396,8 +3439,11 @@ paths_ro := P  if grants ∋ repo_read   else []
 - **Empty `policy.allowed_paths` yields empty lists**, which means a movement holding `repo_write`
   can write nothing. That is a coherent, if useless, score; the compiler **preserves that empty
   authority** rather than silently widening it to `**`. It is not reported: §2's rules are all
-  rejections and every validation diagnostic is fatal (§4), so there is no channel in v0.2 through
-  which a score this appendix calls coherent could be surfaced without also refusing it.
+  rejections and every validation diagnostic is fatal (§4), so there is no general non-fatal
+  **score** reporting channel in v0.2 through which a score this appendix calls coherent could be
+  surfaced without also refusing it. §4's explicit enforcement advisory report is not such a
+  channel: it carries per-performer probe outcomes only, and no score fact may use it without a
+  specification change.
 - `["**"]` is **not** path-scoped: it is the whole repository, so the fail-closed predicate (§4) asks
   only for `read_only` where writes are withheld, and does not additionally demand `path_grants`.
   Any narrower pattern set *is* path-scoped and does demand it. Getting this backwards would either
