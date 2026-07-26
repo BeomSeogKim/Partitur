@@ -69,7 +69,8 @@ of the start-identity path, and the full 100-million-record JCS number corpus.
 **Implementation readiness.** All four spikes have run and their findings are folded in, so no surface
 of this document is marked non-normative. A.4/A.5 give the canonical-AST identity domains and the
 execution-dependency projection; B.0–B.7 give each authoritative event's payload; Appendix C covers
-run, attempt, and acceptance recovery.
+run, attempt, and acceptance recovery; Appendix E freezes the ordered-step boundaries that fault
+injection is performed against.
 
 **Normative does not mean proved.** Each residual risk now has a forcing function other than another
 prose pass, and they are at different stages:
@@ -79,8 +80,8 @@ prose pass, and they are at different stages:
 | JSON canonicalization (A.1) | RFC 8785 vectors and the published ES6 first-1,000 checksum, both carried by CI | **proved against those published expectations; the full 100-million-record corpus stays open (above).** `internal/canonical` checks Appendix B's numbers against their published strings, and regenerates the upstream first 1,000 ES6 records by upstream's own networkless method — its published static prefix, then the published serial continuation from `0x0010000000000000` — serializes them with the production encoder, and matches upstream's published SHA-256. The expectation is external in both cases, so a systematically wrong encoder fails rather than pinning its own output |
 | Domain-separated `H()` construction (A.2) | its own separation tests | proved for the substrate; **each A.4 projector is proved only when it exists** |
 | Process primitives — trampoline gate, session sweep, start identity | SPIKE-4 measurement | measured |
-| The prepare / ACK / quiesce protocol built on them (§6) | replay and fault-injection tests | **not proved** — designed against the measurements, not measured itself |
-| Recovery — pending-prepare, cancellation precedence, live criterion sweeping | replay and fault-injection tests | **not proved** |
+| The prepare / ACK / quiesce protocol built on them (§6) | replay and fault-injection tests (Appendix E) | **not proved** — designed against the measurements, not measured itself |
+| Recovery — pending-prepare, cancellation precedence, live criterion sweeping | replay and fault-injection tests (Appendix E) | **not proved** |
 | Forced PID reuse, Intel macOS, power-loss durability | targeted testing | open |
 | Safety-policy choices | specification review | reviewed, and review is the only instrument they admit |
 
@@ -1765,7 +1766,7 @@ share a mechanism:
   | Observed | Action |
   |---|---|
   | `authority.granted` present, no lease | The driver died between the two writes; the epoch stands and the lease is reclaimable at the next epoch |
-  | Lease present, no `authority.granted` at its epoch | The lease is an orphan from a crashed acquisition: quarantine it and reclaim |
+  | Lease present, no `authority.granted` at its epoch | The lease is an orphan from a crashed acquisition: quarantine it, then re-evaluate — reclaiming immediately would bypass a pending cancellation or prepare (C.1) |
   | Both present and consistent | Verify the owner per above |
 
   **Fencing is a compare-and-swap on every *driver-authorized* mutation, not a one-time act.**
@@ -1902,8 +1903,10 @@ durable path that reaches a driver mid-execution:
    later `resume` observes an already-terminal run and launches nothing.
 6. **A live but wedged owner** — lease verified, yet the driver never acknowledges the journal —
    is the case a responsive/dead dichotomy misses. After a bounded acknowledgement deadline the
-   canceller re-verifies the lease owner and terminates it and its process tree (§4), and then
-   **executes the cancellation oracle** with its conditional phase (d) taken, authorized by run
+   canceller re-verifies the lease owner and terminates it and its process tree (§4) — **halting
+   `owner_unverifiable` if that re-verification fails**, since a process that cannot be named cannot
+   be terminated, and a successful *session* sweep says nothing about the *owner*'s identity — and
+   then **executes the cancellation oracle** with its conditional phase (d) taken, authorized by run
    lifecycle rather than by the lease.
 
    This step deliberately does not restate the order. An earlier draft did, and inverted it — advancing
@@ -1996,10 +1999,19 @@ The procedure:
    | `cancel.requested` present | **Do not approve.** Hand off to the cancellation oracle **from step (a)** with (b) taken — not from (c). Restating (b) here and skipping (a) would let a cancellation arriving after the quiesce deadline terminalize the run without ever sweeping its sessions, which is the one thing (a) exists to prevent |
    | Snapshot missing, or either hash mismatched, or not bound to the plan | Halt `missing_snapshot_file` — the approval names bytes that no longer exist |
    | Quiesced sidecar present and matching | append `amendment.approved` **once** from the persisted plan, `fenced_epoch` omitted |
-   | Deadline passed, lease still present and matching | sweep every recorded adapter and criterion session to verified empty, terminate the owner and its process tree (§4), close its open interval with `execution.stopped {reason: superseded, charging: clamped}`, advance the epoch and revoke the token, append `amendment.approved` with that `fenced_epoch` — **and only then** remove the now-stale lease, since the journaled epoch advance is what makes it stale |
+   | Deadline passed, lease still present and matching, owner **unverifiable** | Halt `owner_unverifiable`. The row below terminates the owner and its process tree before fencing, and that cannot be done to a process recovery cannot name. A successful **session** sweep does not make the **owner** verifiable — the adapter and criterion sessions and the driver's own identity are separate things, and sweeping the first says nothing about the second. C.1's halt does not cover this case, because a live approver never passes through C.1 |
+   | Deadline passed, lease still present and matching | Sweep every recorded adapter and criterion session to verified empty. Then **re-verify the owner immediately before terminating it** — the row above was evaluated before the sweep, and the sweep takes time, so the verification that selected this row may be stale by now (§4 requires the same recheck before each signal). Halt `owner_unverifiable` if that inspection fails; if the owner has become **verifiably gone**, skip termination and take the next row's action instead, the sweep already being done. Only an owner still verified as the matching live one is terminated with its process tree (§4). Then close its open interval with `execution.stopped {reason: superseded, charging: clamped}`, advance the epoch and revoke the token, append `amendment.approved` with that `fenced_epoch` — **and only then** remove the now-stale lease, since the journaled epoch advance is what makes it stale |
    | No sidecar, lease present, owner **verifiably gone** | the driver died mid-drain. Sweep as above, then treat exactly as the fenced case: advance the epoch, append with `fenced_epoch`, clean the lease. No deadline wait is needed — a dead owner will not acknowledge |
+   | No sidecar, lease present and matching, owner **not verifiably gone**, deadline not yet passed | **Wait.** This is the table's only non-terminal row: release the state lock and observe until a sidecar appears, `cancel.requested` lands, the owner becomes verifiably gone, or the deadline expires — then re-enter this table from the top. The driver is mid-drain and entitled to finish, and holding the lock while waiting is the deadlock step 2 exists to avoid. The predicate is *not verifiably gone* rather than *verified live* so an **unverifiable** owner also waits: waiting mutates nothing. If it is still unverifiable when the deadline expires, the halt row above catches it — not the fence row, which would terminate a process it cannot name. Recovery reaching this state takes the same posture instead of inventing a verdict, though C.1's scoped `owner_unverifiable` halt usually resolves it first. Without this row the state selects no action at all, which E.4 forbids |
    | No lease and no sidecar at all | nothing to quiesce: append `amendment.approved`, `fenced_epoch` omitted, no deadline wait |
    | Base head changed, or the plan fails validation below | quarantine the prewritten snapshot and remove the plan and sidecar, **then** append `amendment.approval_abandoned {reason: base_head_changed \| plan_invalidated}` — that order, since the event lifts the barrier. §9 may then be re-run from step 1 |
+
+   **A lease present but *not* matching `observed_authority_epoch` is unreachable here, and that is a
+   claim rather than an omission.** Only this table advances the epoch under a pending prepare: the
+   barrier admits nothing but the drain and cancellation, the drain does not advance it, and
+   cancellation leaves through the first row. So every reachable state with a lease has a matching
+   one. If an implementation ever observes otherwise, the barrier has been violated somewhere else and
+   the right response is to halt, not to guess which incarnation is authoritative.
 
 **Plan validation is a closed predicate**, not a judgement. Commit verifies the plan bytes against
 `plan_record_hash` — a mismatch or missing file halts `missing_prepare_plan`, exactly as recovery does —
@@ -4072,7 +4084,9 @@ resuming work:
 | Last durable state | Recovery action |
 |---|---|
 | Run is terminal | Complete any derived projections idempotently (`movement.cancelled`, `attempt.cancelled`, `decision.obsoleted`), **and finish any residual non-journal cleanup**: remove a stale `driver.lease` or quiesced sidecar, an orphan plan record, and the run's staging root. This is what makes `(f)` crash-closed — a crash between `(e)` and `(f)` makes this row win, and the cancellation row can no longer match because the run is now terminal, so without cleanup here `(f)` would never be retried. Terminality protects the driver CAS; it must not also strand the filesystem. Launch nothing |
-| An `authority.granted` epoch exists and its owner is **unverifiable** | Halt `owner_unverifiable`. This outranks even a pending cancellation: cancellation outranks *resumption*, never the safety check that terminalizing requires. Declaring a run cancelled while a possibly-live owner could still mutate it is the one thing §6 forbids outright |
+| A readable `driver.lease` is at an epoch **older** than the journal-projected one | It is stale, not dangerous: the mutation CAS requires a lease at the current epoch (§6), so its owner cannot mutate whatever its liveness. Remove it and re-evaluate this table from the top. This is what clears a lease stranded by a crash between a fencing terminal event and its cleanup (Appendix E) |
+| A `driver.lease` exists with no `authority.granted` at its epoch | An orphan from a crashed acquisition (§6): quarantine it and **re-evaluate this table from the top**. Reclamation is deliberately not performed here — this row sits above the cancellation and pending-prepare rows, and reclaiming authority while a prepare is pending is exactly what that row forbids. Once the orphan is gone, whichever row genuinely applies wins, including the no-live-owner reclaim below |
+| A `driver.lease` exists **at the current journal-projected epoch** and its owner is **unverifiable** | Halt `owner_unverifiable`. This outranks even a pending cancellation: cancellation outranks *resumption*, never the safety check that terminalizing requires. Declaring a run cancelled while a possibly-live owner could still mutate it is the one thing §6 forbids outright. The check is scoped to a **current** lease deliberately — the CAS needs one, so an owner without one is already unable to act, and an unscoped check halts on states that are provably safe: after `authority.granted` but before the lease exists, after the lease has moved to a quiesced sidecar, and after a fence has advanced the epoch past it |
 | `cancel.requested` present, run nonterminal | **Cancellation takes precedence over resumption and over a pending prepare.** Execute **steps (a)–(f) of the §6 cancellation oracle exactly** — the whole list, including `(e)`'s `run.cancelled` and `(f)`'s lease cleanup; an earlier draft stopped at `(d)`, which left recovery unable to terminalize a cancelling run at all — including the conditional `(c)` and `(d)` — this row deliberately does not restate them, because two copies of a sequence are two chances to disagree. Three notes specific to recovery: `sweep_unverifiable` in (a) halts, since C.1 runs before C.2/C.3 and would otherwise terminalize without consulting the process identities those tables rely on; (c)'s interval close — which has its own predicate, independent of whether (d) fences — is why the generic pre-table close skips a cancelled run; and **no replacement driver is launched** |
 | `amendment.approval_prepared` pending, no matching `amendment.approved` or `amendment.approval_abandoned`, no cancellation | **Complete or abandon the prepare — never step past it**, and the **mutation barrier stays in force** while doing so. Verify **both** referenced files, because first-match ordering means the generic missing-file checks below are never reached: `prepares/<prepare-id>.json` against its recorded hash (`missing_prepare_plan`), and the prewritten snapshot against its recorded raw *and* semantic hashes and its binding to that plan (`missing_snapshot_file`). Sweep every recorded adapter and criterion launch to verified empty (`sweep_unverifiable` halts). Then run §6's commit table exactly as the original approver would have, appending `amendment.approved` **from the persisted plan** — or `amendment.approval_abandoned` if the head changed or the plan no longer validates. Reclaiming authority or entering C.2 while a prepare is pending would let a new driver run against a revision that was about to change |
 | An `authority.granted` epoch exists with no live owner | Reclaim per §6 |
@@ -4284,3 +4298,228 @@ a quality retry, nor a fallback, nor a revision restart.
 `spawn_handoff_unverifiable`, `root_snapshot_divergence`, `journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
 bytes do not match the recorded hash is no more usable than one that is gone, and splitting them
 would double the enum without changing any action.
+
+# Appendix E — Ordered-step boundaries
+
+Normative. §6's quiesce and cancellation protocols are **ordered steps**: each depends on a preceding
+write having become durable. The readiness table marks them **not proved** — designed against
+SPIKE-4's measurements, not measured themselves — and names fault injection as the forcing function.
+This appendix freezes what injection is performed against, so the implementation exposes those points
+by construction rather than being retrofitted with them.
+
+It defines *where* a crash may be injected and *what must hold across it*. It does not restate any
+protocol. §6's cancellation oracle is referenced by its own `(a)`–`(f)` labels, which §6 establishes
+as the single normative sequence.
+
+**Scope, stated as a selection rule rather than a list.** This appendix covers the three families
+whose orderings SPIKE-4 measured and the readiness table marks unproved: the **control channel**
+(prepare, quiesce, cancellation, supersession fencing), **authority acquisition**, and **launch
+identity handoff** — together with the C.1 rows those depend on. An ordered pair belongs here when a
+crash between its steps can strand *process state, authority state, or the control channel's own
+durable records* — the prewritten snapshot, the plan, the quarantine — such that recovery must
+reason about it from durable evidence alone.
+
+It does **not** cover the evidence and lifecycle chains — `attempt.completed` → `movement.succeeded`,
+`movement.failed` → `run.failed`, a criterion's error completion → `acceptance.failed`,
+`acceptance.evaluation_completed` → `decision.requested`. Those are ordered too, and they will need
+their own treatment. They are excluded for a reason that is about this document rather than about
+them: C.2 and C.3 still express steps as `schedule per §3` and `proceed`, which a mechanical branch
+expansion cannot terminate on. Freezing boundaries against prose that vague would produce a catalog
+that looks complete and is not. Narrowing the claim is the honest option; asserting coverage this
+appendix cannot deliver is not.
+
+## E.1 The two signals
+
+An edge has two endpoints, and they do not attest the same kind of thing.
+
+**`DurabilityReceipt`** — proof that a named persistent mutation has crossed its required fsync or
+directory-fsync boundary (§1). It is a typed return value of the durable operation, produced **after**
+that boundary and **before** the next protocol action. Five operation kinds produce one: a journal
+append whose class declares `sync` (Appendix B); a file publication (temp → fsync → rename →
+directory-fsync); a durable quarantine or removal, which also directory-fsyncs before reporting; a
+Git ref creation, which §1 requires to be durable before the journal event naming it; and a lease
+create, compare-move, or compare-remove.
+
+**One receipt attests one mutation.** Where a protocol step performs several — `(b)` quarantines the
+snapshot and removes both the plan and the sidecar — each is its own receipt and its own injectable
+point. Bundling them would hide the orderings inside a step from the harness, which is where the
+window this appendix exists for actually lives.
+
+**Every receipt is addressable; not every receipt owns an E.2 edge.** E.2 lists the windows across
+which something must hold, and a receipt owning no edge is still emitted and still injectable. But
+"no edge" means two different things, and conflating them would read as a safety claim this appendix
+has not made:
+
+- **In-scope and recovery-neutral.** The mutation's loss is genuinely harmless, so no assertion is
+  owed. `(b)`'s plan and sidecar removals are the worked example: an orphan plan is removed on sight
+  and a leftover sidecar is inert.
+- **Out of scope, pending the lifecycle treatment.** The receipt is real and its loss is **not**
+  neutral — `attempt.completed` is a synced append with a recovery chain behind it — but the ordering
+  it belongs to is one this appendix's scope rule excludes. Silence here is deferral, not exemption.
+
+E.1 and E.2 therefore describe one mechanism at two granularities, not two catalogs.
+
+Unowned receipts need addresses too, and enumerating them here would be a second catalog to keep in
+step with the first. They are named by **derivation** instead: `<owning edge id>/<operation>`, where
+the operation is the mutation the receipt attests — `prepare.quarantined_to_abandoned/plan_removed`.
+A receipt inside no edge at all takes the protocol step as its prefix. Only E.2's edge IDs are
+frozen; derived names follow whatever the step is called.
+
+**`BoundaryReached`** — proof only that an actor arrived at a named execution point. It is
+**ephemeral**: it may block under the harness, and **no recovery rule and no correctness argument may
+depend on it**. A `BoundaryReached` that a crash erases must leave the system in a state the durable
+record already accounts for; if it does not, the protocol is wrong and no probe placement can repair
+it.
+
+Endpoints are classified by **what they attest, not by which component owns them**. Acquiring the
+state lock is a `runstore` operation and still emits `BoundaryReached`, because holding a lock is not
+a durable fact.
+
+**One probe mechanism, four surfaces.** `runstore`, the driver and cancellation executor, process
+supervision, and the launch path all emit their point IDs through the same neutral probe. Production
+installs a no-op; the harness installs a blocking one. Per-surface probes would make cross-surface
+interleaving harder to schedule and would let the same word mean different things in two places.
+Receipts are **not** routed through that probe — they are return values, and collapsing them into a
+notification would erase the distinction E.1 exists to draw.
+
+**The edges below are v0.2's required fault-injection catalog, not a claim that they are all the
+crash windows Partitur has.** Point IDs are semantic so the catalog can grow: a newly discovered
+window is added without renumbering, and no count is part of any interface. Changing an existing
+point's meaning is a design change, not an implementation detail. The catalog grew from eleven to
+twenty-two across three review rounds — supersession fencing, the interval-close ordering, authority
+acquisition, two thirds of the launch sequence, and both unconditional sweep edges were all missing
+from the first draft. A numbered scheme would have made each of those admissions expensive, which is
+the argument for semantic IDs stated as something that already happened rather than something that
+might. **This is history, not evidence of convergence.** What bounds the catalog is E's scope rule
+above and the branch expansion E.4 requires, not the fact that three rounds have run.
+
+## E.2 The catalog
+
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Twelve of the twenty-two
+have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
+
+**Prepare and quiesce**
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `prepare.snapshot_to_plan` | snapshot published `R` | plan record published `R` | §6 step 1; §9 snapshot lifecycle | A snapshot no `approval_prepared` names is quarantined and never becomes head |
+| `prepare.plan_to_prepared` | plan record published `R` | `amendment.approval_prepared` appended `R` | §6 step 1; B.5 | An orphan plan with no `approval_prepared` is removed on sight — it authorizes nothing, so it needs no quarantine |
+| `prepare.prepared_to_observed` | `approval_prepared` durable `R` | driver observes the prepare `B` | §6 mutation barrier | The barrier is in force from the moment the event is durable, **not** from when the driver notices, so everything but the drain is refused `prepare_pending` regardless of driver progress. **This edge adds no invariant the left endpoint does not already carry**; it is in the catalog as a deterministic delayed-observation point, so the harness can schedule a driver that has not yet noticed against one that has |
+| `quiesce.swept_to_lease_moved` | adapter and criterion sessions verified empty `B` | `driver.lease` compare-moved to the prepare-bound path `R` | §6 step 2 | A crash here leaves **no** sidecar, and the sidecar is the only durable evidence that the whole ACK sequence ran — sweep, interval close, writer stop, revalidation, compare-move. Absence forces another sweep in the reachable *matching lease, no sidecar* state; the *no lease, no sidecar* branch legitimately commits without one |
+| `quiesce.lease_moved_to_commit_lock` | lease move durable `R` | approver holds the state lock `B` | §6 step 3 | A matching sidecar does **not** mean the approval must commit — it means commit must be **re-entered**, approving only if every guard still passes. Cancellation may win, a hash mismatch may halt, and a changed base head or invalidated plan abandons. What is forbidden is stepping past a pending prepare |
+| `prepare.quarantined_to_abandoned` | snapshot quarantine durable `R` | `amendment.approval_abandoned` appended `R` | §6 `(b)` and step 3's abandon row; §9 snapshot lifecycle | The barrier must not lift with the immutable revision path still occupied, so the quarantine precedes the append that lifts it. This holds for **every** abandonment reason — `cancelled`, `base_head_changed`, `plan_invalidated` — not only the cancellation one. The accompanying plan and sidecar removals carry no separate assertion: an orphan plan is removed on sight and a leftover sidecar is inert, so losing either is recoverable |
+
+**Cancellation** — `(a)`–`(f)` are §6's labels and are not restated here.
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `cancel.swept_to_terminal` | `(a)` sessions verified empty `B` | `(e)` `run.cancelled` appended `R` | §6 `(a)`, `(e)` | **Terminalization always follows a verified sweep**, whatever `(b)`, `(c)` and `(d)` do. The edges below cover those conditionals; this one covers the case where all three skip, which is the ordinary shape when there is no pending prepare, no open interval, and no matching lease — and which would otherwise be the one cancellation path with no edge asserting the invariant the whole oracle exists for. `sweep_unverifiable` halts, and C.1's cancellation row re-enters at `(a)` rather than resuming mid-sequence |
+| `cancel.swept_to_quarantined` | `(a)` sessions verified empty `B` | `(b)` snapshot quarantined `R` | §6 `(a)`–`(b)` | The `(b)`-true refinement of the row above: a pending prepare is quarantined before anything else proceeds |
+| `cancel.interval_stopped_to_terminal` | `(c)` `execution.stopped {reason: cancelled}` appended `R` | `(e)` `run.cancelled` appended `R` | §6 `(c)`–`(e)` | `run.cancelled` never lands with an execution interval still open, **independently of whether `(d)` fences** — the two predicates are separate, and gating the close on fencing would let the budget projection read a run that never stopped consuming. This is the only edge covering the `(d)`-false path, which E.3 excludes |
+| `cancel.fence_decided_to_terminal` | `(d)` taken with its lease predicate **true** — no durable output `B` | `(e)` `run.cancelled` appended `R` | §6 `(d)`–`(e)` | See E.3 |
+| `cancel.terminal_to_lease_removed` | `(e)` durable `R` | `(f)` lease removed `R` | §6 `(f)`; C.1 terminal row | `(f)` must still run. The cancellation row can no longer match once the run is terminal, so C.1's terminal row is what retries the cleanup |
+
+**Supersession fencing** — the commit table's deadline and dead-owner branches.
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `supersede.swept_to_approved` | survivor sweep verified empty `B` | `amendment.approved` appended `R` | §6 step 3 commit table | The deadline and dead-owner branches sweep before fencing and approving, and **nothing else in this group attests that**. If the interval was already closed before the driver died, neither of the two edges below is even reachable, so without this one an approval could follow an unswept survivor |
+| `supersede.interval_stopped_to_approved` | `execution.stopped {reason: superseded}` appended `R` | `amendment.approved` appended `R` | §6 step 3 commit table | Same obligation as `cancel.interval_stopped_to_terminal`. It arises only on the branches where the approver closes the interval; a driver that quiesced normally closed its own in step 2 |
+| `supersede.fence_decided_to_approved` | fence branch taken with the lease still matching — no durable output `B` | `amendment.approved` carrying `fenced_epoch` appended `R` | §6 step 3 commit table | E.3's shape on the supersession path. Nothing durable records the advance until the approval carries it, so recovery must re-derive the same branch from the retained lease. The commit table gives this branch to a verifiably dead owner as well as a wedged one, which is why the field is keyed on *advancing the epoch* rather than on wedging |
+| `supersede.approved_to_lease_removed` | `amendment.approved` durable `R` | stale lease removed `R` | §6 step 3 commit table; C.1 stale-lease row | The journaled advance is what makes the lease stale, so removal follows the append and never precedes it. A lease stranded here is at a superseded epoch, so C.1's stale-lease row removes it and re-evaluates. Freezing this edge is what showed that row had to exist: the unscoped `owner_unverifiable` check halted on this state, which is provably safe |
+
+**Authority acquisition**
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `authority.granted_to_lease_created` | `authority.granted` appended `R` | `driver.lease` created `R` | §6 lease/authority ordering; C.1 | The epoch stands with no authorized driver, and the next acquisition must use a **newer** epoch rather than reusing the granted one. The inverse state — a lease with no `authority.granted` at its epoch — is an orphan from a crashed acquisition, quarantined and then re-evaluated rather than reclaimed on the spot (C.1) |
+
+**Launch** — each row applies per launch, to the adapter and to every external criterion.
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `launch.adapter.marker_held_to_identity_published` | trampoline holds the marker `B` | `identity.json` published `R` | §4; C.2 first row | A held marker with no readable identity halts `spawn_handoff_unverifiable`. The holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name |
+| `launch.adapter.identity_published_to_recorded` | `identity.json` published `R` | `attempt.started` appended `R` | §4; C.2 | An unjournaled `launch_id` directory is found by listing the staging root and its session swept before recovery proceeds. Both files carry the launch nonce and a mismatch means one is from an earlier launch, so both are ignored |
+| `launch.adapter.recorded_to_gate` | `attempt.started` appended `R` | trampoline gate released `B` | §4 | No released mutator exists without a journaled identity. Marker free ⇒ no *released mutator* survives — not "no launch process survives", which the pre-marker window makes false |
+| `launch.criterion.marker_held_to_identity_published` | trampoline holds the marker `B` | `identity.json` published `R` | §7; §4; C.3 | As the adapter row |
+| `launch.criterion.identity_published_to_recorded` | `identity.json` published `R` | `criterion.started` appended `R` | §7; C.3 | As the adapter row. C.3 handles the unjournaled directory explicitly, ahead of the rows that synthesize a completion |
+| `launch.criterion.recorded_to_gate` | `criterion.started` appended `R` | criterion gate released `B` | §7; §4 | As the adapter row |
+
+## E.3 `cancel.fence_decided_to_terminal` is not a lost-write boundary
+
+It is the window the mirrored fence bug lived in, and its left endpoint writes nothing. `(d)` produces
+**no new durable state**: the authority epoch is a journal projection, and the advance becomes
+authoritative only when `(e)` journals it. What `(d)` does is *retain* a durable input — the
+still-matching old lease — which is what makes its predicate replayable, and which is why `(f)` and
+not `(d)` removes it: removing the retained input first would destroy the state the predicate reads.
+
+So the requirement is not "do not lose the fence". It is **an implementation must not make `(d)`
+independently durable.**
+
+**Scope.** The assertions below govern the branch where `(d)`'s predicate is *true* — a lease still
+matching `observed_authority_epoch`. `(d)` evaluating false is the ordinary path in which no epoch
+advances and `(e)` carries no `fenced_epoch`; nothing here applies to it.
+
+Within that branch, four assertions evaluable from durable state alone, and one obligation on
+recovery:
+
+1. Between `(d)` and `(e)`, the journaled epoch is unchanged.
+2. The old matching lease is still present.
+3. `authority.json` never publishes an epoch ahead of the journal.
+4. **No persistent state claims the advanced epoch unless the fencing terminal event carries it.**
+5. Recovery re-evaluates the retained lease predicate and appends `run.cancelled {fenced_epoch:
+   observed + 1}` — **subject to C.1's precedence, which this list does not restate**. Rows above the
+   cancellation one can match first and halt or clean up instead. The append is therefore not
+   unconditional and must not be asserted as such; what governs is C.1, read top-down.
+
+Re-evaluating that predicate is not the recomputation Appendix C forbids. C forbids recomputing a
+*recorded decision*; `(d)` records none, and recovery evaluates the same closed predicate from
+retained durable inputs. The distinction is the whole reason `(d)` is keyed on the surviving lease
+rather than on owner liveness.
+
+`supersede.fence_decided_to_approved` is the same shape with a different terminal: the advance is
+carried by `amendment.approved` rather than `run.cancelled`, and the run stays nonterminal. Every
+assertion above applies with that substitution.
+
+The lease spike in `spikes/` persists the incarnation token in `authority.json` and treats that file
+as authority. Appendix A already flags it as a model this document discarded; against this appendix
+it is **forbidden evidence, not a skeleton to copy**.
+
+## E.4 Obligations on what implements this
+
+**Prospective.** Nothing in the repository implements this appendix yet: there are no signal types,
+no code carries these edge IDs, and the harness specification is an external working note that
+describes its boundaries in prose and restates their invariants. This section states what must be
+true of that work when it exists, not what is true now — the whole point of freezing the contract
+first is that `runstore` is written against it rather than retrofitted.
+
+- The Go types implement E.1's semantics and carry E.2's edge IDs verbatim.
+- They **do not restate the assertions.** An invariant in a doc comment is a second normative text,
+  and this document has paid for that mistake more than once. A comment may name the edge and point
+  here; it may not paraphrase what must hold.
+- The edge IDs are not a numbered enum. Adding a newly discovered window must not renumber anything.
+- The harness specification selects edges by ID and cites the owning clause instead of paraphrasing
+  it. Its present prose boundaries are superseded by E.2, and reconciling it is a prerequisite of
+  building the harness, not of landing this appendix.
+
+**Completeness is checked by branch expansion, not by inspection.** Reading for missing pairs is what
+produced three rounds of additions. The check that terminates is:
+
+1. Expand every in-scope branch — prepare and quiesce, all eight `(b, c, d)` combinations of the
+   cancellation oracle, every supersession commit-table branch, authority acquisition, and both
+   launch types.
+2. Treat every receipt and every correctness-critical ephemeral point as an `R` or `B` node.
+3. At each reachable crash cut, require **at least one** classification: an E.2 assertion with a named
+   recovery owner, an explicit recovery-neutral exemption, a recorded deferral, or a named halt. More
+   than one *invariant* may apply — `cancel.swept_to_terminal` and its `(b)`-true refinement both
+   cover the same cut by design, and a cut may owe several assertions at once.
+4. Require **exactly one** *recovery action* to be selected after precedence is applied. C.1's rows
+   overlap deliberately and first-match resolves them; what is forbidden is a reachable state that
+   selects none, or one where two rows would each be correct to run.
+5. Reject mechanically — an uncovered cut, or a recovery state selecting zero actions, is a failure
+   of this contract and not of the harness.
+
+The distinction between 3 and 4 is the load-bearing part, and collapsing it was a real error in an
+earlier draft: overlapping *assertions* are how refinement works, while overlapping *actions* are how
+recovery becomes ambiguous. Step 4 is what catches the class of defect this freeze found in C.1,
+where a provably safe state selected a halt it should never have reached.
