@@ -1665,6 +1665,11 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   covers only the final composition, so without this a movement's clean base would have no
   identity at all, and a change to *how it was assembled* — contributor membership, order, or the
   composition environment — would be invisible to the executed-dependency check (§9).
+  A movement may have `needs` while receiving zero contributing change sets — for example, when
+  every dependency is read-only. In that case `T` remains the run base tree and **no merge
+  executes**. Its required `movement_composition_dependency_hash` uses A.4's
+  `composition_mode: identity` projection: the empty contributor list is recorded as a fact, and
+  no `composition_environment_hash` is fabricated for a subprocess that never ran.
 
   A merge conflict yields exactly one outcome, and it is **terminal, not a wait**: the core
   records `composition.conflicted` with the conflicting contributors and the conflicted paths
@@ -2634,16 +2639,21 @@ movement, deduplicated, in the deterministic fan-in order of §5, into
 `(base_tree, result_tree)`:
 
 ```text
-# The candidate additionally records candidate_composition_dependency_hash, which binds the
-# composition ENVIRONMENT (A.4) — the same trees composed under a different Git build or merge
-# configuration are not the same composition (§5).
+# The candidate additionally records candidate_composition_dependency_hash (A.4). With one or
+# more contributors it binds the composition ENVIRONMENT — the same trees composed under a
+# different Git build or merge configuration are not the same composition (§5). With zero
+# contributors its tagged identity projection records that no merge ran and binds no fictitious
+# environment.
 candidate_id = H("partitur/candidate",
                  { base_tree, result_tree, ordered_change_sets })      # Appendix A
 ```
 
 It is a **content** identity, independent of score revision. A run with no write movements
-records `result_tree == base_tree`. A composition that conflicts or cannot be executed is handled
-**before** recording, and terminally: it fails the run per §5 — never discovered at `apply` time.
+records `result_tree == base_tree`, `contributors == []`, and
+`candidate_composition_dependency_hash` over A.4's `composition_mode: identity` projection.
+No merge executes and no `composition_environment_hash` exists on that branch. A composition
+that conflicts or cannot be executed is handled **before** recording, and terminally: it fails
+the run per §5 — never discovered at `apply` time.
 
 Materialization is always **one authoritative journal event**, never a batch that could
 tear on crash:
@@ -2914,16 +2924,20 @@ candidate-compatible iff
   1. no movement with a completed successful (non-superseded) attempt has a different
      execution_dependency_hash under the patched score, and none is removed. Because that
      projection carries base_composition_hash (A.5), a change to how a succeeded movement's
-     clean base was assembled is caught by this same condition;
+     clean base was assembled is caught by this same condition — including an
+     `identity` → `merge` transition when the first contributing writer enters a previously
+     zero-contributor fan-in;
   2. the candidate composition identity is unchanged —
        candidate_composition_dependency_hash =
-         H("partitur/candidate-composition",
-           { base_tree, ordered contributing movement ids,
-             corresponding change_set_ids, composition_algorithm_version,
-             composition_environment_hash })          # A.4 — Git build and merge config
+         H("partitur/candidate-composition", candidate_composition_projection)
+                                                       # A.4 tagged identity | merge union
      must equal the hash recorded with the candidate. Changes altering the composition —
      movement order, `needs`, contributor membership — are incompatible even if the
-     resulting tree would coincidentally be identical;
+     resulting tree would coincidentally be identical. In particular, adding the first writer
+     to a zero-writer candidate changes `composition_mode: identity` to
+     `composition_mode: merge` and is incompatible even when that writer's change set is a no-op
+     and `result_tree` remains equal to `base_tree`; removing the last writer is the inverse
+     incompatible transition;
   3. the patched score remains non-waived and its designated (or redesignated) final
      movement has no completed successful attempt.
 
@@ -3246,13 +3260,24 @@ a defect.
 | `partitur/acceptance-spec` | A.4.2 — the effective compiled acceptance plan. |
 | `partitur/change-set` | `{base_tree, result_tree}` |
 | `partitur/candidate` | `{base_tree, result_tree, ordered_change_sets: [change_set_id]}` — the **content-deduplicated applied** sequence (§8). |
-| `partitur/candidate-composition` | `{base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` — the **full pre-dedup ordered** sequence, so removing or reordering an identical or no-op writer stays detectable. |
-| `partitur/movement-composition` | `{movement_id, base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` — a **movement's own fan-in** (§5). The candidate-level hash covers only the final composition, so without this a movement's clean base has no identity and a change to how it was assembled would be invisible. |
-| `partitur/composition-environment` | §5, exactly: `{git_version_string, object_format, argv, env, merge_renormalize, merge_config}` where `git_version_string` is `git --version` verbatim, `argv` is the full merge argv as executed, `env` is the **allowlisted** subset the core passes (sorted key/value pairs), and `merge_config` is every `merge.*` key effective in the composition repository, sorted. Separate because both composition identities need it, and because the environment can change while every tree stays the same. |
+| `partitur/candidate-composition` | Tagged union: zero contributors ⇒ `{composition_mode: "identity", base_tree, contributors: [], composition_algorithm_version}`; one or more contributors ⇒ `{composition_mode: "merge", base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` with `contributors` non-empty. The tag and cardinality must agree. `identity` states that no merge ran, so an environment hash is forbidden rather than fabricated; `merge` records the **full pre-dedup ordered** sequence, so adding, removing, or reordering an identical or no-op writer stays detectable. |
+| `partitur/movement-composition` | The same tagged union as `partitur/candidate-composition`, with `movement_id` added to both variants: zero contributors ⇒ `{composition_mode: "identity", movement_id, base_tree, contributors: [], composition_algorithm_version}`; one or more ⇒ `{composition_mode: "merge", movement_id, base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` with `contributors` non-empty. This is a movement's own fan-in (§5), including the reachable case where it has `needs` but every dependency is read-only. The candidate-level hash covers only the final composition, so without this a movement's clean base has no identity and a change to how it was assembled would be invisible. |
+| `partitur/composition-environment` | §5, exactly: `{git_version_string, object_format, argv, env, merge_renormalize, merge_config}` where `git_version_string` is `git --version` verbatim, `argv` is the full merge argv as executed, `env` is the **allowlisted** subset the core passes (sorted key/value pairs), and `merge_config` is every `merge.*` key effective in the composition repository, sorted. Separate because both `composition_mode: merge` identities need it, and because the environment can change while every tree stays the same. It is absent from `composition_mode: identity`, where no merge invocation exists to describe. |
 | `partitur/composition-subject` | `{scope, target_id, contributors: [change_set_id], composition_algorithm_version, composition_environment_hash}` — identifies *which* composition failed to yield a usable result, and is the third component of both non-success evidence keys — `composition.conflicted` and `composition.failed` (B.3). It must include the algorithm and environment because the payloads do: the same contributors failing under a different Git configuration is a different fact, and omitting them would let one idempotency key acquire two differing payloads. Distinct from the two dependency hashes: those identify a **successful** composition's inputs, this identifies a composition that produced none. |
 | `partitur/execution-dependency` | A.5 — exhaustive. |
 | `partitur/patch-operations` | The raw RFC 6902 operations array **as the proposer wrote it**, order preserved, for pre-validation rejection records (§9). |
 | `partitur/resolution-body` | `{kind, answer}` for an answered question, or `{kind, reason}` for an amendment rejection — the resolution's semantic content and nothing else. Used for `resolved_decisions[].digest` in A.5, so an answer's length cannot bloat the projection while its *content* still binds. |
+
+`composition_algorithm_version` remains in the `identity` variant because the algorithm owns
+contributor selection, ordering, and content deduplication — including the conclusion that the
+contributor list is empty. It binds that rule without claiming that a merge subprocess ran.
+
+The two modes are disjoint facts, not sentinel values: `identity` requires exactly zero
+contributors and forbids `composition_environment_hash`; `merge` requires at least one contributor
+and requires it. `partitur/composition-subject` has no `identity` variant because a zero-contributor
+composition completes as the identity result without attempting a merge and therefore cannot yield
+`composition.conflicted` or `composition.failed`. Every composition subject consequently describes
+an attempted `merge` branch and retains its non-empty contributor list and environment hash.
 
 ### A.4.3 Scoped identifiers — derived, but not content identities
 
@@ -3380,7 +3405,9 @@ comes from the resolved cast, and the adapter id is the one that actually served
     acceptance: acceptance_spec_hash,  # the effective compiled plan (A.4.2)
     base_composition_hash?             # movement_composition_dependency_hash (A.4), REQUIRED
                                        #   iff the movement has ≥1 `needs` — how its clean base
-                                       #   was assembled. Without it, changing contributor
+                                       #   was assembled. `needs` with zero contributing change
+                                       #   sets uses the tagged `identity` projection. Without
+                                       #   the hash, changing contributor
                                        #   membership, order, or the composition environment
                                        #   would leave a succeeded attempt looking valid (§5)
   },
@@ -3655,6 +3682,8 @@ run.succeeded {                   # WAIVED PATH ONLY. On the non-waived path the
     ordered_change_sets: [change_set_id],
     contributors: [{movement_id, change_set_id}],
     candidate_composition_dependency_hash
+                                  # partitur/candidate-composition; A.4's tagged identity | merge
+                                  # projection, including the zero-writer candidate
   },
   waiver: {reason},               # the recorded apply_gate waiver (§2). The candidate's binding
                                   #   revision is the envelope's score_revision — not repeated
@@ -3757,7 +3786,9 @@ attempt.started {
   base_composition_hash?,         # movement_composition_dependency_hash (A.4); present iff the
                                   #   movement has dependencies. Journaled here because §5
                                   #   records it and §9 checks it — a declared identity that is
-                                  #   never persisted protects nothing
+                                  #   never persisted protects nothing. A dependency set with
+                                  #   zero contributing change sets uses `composition_mode:
+                                  #   identity`
   granted_authority: {            # exactly the wire `grants` object of §4
     paths_rw: [pattern], paths_ro: [pattern], shell: bool, network: bool
   },
@@ -3915,6 +3946,8 @@ application_candidate.recorded {
   ordered_change_sets: [change_set_id],           # content-deduplicated applied sequence
   contributors: [{movement_id, change_set_id}],   # full pre-dedup ordered sequence
   candidate_composition_dependency_hash,
+                                  # partitur/candidate-composition; A.4's tagged identity | merge
+                                  # projection, including the zero-writer candidate
                                   # The initial binding is {candidate_id, score_revision} where
                                   #   score_revision comes from the ENVELOPE; recording this
                                   #   event IS the binding, and no separate binding event is ever
