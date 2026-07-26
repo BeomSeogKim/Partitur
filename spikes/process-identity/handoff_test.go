@@ -133,14 +133,15 @@ func TestInheritedLockMarkerSurvivesParentDeathButDoesNotNameOwner(t *testing.T)
 		t.Fatal(err)
 	}
 	waitUntilGone(t, handoff.Process)
+	// On Linux, a zombie thread-group leader can briefly coexist with runtime
+	// threads that still share its file table. Assert the lock state directly.
+	postWaitProcess := processObservation(handoff.Process)
 	probe, err = os.OpenFile(markerPath, os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer probe.Close()
-	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatalf("marker lock remained after child exit: %v", err)
-	}
+	waitForMarkerLockRelease(t, probe, handoff.Process, postWaitProcess)
 	t.Logf("LOCK_MARKER_RESULT os=%s parent_dead_holder_detected=true owner_from_lock=false",
 		runtime.GOOS)
 }
@@ -379,6 +380,64 @@ func waitUntilGone(t *testing.T, record processRecord) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("process still live: %+v", record)
+}
+
+func waitForMarkerLockRelease(
+	t *testing.T,
+	probe *os.File,
+	record processRecord,
+	postWaitProcess string,
+) {
+	t.Helper()
+	const timeout = 3 * time.Second
+	start := time.Now()
+	deadline := start.Add(timeout)
+	attempts := 0
+	var lastErr error
+	for {
+		attempts++
+		lastErr = syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if lastErr == nil {
+			return
+		}
+		if !errors.Is(lastErr, syscall.EWOULDBLOCK) &&
+			!errors.Is(lastErr, syscall.EAGAIN) {
+			t.Fatalf(
+				"marker lock acquisition failed unexpectedly after child exit: "+
+					"attempts=%d post_wait_process=%s current_process=%s error=%v",
+				attempts,
+				postWaitProcess,
+				processObservation(record),
+				lastErr,
+			)
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf(
+		"marker lock remained after child exit and %s bounded wait: "+
+			"attempts=%d post_wait_process=%s current_process=%s last_error=%v",
+		timeout,
+		attempts,
+		postWaitProcess,
+		processObservation(record),
+		lastErr,
+	)
+}
+
+func processObservation(record processRecord) string {
+	current, err := processByPID(record.PID)
+	if err != nil {
+		return fmt.Sprintf("pid=%d inspection_error=%v", record.PID, err)
+	}
+	return fmt.Sprintf(
+		"identity_match=%t zombie=%t current=%+v",
+		current.Start == record.Start,
+		current.IsZombie,
+		current,
+	)
 }
 
 func waitForFileGrowth(t *testing.T, path string) {
