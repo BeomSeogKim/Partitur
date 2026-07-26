@@ -923,8 +923,9 @@ Every retry and fallback starts from the same clean base and the same input arti
 **Outside the oracle.** These paths never reach it, because none of them is an attempt failure:
 blocking review findings set `review_outcome` and open the human gate (§7, §8); a rejected human gate
 terminalizes through `movement.failed {human_gate_rejected}` directly (B.1); user cancellation
-terminalizes the run (§6); and revision-triggered restarts (§9) and decision resumes (§4) are not
-failures at all.
+terminalizes the run (§6); **composition conflicts and composition execution failures run between
+attempts and terminalize their own scope (§5)**; and revision-triggered restarts (§9) and decision
+resumes (§4) are not failures at all.
 
 Restarts and resumes are limited **only by the remaining active wall-clock budget**, and a decision
 resume additionally preserves the blocked attempt's performer and its position in the fallback
@@ -1545,6 +1546,49 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   be a wait with no decision to answer and no resolution event, so v0.2 fails deterministically
   instead. Changes from failed, cancelled, or superseded attempts are never candidates.
 
+  **A composition execution failure takes the same shape and a different reason.** The term is
+  deliberately not "infrastructure failure": §3.1's Infrastructure class partitions **attempt**-failure
+  kinds, and composition runs between attempts with no performer and no fallback chain, so that class
+  cannot apply to it.
+
+  It is defined by its **outcome, not by a list of ways to reach it**: the core ran the composition
+  and **obtained no verdict** — neither a result tree nor a conflict. The core records
+  `composition.failed` as **evidence only**, then fails the affected movement — or, for candidate
+  composition, the run — with reason `composition_failed`.
+
+  **The outcome alone does not select this reason, because other rules reach it too.** The live
+  selection is an ordered test, and its order is **C.1's, not a second one** — a live core and a
+  recovering one must not classify the same durable state differently. **C.1 governs**: if this test
+  and C.1 ever disagree, C.1 is right and this is the defect:
+
+  1. **A core-controlled interruption inherits its own authority.** Cancellation and supersession
+     terminating the driver's process tree, and an exhausted budget stopping the composition, are
+     owned by §6's oracle, §6's commit table and §6's budget path. Where a **durable** control request
+     already governs, its precedence decides even if the core had not yet signalled: a spontaneous Git
+     failure under a durable `cancel.requested` does not outrank the cancellation. C.1 places control
+     above the integrity halts below it, so this test does too.
+  2. **An integrity condition halts and classifies nothing.** A change-set ref named by an event but
+     missing or hash-mismatched is `missing_changeset_ref` (§1), and a halt never appends to a journal
+     whose integrity is in question (B.7). That the same condition also prevents populating the
+     temporary repository does not make it a composition failure.
+  3. **Otherwise**, an observed no-verdict outcome is `composition_failed`, and Appendix D closes its
+     causes over exactly that.
+
+  A crash *during* composition is not on this list because it is not something the live core
+  observes — it is Appendix C's, under its own precedence.
+
+  **It is terminal and v0.2 does not retry it.** Composition has no performer, so there is no
+  fallback chain to advance, and §3.1's classes are defined over attempt failures. A composition
+  retry budget would be a second retry policy answering to nothing in §3, and inventing one to cover
+  a transient Git fault is more machinery than the fault justifies. Stated rather than left as an
+  assumed guarantee: a transient failure ends the run, and the operator re-runs.
+
+  The separation from `composition_unresolvable` is the point, and the claim is narrower than
+  "environment": an execution failure proves **no verdict was obtained**, never that the trees are
+  unmergeable. A `driver_rejected` can originate from an in-tree `.gitattributes`, which is content
+  rather than environment, and it still says nothing about whether the trees compose. Collapsing the
+  two reasons would let a machine with a broken Git report a clean repository as unmergeable.
+
   **The exact invocation is normative**, because the composed tree depends on it. Each step runs,
   in a **non-bare** repository with system and global Git config isolated:
 
@@ -1565,8 +1609,8 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   - Exit `0`: the first NUL-delimited field is the result tree.
   - Exit `1`: the first field is Git's conflict tree, the rest are the exact conflicted paths —
     NUL delimiting is required because a path may contain a newline.
-  - Any other exit is an **infrastructure failure**, not a composition conflict, and must not be
-    reported as one.
+  - Any other exit is a **composition execution failure**, defined below, and must never be
+    reported as a conflict.
 
   `GIT_ATTR_SOURCE=<T>` is required so attributes are read from the composed *ours* tree rather
   than an unrelated checkout. The repository must be **non-bare** — a bare one fails this
@@ -1663,7 +1707,7 @@ Promotion:   NOT_PROMOTED | PROMOTING | PROMOTED | RECOVERY_REQUIRED
   use `WAITING_HUMAN`.
 - A movement fails when **no further execution path is authorized** — retries and fallbacks
   exhausted, budget exhausted, or an immediate terminal cause such as `grant_denied`,
-  `protocol_error`, human-gate rejection, or `composition_unresolvable`;
+  `protocol_error`, human-gate rejection, `composition_unresolvable`, or `composition_failed`;
   `SUPERSEDED` exists only at the attempt level (steer, instruction revision, or an
   approved amendment → new attempt).
 - `CONTESTED` is **not** a state at any level. It is a value of the `review_outcome`
@@ -2452,9 +2496,8 @@ candidate_id = H("partitur/candidate",
 ```
 
 It is a **content** identity, independent of score revision. A run with no write movements
-records `result_tree == base_tree`. A composition conflict is handled **before** recording,
-and terminally: it fails the run with `composition_unresolvable` per §5 — never discovered at
-`apply` time.
+records `result_tree == base_tree`. A composition that conflicts or cannot be executed is handled
+**before** recording, and terminally: it fails the run per §5 — never discovered at `apply` time.
 
 Materialization is always **one authoritative journal event**, never a batch that could
 tear on crash:
@@ -3060,7 +3103,7 @@ a defect.
 | `partitur/candidate-composition` | `{base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` — the **full pre-dedup ordered** sequence, so removing or reordering an identical or no-op writer stays detectable. |
 | `partitur/movement-composition` | `{movement_id, base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` — a **movement's own fan-in** (§5). The candidate-level hash covers only the final composition, so without this a movement's clean base has no identity and a change to how it was assembled would be invisible. |
 | `partitur/composition-environment` | §5, exactly: `{git_version_string, object_format, argv, env, merge_renormalize, merge_config}` where `git_version_string` is `git --version` verbatim, `argv` is the full merge argv as executed, `env` is the **allowlisted** subset the core passes (sorted key/value pairs), and `merge_config` is every `merge.*` key effective in the composition repository, sorted. Separate because both composition identities need it, and because the environment can change while every tree stays the same. |
-| `partitur/composition-subject` | `{scope, target_id, contributors: [change_set_id], composition_algorithm_version, composition_environment_hash}` — identifies *which* composition a conflict was about, for the `composition.conflicted` idempotency key (B.3). It must include the algorithm and environment because the payload does: the same contributors conflicting under a different Git configuration is a different fact, and omitting them would let one idempotency key acquire two differing payloads. Distinct from the two dependency hashes: those identify a **successful** composition's inputs, this identifies a **failed** one. |
+| `partitur/composition-subject` | `{scope, target_id, contributors: [change_set_id], composition_algorithm_version, composition_environment_hash}` — identifies *which* composition failed to yield a usable result, and is the third component of both non-success evidence keys — `composition.conflicted` and `composition.failed` (B.3). It must include the algorithm and environment because the payloads do: the same contributors failing under a different Git configuration is a different fact, and omitting them would let one idempotency key acquire two differing payloads. Distinct from the two dependency hashes: those identify a **successful** composition's inputs, this identifies a composition that produced none. |
 | `partitur/execution-dependency` | A.5 — exhaustive. |
 | `partitur/patch-operations` | The raw RFC 6902 operations array **as the proposer wrote it**, order preserved, for pre-validation rejection records (§9). |
 | `partitur/resolution-body` | `{kind, answer}` for an answered question, or `{kind, reason}` for an amendment rejection — the resolution's semantic content and nothing else. Used for `resolved_decisions[].digest` in A.5, so an answer's length cannot bloat the projection while its *content* still binds. |
@@ -3650,7 +3693,8 @@ execution.stopped {
 | `artifact.recorded` | ✓ | `(logical_output_id, attempt_id)` | Attempt `RUNNING`/`VERIFYING` | Registers the immutable instance and its byte hash (§1). Two distinct rules apply and must not be conflated: a **second adapter notification** for the same logical id is rejected *before* any append (`duplicate_artifact_instance`, §1), while a **replayed append** with the same key and equivalent payload is an ordinary idempotent no-op (B.0) — replay must be safe, and a protocol violation must not be |
 | `change_set.recorded` | ✓ | attempt_id | Attempt `VERIFYING` | Records `change_set_id`, `base_tree`, `result_tree`, and the pinning ref (§5). Only for `repo_write` movements |
 | `verification.passed` | ✓ | attempt_id | Attempt `VERIFYING` | The post-hoc verification boundary (§5): protected paths, and the read-only invariant where applicable, both held. Exists so recovery can tell "checked" from "not yet checked" — inferring it from `change_set.recorded` would silently skip the check |
-| `composition.conflicted` | ✓ | `scope` + `target_id` + `composition_subject_hash` | fan-in or candidate composition | **Evidence only — it projects no state.** Records `scope`, `target_id`, the ordered contributors and the conflicted paths. `scope: movement` ⇒ `target_id = movement_id`, and the terminal event is `movement.failed {composition_unresolvable}` — legal from `RUNNING`, since fan-in happens after `movement.started`. `scope: candidate` ⇒ `target_id = run_id` (**not** a `candidate_id`: composition failed, so no candidate exists), and the terminal event is `run.failed {composition_unresolvable}`. Recovery synthesizes the missing terminal event if a crash lands between the two appends. The key includes `target_id` because two movements can conflict over the same contributor list |
+| `composition.conflicted` | ✓ | `scope` + `target_id` + `composition_subject_hash` | fan-in or candidate composition | **Evidence only — it projects no state.** Records `scope`, `target_id`, the ordered contributors and the conflicted paths. `scope: movement` ⇒ `target_id = movement_id`, and the terminal event is `movement.failed {composition_unresolvable}` — legal from `RUNNING`, since fan-in happens after `movement.started`. `scope: candidate` ⇒ `target_id = run_id` (**not** a `candidate_id`: composition failed, so no candidate exists), and the terminal event is `run.failed {composition_unresolvable}`. Recovery synthesizes the missing terminal event if a crash lands between the two appends, **subject to C.1's precedence** — a `cancel.requested` landing in that window outranks it. The key includes `target_id` because two movements can conflict over the same contributor list |
+| `composition.failed` | ✓ | `scope` + `target_id` + `composition_subject_hash` | fan-in or candidate composition | **Evidence only — it projects no state**, exactly as the conflict event. Records the `cause` (Appendix D), the merge's exit status where the merge exited at all, and a sanitized diagnostic. The terminal event is `movement.failed {composition_failed}` or `run.failed {composition_failed}` by the same scope rule, and recovery synthesizes it if a crash lands between the two appends — **subject to C.1's precedence**, since a `cancel.requested` landing in that window outranks it. Separate from `composition.conflicted` because a conflict is a verdict and this is the absence of one — reporting the second as the first would let a broken Git call a clean repository unmergeable (§5) |
 | `application_candidate.recorded` | ✓ | candidate_id | every `repo_write` movement succeeded | Records the candidate and **constitutes its initial binding** (§8) |
 | `acceptance.started` | ✓ | attempt_id | Attempt `VERIFYING` | Binds `subject_tree` + `acceptance_spec_hash` before any criterion runs (§7) |
 | `criterion.started` | ✓ | attempt_id + criterion_id | after `acceptance.started` | Carries `criterion_spec_hash` and the same subject binding |
@@ -3690,6 +3734,26 @@ composition.conflicted {          # EVIDENCE ONLY — projects no state (§5)
                                   #   identifies WHICH composition conflicted
   contributors: [{movement_id, change_set_id}],   # composition order
   conflicted_paths: [path],       # sorted
+  composition_algorithm_version,
+  identity_versions
+}
+
+composition.failed {              # EVIDENCE ONLY — projects no state (§5)
+  scope,                          # movement | candidate — same values as composition.conflicted
+  target_id,                      # as composition.conflicted
+  composition_subject_hash,       # partitur/composition-subject — identifies WHICH composition
+                                  #   could not be determined. Same third key component as the
+                                  #   conflict event, for the same reason
+  cause,                          # closed enum, Appendix D
+  git_exit_code?,                 # required iff cause is `git_exit` or `output_unusable` — the two
+                                  #   in which the merge ran AND exited. Absent for `git_signalled`,
+                                  #   which has no exit status, and for the phase 1 and phase 2
+                                  #   causes, which never reached the merge
+  diagnostic,                     # sanitized and truncated to 4 KiB on a valid UTF-8 boundary,
+                                  #   like log (B.7). Composition runs a subprocess against a
+                                  #   core-created temporary repository, so its stderr can name
+                                  #   paths; it is evidence, not a channel
+  contributors: [{movement_id, change_set_id}],   # composition order, as the conflict event
   composition_algorithm_version,
   identity_versions
 }
@@ -4164,6 +4228,7 @@ resuming work:
 | An `authority.granted` epoch exists with no live owner | Reclaim per §6 |
 | `root_snapshot_divergence` — the root score claims the snapshot's revision with a different semantic hash | Halt (§1). Resume is impossible until an operator resolves it |
 | A run-level snapshot, artifact, proposal record, ref, or `resolved-cast.yaml` named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
+| `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
 | Otherwise | Proceed to C.2 for the movement's in-flight attempt, if any |
 
 ## C.2 Attempt lifecycle recovery
@@ -4262,11 +4327,12 @@ none of them is a defect in this appendix.
 
 **`movement.failed` reasons:** `retries_exhausted`, `fallbacks_exhausted`,
 `budget_exhausted`, `human_gate_rejected`, `grant_denied`, `protocol_error`,
-`composition_unresolvable`. `protocol_error` and `grant_denied` need their own terminal path
+`composition_unresolvable`, `composition_failed`. `protocol_error` and `grant_denied` need their own terminal path
 because §3.1 classes them immediately terminal — without it the movement would have no
 way to end.
 
-**`run.failed` reasons:** `movement_failed`, `budget_exhausted`, `composition_unresolvable`.
+**`run.failed` reasons:** `movement_failed`, `budget_exhausted`, `composition_unresolvable`,
+`composition_failed`.
 A recovery halt is deliberately **not** among them: halts are never journal events (B.7), so a run
 whose recovery halted stays in whatever state its last durable event left it, and the halt is
 reported to the operator instead.
@@ -4363,7 +4429,38 @@ a quality retry, nor a fallback, nor a revision restart.
 
 **Recovery outcomes** (`apply.recovery_resolved`): `rolled_back`.
 
-**Composition scopes** (`composition.conflicted`): `movement`, `candidate`.
+**Composition scopes** (`composition.conflicted`, `composition.failed`): `movement`, `candidate`.
+
+**`composition.failed` causes** (§5), closed and **partitioned by phase**. Composition runs three
+ordered phases, and **a phase completes only when its subprocess status *and* its fully decoded,
+validated output have both been accepted**. Attribution follows the **first phase operation that
+fails to produce its required accepted output** — never the latent origin of the defect. So an
+incomplete phase-1 population that only surfaces as a merge exit `128` is `git_exit`, because phase 1
+had produced its accepted output and phase 3 is where an operation first failed; a malformed
+inspection result caught before the merge stays `inspection_failed`. Causal attribution would make
+the same fault classifiable two ways depending on when it was noticed:
+
+| Phase | Cause | Condition |
+|---|---|---|
+| 1 — prepare | `repository_unusable` | the core-created temporary repository could not be created or populated |
+| 2 — inspect | `inspection_failed` | the pre-merge inspection could not be completed, including a failure to start it |
+| 2 — inspect | `driver_rejected` | the inspection completed and found an external custom merge driver |
+| 3 — merge | `spawn_failed` | the merge subprocess could not be started |
+| 3 — merge | `git_exit` | the merge exited outside `0` and `1` |
+| 3 — merge | `git_signalled` | the merge was terminated by a signal |
+| 3 — merge | `output_unusable` | the merge exited `0` or `1` but its output could not be read as §5 specifies |
+| 3 — merge | `status_unobtainable` | the merge started but the core could not obtain or interpret its termination status at all |
+
+Within a phase the causes are disjoint by construction: phase 2 either completes or does not, and
+phase 3's five are exhaustive over the **no-verdict** outcomes of a child — not over all of them, since
+an exit `0` or `1` whose output decodes is a verdict and leaves this table entirely. Inside that
+boundary the child either fails to start, or starts without a usable terminal status, or is signalled,
+or exits outside `0`/`1`, or exits inside it with undecodable output. `status_unobtainable` covers
+every case with no usable status — a failed wait, or a status interpretable as neither exited nor
+signalled — and is what keeps the other four from silently assuming a status was obtained. The set is closed over the outcome
+§5 defines — **an observed no-verdict outcome that no control request and no recovery rule owns** —
+and a condition inside that boundary fitting no row is a defect in this appendix, not a case for an
+implementation to classify.
 
 **Score status** (§2): `draft`, `finalized`.
 
