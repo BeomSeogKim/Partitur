@@ -26,6 +26,8 @@ var (
 	ErrPartialFrame   = errors.New("JSON-RPC stream ended with a partial frame")
 	ErrParseRequest   = errors.New("JSON-RPC parse error")
 	ErrInvalidRequest = errors.New("invalid JSON-RPC request")
+	ErrDuplicateKey   = errors.New("duplicate JSON key")
+	ErrInvalidUTF8    = errors.New("invalid UTF-8")
 )
 
 type Request struct {
@@ -72,7 +74,7 @@ func DecodeRequest(line []byte) (Request, error) {
 	var request Request
 	if err := DecodeStrict(line, &request); err != nil {
 		var syntaxError *json.SyntaxError
-		if errors.As(err, &syntaxError) || errors.Is(err, io.ErrUnexpectedEOF) {
+		if errors.As(err, &syntaxError) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 			return Request{}, fmt.Errorf("%w: %v", ErrParseRequest, err)
 		}
 		return Request{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
@@ -87,7 +89,10 @@ func DecodeRequest(line []byte) (Request, error) {
 // fields and duplicate object keys.
 func DecodeStrict(data []byte, value any) error {
 	if !utf8.Valid(data) {
-		return errors.New("invalid UTF-8")
+		return ErrInvalidUTF8
+	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -102,7 +107,7 @@ func DecodeStrict(data []byte, value any) error {
 		}
 		return err
 	}
-	return rejectDuplicateJSONKeys(data)
+	return nil
 }
 
 func rejectDuplicateJSONKeys(data []byte) error {
@@ -143,7 +148,7 @@ func scanJSONValue(decoder *json.Decoder) error {
 				return errors.New("object key is not a string")
 			}
 			if _, exists := keys[key]; exists {
-				return fmt.Errorf("duplicate JSON key %q", key)
+				return fmt.Errorf("%w %q", ErrDuplicateKey, key)
 			}
 			keys[key] = struct{}{}
 			if err := scanJSONValue(decoder); err != nil {

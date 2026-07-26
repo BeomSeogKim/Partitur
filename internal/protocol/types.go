@@ -4,8 +4,9 @@ package protocol
 import "encoding/json"
 
 const (
-	ProtocolVersion = 1
-	MaxFrameBytes   = 1 << 20
+	MinimumProtocolVersion = 1
+	ProtocolVersion        = 2
+	MaxFrameBytes          = 1 << 20
 )
 
 type Outcome string
@@ -49,6 +50,7 @@ type ProbeResult struct {
 	Adapter      AdapterIdentity `json:"adapter"`
 	Capabilities Capabilities    `json:"capabilities"`
 	Enforcement  Enforcement     `json:"enforcement"`
+	Features     []string        `json:"features,omitempty"`
 }
 
 type OutputSpec struct {
