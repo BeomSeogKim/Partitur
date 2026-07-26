@@ -118,9 +118,10 @@ corrupt evidence by writing where evidence lives:
   partitur.yaml                # the score (committed)
   .partitur/
     .gitignore                 # created by `partitur init`; contains `runs/` and `work/`
-                               #   (both are run-local; neither is ever committed)
+                               #   (run state and staging; neither is ever committed)
     cast.yaml                  # project cast override (committed or ignored, user's choice)
 
+    runs/.state.lock           # persistent repository-scoped state-mutation lock (§6)
     runs/<run-id>/             # AUTHORITATIVE — core-written only, never agent-writable
       journal.jsonl            # append-only event log (single writer: core)
       manifest.yaml            # rebuildable projection: score revision + hash, resolved
@@ -137,6 +138,8 @@ corrupt evidence by writing where evidence lives:
                                #   re-validation replays the pipeline from the ORIGINAL
                                #   operations, which a typed delta cannot reconstruct — the
                                #   delta is lossy by design
+      quarantine/<kind>/<content-sha256>/<source-basename>
+                               # durable destination for quarantined run files
       resolved-cast.yaml       # the fully resolved cast used by this run
       artifacts/<logical-output-id>/<attempt-id>
                                # immutable artifact instances (identity and atomicity
