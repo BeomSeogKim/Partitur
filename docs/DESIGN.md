@@ -495,8 +495,8 @@ authority that governs them.
 Two different mechanisms, because a tree comparison cannot see everything:
 
 - **Tracked paths inside the worktree** are rejected from candidate change sets, checked post
-  hoc even when an `allowed_paths` glob would admit them. A violation fails the attempt in the
-  `grant_denied` class (`protected_path_violation`) with no quality retry and no fallback.
+  hoc even when an `allowed_paths` glob would admit them. A violation fails the attempt with
+  `kind: grant_denied` (`protected_path_violation`), which §3.1 classes immediately terminal.
 - **Shared Git refs and authoritative run state** live outside the worktree, so no candidate
   check can detect a `git update-ref` or a direct journal write. These are guarded by
   *isolation* — the worktree and its staging root are separate from run storage (§1) — plus
@@ -572,8 +572,8 @@ itself under §9's executed-dependency rule. While `status: draft`:
                      recorded quality disposition }
   ```
 
-  If a retry is admissible it proceeds as an ordinary `quality_retry`; otherwise the movement
-  and run fail without charging past the cap (§3).
+  §3.1's first arm classifies it as any other quality failure, and its second arm realizes that
+  classification.
 - **Ordinary acceptance can never make the interview movement succeed.** Only the finalization
   amendment projects it to `SUCCEEDED`.
 
@@ -862,49 +862,82 @@ this document freezes, and the probe governs.
   independently to each fallback performer), and when `true` the manifest records
   individually which constraints were advisory for which attempt.
 
-**Retry and fallback semantics.** `retries_per_movement` is the movement's
-**quality-retry budget**; infrastructure failures advance the fallback chain instead:
+**Retry and fallback semantics.** `retries_per_movement` is the movement's **quality-retry budget**,
+a per-movement total shared across the fallback chain — a fallback performer does not receive a fresh
+one. Infrastructure failures advance the fallback chain instead of consuming it.
 
-- **Infrastructure failure** (`adapter_unavailable`, `model_unavailable`,
-  `provider_timeout`, `rate_limited`, `authentication`): move to the next fallback
-  performer; no retry is consumed. `protocol_error` does **not** trigger fallback in
-  v0.2 (uniform rule; a cast-level opt-in may come later).
-- **Quality failure** (`task_failed` or acceptance failure): consume one retry **if another
-  quality attempt is admissible** and try again with the **same** performer from a clean base;
-  otherwise terminalize the movement without charging past the cap. Quality failures never trigger
-  fallback — a different model is not the fix for a failed test; amendments and humans
-  are.
-- The movement fails when quality retries are exhausted, or when the fallback chain is
-  exhausted by infrastructure failures. The chain never revisits an earlier performer.
-- **Attempts per movement.** There is no closed-form bound:
+### 3.1 The successor oracle
 
-  ```text
-  total attempts = initial
-                 + quality retries consumed          (≤ retries_per_movement)
-                 + infrastructure fallbacks consumed (≤ fallback_count)
-                 + revision-triggered superseded restarts   (unbounded by retry policy)
-                 + decision resumes                        (unbounded by retry policy)
-  ```
+Normative, and the **single** statement of how a failure selects what happens next. Appendix C
+references this rule and restates no part of it; a second copy would be a second chance to disagree.
 
-  Revision-triggered restarts (§9) and **decision resumes** (§4) consume neither a quality
-  retry nor a fallback and are limited **only by the remaining active wall-clock budget**. A
-  decision resume additionally preserves the blocked attempt's performer and its position in
-  the fallback chain — answering a question is not evidence that the performer was wrong. `remaining_retries == 0` forbids only new
-  *quality-retry* attempts; `remaining_time == 0` starts **no** new attempt of any kind.
-- `retries_per_movement` is a per-movement total shared across the fallback chain — a
-  fallback performer does not receive a fresh retry budget.
-- **A failure charges only if it authorizes another attempt.** A quality failure consumes a
-  retry only when a further quality attempt is actually available; an infrastructure failure
-  advances the fallback position only when a further fallback exists. Otherwise the failure
-  terminalizes the movement **without** consuming past the cap, and the failure event records
-  that disposition atomically. Charging the terminal failure too would let
-  `retries_consumed` exceed `retries_per_movement`, making the projection contradict its own
-  bound.
-- Every retry and fallback starts from the same clean base and the same input artifact
-  instances.
-- `grant_denied` (including `candidate_mismatch` and protected-path violations), review
-  findings, human-gate rejection, and user cancellation trigger neither retry nor
-  fallback.
+It has **two arms, and merging them is the defect it exists to prevent**: one runs before the failure
+event is recorded and may read the budget, the other runs after it is durable and may not.
+
+**Arm 1 — classify, before the failure event is appended.**
+
+The classified input is the **failure case**: an `attempt.failed`'s `kind`, or an
+`acceptance.failed` — which carries a `reason` and no kind, and is a failure case in its own right.
+The remaining inputs are all projected from the journal: whether an unvisited fallback remains,
+`retries_consumed` against `retries_per_movement`, and `remaining_time`.
+
+Appendix D partitions those failure cases into three classes and owns that membership; a case
+belonging to none is a defect there, not one for this rule to guess at. What each class selects:
+
+| Class (Appendix D) | `charged` | `terminal_reason` when `none` |
+|---|---|---|
+| Infrastructure | `fallback` if an unvisited fallback remains **and** `remaining_time > 0`; otherwise `none` | `budget_exhausted` if `remaining_time == 0`, else `fallbacks_exhausted` |
+| Quality | `quality_retry` if `retries_consumed < retries_per_movement` **and** `remaining_time > 0`; otherwise `none` | `budget_exhausted` if `remaining_time == 0`, else `retries_exhausted` |
+| Immediately terminal | always `none` | that kind's own `movement.failed` reason |
+
+**The immediately-terminal class never consults the budget**, so a zero budget cannot overwrite its
+reason. A `grant_denied` that coincides with an exhausted budget stays `grant_denied`: it is the more
+specific cause, it is true independently of the budget, and reporting `budget_exhausted` there would
+hide a policy violation behind an accounting one.
+
+`remaining_time == 0` therefore starts no new attempt of any kind, while `remaining_retries == 0`
+forbids only new *quality-retry* attempts. `protocol_error` triggers neither
+retry nor fallback in v0.2 (uniform rule; a cast-level opt-in may come later), and quality failures
+never trigger fallback: a different model is not the fix for a failed test; amendments and humans are.
+
+The result is written into the failure event's `disposition` (B.0) **atomically with the failure**. A
+failure charges only when it authorizes another attempt — otherwise `retries_consumed` could exceed
+`retries_per_movement` and the projection would contradict its own bound.
+
+**Arm 2 — realize, after the failure event is durable.**
+
+Input: the recorded failure and its recorded `disposition`. This arm reads **no budget and no
+admissibility state** — Arm 1 already consulted both, and consulting them here is exactly the
+recomputation Appendix C forbids. Resolving *which* performer a recorded decision names is not that:
+reading the durable cast projection to find the same performer or the next unvisited fallback is
+deterministic target resolution, not a fresh judgement.
+
+| `disposition.charged` | Action |
+|---|---|
+| `quality_retry` | one new attempt with the **same** performer |
+| `fallback` | one new attempt with the immediate next unvisited fallback; the chain never revisits an earlier performer |
+| `none` | `movement.failed` carrying the recorded `terminal_reason` verbatim |
+
+Every retry and fallback starts from the same clean base and the same input artifact instances.
+
+**Outside the oracle.** These paths never reach it, because none of them is an attempt failure:
+blocking review findings set `review_outcome` and open the human gate (§7, §8); a rejected human gate
+terminalizes through `movement.failed {human_gate_rejected}` directly (B.1); user cancellation
+terminalizes the run (§6); and revision-triggered restarts (§9) and decision resumes (§4) are not
+failures at all.
+
+Restarts and resumes are limited **only by the remaining active wall-clock budget**, and a decision
+resume additionally preserves the blocked attempt's performer and its position in the fallback
+chain — answering a question is not evidence that the performer was wrong. So attempts per movement
+have no closed-form bound:
+
+```text
+total attempts = initial
+               + quality retries consumed          (≤ retries_per_movement)
+               + infrastructure fallbacks consumed (≤ fallback_count)
+               + revision-triggered superseded restarts   (unbounded by retry policy)
+               + decision resumes                        (unbounded by retry policy)
+```
 
 ## 4. Adapter protocol v2
 
@@ -1586,7 +1619,7 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   `repo_write`, the core verifies at adapter exit that the worktree is unchanged. A Git
   tree comparison alone is insufficient: the check covers tracked content, **non-ignored
   untracked files, symlink targets, and file modes**, plus the protected paths of §2. A violation is
-  classified in the `grant_denied` class with no quality retry and no fallback. For the
+  `kind: grant_denied`, which §3.1 classes immediately terminal. For the
   final movement the same check is expressed as `candidate_mismatch` against the recorded
   candidate `result_tree` (§8).
 - **Every successful `repo_write` attempt records exactly one change set**, including a
@@ -1670,7 +1703,7 @@ acceptance, **composition**, retries, fallbacks, revision restarts, and decision
 excluding `WAITING_HUMAN` and stopped time. The three phases of Appendix D (`adapter`,
 `acceptance`, `composition`) are exactly the phases that consume it; composition counts because
 a large fan-in is real work the run must be able to run out of time during. Because revision
-restarts and decision resumes are bounded by time alone (§3), the accounting must be
+restarts and decision resumes are bounded by time alone (§3.1), the accounting must be
 **replay-stable** — every projection of the journal yields the same consumption — and crash-safe.
 It is deliberately *not* claimed to be exact: an uncertain interval is bounded best-effort, per
 the recovery rule below.
@@ -1740,12 +1773,15 @@ the recovery rule below.
 
   This is distinct from a **criterion timeout**: a per-criterion `timeout_min` reached while run
   budget remains yields criterion `ERROR` on the ordinary quality path (§7). When the two deadlines
-  fall on the **same instant**, the **criterion timeout wins** — `ERROR`, retryable — because it is
-  the more specific and the more recoverable of the two, and because a tie resolved the other way
-  would end a run on an ambiguity. The rule is stated so two implementations cannot resolve it
-  differently. Only exhaustion of
-  the *run's remaining budget* takes the budget path, which consumes no quality retry — there is
-  nothing left to fund one.
+  fall on the **same instant**, the **criterion timeout wins** — `ERROR`, on the quality path — because it
+  is the more specific of the two and because a tie resolved the other way would end a run on an
+  ambiguity. What the rule fixes is the *classification*, so two implementations cannot disagree
+  about which evidence the failure records. It does **not** make the attempt retryable at the tie:
+  §3.1's first arm reads `remaining_time == 0` and selects `none` with
+  `terminal_reason: budget_exhausted`. Both paths end the movement; they differ in what they record,
+  and an `acceptance.failed {criterion_errored}` is the truer account of what happened. Only exhaustion of
+  the *run's remaining budget* takes the budget path, which §3.1 classes immediately terminal —
+  there is nothing left to fund a retry.
 
   **Composition exhaustion needs no attempt event**, because fan-in and candidate composition
   run *between* attempts, not inside one (§5, §8) — there is no live attempt to terminalize:
@@ -2217,9 +2253,8 @@ A criterion that cannot be spawned, times out, or whose runner crashes yields `E
 **Criterion outcomes and the no-override rule.** `ERROR` means the criterion produced no
 verdict — spawn failure, timeout, runner crash. Both `FAIL` and `ERROR` block movement
 completion and block VERIFIED, and **neither is human-overridable**: a human cannot
-complete a movement over a red or errored hard criterion. The paths out are a retry (both
-consume the movement's quality-retry budget, §3) or an audited score amendment changing the
-criterion — never envelope-eligible, applying only to a new revision and a new attempt, and
+complete a movement over a red or errored hard criterion. The paths out are a retry (§3.1 classifies both as quality failures) or an
+audited score amendment changing the criterion — never envelope-eligible, applying only to a new revision and a new attempt, and
 subject to §9's prohibition on rewriting a succeeded movement's dependencies. A later
 clean-base attempt whose criteria pass may become VERIFIED; earlier failed attempts stay
 visible in `status`, so flakiness is surfaced rather than laundered.
@@ -2452,9 +2487,9 @@ At adapter exit the core applies the full read-only post-hoc invariant of §5 �
 non-ignored untracked files, symlink targets, modes, protected paths — and additionally verifies
 that the worktree tree equals the recorded candidate `result_tree`. `subject_tree` equality
 alone would miss an untracked file or a mode change that a later step could observe. Any
-mismatch is `candidate_mismatch`, classified in the `grant_denied` class —
-an unauthorized write to the tree under verification — failing the attempt with no quality
-retry and no fallback. If the core's own composition disagrees with what it recorded, that
+mismatch is `candidate_mismatch`, a `grant_denied` sub-reason (Appendix D) —
+an unauthorized write to the tree under verification — failing the attempt with a kind §3.1
+classes immediately terminal. If the core's own composition disagrees with what it recorded, that
 is internal corruption handled by recovery, never attributed to the performer.
 
 **Apply-gate predicates** (closed enum, optional, meaningful only with review evidence
@@ -2739,7 +2774,7 @@ episode**, not merely running attempts:
   If the remaining budget cannot fund that re-run, the candidate stays bound but unmarked and
   the run fails through the normal exhaustion rules — **a bound candidate is never an apply
   permission by itself**.
-- Revision-triggered restarts consume no quality retry (§3).
+- Revision-triggered restarts consume no quality retry — §3.1 places them outside the oracle.
 
 **Journal taxonomy.** Routing is not an outcome, and neither is preparation.
 `amendment.approval_prepared` is the durable control request of §6 and changes no score or lifecycle
@@ -3313,9 +3348,9 @@ separate appends. Recovery **replays the disposition recorded on the failure eve
 recomputes admissibility — recomputation could reach a different answer than the live process
 did, which would make the projection depend on when it was replayed:
 
-- Recorded disposition names a scheduled successor that is missing → synthesize it.
+- Recorded disposition names a successor that is missing → realize it per §3.1's second arm.
 - Recorded disposition is *terminal* → synthesize `movement.failed`, and `run.failed` if that
-  terminalizes the run. This holds even though a terminal failure is **uncharged** (§3) — being
+  terminalizes the run. This holds even though a terminal failure is **uncharged** (§3.1) — being
   uncharged is precisely what marks it terminal.
 
 Each synthesized event is keyed so a repeated recovery is a no-op.
@@ -3369,17 +3404,25 @@ that had to join across events to learn what a criterion proved would be one joi
 proving the wrong thing.
 
 **Disposition.** Failure events that may or may not authorize another attempt carry the decision
-explicitly, because recovery replays it and must never recompute admissibility (§3, Appendix C):
+explicitly, because recovery replays it and must never recompute admissibility (§3.1, Appendix C):
 
 ```text
 disposition: {
   charged: "quality_retry" | "fallback" | "none",
-  movement_terminal: bool          # true ⇔ charged: "none" and no further path exists
+  movement_terminal: bool,         # true ⇔ charged: "none" and no further path exists
+  terminal_reason?                 # REQUIRED iff movement_terminal; a movement.failed reason
+                                   #   (Appendix D), selected by §3.1's first arm
 }
 ```
 
 `charged: "none"` with `movement_terminal: true` is what marks a *terminal* failure. Being
-uncharged is the marker — a terminal failure must not consume past its cap (§3).
+uncharged is the marker — a terminal failure must not consume past its cap (§3.1).
+
+**`terminal_reason` exists because `charged: "none"` does not record *why* the classification
+stopped.** Quality with retries remaining but no time left, and quality with time remaining but no
+retries left, are both `none` — and `retries_exhausted` is false for the first. Recovery cannot
+recover the distinction later without re-reading the budget, which §3.1's second arm forbids, so the
+reason is chosen once and carried.
 
 ## B.1 Run and movement lifecycle
 
@@ -3472,7 +3515,7 @@ movement.cancelled {}             # derived from run.cancelled
 | `performer.completed` | ✓ | attempt_id | Attempt `RUNNING` | Attempt → `VERIFYING`. **Vendor execution ended; says nothing about success** (§6) |
 | `attempt.completed` | ✓ | attempt_id | Attempt `VERIFYING`, acceptance and gate passed | Attempt → `COMPLETED` |
 | `attempt.blocked` | ✓ | attempt_id | Attempt `RUNNING` | Attempt → `BLOCKED` (terminal); carries `pending_decision_ids` |
-| `attempt.failed` | ✓ | attempt_id | Attempt `STARTING`/`RUNNING`/`VERIFYING` | Attempt → `FAILED`; carries the failure kind (Appendix D). Legal from `STARTING` so spawn and startup failures are representable. **Charges at most once, and only if it authorizes another attempt** (§3): a quality kind (`task_failed`) may consume one quality retry; an infrastructure kind may advance the fallback chain; `grant_denied` and `protocol_error` charge neither and terminalize the movement immediately |
+| `attempt.failed` | ✓ | attempt_id | Attempt `STARTING`/`RUNNING`/`VERIFYING` | Attempt → `FAILED`; carries the failure kind (Appendix D). Legal from `STARTING` so spawn and startup failures are representable. **Charges at most once, and only if it authorizes another attempt**; what it charges and what follows are §3.1's, selected by its first arm and recorded in `disposition` |
 | `attempt.cancelled` *derived* | — | source event_id + attempt_id | — | Attempt → `CANCELLED`; projected idempotently from `run.cancelled`, for the same reason |
 | `attempt.superseded` *derived* | — | source event_id + attempt_id | — | Attempt → `SUPERSEDED`; projected from `amendment.approved` (§9) |
 | `execution.started` | ✓ | `interval_id` | no interval open | Opens the (single) budget interval; carries `interval_id`, `phase`, `wall_start`, `remaining_at_start` (§6). Keyed on `interval_id` because one attempt legitimately opens several intervals |
@@ -3612,7 +3655,7 @@ execution.stopped {
 | `acceptance.started` | ✓ | attempt_id | Attempt `VERIFYING` | Binds `subject_tree` + `acceptance_spec_hash` before any criterion runs (§7) |
 | `criterion.started` | ✓ | attempt_id + criterion_id | after `acceptance.started` | Carries `criterion_spec_hash` and the same subject binding |
 | `criterion.completed` | ✓ | attempt_id + criterion_id | matching `criterion.started` | `outcome` ∈ `{PASS, FAIL, ERROR}` |
-| `acceptance.failed` | ✓ | attempt_id | any `FAIL`/`ERROR`, or recovery | Terminal for this acceptance **and for the attempt**: projects Attempt `VERIFYING → FAILED` in the same transition, so no attempt is ever left stranded in `VERIFYING`. Reason ∈ Appendix D. Always terminalizes the attempt; charges a quality retry **only if another quality attempt is admissible** (§3), otherwise leads to terminal `movement.failed` without charging past the cap. The disposition is recorded in the event, and recovery replays it rather than recomputing. No separate `attempt.failed` is appended on this path |
+| `acceptance.failed` | ✓ | attempt_id | any `FAIL`/`ERROR`, or recovery | Terminal for this acceptance **and for the attempt**: projects Attempt `VERIFYING → FAILED` in the same transition, so no attempt is ever left stranded in `VERIFYING`. Reason ∈ Appendix D. Always terminalizes the attempt; it is a quality failure case, so §3.1's first arm decides what it charges and what follows. The disposition is recorded in the event, and recovery replays it rather than recomputing. No separate `attempt.failed` is appended on this path |
 | `acceptance.evaluation_completed` | ✓ | attempt_id | all criteria `PASS` | The **only** gateway to grade derivation (§8) |
 
 **Payloads.**
@@ -4100,8 +4143,8 @@ crashed.
 Two further rules govern everything below, and every row obeys them rather than restating them:
 
 1. **Recovery never recomputes a decision the live process already made.** Where a disposition,
-   charge, or admissibility outcome was recorded, recovery replays it (§3). Where recovery must
-   *originate* a decision, the table gives a deterministic rule — never "recompute".
+   charge, or admissibility outcome was recorded, recovery realizes it per §3.1's second arm. Where
+   recovery must *originate* a decision, the table gives a deterministic rule — never "recompute".
 2. **Recovery never claims an outcome it did not verify.** Anything unverifiable is a halt
    (Appendix D), not a guess.
 
@@ -4127,11 +4170,12 @@ resuming work:
 
 The window between `performer.selected` and `acceptance.started` was previously undefined, which
 left those states permanently stranded. `attempt_terminated_incomplete` is a quality failure whose
-disposition follows §3, recorded on the synthesized event so C.3's replay rule holds.
+disposition is classified by §3.1's first arm and recorded on the synthesized event, so C.3's
+replay rule holds.
 
 | Last durable state | Recovery action |
 |---|---|
-| `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). If a trampoline handoff identity was published, verify and sweep that session. If the inherited marker is *held* but no identity can be read, halt `spawn_handoff_unverifiable` — the holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name. If the marker is free, **no released mutator survives** — an unreleased trampoline may still be in its pre-marker window but contains no adapter code (§4) — so append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and schedule per §3 |
+| `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). If a trampoline handoff identity was published, verify and sweep that session. If the inherited marker is *held* but no identity can be read, halt `spawn_handoff_unverifiable` — the holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name. If the marker is free, **no released mutator survives** — an unreleased trampoline may still be in its pre-marker window but contains no adapter code (§4) — so append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}`, then realize it per §3.1's second arm |
 | `attempt.started`, **no** `performer.completed` | Sweep the **recorded** adapter session to verified empty **before** any failure or retry — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. Then append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: after it, adapter exit is *expected*, and without the exclusion this row would capture every normal completion before the rows that handle it |
 | `performer.completed`, movement holds `repo_write`, no `change_set.recorded` | The worktree still exists and its tree is authoritative: capture the change set idempotently, then continue at the next row. If the worktree is gone, the candidate cannot be reconstructed — append `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}` |
 | `performer.completed`, no `verification.passed` | Re-run the **full** §5 post-hoc verification — protected paths for every movement, plus the read-only invariant where the movement holds no `repo_write` — against the surviving worktree; if it is gone, `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}`. A durable `verification.passed` event marks the boundary, because without one a crash after `change_set.recorded` but before the check would let recovery start acceptance having verified nothing |
@@ -4150,15 +4194,13 @@ untracked files, symlink targets, modes, and protected-path integrity; on any mi
 `acceptance.failed {reason: recovery_subject_mismatch, disposition}`. The event is keyed on
 `attempt_id` (Appendix B); the causation id is evidence, not the key.
 
-**Every `acceptance.failed` recovery synthesizes carries a disposition**, and it is determined
-without recomputation: recovery charges a quality retry iff `retries_consumed < retries_per_movement`
-**and** `remaining_time > 0` as already projected from the journal, both of which are recorded
-facts, not judgements. Otherwise the disposition is `{charged: "none", movement_terminal: true}` and
-the movement failure follows.
+**Every `acceptance.failed` recovery synthesizes carries a disposition**, classified by §3.1's first
+arm: an acceptance failure is that rule's quality class, and every input it reads is a fact already
+projected from the journal rather than a judgement recovery originates.
 
 | Last durable state | Recovery action |
 |---|---|
-| `acceptance.failed` present | Terminal — synthesize no further criterion results. The attempt is already `FAILED` by that event's own projection (B.3); replay the **recorded** disposition (charged or not, §3) and its scheduling exactly once — never recompute admissibility at recovery |
+| `acceptance.failed` present | Terminal — synthesize no further criterion results. The attempt is already `FAILED` by that event's own projection (B.3); realize the **recorded** disposition exactly once per §3.1's second arm — never recompute admissibility at recovery |
 | Any `criterion.completed` is `FAIL` or `ERROR`, no `acceptance.failed` | Append `acceptance.failed` idempotently — which terminalizes the attempt as `FAILED` — and start no further criterion |
 | `criterion.started` without `criterion.completed` | **First sweep the recorded criterion session to verified empty** (nothing to sweep when `spawn_failed`) — otherwise an orphan could still be mutating the worktree about to be verified; unverifiable process state halts recovery. Then re-verify the worktree, and branch on the result: a **mismatch** is `acceptance.failed {reason: recovery_subject_mismatch}`, because the tree no longer matches what acceptance bound and no verdict about it is meaningful; only a **clean** re-verification synthesizes `criterion.completed {outcome: ERROR, error_detail: "recovered_without_observed_completion"}` with `exit_code`, `duration_ms`, and `output_ref` **absent**, followed by `acceptance.failed`. Either way it closes as a failure even when the command in fact passed but crashed before its event was written: recovery reports what it observed, and it observed no completion |
 | All criteria completed, all `PASS`, no `acceptance.evaluation_completed` | Append `acceptance.evaluation_completed` idempotently |
@@ -4189,17 +4231,24 @@ cancelled → adapter_unavailable → protocol_error → grant_denied
           → typed vendor failure → task_failed → result-envelope validation
 ```
 
-**`grant_denied` sub-reasons** (core-determined; no quality retry, no fallback):
+**`grant_denied` sub-reasons** (core-determined; §3.1 classes the kind immediately terminal):
 `candidate_mismatch`, `protected_path_violation`, `read_only_violation`,
 `path_grant_violation`, `enforcement_unavailable`.
 
-**Infrastructure vs quality** (§3): infrastructure = `adapter_unavailable`,
-`model_unavailable`, `provider_timeout`, `rate_limited`, `authentication` → advance the
-fallback chain **if a further fallback exists**, consuming no retry. Quality = `task_failed`
-or any acceptance failure → consume one retry **if another quality attempt is admissible**,
-same performer, clean base. When neither is available the failure terminalizes the movement
-without charging past its cap. `protocol_error` triggers **neither** in
-v0.2.
+**Failure classes** — the partition §3.1's first arm classifies over. It covers the **failure
+cases**, not only the attempt-failure kinds: `acceptance.failed` carries a reason rather than a kind
+and is a case in its own right. Membership is fixed here; what each class *does* is §3.1's and is not
+restated:
+
+| Class | Failure cases |
+|---|---|
+| Infrastructure | `adapter_unavailable`, `model_unavailable`, `provider_timeout`, `rate_limited`, `authentication` |
+| Quality | `task_failed`, and every `acceptance.failed` |
+| Immediately terminal | `grant_denied`, `protocol_error`, `budget_exhausted` |
+
+The three classes are exhaustive over **every** attempt-failure kind this appendix declares — the
+adapter kinds above and the core-determined kinds below — plus `acceptance.failed`. A failure case in
+none of them is a defect in this appendix.
 
 **Quality-failure reasons beyond acceptance** — `task_failed` reasons the core itself determines:
 `draft_no_blocking_output` (§2 draft contract), and the recovery-originated
@@ -4214,7 +4263,7 @@ v0.2.
 **`movement.failed` reasons:** `retries_exhausted`, `fallbacks_exhausted`,
 `budget_exhausted`, `human_gate_rejected`, `grant_denied`, `protocol_error`,
 `composition_unresolvable`. `protocol_error` and `grant_denied` need their own terminal path
-because they trigger neither retry nor fallback (§3) — without it the movement would have no
+because §3.1 classes them immediately terminal — without it the movement would have no
 way to end.
 
 **`run.failed` reasons:** `movement_failed`, `budget_exhausted`, `composition_unresolvable`.
@@ -4352,10 +4401,11 @@ It does **not** cover the evidence and lifecycle chains — `attempt.completed` 
 `movement.failed` → `run.failed`, a criterion's error completion → `acceptance.failed`,
 `acceptance.evaluation_completed` → `decision.requested`. Those are ordered too, and they will need
 their own treatment. They are excluded for a reason that is about this document rather than about
-them: C.2 and C.3 still express steps as `schedule per §3` and `proceed`, which a mechanical branch
-expansion cannot terminate on. Freezing boundaries against prose that vague would produce a catalog
-that looks complete and is not. Narrowing the claim is the honest option; asserting coverage this
-appendix cannot deliver is not.
+them, and §3.1 has since removed half of it: recovery's successor selection is now a closed rule, but
+Appendix C has not yet been mechanically expanded against it, so the reachable states these chains
+pass through are still unenumerated. Freezing boundaries against an unexpanded table would produce a
+catalog that looks complete and is not. Narrowing the claim is the honest option; asserting coverage
+this appendix cannot deliver is not.
 
 ## E.1 The two signals
 
