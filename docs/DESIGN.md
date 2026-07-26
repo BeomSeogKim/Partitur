@@ -3587,9 +3587,10 @@ table give its **exact fields**. Both are normative. Conventions:
 - `?` marks an optional field. Everything else is **required** — absent is malformed, and
   malformed is a recovery halt, not a value to guess at.
 - An **empty payload** is written `{}` and is a deliberate statement: the event's entire meaning
-  is its type plus its envelope. Three *authoritative* events are like this —
-  `movement.ready`, `movement.started`, `attempt.completed` — and it is not an oversight, because
-  their evidence lives upstream. **Derived** events carry only what the envelope cannot supply:
+  is its type plus its envelope. Four *authoritative* events are like this —
+  `movement.ready`, `movement.started`, `verification.passed`, `attempt.completed` — and it is not
+  an oversight, because their target and prerequisites are determined by upstream authority.
+  **Derived** events carry only what the envelope cannot supply:
   usually nothing, since their type, envelope, and `causation_id` already say which target and
   which source. The exception is `decision.obsoleted`, which must name its `decision_id` because
   the envelope has no such field.
@@ -3874,7 +3875,7 @@ execution.stopped {
 |---|---|---|---|---|
 | `artifact.recorded` | ✓ | `(logical_output_id, attempt_id)` | Attempt `RUNNING`/`VERIFYING` | Registers the immutable instance and its byte hash (§1). Two distinct rules apply and must not be conflated: a **second adapter notification** for the same logical id is rejected *before* any append (`duplicate_artifact_instance`, §1), while a **replayed append** with the same key and equivalent payload is an ordinary idempotent no-op (B.0) — replay must be safe, and a protocol violation must not be |
 | `change_set.recorded` | ✓ | attempt_id | Attempt `VERIFYING` | Records `change_set_id`, `base_tree`, `result_tree`, and the pinning ref (§5). Only for `repo_write` movements |
-| `verification.passed` | ✓ | attempt_id | Attempt `VERIFYING` | The post-hoc verification boundary (§5): protected paths, and the read-only invariant where applicable, both held. Exists so recovery can tell "checked" from "not yet checked" — inferring it from `change_set.recorded` would silently skip the check |
+| `verification.passed` | ✓ | attempt_id | Attempt `VERIFYING` | The post-hoc verification boundary (§5): protected paths, and the read-only invariant where applicable, both held. Whether the read-only invariant applies is derived from this movement's grants in the pinned score revision identified by the envelope, never restated in the payload. Exists so recovery can tell "checked" from "not yet checked" — inferring it from `change_set.recorded` would silently skip the check |
 | `composition.conflicted` | ✓ | `scope` + `target_id` + `composition_subject_hash` | fan-in or candidate composition | **Evidence only — it projects no state.** Records `scope`, `target_id`, the ordered contributors and the conflicted paths. `scope: movement` ⇒ `target_id = movement_id`, and the terminal event is `movement.failed {composition_unresolvable}` — legal from `RUNNING`, since fan-in happens after `movement.started`. `scope: candidate` ⇒ `target_id = run_id` (**not** a `candidate_id`: composition failed, so no candidate exists), and the terminal event is `run.failed {composition_unresolvable}`. Recovery synthesizes the missing terminal event if a crash lands between the two appends, **subject to C.1's precedence** — a `cancel.requested` landing in that window outranks it. The key includes `target_id` because two movements can conflict over the same contributor list |
 | `composition.failed` | ✓ | `scope` + `target_id` + `composition_subject_hash` | fan-in or candidate composition | **Evidence only — it projects no state**, exactly as the conflict event. Records the `cause` (Appendix D), the merge's exit status where the merge exited at all, and a sanitized diagnostic. The terminal event is `movement.failed {composition_failed}` or `run.failed {composition_failed}` by the same scope rule, and recovery synthesizes it if a crash lands between the two appends — **subject to C.1's precedence**, since a `cancel.requested` landing in that window outranks it. Separate from `composition.conflicted` because a conflict is a verdict and this is the absence of one — reporting the second as the first would let a broken Git call a clean repository unmergeable (§5) |
 | `application_candidate.recorded` | ✓ | candidate_id | every `repo_write` movement succeeded | Records the candidate and **constitutes its initial binding** (§8) |
@@ -3903,6 +3904,11 @@ change_set.recorded {
   ref,                            # refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset
   identity_versions
 }
+
+verification.passed {}            # attests the full §5 invariant. The expected worktree is
+                                  #   determined by the run/composition/change-set/candidate facts
+                                  #   for this attempt, and a tree hash could not restate
+                                  #   non-ignored untracked files or the other non-tree checks
 
 composition.conflicted {          # EVIDENCE ONLY — projects no state (§5)
   scope,                          # movement | candidate
