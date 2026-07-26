@@ -68,9 +68,6 @@ func (store *Store) Replay(
 					return err
 				}
 				repairEvent := runstate.Event{
-					EventID:       newEventID(),
-					Seq:           expectedSeq,
-					Timestamp:     time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 					RunID:         runID,
 					ScoreRevision: state.ScoreHead.Revision,
 					Type:          runstate.EventJournalTailTruncated,
@@ -81,6 +78,9 @@ func (store *Store) Replay(
 				if err != nil {
 					return err
 				}
+				repairEvent.EventID = receipt.Mutation.EventID
+				repairEvent.Seq = receipt.Mutation.Sequence
+				repairEvent.Timestamp = receipt.Mutation.Timestamp
 				state, err = runstate.Apply(state, repairEvent)
 				if err != nil {
 					return fmt.Errorf("%w: repair event: %v", ErrJournalCorrupt, err)
@@ -117,16 +117,20 @@ func (store *Store) Replay(
 	return result, err
 }
 
-// Append appends one strictly sequenced, strictly validated event.
+// Append allocates the journal envelope and appends one strictly validated
+// event. EventID, Seq, and Timestamp must be left empty by the caller.
 func (transaction *Txn) Append(event runstate.Event) (DurabilityReceipt, error) {
 	if err := transaction.requireReceiptAddress(); err != nil {
 		return DurabilityReceipt{}, err
 	}
+	if event.EventID != "" || event.Seq != 0 || event.Timestamp != "" {
+		return DurabilityReceipt{}, fmt.Errorf(
+			"%w: event_id, seq, and ts are allocated by runstore",
+			ErrJournalCorrupt,
+		)
+	}
 	if event.RunID != transaction.runID {
 		return DurabilityReceipt{}, fmt.Errorf("%w: event run id", ErrJournalCorrupt)
-	}
-	if err := validateEnvelope(event); err != nil {
-		return DurabilityReceipt{}, err
 	}
 	key, err := runstate.IdempotencyKey(event)
 	if err != nil {
@@ -156,15 +160,13 @@ func (transaction *Txn) Append(event runstate.Event) (DurabilityReceipt, error) 
 		if err := transaction.store.fs.SyncFile(path); err != nil {
 			return DurabilityReceipt{}, fmt.Errorf("sync idempotent journal append: %w", err)
 		}
-		receipt := transaction.newReceipt(faultpoint.JournalAppend)
-		receipt.Mutation.EventType = string(event.Type)
-		receipt.Mutation.Sequence = existing.event.Seq
-		receipt.Mutation.Path = relativeToRoot(transaction.store.root, path)
-		return receipt, nil
+		return transaction.journalReceipt(existing.event, path), nil
 	}
-	wantSeq := uint64(len(entries) + 1)
-	if event.Seq != wantSeq {
-		return DurabilityReceipt{}, fmt.Errorf("%w: seq=%d want=%d", ErrJournalCorrupt, event.Seq, wantSeq)
+	event.EventID = newEventID()
+	event.Seq = uint64(len(entries) + 1)
+	event.Timestamp = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	if err := validateEnvelope(event); err != nil {
+		return DurabilityReceipt{}, err
 	}
 	line, err := json.Marshal(event)
 	if err != nil {
@@ -180,11 +182,17 @@ func (transaction *Txn) Append(event runstate.Event) (DurabilityReceipt, error) 
 	if err := transaction.store.fs.SyncFile(path); err != nil {
 		return DurabilityReceipt{}, fmt.Errorf("sync journal: %w", err)
 	}
+	return transaction.journalReceipt(event, path), nil
+}
+
+func (transaction *Txn) journalReceipt(event runstate.Event, path string) DurabilityReceipt {
 	receipt := transaction.newReceipt(faultpoint.JournalAppend)
+	receipt.Mutation.EventID = event.EventID
 	receipt.Mutation.EventType = string(event.Type)
 	receipt.Mutation.Sequence = event.Seq
+	receipt.Mutation.Timestamp = event.Timestamp
 	receipt.Mutation.Path = relativeToRoot(transaction.store.root, path)
-	return receipt, nil
+	return receipt
 }
 
 func (transaction *Txn) loadJournal(path string) ([]journalEntry, error) {

@@ -70,8 +70,10 @@ type ReceiptAddress string
 type Mutation struct {
 	Kind        MutationKind
 	RunID       string
+	EventID     string
 	EventType   string
 	Sequence    uint64
+	Timestamp   string
 	Path        string
 	Source      string
 	Destination string

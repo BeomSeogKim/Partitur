@@ -1,4 +1,14 @@
 // Package runstore implements the durable, repository-scoped run-state store.
+//
+// Append currently fsyncs every journal append, so the DESIGN Appendix B sync
+// column is not modelled. This is the Appendix E.1 / Appendix B.1 tension:
+// movement.ready receives stronger durability than its empty sync column
+// requires. Supporting the Appendix B.7 log and progress events will require
+// revisiting Append's receipt contract.
+//
+// Append also reloads and reparses the complete journal for every call. This is
+// correct for bounded harness runs, but makes repeated appends quadratic in the
+// number of events.
 package runstore
 
 import (

@@ -25,17 +25,100 @@ func TestAppendSyncsBeforeReturningReceipt(t *testing.T) {
 	var receipt DurabilityReceipt
 	err := store.Mutate("run-1", "", func(transaction *Txn) error {
 		var err error
-		receipt, err = transaction.At("run.started/journal_append").Append(runStartedEvent(1))
+		receipt, err = transaction.At("run.started/journal_append").Append(runStartedEvent())
 		return err
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Address == "" || receipt.Mutation.Sequence != 1 {
+	if receipt.Address == "" || receipt.Mutation.EventID == "" ||
+		receipt.Mutation.Sequence != 1 || receipt.Mutation.Timestamp == "" {
 		t.Fatalf("receipt = %+v", receipt)
 	}
 	if got, want := recorder.journalMutationOperations(), []string{"append", "sync-file"}; !slices.Equal(got, want) {
 		t.Fatalf("journal operations = %v, want %v", got, want)
+	}
+}
+
+func TestAppendAllocatesEnvelopeForMultipleEventsInOneMutation(t *testing.T) {
+	store := newTestStore(t)
+	var receipts []DurabilityReceipt
+	err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		for _, event := range []runstate.Event{runStartedEvent(), movementReadyEvent()} {
+			receipt, err := transaction.At("test/journal_append").Append(event)
+			if err != nil {
+				return err
+			}
+			receipts = append(receipts, receipt)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipts[0].Mutation.Sequence != 1 || receipts[1].Mutation.Sequence != 2 {
+		t.Fatalf("receipt sequences = %d, %d", receipts[0].Mutation.Sequence, receipts[1].Mutation.Sequence)
+	}
+	if receipts[0].Mutation.EventID == "" ||
+		receipts[1].Mutation.EventID == "" ||
+		receipts[0].Mutation.EventID == receipts[1].Mutation.EventID {
+		t.Fatalf("receipt event ids = %q, %q", receipts[0].Mutation.EventID, receipts[1].Mutation.EventID)
+	}
+	for _, receipt := range receipts {
+		if _, err := time.Parse("2006-01-02T15:04:05.000Z", receipt.Mutation.Timestamp); err != nil {
+			t.Fatalf("receipt timestamp %q: %v", receipt.Mutation.Timestamp, err)
+		}
+	}
+
+	journal := filepath.Join(store.root, ".partitur", "runs", "run-1", "journal.jsonl")
+	contents, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := journalLines(contents)
+	if len(lines) != len(receipts) {
+		t.Fatalf("journal line count = %d, want %d", len(lines), len(receipts))
+	}
+	for index, line := range lines {
+		event, syntaxErr, err := decodeEvent(line.bytes)
+		if syntaxErr != nil || err != nil {
+			t.Fatalf("decode line %d: syntax=%v error=%v", index+1, syntaxErr, err)
+		}
+		receipt := receipts[index]
+		if event.EventID != receipt.Mutation.EventID ||
+			event.Seq != receipt.Mutation.Sequence ||
+			event.Timestamp != receipt.Mutation.Timestamp {
+			t.Fatalf("line %d envelope = %+v, receipt = %+v", index+1, event, receipt)
+		}
+	}
+}
+
+func TestAppendRejectsCallerAllocatedEnvelope(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*runstate.Event)
+	}{
+		{name: "event id", change: func(event *runstate.Event) { event.EventID = "caller-event" }},
+		{name: "sequence", change: func(event *runstate.Event) { event.Seq = 1 }},
+		{name: "timestamp", change: func(event *runstate.Event) {
+			event.Timestamp = "2026-07-26T00:00:00.000Z"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			event := runStartedEvent()
+			test.change(&event)
+			var receipt DurabilityReceipt
+			err := store.Mutate("run-1", "", func(transaction *Txn) error {
+				var err error
+				receipt, err = transaction.At("test/journal_append").Append(event)
+				return err
+			})
+			if !errors.Is(err, ErrJournalCorrupt) || receipt.Address != "" {
+				t.Fatalf("error=%v receipt=%+v", err, receipt)
+			}
+		})
 	}
 }
 
@@ -48,7 +131,7 @@ func TestRequiredSyncFailurePreventsReceipt(t *testing.T) {
 		{
 			name: "append",
 			run: func(transaction *Txn) (DurabilityReceipt, error) {
-				return transaction.At("run.started/journal_append").Append(runStartedEvent(1))
+				return transaction.At("run.started/journal_append").Append(runStartedEvent())
 			},
 			fail: func(recorder *recordingFS) { recorder.failSyncFile = true },
 		},
@@ -259,7 +342,7 @@ func testQuarantineSyncFailure(t *testing.T, failAt int) {
 func TestReplayRepairsOnlySyntacticallyUnparseableTail(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
-		_, err := transaction.At("run.started/journal_append").Append(runStartedEvent(1))
+		_, err := transaction.At("run.started/journal_append").Append(runStartedEvent())
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -308,7 +391,7 @@ func TestReplayRepairsOnlySyntacticallyUnparseableTail(t *testing.T) {
 func TestReplayDoesNotTruncateValidJSONWithInvalidEnvelope(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
-		_, err := transaction.At("run.started/journal_append").Append(runStartedEvent(1))
+		_, err := transaction.At("run.started/journal_append").Append(runStartedEvent())
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -362,7 +445,7 @@ func TestReplayDoesNotTruncateDuplicateNameJSON(t *testing.T) {
 func TestReplayReturnsUnsupportedEventDistinctFromCorruption(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
-		_, err := transaction.At("run.started/journal_append").Append(runStartedEvent(1))
+		_, err := transaction.At("run.started/journal_append").Append(runStartedEvent())
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -408,17 +491,17 @@ func TestReplayReturnsUnsupportedEventDistinctFromCorruption(t *testing.T) {
 
 func TestJournalIdempotencyUsesCanonicalPayloadOnly(t *testing.T) {
 	store := newTestStore(t)
-	first := runStartedEvent(1)
-	second := runStartedEvent(99)
-	second.EventID = "another-event"
-	second.Timestamp = "2026-07-26T01:00:00.000Z"
+	first := runStartedEvent()
+	second := runStartedEvent()
 	second.Payload = json.RawMessage(`{"score_hash":"sha256:score-1","base_tree":"git-sha1:tree","base_commit":"git-sha1:commit","identity_versions":{"canonical_encoding":1,"projections":{}},"resolved_cast_hash":"sha256:cast","score_file_hash":"sha256:file-1"}`)
+	var firstReceipt DurabilityReceipt
 	var secondReceipt DurabilityReceipt
 	err := store.Mutate("run-1", "", func(transaction *Txn) error {
-		if _, err := transaction.At("run.started/journal_append").Append(first); err != nil {
+		var err error
+		firstReceipt, err = transaction.At("run.started/journal_append").Append(first)
+		if err != nil {
 			return err
 		}
-		var err error
 		secondReceipt, err = transaction.At("run.started/journal_append").Append(second)
 		return err
 	})
@@ -428,8 +511,12 @@ func TestJournalIdempotencyUsesCanonicalPayloadOnly(t *testing.T) {
 	if secondReceipt.Mutation.Sequence != 1 {
 		t.Fatalf("idempotent receipt sequence = %d", secondReceipt.Mutation.Sequence)
 	}
+	if secondReceipt.Mutation.EventID != firstReceipt.Mutation.EventID ||
+		secondReceipt.Mutation.Timestamp != firstReceipt.Mutation.Timestamp {
+		t.Fatalf("idempotent receipt changed envelope: first=%+v second=%+v", firstReceipt, secondReceipt)
+	}
 
-	conflict := runStartedEvent(2)
+	conflict := runStartedEvent()
 	conflictPayload := runStartedPayload()
 	conflictPayload["score_hash"] = "sha256:different"
 	conflict.Payload, _ = json.Marshal(conflictPayload)
@@ -623,19 +710,26 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
-func runStartedEvent(sequence uint64) runstate.Event {
+func runStartedEvent() runstate.Event {
 	payload, err := json.Marshal(runStartedPayload())
 	if err != nil {
 		panic(err)
 	}
 	return runstate.Event{
-		EventID:       "event-run-started",
-		Seq:           sequence,
-		Timestamp:     "2026-07-26T00:00:00.000Z",
 		RunID:         "run-1",
 		ScoreRevision: 1,
 		Type:          runstate.EventRunStarted,
 		Payload:       payload,
+	}
+}
+
+func movementReadyEvent() runstate.Event {
+	return runstate.Event{
+		RunID:         "run-1",
+		ScoreRevision: 1,
+		MovementID:    "m1",
+		Type:          runstate.EventMovementReady,
+		Payload:       json.RawMessage(`{}`),
 	}
 }
 
