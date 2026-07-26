@@ -127,8 +127,8 @@ func TestEnforcementExtensionDefaultsFailClosed(t *testing.T) {
 		enforcement.ShellGrants || enforcement.ReadGrants {
 		t.Fatalf("unexpected enforcement defaults: %#v", enforcement)
 	}
-	if ProtocolVersion != 1 {
-		t.Fatalf("protocol version = %d, want 1", ProtocolVersion)
+	if ProtocolVersion != 2 {
+		t.Fatalf("protocol version = %d, want 2", ProtocolVersion)
 	}
 }
 
