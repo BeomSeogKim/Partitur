@@ -961,6 +961,29 @@ enabled only when the resolved cast references its id; the core resolves those e
 demand and never scans `PATH` for candidate adapters. v0.2 supports macOS and Linux; Windows is
 out of scope.
 
+**Adapter process environment.** For validation and execution, the core takes one snapshot of the
+environment inherited by the Partitur process, resolves the exact adapter executable using `PATH`
+from that snapshot, and passes the same snapshot unchanged to the adapter. The core does not add,
+remove, or overwrite variables for adapter launch — including `PATH`, home or configuration
+variables, credential variables, or values derived from the score, cast, run, movement, or attempt —
+and it neither records nor renders the inherited environment. The composition-subprocess allowlist
+(§5) and criterion-runner allowlist (§7) do not apply to adapters.
+
+For an execution launch, the trusted trampoline receives all Partitur launch-control values —
+including the already-resolved adapter path, handoff location, `launch_id`, and nonce — through its
+argv, and receives the gate as an inherited file descriptor, never through the environment. It
+consumes and closes the gate before `exec`, replaces its argv with the adapter's protocol argv, and
+`exec`s the already-resolved adapter in place with the unchanged environment. The marker descriptor
+survives that `exec` only to hold the lifetime lock required below. Thus the adapter does not receive
+launch-control parameters through either its environment or its argv; its request data travels only
+through the protocol.
+
+This inheritance is deliberate: an adapter is an operator-enabled trusted executable running with
+the user's privileges and must retain vendor-specific authentication and configuration that a
+vendor-neutral core cannot enumerate. Filtering the environment would break legitimate vendor
+control-plane access without creating containment, because malicious adapter behaviour is already
+outside the core's security boundary.
+
 **Process model and framing.** Execution uses one adapter process **per attempt**; validation uses
 one standalone process per distinct adapter as specified below. Transport is JSON-RPC 2.0 messages
 as **UTF-8 JSON Lines**, one per line, directional: **requests travel on the adapter's stdin;
