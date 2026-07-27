@@ -28,7 +28,7 @@ copies of the cancellation sequence had been normalized into one oracle:
 
 Both are crash windows between ordered steps. That is the class a harness enumerates mechanically and
 prose enumeration keeps missing by one — which the appendix's own history bears out: E.2's catalog
-went from eleven edges to twenty-two under review, every addition a category rather than an oversight.
+went from eleven edges to twenty-four, every addition a category rather than an oversight.
 
 **The precondition, which held.** Fault injection cannot adjudicate contradictory normative text; it
 tests whichever reading the implementation chose. The oracle had to become singular first, and it is:
@@ -48,7 +48,7 @@ generally.
 
 ## Selection manifest
 
-All twenty-two E.2 edges are in scope for v0.2; none is deferred. Each needs a crash injected at a
+All twenty-four E.2 edges are in scope for v0.2; none is deferred. Each needs a crash injected at a
 cut **on either side of each endpoint**, and a resume that evaluates the assertion E.2 states for
 that edge.
 
@@ -114,6 +114,13 @@ required; the criterion set is not implied by the adapter set.
 | `launch.criterion.marker_held_to_identity_published` | **B** → R | driver | as the adapter row, per criterion launch |
 | `launch.criterion.identity_published_to_recorded` | R → R | driver | as above |
 | `launch.criterion.recorded_to_gate` | R → **B** | driver | as above |
+
+### Adapter execute completion
+
+| Edge | Blocks on | Driven by | Precondition to reach |
+|---|---|---|---|
+| `execute.adapter_swept_to_interval_stopped` | **B** → R | driver | a validated execute response and a zero adapter exit, with the recorded session verified empty and the `adapter` interval not yet closed |
+| `execute.interval_stopped_to_outcome` | R → R | driver | the adapter `execution.stopped` durable, the response-derived event not yet appended |
 
 ## Execution model — deterministic interleaving, not a self-racing process
 
