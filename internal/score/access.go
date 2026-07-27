@@ -36,17 +36,31 @@ func (s *Score) Movements() []MovementView {
 	}
 	result := make([]MovementView, 0, len(s.document.Movements))
 	for _, movement := range s.document.Movements {
-		phase := ""
-		if movement.Phase != nil {
-			phase = *movement.Phase
+		result = append(result, movementView(movement))
+	}
+	return result
+}
+
+// Execution returns the score-level fields needed to build an execute brief
+// and identify the terminal movement.
+func (s *Score) Execution() ExecutionView {
+	if s == nil {
+		return ExecutionView{}
+	}
+	result := ExecutionView{Goal: s.document.Goal}
+	if s.document.Context != nil {
+		result.Context = *s.document.Context
+		result.ContextPresent = true
+	}
+	if s.document.Verification != nil {
+		if s.document.Verification.FinalMovement != nil {
+			result.FinalMovementID = *s.document.Verification.FinalMovement
 		}
-		result = append(result, MovementView{
-			ID:         movement.ID,
-			PartID:     movement.PartID,
-			Phase:      phase,
-			Grants:     sortedStrings(movement.Grants),
-			MayPropose: movement.MayPropose,
-		})
+		if expectation := s.document.Verification.Expectation; expectation != nil &&
+			expectation.Intent != nil {
+			result.VerificationExpectation = *expectation.Intent
+			result.VerificationExpectationPresent = true
+		}
 	}
 	return result
 }
@@ -62,5 +76,53 @@ func (s *Score) EffectivePolicy() PolicyView {
 		ActiveWallClockMin: int64(s.document.Policy.Budget.ActiveWallClockMin),
 		RetriesPerMovement: int64(s.document.Policy.Budget.RetriesPerMovement),
 		AmendmentAuto:      s.document.Policy.Amendment.Auto,
+	}
+}
+
+func movementView(value movement) MovementView {
+	phase := ""
+	if value.Phase != nil {
+		phase = *value.Phase
+	}
+	outputs := make([]OutputView, len(value.Outputs))
+	for index, output := range value.Outputs {
+		outputs[index] = OutputView{
+			ArtifactID: output.ID,
+			Kind:       output.Kind,
+		}
+	}
+	acceptance := AcceptanceView{
+		ArtifactCriteria:  make([]ArtifactCriterionView, 0, len(value.Acceptance.Hard)),
+		HasReviewCriteria: len(value.Acceptance.Review) != 0,
+		HumanGate:         value.Acceptance.HumanGate,
+	}
+	for _, criterion := range value.Acceptance.Hard {
+		if criterion.Artifact == nil {
+			acceptance.HasRunCriteria = true
+			continue
+		}
+		expectedHash := ""
+		if criterion.ExpectedHash != nil {
+			expectedHash = *criterion.ExpectedHash
+		}
+		acceptance.ArtifactCriteria = append(
+			acceptance.ArtifactCriteria,
+			ArtifactCriterionView{
+				ID:           criterion.ID,
+				ArtifactID:   *criterion.Artifact,
+				ExpectedHash: expectedHash,
+			},
+		)
+	}
+	return MovementView{
+		ID:          value.ID,
+		PartID:      value.PartID,
+		Phase:       phase,
+		Grants:      sortedStrings(value.Grants),
+		MayPropose:  value.MayPropose,
+		Instruction: value.Instruction,
+		Inputs:      sortedStrings(value.Inputs),
+		Outputs:     outputs,
+		Acceptance:  acceptance,
 	}
 }

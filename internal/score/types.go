@@ -50,14 +50,53 @@ type PartView struct {
 	ReadOnly     bool
 }
 
-// MovementView is a defensive read view of the fields needed for cast and
-// fail-closed validation.
+// MovementView is a defensive read view of the fields needed for cast,
+// fail-closed validation, and the artifact-only execution slice.
 type MovementView struct {
-	ID         string
-	PartID     string
-	Phase      string
-	Grants     []string
-	MayPropose bool
+	ID          string
+	PartID      string
+	Phase       string
+	Grants      []string
+	MayPropose  bool
+	Instruction string
+	Inputs      []string
+	Outputs     []OutputView
+	Acceptance  AcceptanceView
+}
+
+// OutputView is one declared output in declaration order.
+type OutputView struct {
+	ArtifactID string
+	Kind       string
+}
+
+// ArtifactCriterionView is one declared hard.artifact criterion.
+type ArtifactCriterionView struct {
+	ID           string
+	ArtifactID   string
+	ExpectedHash string
+}
+
+// AcceptanceView exposes the artifact-only acceptance surface. The presence
+// flags prevent a caller from silently treating an unsupported criterion kind
+// as absent.
+type AcceptanceView struct {
+	ArtifactCriteria  []ArtifactCriterionView
+	HasRunCriteria    bool
+	HasReviewCriteria bool
+	HumanGate         string
+}
+
+// ExecutionView contains score-level fields forwarded into an execute brief.
+// Presence booleans preserve the distinction between omission and an empty
+// string.
+type ExecutionView struct {
+	Goal                           string
+	Context                        string
+	ContextPresent                 bool
+	VerificationExpectation        string
+	VerificationExpectationPresent bool
+	FinalMovementID                string
 }
 
 // PolicyView is a defensive read view of effective score policy.

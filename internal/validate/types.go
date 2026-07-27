@@ -1,6 +1,9 @@
 package validate
 
-import "github.com/BeomSeogKim/Partitur/internal/cast"
+import (
+	"github.com/BeomSeogKim/Partitur/internal/cast"
+	"github.com/BeomSeogKim/Partitur/internal/score"
+)
 
 // EntryKind identifies one validation output class. EnforcementAdvisory is the
 // sole non-fatal class; it is not a general diagnostic severity.
@@ -59,6 +62,14 @@ type Refusal struct {
 type Result struct {
 	Refusal *Refusal
 	Entries []Entry
+}
+
+// Preparation is the non-mutating, validated input graph shared by validate
+// and run. RepositoryRoot is the invocation working directory.
+type Preparation struct {
+	RepositoryRoot string
+	Score          *score.Score
+	Cast           *cast.Cast
 }
 
 // HasDiagnostics reports whether any fatal validation output exists.
