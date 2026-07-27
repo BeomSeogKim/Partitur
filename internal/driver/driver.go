@@ -269,7 +269,6 @@ func run(
 			"capabilities":              capabilityPayload(probe.Capabilities),
 			"enforcement":               probe.Enforcement,
 			"negotiated_features":       features,
-			"withheld_resolutions":      []any{},
 			"truncated_resolutions":     []any{},
 			"advisory_dimensions":       advisory,
 			"execution_dependency_hash": executionHash,
@@ -742,16 +741,8 @@ func executionDependencyHash(
 	return canonical.Hash(canonical.DomainExecutionDependency, value)
 }
 
-func recognizedFeatures(features []string) []string {
-	result := []string{}
-	for _, feature := range features {
-		if feature == "typed_resolutions" &&
-			!slices.Contains(result, feature) {
-			result = append(result, feature)
-		}
-	}
-	slices.Sort(result)
-	return result
+func recognizedFeatures(_ []string) []string {
+	return []string{}
 }
 
 func capabilityPayload(value protocol.Capabilities) map[string]any {

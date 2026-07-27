@@ -316,6 +316,22 @@ func TestSuccessPathPayloadValidation(t *testing.T) {
 			}(),
 		},
 		{
+			name: "adapter probed truncation is required",
+			event: func() Event {
+				payload := adapterProbedPayload()
+				delete(payload, "truncated_resolutions")
+				return fixtureEvent(EventAdapterProbed, payload, attemptEnvelope)
+			}(),
+		},
+		{
+			name: "adapter probed rejects retired withheld resolutions",
+			event: func() Event {
+				payload := adapterProbedPayload()
+				payload["withheld_resolutions"] = []any{}
+				return fixtureEvent(EventAdapterProbed, payload, attemptEnvelope)
+			}(),
+		},
+		{
 			name: "artifact size is integer",
 			event: func() Event {
 				payload := artifactRecordedPayload()

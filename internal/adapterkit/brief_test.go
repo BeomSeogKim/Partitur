@@ -19,13 +19,24 @@ func TestRenderPromptIncludesContractAndBrief(t *testing.T) {
 			GlobalInvariants:        json.RawMessage(`["keep compatibility"]`),
 			Outputs:                 []protocol.OutputSpec{{ArtifactID: "report", Kind: "document"}},
 		},
-		Inputs:            []protocol.ArtifactRef{{ArtifactID: "design", Kind: "document", Path: "/input", Hash: "sha256:x"}},
-		Feedback:          []protocol.Feedback{{PreviousAttemptID: "a-1", Kind: "task_failed", ArtifactID: "failure"}},
-		ResolvedDecisions: []protocol.ResolvedDecision{{DecisionID: "q-1", Answer: "yes"}},
-		Workdir:           "/work",
-		OutputDir:         "/output",
-		Grants:            protocol.Grants{PathsRW: []string{"internal/**"}, PathsRO: []string{"docs/**"}, Shell: true},
-		Budget:            protocol.Budget{RemainingMS: 750_001},
+		Inputs:   []protocol.ArtifactRef{{ArtifactID: "design", Kind: "document", Path: "/input", Hash: "sha256:x"}},
+		Feedback: []protocol.Feedback{{PreviousAttemptID: "a-1", Kind: "task_failed", ArtifactID: "failure"}},
+		ResolvedDecisions: []protocol.ResolvedDecision{
+			{
+				DecisionID: "q-1",
+				Kind:       protocol.ResolvedDecisionAnswer,
+				Answer:     "yes",
+			},
+			{
+				DecisionID: "p-1",
+				Kind:       protocol.ResolvedDecisionAmendmentRejected,
+				Reason:     "human_rejected",
+			},
+		},
+		Workdir:   "/work",
+		OutputDir: "/output",
+		Grants:    protocol.Grants{PathsRW: []string{"internal/**"}, PathsRO: []string{"docs/**"}, Shell: true},
+		Budget:    protocol.Budget{RemainingMS: 750_001},
 	}
 	prompt := RenderPrompt(request)
 	for _, expected := range []string{
@@ -33,7 +44,8 @@ func TestRenderPromptIncludesContractAndBrief(t *testing.T) {
 		"Repository context",
 		"artifact_id=\"report\" kind=\"document\"",
 		"previous_attempt_id=\"a-1\"",
-		"decision_id=\"q-1\"",
+		"decision_id=\"q-1\" kind=\"answer\" answer=\"yes\"",
+		"decision_id=\"p-1\" kind=\"amendment_rejected\" reason=\"human_rejected\"",
 		"750001 milliseconds",
 		"/output/" + ResultFilename,
 		`"version": 1`,

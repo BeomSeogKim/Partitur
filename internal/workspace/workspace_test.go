@@ -876,7 +876,6 @@ func appendAttemptVerifyingHistory(t *testing.T, run *Run, attempt *AttemptWorks
 				"shell_grants": false, "read_grants": true,
 			},
 			"negotiated_features":       []any{},
-			"withheld_resolutions":      []any{},
 			"truncated_resolutions":     []any{},
 			"advisory_dimensions":       []any{},
 			"execution_dependency_hash": "sha256:dependency",

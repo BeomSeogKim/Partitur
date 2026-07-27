@@ -215,7 +215,6 @@ func Apply(input State, event Event) (State, error) {
 			Capabilities:            boolMap(mustObject(payload, "capabilities")),
 			Enforcement:             boolMap(mustObject(payload, "enforcement")),
 			NegotiatedFeatures:      mustStrings(payload, "negotiated_features"),
-			WithheldResolutions:     withheldResolutions(payload["withheld_resolutions"].([]any)),
 			TruncatedResolutions:    mustStrings(payload, "truncated_resolutions"),
 			AdvisoryDimensions:      mustStrings(payload, "advisory_dimensions"),
 			ExecutionDependencyHash: Hash(mustString(payload, "execution_dependency_hash")),
@@ -679,18 +678,6 @@ func boolMap(value map[string]any) map[string]bool {
 	return output
 }
 
-func withheldResolutions(values []any) []WithheldResolution {
-	output := make([]WithheldResolution, len(values))
-	for index, raw := range values {
-		entry, _ := raw.(map[string]any)
-		output[index] = WithheldResolution{
-			DecisionID: mustString(entry, "decision_id"),
-			Why:        mustString(entry, "why"),
-		}
-	}
-	return output
-}
-
 func candidateContributors(values []any) []CandidateContributor {
 	output := make([]CandidateContributor, len(values))
 	for index, raw := range values {
@@ -859,7 +846,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventAttemptStarted:
 		return []string{"attempt_number", "adapter_process", "granted_authority", "identity_versions"}, []string{"base_composition_hash"}, true
 	case EventAdapterProbed:
-		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "withheld_resolutions", "truncated_resolutions", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, nil, true
+		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "truncated_resolutions", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, nil, true
 	case EventPerformerCompleted:
 		return []string{"session_hint_stored"}, nil, true
 	case EventAttemptCompleted, EventVerificationPassed:
@@ -959,18 +946,6 @@ func validateNestedPayload(eventType EventType, payload map[string]any) error {
 		}
 		if err := namedTypes(enforcement, nil, nil, nil, names, nil); err != nil {
 			return fmt.Errorf("enforcement: %w", err)
-		}
-		for _, raw := range payload["withheld_resolutions"].([]any) {
-			entry, ok := raw.(map[string]any)
-			if !ok {
-				return errors.New("withheld_resolutions must contain objects")
-			}
-			if err := fields(entry, []string{"decision_id", "why"}, nil); err != nil {
-				return fmt.Errorf("withheld_resolutions: %w", err)
-			}
-			if err := namedTypes(entry, []string{"decision_id", "why"}, nil, nil, nil, nil); err != nil {
-				return fmt.Errorf("withheld_resolutions: %w", err)
-			}
 		}
 	case EventApplicationCandidateRecorded:
 		if err := validateContributors(payload["contributors"].([]any)); err != nil {
@@ -1177,7 +1152,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 	case EventAdapterProbed:
 		strings = []string{"adapter_version", "execution_dependency_hash"}
 		objects = []string{"capabilities", "enforcement", "identity_versions"}
-		arrays = []string{"negotiated_features", "withheld_resolutions", "truncated_resolutions", "advisory_dimensions"}
+		arrays = []string{"negotiated_features", "truncated_resolutions", "advisory_dimensions"}
 	case EventAttemptStarted:
 		strings = optionalNames(payload, "base_composition_hash")
 		objects = []string{"adapter_process", "granted_authority", "identity_versions"}
@@ -1249,8 +1224,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		return err
 	}
 	for _, name := range arrays {
-		if name == "typed_delta" || name == "withheld_resolutions" ||
-			name == "contributors" || name == "criterion_outcomes" {
+		if name == "typed_delta" || name == "contributors" || name == "criterion_outcomes" {
 			continue
 		}
 		if err := stringArray(payload, name); err != nil {
@@ -1338,15 +1312,12 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 			return errors.New("invalid performer selection reason")
 		}
 	case EventAdapterProbed:
-		if err := sortedStringFields(
+		return sortedStringFields(
 			payload,
 			"negotiated_features",
 			"truncated_resolutions",
 			"advisory_dimensions",
-		); err != nil {
-			return err
-		}
-		return sortedWithheldResolutions(payload["withheld_resolutions"].([]any))
+		)
 	case EventAmendmentApprovalPrepared:
 		if mustString(payload, "mode") != "auto" {
 			return errors.New("only auto amendment prepares are supported")
@@ -1426,19 +1397,6 @@ func sortedStringFields(payload map[string]any, names ...string) error {
 				return fmt.Errorf("%s must not contain duplicates", name)
 			}
 		}
-	}
-	return nil
-}
-
-func sortedWithheldResolutions(values []any) error {
-	var previous string
-	for index, raw := range values {
-		entry, _ := raw.(map[string]any)
-		decisionID := mustString(entry, "decision_id")
-		if index > 0 && decisionID <= previous {
-			return errors.New("withheld_resolutions must be sorted without duplicates")
-		}
-		previous = decisionID
 	}
 	return nil
 }

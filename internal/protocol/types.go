@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	MinimumProtocolVersion = 1
+	MinimumProtocolVersion = 2
 	ProtocolVersion        = 2
 	MaxFrameBytes          = 1 << 20
 )
@@ -87,9 +87,45 @@ type Feedback struct {
 	ArtifactID        string `json:"artifact_id"`
 }
 
+type ResolvedDecisionKind string
+
+const (
+	ResolvedDecisionAnswer            ResolvedDecisionKind = "answer"
+	ResolvedDecisionAmendmentRejected ResolvedDecisionKind = "amendment_rejected"
+)
+
 type ResolvedDecision struct {
-	DecisionID string `json:"decision_id"`
-	Answer     string `json:"answer"`
+	DecisionID string               `json:"decision_id"`
+	Kind       ResolvedDecisionKind `json:"kind"`
+	Answer     string               `json:"answer,omitempty"`
+	Reason     string               `json:"reason,omitempty"`
+}
+
+func (decision ResolvedDecision) MarshalJSON() ([]byte, error) {
+	switch decision.Kind {
+	case ResolvedDecisionAnswer:
+		return json.Marshal(struct {
+			DecisionID string               `json:"decision_id"`
+			Kind       ResolvedDecisionKind `json:"kind"`
+			Answer     string               `json:"answer"`
+		}{
+			DecisionID: decision.DecisionID,
+			Kind:       decision.Kind,
+			Answer:     decision.Answer,
+		})
+	case ResolvedDecisionAmendmentRejected:
+		return json.Marshal(struct {
+			DecisionID string               `json:"decision_id"`
+			Kind       ResolvedDecisionKind `json:"kind"`
+			Reason     string               `json:"reason"`
+		}{
+			DecisionID: decision.DecisionID,
+			Kind:       decision.Kind,
+			Reason:     decision.Reason,
+		})
+	default:
+		return nil, fmt.Errorf("unknown resolved decision kind %q", decision.Kind)
+	}
 }
 
 type Grants struct {

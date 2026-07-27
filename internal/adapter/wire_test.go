@@ -18,16 +18,16 @@ func TestProtocolNegotiationAndFeatures(t *testing.T) {
 		want     []string
 		wantKind DiagnosticKind
 	}{
-		{name: "protocol 1 absent", version: 1},
-		{name: "protocol 1 empty rejected", version: 1, features: `,"features":[]`, wantKind: DiagnosticMalformedResponse},
-		{name: "protocol 1 null rejected", version: 1, features: `,"features":null`, wantKind: DiagnosticMalformedResponse},
+		{name: "protocol 1 absent rejected", version: 1, wantKind: DiagnosticUnsupportedProtocol},
+		{name: "protocol 1 empty rejected", version: 1, features: `,"features":[]`, wantKind: DiagnosticUnsupportedProtocol},
+		{name: "protocol 1 null rejected", version: 1, features: `,"features":null`, wantKind: DiagnosticUnsupportedProtocol},
 		{name: "protocol 2 absent", version: 2},
 		{name: "protocol 2 empty", version: 2, features: `,"features":[]`, want: []string{}},
 		{
 			name:     "protocol 2 open ordered list",
 			version:  2,
-			features: `,"features":["future_token","typed_resolutions","future_token"]`,
-			want:     []string{"future_token", "typed_resolutions", "future_token"},
+			features: `,"features":["future_token","vendor_extension","future_token"]`,
+			want:     []string{"future_token", "vendor_extension", "future_token"},
 		},
 		{name: "protocol 2 null rejected", version: 2, features: `,"features":null`, wantKind: DiagnosticMalformedResponse},
 		{name: "protocol 2 non-string rejected", version: 2, features: `,"features":["ok",1]`, wantKind: DiagnosticMalformedResponse},

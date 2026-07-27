@@ -171,19 +171,12 @@ func decodeProbeResult(data []byte) (protocol.ProbeResult, error) {
 		return protocol.ProbeResult{}, err
 	}
 
-	switch result.Protocol {
-	case 1:
-		if raw.Features != nil {
-			return protocol.ProbeResult{}, malformed("protocol 1 response must omit features")
+	if raw.Features != nil {
+		if null(raw.Features) {
+			return protocol.ProbeResult{}, malformed("features must be omitted or an array")
 		}
-	case 2:
-		if raw.Features != nil {
-			if null(raw.Features) {
-				return protocol.ProbeResult{}, malformed("features must be omitted or an array")
-			}
-			if err := protocol.DecodeStrict(raw.Features, &result.Features); err != nil {
-				return protocol.ProbeResult{}, classifyDecodeError(err)
-			}
+		if err := protocol.DecodeStrict(raw.Features, &result.Features); err != nil {
+			return protocol.ProbeResult{}, classifyDecodeError(err)
 		}
 	}
 	return result, nil

@@ -415,7 +415,6 @@ func adapterProbedPayload() map[string]any {
 			"shell_grants": false, "read_grants": false,
 		},
 		"negotiated_features":       []any{},
-		"withheld_resolutions":      []any{},
 		"truncated_resolutions":     []any{},
 		"advisory_dimensions":       []any{},
 		"execution_dependency_hash": "sha256:dependency",
