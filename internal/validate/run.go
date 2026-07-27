@@ -108,6 +108,7 @@ func compilePreparation(
 		RepositoryRoot: repositoryRoot,
 		Score:          compiled,
 		Cast:           resolved,
+		scoreSource:    append([]byte(nil), source...),
 	}, result
 }
 

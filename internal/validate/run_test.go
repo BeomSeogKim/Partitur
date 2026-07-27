@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -64,6 +65,11 @@ func TestPrepareReturnsAnchoredValidatedInputs(t *testing.T) {
 	home := filepath.Join(string(filepath.Separator), "users", "operator")
 	scorePath := filepath.Join(root, "partitur.yaml")
 	castPath := filepath.Join(root, ".partitur", "cast.yaml")
+	scoreSource := encode(t, validDraftScore("plan"))
+	castSource := encode(
+		t,
+		validCast(map[string]string{"plan": "performer"}),
+	)
 	workingDirectoryCalls := 0
 	preparation, result := prepareValidated(acquisitionDependencies{
 		workingDirectory: func() (string, error) {
@@ -74,12 +80,9 @@ func TestPrepareReturnsAnchoredValidatedInputs(t *testing.T) {
 		readFile: func(path string) ([]byte, error) {
 			switch path {
 			case scorePath:
-				return encode(t, validDraftScore("plan")), nil
+				return scoreSource, nil
 			case castPath:
-				return encode(
-					t,
-					validCast(map[string]string{"plan": "performer"}),
-				), nil
+				return castSource, nil
 			default:
 				return nil, os.ErrNotExist
 			}
@@ -99,6 +102,12 @@ func TestPrepareReturnsAnchoredValidatedInputs(t *testing.T) {
 	}
 	if got := preparation.Score.Execution().Goal; got != "Validate the fixture." {
 		t.Fatalf("score goal = %q", got)
+	}
+	firstSource := preparation.ScoreSource()
+	firstSource[0] = '!'
+	if got := preparation.ScoreSource(); bytes.Equal(got, firstSource) ||
+		!bytes.Equal(got, scoreSource) {
+		t.Fatalf("score source was not defensive: %q", got)
 	}
 	binding, exists := preparation.Cast.Binding("plan")
 	if !exists || binding.Performer != "performer" {
