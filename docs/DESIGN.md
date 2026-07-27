@@ -942,6 +942,13 @@ deterministic target resolution, not a fresh judgement.
 | `RC-DISPOSITION-003` | `none` | `movement.failed` carrying the recorded `terminal_reason` verbatim |
 
 Every retry and fallback starts from the same clean base and the same input artifact instances.
+For `quality_retry` and `fallback`, “one new attempt” first establishes a pending successor whose
+performer and reason are fixed by this arm; the between-unit scheduler makes that choice durable as
+`performer.selected` and only then may launch it. Recovery selecting the pending successor does not
+itself append `performer.selected` or launch an adapter. The recorded failure remains the authority
+until that durable selection exists, so a repeated recovery selects the same successor rather than
+charging or deciding again. For `none`, the durable realization is the `movement.failed` named in
+the table.
 
 **Outside the oracle.** These paths never reach it, because none of them is an attempt failure:
 blocking review findings set `review_outcome` and open the human gate (§7, §8); a rejected human gate
@@ -1365,13 +1372,16 @@ in memory for a human:
   or block on an id nothing raised. A blocking proposal's `id` is a valid member of
   `pending_decision_ids`, alongside question ids. The attempt ends `BLOCKED` (a terminal
   attempt state — no process stays alive).
-- **The whole handshake is recorded by one fsynced event, then its requests are derived.**
-  `attempt.blocked` carries the complete set of raised decisions *with their content* — question
-  text, proposal ids, types, and blocking flags — and the per-decision `decision.requested` events
-  are **derived** from it. Recording them as independent appends first would mean a crash after the
-  first question lost the second one's text, with no source to rebuild it from; recording
-  `attempt.blocked` first with only an id set would lose every type and body. One source event
-  fixes both, and matches how `amendment.routed_human` already works.
+- **The blocked result is recorded by one fsynced event, and every request has exactly one durable
+  source.** `attempt.blocked` carries the complete set of raised decisions *with their content* —
+  question text, proposal ids, types, and blocking flags. A question's `decision.requested` derives
+  from that recorded `raised` entry. A proposal's request derives only from
+  `amendment.routed_human`, which owns the routing facts §1 requires; `attempt.blocked` records only
+  that the attempt raised and, where applicable, blocked on the proposal. Recording question
+  requests as independent appends first would mean a crash after the first question lost the
+  second one's text, while deriving a proposal request from both events would give it competing
+  authorities. Appendix C closes either source-to-request cut idempotently before treating the run
+  as intentionally waiting.
 - An unresolved blocking decision projects the movement and the run to `WAITING_HUMAN` (§6) — a
   projection of the outstanding decision, not a separately appended state event.
 - **Emitted ids are attempt-scoped, so neither `decision_id` nor `proposal_id` is the emitted
@@ -2313,6 +2323,23 @@ step list:
   written and fsynced first, the full planned approval payload is persisted beside it as
   `prepares/<prepare-id>.json`, and the prepare event references both by raw hash. Recovery then
   *replays* a plan rather than recomputing one.
+- **Durable consequences close before a prepare can exist.** Under the state lock, a command that
+  has reached approval intent first closes every already-determined, non-supersedable consequence
+  selected by `RC-RESUME-011`, `019`, `020`, `021`–`023`, `025`, `026`, `028`–`030`, `037`,
+  `039`, `040`, and `047`. These are recorded failures or completed verdicts awaiting their §3.1 or lifecycle
+  consequence, composition evidence awaiting its terminal, and durable sources awaiting mandatory
+  `decision.requested` authority. The command applies those Appendix C cases idempotently until none
+  matches, then re-establishes §9 steps 1–9 and approval intent against the resulting projection
+  before writing a snapshot or plan. A consequence that selects a retry or fallback remains pending
+  until the between-unit scheduler records its `performer.selected`; prepare cannot step around it.
+
+  This is narrower than quiescing all unfinished work. A `performer.selected`, `attempt.started`,
+  `adapter.probed`, `performer.completed`, `acceptance.started`, or `criterion.started` without a
+  verified outcome still belongs to a nonterminal attempt and may be superseded by the prepare.
+  What is newly forbidden is establishing `amendment.approval_prepared` after an authoritative
+  event has already fixed a consequence but before that consequence is durable. Without this
+  barrier, an old-revision disposition, terminal cascade, or decision authority could race the new
+  head and either disappear or be realized beside its revision replacement.
 - **A pending prepare is a mutation barrier.** Between prepare and commit the only mutations permitted
   are the drain itself: closing an execution interval, sweeping sessions, the lease rename, and
   cancellation — and because cancellation is admitted through the barrier, **every step that follows
@@ -2327,9 +2354,10 @@ step list:
 
 The procedure:
 
-1. **Plan and prepare.** Under the state lock, having established approval intent (§9 policy, not
-   merely admissibility): write and fsync the new snapshot; write and fsync
-   `prepares/<prepare-id>.json` carrying the complete approval payload; then append and fsync
+1. **Plan and prepare.** Under the state lock, having closed the durable-consequence barrier above
+   and re-established approval intent (§9 policy, not merely admissibility): write and fsync the new
+   snapshot; write and fsync `prepares/<prepare-id>.json` carrying the complete approval payload;
+   then append and fsync
    `amendment.approval_prepared` referencing both. At most one prepare may be pending per run. Release
    the lock — the driver cannot acknowledge while it is held.
 2. **Quiesce or expire.** The driver, on observing the prepare, sweeps its adapter session **and every
@@ -3051,6 +3079,15 @@ deciding human would loop. Rejection is permanent; a corrected proposal is a new
 The proposal's origin (adapter or CLI) never affects any rule — with the single, explicit
 exception that only the core may construct the reserved `/status` finalization amendment, which
 still always requires human approval.
+
+Passing this pipeline and the approval policy establishes intent; it does not by itself authorize
+`amendment.approval_prepared`. §6's durable-consequence closure barrier runs before preparation and
+then requires this pipeline and the policy decision to be re-established against the projection
+that closure produced. The barrier adds no amendment class or rejection reason, but closure may
+change the state read by an existing guard — for example, materializing a recorded retry can make
+`runtime_scope_started` true. That is the intended precedence: an approval reservation cannot
+overtake a consequence the journal has already fixed merely because the earlier observation would
+have passed.
 
 **Typed comparison, never a JSON diff.** Neither classification nor impact computation
 inspects RFC 6902 operations or a generic diff — array-index ambiguity would make the same
@@ -4668,23 +4705,17 @@ tables below as their owning clauses require:
 | `RC-RESUME-034` | §1 torn-tail repair and manifest rebuild during journal replay |
 | `RC-RESUME-035` | §1 orphan artifact, routed-proposal record, and change-set-ref cleanup; §9 unreferenced pre-prepare snapshot cleanup |
 | `RC-RESUME-036` | §6/§9 inert orphan plan and quiesced-sidecar cleanup |
-| `RC-RESUME-037` | §1 recreation of `decision.requested` from durable `amendment.routed_human` |
 | `RC-RESUME-038` | §2 reconstruction of an orphaned core-finalization proposal on the next `resume` |
 
-These known holes are recorded now so the registry is honest. F2 and F3 own their actions; this
-section adds none:
+These remaining holes are recorded so the registry is honest. F3 owns their actions; this section
+adds none:
 
 | Recovery case | Planned closure | Open gap |
 |---|---|---|
-| `RC-RESUME-039` | F2 | A durable `attempt.failed` has no case that realizes its recorded disposition |
-| `RC-RESUME-040` | F2/F3 | `attempt.blocked` has no complete source-to-request closure, intentional-wait result, or later continuation |
-| `RC-RESUME-041` | F2/F3 | A non-gate decision resolution or amendment terminal can release a blocked movement without selecting its continuation |
-| `RC-RESUME-042` | F2 | An approved amendment's superseded-attempt projection does not select revision continuation or exclude the old attempt from C.2/C.3 |
+| `RC-RESUME-041` | F3 | A non-gate decision resolution, decision obsoletion, or amendment terminal can release a blocked movement without selecting its continuation |
 | `RC-RESUME-043` | F3 | No-in-flight scheduling is absent after run start, movement readiness/start/success, candidate materialization, or finalization |
 | `RC-RESUME-044` | F3 | A crash during movement or candidate composition, before durable verdict evidence, selects no post-close action |
 | `RC-RESUME-045` | F3 | Exhausted budget between attempts, movements, or candidate composition has no selected terminal path |
-| `RC-RESUME-046` | F3 | A current lease with a verifiably live owner has no selected refusal or existing-owner result |
-| `RC-RESUME-047` | F2 | C.2 does not enumerate the contrary branch of “no further execution path authorized” after `movement.failed` |
 
 The registry is a coverage index, not another recovery procedure. `direct` means a case predicate
 names the event or disposition; `structural` means a broader projected-state or phase predicate owns
@@ -4700,17 +4731,17 @@ it to one of the two §8 surfaces above. `open` entries point to the stable gap 
 | event | `movement.ready` | direct | `RC-RESUME-043` | open |
 | event | `movement.started` | direct | `RC-RESUME-043`, `RC-RESUME-044` | open |
 | event | `movement.succeeded` | structural | `RC-RESUME-002`, `RC-RESUME-043` | open |
-| event | `movement.failed` | direct | `RC-RESUME-020`, `RC-RESUME-047` | open |
+| event | `movement.failed` | direct | `RC-RESUME-020`, `RC-RESUME-047` | covered |
 | event | `movement.cancelled` | structural | `RC-RESUME-002` | covered |
 | event | `performer.selected` | direct | `RC-RESUME-013` | covered |
 | event | `attempt.started` | direct | `RC-RESUME-014` | covered |
 | event | `adapter.probed` | direct | `RC-RESUME-015` | covered |
 | event | `performer.completed` | direct | `RC-RESUME-016`, `RC-RESUME-017` | covered |
 | event | `attempt.completed` | direct | `RC-RESUME-019` | covered |
-| event | `attempt.blocked` | direct | `RC-RESUME-040` | open |
-| event | `attempt.failed` | direct | `RC-RESUME-039` | open |
+| event | `attempt.blocked` | direct | `RC-RESUME-040`, `RC-RESUME-048` | covered |
+| event | `attempt.failed` | direct | `RC-RESUME-039` | covered |
 | event | `attempt.cancelled` | structural | `RC-RESUME-002` | covered |
-| event | `attempt.superseded` | structural | `RC-RESUME-042` | open |
+| event | `attempt.superseded` | structural | `RC-RESUME-042` | covered |
 | event | `execution.started` | structural | `RC-RESUME-001`, `RC-RESUME-044` | open |
 | event | `execution.stopped` | structural | `RC-RESUME-015`, `RC-RESUME-044` | open |
 | event | `artifact.recorded` | structural | `RC-RESUME-010`, `RC-RESUME-015`, `RC-RESUME-016`, `RC-RESUME-017` | covered |
@@ -4724,13 +4755,13 @@ it to one of the two §8 surfaces above. `open` entries point to the stable gap 
 | event | `criterion.completed` | direct | `RC-RESUME-023`, `RC-RESUME-025`, `RC-RESUME-033` | covered |
 | event | `acceptance.failed` | direct | `RC-RESUME-022` | covered |
 | event | `acceptance.evaluation_completed` | direct | `RC-RESUME-026`, `RC-RESUME-030` | covered |
-| event | `decision.requested` | direct | `RC-RESUME-027`, `RC-RESUME-040` | open |
+| event | `decision.requested` | direct | `RC-RESUME-027`, `RC-RESUME-040`, `RC-RESUME-048` | covered |
 | event | `decision.resolved` | direct | `RC-RESUME-028`, `RC-RESUME-029`, `RC-RESUME-041` | open |
-| event | `decision.obsoleted` | structural | `RC-RESUME-002`, `RC-RESUME-042` | open |
+| event | `decision.obsoleted` | structural | `RC-RESUME-002`, `RC-RESUME-041`, `RC-RESUME-042` | open |
 | event | `amendment.rejected` | structural | `RC-RESUME-041` | open |
 | event | `amendment.approval_prepared` | direct | `RC-RESUME-007` | covered |
 | event | `amendment.approval_abandoned` | structural | `RC-RESUME-036`, `RC-RESUME-043` | open |
-| event | `amendment.routed_human` | direct | `RC-RESUME-037`, `RC-RESUME-040` | open |
+| event | `amendment.routed_human` | direct | `RC-RESUME-037` | covered |
 | event | `amendment.approved` | structural | `RC-RESUME-003`, `RC-RESUME-042`, `RC-RESUME-043` | open |
 | event | `amendment.human_rejected` | structural | `RC-RESUME-041` | open |
 | event | `apply.started` | separate-surface | `RC-APPLY-001` | covered |
@@ -4741,7 +4772,7 @@ it to one of the two §8 surfaces above. `open` entries point to the stable gap 
 | event | `score.promotion_started` | separate-surface | `RC-PROMOTE-001` | covered |
 | event | `score.promoted` | separate-surface | `RC-PROMOTE-002` | covered |
 | event | `score.promotion_recovery_required` | separate-surface | `RC-PROMOTE-001` | covered |
-| event | `authority.granted` | direct | `RC-RESUME-003`, `RC-RESUME-008`, `RC-RESUME-046` | open |
+| event | `authority.granted` | direct | `RC-RESUME-003`, `RC-RESUME-008`, `RC-RESUME-046` | covered |
 | event | `cancel.requested` | direct | `RC-RESUME-006` | covered |
 | event | `journal.tail_truncated` | neutral | — | covered |
 | event | `log` | neutral | — | covered |
@@ -4794,11 +4825,14 @@ resuming work:
 | `RC-RESUME-003` | A readable `driver.lease` is at an epoch **older** than the journal-projected one | It is stale, not dangerous: the mutation CAS requires a lease at the current epoch (§6), so its owner cannot mutate whatever its liveness. Remove it and re-evaluate this table from the top. This is what clears a lease stranded by a crash between a fencing terminal event and its cleanup (Appendix E) |
 | `RC-RESUME-004` | A `driver.lease` exists with no `authority.granted` at its epoch | An orphan from a crashed acquisition (§6): quarantine it and **re-evaluate this table from the top**. Reclamation is deliberately not performed here — this row sits above the cancellation and pending-prepare rows, and reclaiming authority while a prepare is pending is exactly what that row forbids. Once the orphan is gone, whichever row genuinely applies wins, including the no-live-owner reclaim below |
 | `RC-RESUME-005` | A `driver.lease` exists **at the current journal-projected epoch** and its owner is **unverifiable** | Halt `owner_unverifiable`. This outranks even a pending cancellation: cancellation outranks *resumption*, never the safety check that terminalizing requires. Declaring a run cancelled while a possibly-live owner could still mutate it is the one thing §6 forbids outright. The check is scoped to a **current** lease deliberately — the CAS needs one, so an owner without one is already unable to act, and an unscoped check halts on states that are provably safe: after `authority.granted` but before the lease exists, after the lease has moved to a quiesced sidecar, and after a fence has advanced the epoch past it |
+| `RC-RESUME-046` | A `driver.lease` exists at the current journal-projected epoch and its matching owner is verifiably live | Refuse this `resume` invocation under §7's existing command-precondition outcome. The current owner already holds continuation authority; recovery neither reclaims its lease nor enters C.2 beside it. This is not a halt and records no event |
 | `RC-RESUME-006` | `cancel.requested` present, run nonterminal | **Cancellation takes precedence over resumption and over a pending prepare.** Execute **steps (a)–(f) of the §6 cancellation oracle exactly** — the whole list, including `(e)`'s `run.cancelled` and `(f)`'s lease cleanup; an earlier draft stopped at `(d)`, which left recovery unable to terminalize a cancelling run at all — including the conditional `(c)` and `(d)` — this row deliberately does not restate them, because two copies of a sequence are two chances to disagree. Three notes specific to recovery: `sweep_unverifiable` in (a) halts, since C.1 runs before C.2/C.3 and would otherwise terminalize without consulting the process identities those tables rely on; (c)'s interval close — which has its own predicate, independent of whether (d) fences — is why the generic pre-table close skips a cancelled run; and **no replacement driver is launched** |
 | `RC-RESUME-007` | `amendment.approval_prepared` pending, no matching `amendment.approved` or `amendment.approval_abandoned`, no cancellation | **Complete or abandon the prepare — never step past it**, and the **mutation barrier stays in force** while doing so. Verify **both** referenced files, because first-match ordering means the generic missing-file checks below are never reached: `prepares/<prepare-id>.json` against its recorded hash (`missing_prepare_plan`), and the prewritten snapshot against its recorded raw *and* semantic hashes and its binding to that plan (`missing_snapshot_file`). Sweep every recorded adapter and criterion launch to verified empty (`sweep_unverifiable` halts). Then run §6's commit table exactly as the original approver would have, appending `amendment.approved` **from the persisted plan** — or `amendment.approval_abandoned` if the head changed or the plan no longer validates. Reclaiming authority or entering C.2 while a prepare is pending would let a new driver run against a revision that was about to change |
 | `RC-RESUME-008` | An `authority.granted` epoch exists with no live owner | Reclaim per §6 |
 | `RC-RESUME-009` | `root_snapshot_divergence` — the root score claims the snapshot's revision with a different semantic hash | Halt (§1). Resume is impossible until an operator resolves it |
 | `RC-RESUME-010` | A run-level snapshot, artifact, proposal record, ref, or `resolved-cast.yaml` named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
+| `RC-RESUME-037` | `amendment.routed_human` durable, its matching `decision.requested` absent | Apply §1's source-to-request rule idempotently, then re-evaluate C.1. The routed event fixes the request payload; recovery does not re-run routing or infer it from `attempt.blocked` |
+| `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). Do not enter C.2 or C.3 for an attempt from the superseded revision |
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
 | `RC-RESUME-012` | Otherwise | Proceed to C.2 for the movement's in-flight attempt, if any |
 
@@ -4809,8 +4843,20 @@ left those states permanently stranded. `attempt_terminated_incomplete` is a qua
 disposition is classified by §3.1's first arm and recorded on the synthesized event, so C.3's
 replay rule holds.
 
+**C.2 and C.3 inspect only an attempt on the current score head that is not projected
+`SUPERSEDED`.** An event-tail predicate from an older revision cannot make its attempt current:
+recovery never verifies, fails, completes, or resumes that historical attempt. After
+`amendment.approved`, `RC-RESUME-042` owns revision-continuation selection, and a state with no
+current-head attempt belongs to the between-unit scheduler rather than falling through these
+tables. A terminal `BLOCKED` attempt whose last blocking decision has become terminal likewise
+leaves C.2 and is the still-open `RC-RESUME-041`; its source/request and intentional-wait cuts are
+closed below.
+
 | Recovery case | Last durable state | Recovery action |
 |---|---|---|
+| `RC-RESUME-039` | Current-head `attempt.failed` durable, its recorded §3.1 Arm 2 consequence absent | Realize that recorded disposition exactly once per §3.1's second arm, reading no current budget or admissibility state. A `none` consequence appends the prescribed `movement.failed` and re-evaluates from C.1. A `quality_retry` or `fallback` consequence selects the recorded pending successor and exits C.2 to the between-unit scheduler; this row does not append `performer.selected` or launch it |
+| `RC-RESUME-040` | Current-head `attempt.blocked` has a `question` in `raised` whose matching `decision.requested` is absent | Append the first missing request idempotently from the recorded source, in `raised` order, then re-evaluate this row. Proposal requests never match this row; their sole source is `amendment.routed_human` and `RC-RESUME-037` owns that cut |
+| `RC-RESUME-048` | Current-head `attempt.blocked`, every request required by a durable source is durable, and at least one blocking decision unresolved | Append nothing and return the quiescent `WAITING_HUMAN` result §6 and §7 already define. No adapter or criterion process remains: `attempt.blocked` is terminal and §4's execute-completion boundary precedes it |
 | `RC-RESUME-013` | `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). Run §4's shared bounded handoff stabilization rather than classifying its first sample. If it yields a matching identity, verify and sweep that session. If it yields marker-free, rely only on the stated **no released mutator survives** property — an unreleased trampoline may still be in its pre-marker window but contains no adapter code. Either halt outcome stops this row. Only after a published session is verified empty or the marker is observed free, close any open `adapter` interval `recovered`/`clamped`; then append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and realize it per §3.1's second arm |
 | `RC-RESUME-014` | `attempt.started`, no `adapter.probed` | Sweep the **recorded** adapter session to verified empty **before** any failure or fallback — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped`. No durable valid probe observation exists, so append `attempt.failed {kind: adapter_unavailable, reason: probe_terminated_incomplete, disposition}`, then realize it per §3.1. Recovery does not manufacture the missing observation |
 | `RC-RESUME-015` | `adapter.probed`, **no** `performer.completed` | Sweep the recorded adapter session to verified empty before any failure or retry. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped` and append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: that event attests both verified-empty cleanup and the prior interval close, so recovery may enter verification without repeating either; without the exclusion this row would turn every normal completion into an incomplete attempt |
@@ -4818,8 +4864,19 @@ replay rule holds.
 | `RC-RESUME-017` | `performer.completed`, no `verification.passed` | Re-run the **full** §5 post-hoc verification — protected paths for every movement, plus the read-only invariant where the movement holds no `repo_write` — against the surviving worktree; if it is gone, `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}`. A durable `verification.passed` event marks the boundary, because without one a crash after `change_set.recorded` but before the check would let recovery start acceptance having verified nothing |
 | `RC-RESUME-018` | `change_set.recorded` or `verification.passed`, no `acceptance.started` | Begin acceptance: append `acceptance.started` and proceed to C.3 |
 | `RC-RESUME-019` | `attempt.completed`, no `movement.succeeded` | Append `movement.succeeded` idempotently — including, for the final movement, the run's `SUCCEEDED` transition (§8). Without this row a crash between the two appends left the movement, and possibly the run, nonterminal forever |
-| `RC-RESUME-020` | `movement.failed`, run not terminal and no further execution path authorized | Append `run.failed {reason: movement_failed}` idempotently. The movement's own reason is **not** propagated: most `movement.failed` reasons are not valid `run.failed` values (Appendix D), and `movement_failed` is the run-level reason that exists for exactly this. The movement's reason stays readable on its own event |
+| `RC-RESUME-020` | `movement.failed`, run not terminal | Append `run.failed {reason: movement_failed}` idempotently. The movement's own reason is **not** propagated: most `movement.failed` reasons are not valid `run.failed` values (Appendix D), and `movement_failed` is the run-level reason that exists for exactly this. The movement's reason stays readable on its own event |
 | `RC-RESUME-021` | Gate resolved reject on the **final** movement, no terminal event | Append `movement.failed {reason: human_gate_rejected, run_failed: true, decision_id, subject_tree}` — one atomic transition (§8), so no separate `run.failed` follows |
+
+**Recovery case:** `RC-RESUME-047`.
+
+There is no contrary branch to `RC-RESUME-020`. B.1 makes `movement.failed` the movement's terminal
+transition, and §6 defines movement failure as occurring only when no execution path remains.
+Its producers — §3.1 selecting `none`, composition terminalizing its scope, a rejected gate, and
+budget exhaustion — all satisfy that definition. v0.2 has no optional failed movement, and every successful run
+requires every applicable movement to succeed, directly on the waived path or through the final
+sink (§8). The old phrase “and no further execution path authorized” therefore tried to decide
+again what the durable event already proves. Removing it makes the predicate closed instead of
+inventing an unreachable alternative.
 
 ## C.3 Acceptance recovery
 
