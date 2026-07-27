@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	fakeModeEnv   = "PARTITUR_ADAPTER_TEST_MODE"
-	fakeMarkerEnv = "PARTITUR_ADAPTER_TEST_MARKER"
-	vendorModeEnv = "PARTITUR_EXECUTE_VENDOR_MODE"
-	vendorOutEnv  = "PARTITUR_EXECUTE_VENDOR_OUTPUT"
+	fakeModeEnv            = "PARTITUR_ADAPTER_TEST_MODE"
+	fakeMarkerEnv          = "PARTITUR_ADAPTER_TEST_MARKER"
+	vendorModeEnv          = "PARTITUR_EXECUTE_VENDOR_MODE"
+	vendorOutEnv           = "PARTITUR_EXECUTE_VENDOR_OUTPUT"
+	incidentalTestDeadline = 10 * time.Second
 )
 
 func TestMain(m *testing.M) {
@@ -60,7 +61,7 @@ func TestRealFirstPartyAdaptersProbeAndExitCleanly(t *testing.T) {
 		"PARTITUR_CLAUDE_BIN": executable,
 		"PARTITUR_CODEX_BIN":  executable,
 	})
-	report := newClient(environment, 5*time.Second, 200*time.Millisecond).ProbeAll([]string{"codex", "claude"})
+	report := newClient(environment, incidentalTestDeadline, 200*time.Millisecond).ProbeAll([]string{"codex", "claude"})
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v", report.Diagnostics)
 	}
@@ -126,7 +127,7 @@ func TestPATHResolutionUsesExactNameFirstEntryAndSnapshot(t *testing.T) {
 		"GIT_CONFIG_KEY_0=credential.helper",
 		"GIT_CONFIG_VALUE_0=operator-helper",
 	}
-	report := newClient(environment, time.Second, 100*time.Millisecond).ProbeAll([]string{"fake"})
+	report := newClient(environment, incidentalTestDeadline, 100*time.Millisecond).ProbeAll([]string{"fake"})
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v", report.Diagnostics)
 	}
@@ -163,7 +164,7 @@ func TestDiscoveryFailuresDoNotSearchLoosely(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			report := newClient(test.env, time.Second, time.Millisecond).ProbeAll([]string{test.id})
+			report := newClient(test.env, incidentalTestDeadline, time.Millisecond).ProbeAll([]string{test.id})
 			assertDiagnosticKinds(t, report, DiagnosticExecutableAbsent)
 		})
 	}
@@ -176,19 +177,19 @@ func TestSpawnAndInjectedIOFailures(t *testing.T) {
 		if err := os.WriteFile(path, []byte("not an executable format"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		report := newClient([]string{"PATH=" + directory}, time.Second, time.Millisecond).ProbeAll([]string{"bad"})
+		report := newClient([]string{"PATH=" + directory}, incidentalTestDeadline, time.Millisecond).ProbeAll([]string{"bad"})
 		assertDiagnosticKinds(t, report, DiagnosticSpawnFailed)
 	})
 
 	t.Run("request", func(t *testing.T) {
-		client := fakeClient(t, "hang_no_response", 100*time.Millisecond, 10*time.Millisecond)
+		client := fakeClient(t, "hang_no_response", 10*time.Millisecond)
 		client.write = func(io.Writer, []byte) error { return errors.New("injected write failure") }
 		report := client.ProbeAll([]string{"fake"})
 		assertDiagnosticKinds(t, report, DiagnosticRequestIO)
 	})
 
 	t.Run("response", func(t *testing.T) {
-		client := fakeClient(t, "hang_no_response", 100*time.Millisecond, 10*time.Millisecond)
+		client := fakeClient(t, "hang_no_response", 10*time.Millisecond)
 		client.read = func(_ io.Reader, events chan<- frameEvent) {
 			events <- frameEvent{err: errors.New("injected response read failure")}
 		}
@@ -217,7 +218,7 @@ func TestFramingFailuresAreNotSkipped(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.mode, func(t *testing.T) {
-			report := fakeClient(t, test.mode, time.Second, 20*time.Millisecond).ProbeAll([]string{"fake"})
+			report := fakeClient(t, test.mode, 20*time.Millisecond).ProbeAll([]string{"fake"})
 			assertDiagnosticKinds(t, report, test.kind)
 		})
 	}
@@ -225,14 +226,14 @@ func TestFramingFailuresAreNotSkipped(t *testing.T) {
 
 func TestBlankLinesAndPostResponseWait(t *testing.T) {
 	t.Run("blank lines", func(t *testing.T) {
-		report := fakeClient(t, "blank_success", time.Second, 20*time.Millisecond).ProbeAll([]string{"fake"})
+		report := fakeClient(t, "blank_success", 20*time.Millisecond).ProbeAll([]string{"fake"})
 		if len(report.Diagnostics) != 0 || len(report.Probes) != 1 {
 			t.Fatalf("report = %#v", report)
 		}
 	})
 	t.Run("waits for clean exit", func(t *testing.T) {
 		marker := filepath.Join(t.TempDir(), "exited")
-		client := fakeClientWithMarker(t, "delayed_exit", marker, time.Second, 20*time.Millisecond)
+		client := fakeClientWithMarker(t, "delayed_exit", marker, 20*time.Millisecond)
 		started := time.Now()
 		report := client.ProbeAll([]string{"fake"})
 		if len(report.Diagnostics) != 0 {
@@ -248,7 +249,7 @@ func TestBlankLinesAndPostResponseWait(t *testing.T) {
 }
 
 func TestWaitCannotCloseOutputBeforeReadersFinish(t *testing.T) {
-	client := fakeClient(t, "immediate_clean_exit", time.Second, 20*time.Millisecond)
+	client := fakeClient(t, "immediate_clean_exit", 20*time.Millisecond)
 	waitCompleted := make(chan struct{})
 	stderrCopied := make(chan string, 1)
 	client.wait = func(command *exec.Cmd) error {
@@ -286,7 +287,13 @@ func TestWaitCannotCloseOutputBeforeReadersFinish(t *testing.T) {
 func TestDeadlineCoversResponseAndCleanExit(t *testing.T) {
 	for _, mode := range []string{"hang_no_response", "hang_after_response"} {
 		t.Run(mode, func(t *testing.T) {
-			report := fakeClient(t, mode, 40*time.Millisecond, 30*time.Millisecond).ProbeAll([]string{"fake"})
+			report := deadlineSubjectFakeClient(
+				t,
+				mode,
+				"",
+				40*time.Millisecond,
+				30*time.Millisecond,
+			).ProbeAll([]string{"fake"})
 			assertDiagnosticKinds(t, report, DiagnosticDeadline)
 		})
 	}
@@ -294,7 +301,13 @@ func TestDeadlineCoversResponseAndCleanExit(t *testing.T) {
 
 func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pids")
-	client := fakeClientWithMarker(t, "session_tree_hang", marker, 50*time.Millisecond, 40*time.Millisecond)
+	client := deadlineSubjectFakeClient(
+		t,
+		"session_tree_hang",
+		marker,
+		50*time.Millisecond,
+		40*time.Millisecond,
+	)
 	report := client.ProbeAll([]string{"fake"})
 	assertDiagnosticKinds(t, report, DiagnosticDeadline)
 	data, err := os.ReadFile(marker)
@@ -314,7 +327,7 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 
 func TestSessionLeadership(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "identity")
-	report := fakeClientWithMarker(t, "session_identity", marker, time.Second, 20*time.Millisecond).ProbeAll([]string{"fake"})
+	report := fakeClientWithMarker(t, "session_identity", marker, 20*time.Millisecond).ProbeAll([]string{"fake"})
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v", report.Diagnostics)
 	}
@@ -329,14 +342,14 @@ func TestSessionLeadership(t *testing.T) {
 }
 
 func TestCleanupUnverifiableIsAggregated(t *testing.T) {
-	client := fakeClient(t, "premature_eof", time.Second, time.Millisecond)
+	client := fakeClient(t, "premature_eof", time.Millisecond)
 	client.sessions = failingSessionController{}
 	report := client.ProbeAll([]string{"fake"})
 	assertDiagnosticKinds(t, report, DiagnosticCleanupUnverifiable, DiagnosticPrematureEOF)
 }
 
 func TestStderrIsBoundedAndSanitized(t *testing.T) {
-	report := fakeClient(t, "stderr_failure", time.Second, 20*time.Millisecond).ProbeAll([]string{"fake"})
+	report := fakeClient(t, "stderr_failure", 20*time.Millisecond).ProbeAll([]string{"fake"})
 	assertDiagnosticKinds(t, report, DiagnosticPrematureEOF)
 	stderr := report.Diagnostics[0].Stderr
 	if !strings.Contains(stderr, "harmless") || !strings.Contains(stderr, "[REDACTED]") {
@@ -368,7 +381,7 @@ func TestProbeAllDeduplicatesAggregatesAndOrders(t *testing.T) {
 		fakeModeEnv + "=aggregate",
 		fakeMarkerEnv + "=" + marker,
 	}
-	report := newClient(environment, time.Second, 20*time.Millisecond).ProbeAll(
+	report := newClient(environment, incidentalTestDeadline, 20*time.Millisecond).ProbeAll(
 		[]string{"zeta", "bad", "alpha", "zeta", "bad"},
 	)
 	if got := probeIDs(report.Probes); !reflect.DeepEqual(got, []string{"alpha", "zeta"}) {
@@ -440,12 +453,28 @@ func (failingSessionController) terminate(int, string, time.Duration) error {
 	return errors.New("injected enumeration failure")
 }
 
-func fakeClient(t *testing.T, mode string, deadline, grace time.Duration) *Client {
+func fakeClient(t *testing.T, mode string, grace time.Duration) *Client {
 	t.Helper()
-	return fakeClientWithMarker(t, mode, "", deadline, grace)
+	return newFakeClient(t, mode, "", incidentalTestDeadline, grace)
 }
 
-func fakeClientWithMarker(t *testing.T, mode, marker string, deadline, grace time.Duration) *Client {
+func fakeClientWithMarker(t *testing.T, mode, marker string, grace time.Duration) *Client {
+	t.Helper()
+	return newFakeClient(t, mode, marker, incidentalTestDeadline, grace)
+}
+
+func deadlineSubjectFakeClient(
+	t *testing.T,
+	mode string,
+	marker string,
+	deadline time.Duration,
+	grace time.Duration,
+) *Client {
+	t.Helper()
+	return newFakeClient(t, mode, marker, deadline, grace)
+}
+
+func newFakeClient(t *testing.T, mode, marker string, deadline, grace time.Duration) *Client {
 	t.Helper()
 	directory := t.TempDir()
 	installFake(t, directory, "fake")

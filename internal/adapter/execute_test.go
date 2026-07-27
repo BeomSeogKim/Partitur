@@ -40,7 +40,7 @@ func TestRealFirstPartyAdaptersExecuteThroughGatedPeer(t *testing.T) {
 				"PARTITUR_CLAUDE_BIN": vendor,
 				"PARTITUR_CODEX_BIN":  vendor,
 			})
-			client := newClient(environment, 5*time.Second, 200*time.Millisecond)
+			client := newClient(environment, incidentalTestDeadline, 200*time.Millisecond)
 			var order []string
 			recorder := successfulRecorder(&order)
 			recorder.RecordArtifact = func(observation ArtifactObservation) (faultpoint.DurabilityReceipt, error) {
@@ -96,7 +96,7 @@ func TestExecuteCompletionOrderObservesResponseBeforeSweep(t *testing.T) {
 	client := newClient([]string{
 		fakeModeEnv + "=execute_completed",
 		fakeMarkerEnv + "=" + marker,
-	}, time.Second, 20*time.Millisecond)
+	}, incidentalTestDeadline, 20*time.Millisecond)
 	probeRecorded := false
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
@@ -160,7 +160,7 @@ func TestSweepUnverifiableLeavesIntervalAndOutcomeAbsent(t *testing.T) {
 	client := newClient([]string{
 		fakeModeEnv + "=execute_completed",
 		fakeMarkerEnv + "=" + marker,
-	}, time.Second, 20*time.Millisecond)
+	}, incidentalTestDeadline, 20*time.Millisecond)
 	client.sessions = &observingSessionController{
 		verify: func() (bool, error) {
 			order = append(order, "session.unverifiable")
@@ -196,7 +196,7 @@ func TestNonzeroExitDiscardsResponseThenSweepsClosesAndFails(t *testing.T) {
 	client := newClient([]string{
 		fakeModeEnv + "=execute_nonzero",
 		fakeMarkerEnv + "=" + marker,
-	}, time.Second, 20*time.Millisecond)
+	}, incidentalTestDeadline, 20*time.Millisecond)
 	client.sessions = &observingSessionController{
 		terminateFn: func() error {
 			if _, err := os.Stat(marker); err != nil {
@@ -260,7 +260,7 @@ func TestFrameAfterExecuteResponseIsProtocolFailure(t *testing.T) {
 	client := newClient([]string{
 		fakeModeEnv + "=execute_extra_after_response",
 		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
-	}, time.Second, 20*time.Millisecond)
+	}, incidentalTestDeadline, 20*time.Millisecond)
 	client.sessions = &observingSessionController{}
 	recorder := successfulRecorder(&order)
 	var outcome OutcomeObservation
@@ -594,7 +594,7 @@ func TestExecuteOutcomeMappingIsOneToOne(t *testing.T) {
 					Amendment: json.RawMessage(`{}`), RequiresDecision: true,
 				}}
 			}
-			if err := newClient(nil, time.Second, time.Second).recordResult(&state); err != nil {
+			if err := newClient(nil, incidentalTestDeadline, time.Second).recordResult(&state); err != nil {
 				t.Fatal(err)
 			}
 			if observation.EventType != test.eventType ||
