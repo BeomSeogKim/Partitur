@@ -193,7 +193,14 @@ source rather than escaped at each use site:
 - **`run_id` and `attempt_id`** are **core-generated** UUIDv7 — time-ordered, collision-free
   without coordination, and trivially path- and ref-safe. They remain opaque strings on the
   wire (§4): the protocol never constrains their form, and the core never parses meaning out
-  of them.
+  of them. Collision freedom is load-bearing namespace separation: a `run_id` names the
+  authoritative run directory, writable staging root, owned Git refs, and every journal envelope,
+  so a collision would alias two runs' state rather than merely label them alike. UUIDv7's time
+  ordering is an allocation property only — no projection, command selection, or recovery rule
+  sorts or chooses a run by decoding it. Those decisions use journal sequence and lifecycle state.
+  The id is allocated before any per-run paths are populated, but `run.started`'s fsynced envelope
+  is the first authoritative record that the run exists; a pre-event directory is orphan state,
+  not a run.
 - The reserved `partitur.` prefix (containing a `.`, hence outside the slug grammar) is
   therefore unusable as a score-declared id by construction, which is what makes the
   core-supplied inputs of §4 unspoofable.
@@ -2195,8 +2202,9 @@ share a mechanism:
 
 A run is *active* while nonterminal (`RUNNING` or `WAITING_HUMAN`). v0.2 allows one active
 run per repository: `partitur run` refuses to start while one exists (resume or cancel it
-first). Commands accept an explicit run id or select the unique active run. The nonterminal
-journal state is the logical guard; the lease guards concurrent *drivers* of the same run.
+first). Commands that address an existing run accept its explicit id or select the unique active
+run. The nonterminal journal state is the logical guard; the lease guards concurrent *drivers* of
+the same run.
 
 **Cancellation is run-scoped.** `partitur cancel` cancels the *run*, not a single attempt.
 An attempt-scoped cancel would leave the movement `RUNNING` with no selection reason for what
@@ -2684,7 +2692,7 @@ partitur approve <decision-id> --approve | --reject [--reason <text>]
 partitur amend   --patch <path>            # RFC 6902 JSON; - reads stdin
                  --reason <text> [--claimed-impact <path>]
 partitur cancel  [<run-id>]
-partitur run     [--run-id <id>]
+partitur run
 partitur resume  [<run-id>]
 partitur status  [<run-id>] [--json]
 partitur logs    [<run-id>] [--jsonl] [--follow]
@@ -2693,9 +2701,11 @@ partitur promote-score [<run-id>] [--recover]
 ```
 
 Every command is **non-interactive**: a missing operand is an error, never a prompt, so the CLI is
-scriptable and a GUI can use the same commands (§0). An omitted `<run-id>` selects the unique active
-run and errors if there is not exactly one. `--approve`/`--reject` is mandatory rather than defaulted,
-because defaulting either direction on a human gate would be indefensible.
+scriptable and a GUI can use the same commands (§0). `partitur run` accepts no run-id operand or
+option: §1's core allocation is the only creation path. For commands whose syntax includes
+`[<run-id>]`, omitting it selects the unique active run and errors if there is not exactly one.
+`--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
+human gate would be indefensible.
 
 `validate` acquires inputs before interpreting their contents. A missing or unreadable required
 `partitur.yaml`, or a discovered cast file that cannot be read, is a refused precondition and exits
