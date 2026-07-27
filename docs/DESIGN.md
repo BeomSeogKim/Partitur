@@ -4912,7 +4912,8 @@ notification would erase the distinction E.1 exists to draw.
 crash windows Partitur has.** Point IDs are semantic so the catalog can grow: a newly discovered
 window is added without renumbering, and no count is part of any interface. Changing an existing
 point's meaning is a design change, not an implementation detail. The catalog grew from eleven to
-twenty-two across three review rounds — supersession fencing, the interval-close ordering, authority
+twenty-two across three review rounds, and to twenty-four when freezing the execute-completion
+order exposed two more — supersession fencing, the interval-close ordering, authority
 acquisition, two thirds of the launch sequence, and both unconditional sweep edges were all missing
 from the first draft. A numbered scheme would have made each of those admissions expensive, which is
 the argument for semantic IDs stated as something that already happened rather than something that
@@ -4921,7 +4922,7 @@ above and the branch expansion E.4 requires, not the fact that three rounds have
 
 ## E.2 The catalog
 
-`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Twelve of the twenty-two
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the twenty-four
 have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
 
 **Prepare and quiesce**
