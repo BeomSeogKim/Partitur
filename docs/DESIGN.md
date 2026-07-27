@@ -20,7 +20,7 @@ for *why* a rule exists, never for what the rule is.
 | This document | 0.2 | supersedes 0.1 |
 | Score schema (`score:`) | `"0.2"` | **breaking** — `verification` and acceptance-criterion shapes are incompatible with 0.1 |
 | Cast schema (`cast:`) | `"0.1"` | unchanged |
-| Adapter protocol (`protocol:`) | `2` | **bumped.** `probe.features` and the tagged `resolved_decisions` cannot be added under 1: strict decoding is symmetric, so a protocol-1 *core* rejects an unknown `features` field from a new adapter exactly as a protocol-1 *adapter* rejects an unknown `kind`. Feature negotiation cannot be introduced by a field that itself needs negotiating. The enforcement dimensions added earlier remain compatible because absent booleans decode `false` |
+| Adapter protocol (`protocol:`) | `2` | the sole accepted version. Tagged `resolved_decisions` is the baseline form. `probe.features` remains an open extension point because feature negotiation cannot later be introduced by a field that itself needs negotiating; no tokens are defined in v0.2, and absent or empty means none. Enforcement booleans remain fail-closed because absence decodes `false` |
 | Adapter result envelope | `1` | unchanged (adapter-internal) |
 
 **A fourth spike has run: process-identity handoff.** Three questions resisted prose because the
@@ -1015,14 +1015,6 @@ will not change" — **not** "every line already exists". Implementation status:
   `Client.ProbeAll`, and `Client.Execute`, with `HaltError` for fail-closed conditions. Its process
   supervision covers session leadership, process-group sweeps, bounded sanitized stderr, and one
   deadline spanning response receipt through clean process exit.
-- Two adapter-side additions are **protocol 2**: `probe.features` and the `typed_resolutions`
-  shape it gates. They cannot ship under protocol 1 because strict decoding is symmetric — a
-  protocol-1 core rejects an unknown `features` field just as a protocol-1 adapter rejects an
-  unknown `kind` — so the negotiation surface itself needs the bump. Within protocol 2, feature
-  tokens are then additive forever.
-- A protocol-1 adapter remains usable: the core negotiates the lower version and uses the legacy
-  `{decision_id, answer}` entry, with the consequences below. Process supervision is settled below —
-  session ownership plus conformance, not containment.
 
 `stderr` is diagnostics only and never carries protocol.
 
@@ -1100,7 +1092,8 @@ probe() -> {
                                 #   a closed enum would need a bump for every future token, which
                                 #   is the problem negotiation exists to solve. A core ignores
                                 #   tokens it does not know; an adapter advertises only what it
-                                #   implements. Absent or empty means none.
+                                #   implements. No tokens are defined in v0.2; absent or empty
+                                #   means none.
   enforcement: {                # what the adapter/vendor agent actually enforces.
                                 # Absent booleans decode as false — fail closed.
     path_grants: bool,          # confines writes AND reads to granted paths
@@ -1141,10 +1134,9 @@ execute(request) -> streams `event` notifications, then returns result
         path,                   # read-only, inside the attempt's readable area
         hash }                  # sha256: raw bytes, so tampering is detectable
     ],                          # read-only; never applied to the base
-    resolved_decisions: [       # {decision_id, answer} by default; a tagged union on `kind` only
-      { decision_id, ... }      #   for a peer advertising `typed_resolutions` (see the blocking
-    ],                          #   handshake below). Gating it on the feature is what keeps this
-                                #   additive rather than breaking.
+    resolved_decisions: [       # tagged union; every entry carries `kind`
+      { decision_id, kind, ... } # see the blocking handshake below for the closed variants
+    ],
     workdir,                    # the attempt worktree (see §5)
     output_dir,                 # always-writable artifact area (see §5)
     grants: { paths_rw, paths_ro, shell, network },
@@ -1196,7 +1188,7 @@ same verified-empty boundary rather than making process exit a proxy for session
 Each of the following is an adapter-environment validation diagnostic: the exact executable is
 absent from `PATH`; spawn or request/response I/O fails; EOF arrives before a complete response;
 the response is malformed, oversized, duplicate-keyed, invalid UTF-8, an error response, names the
-wrong adapter id, or cannot negotiate a supported protocol; the adapter exits nonzero; the
+wrong adapter id, or reports a protocol version other than 2; the adapter exits nonzero; the
 probe-completion deadline expires; or cleanup cannot verify that the adapter session is empty.
 When an adapter has no valid probe result, `validate` reports that adapter-level failure and
 suppresses derivative capability and enforcement diagnostics for every performer using it:
@@ -1283,13 +1275,13 @@ The suppression rule is the same fact boundary in a different surface: without a
 result the core manufactures no capability, enforcement, feature, or adapter-version observation.
 It records an `attempt.failed` instead, with the failure classified under Appendix D, and sends no
 `execute`. A valid result must name the selected adapter id and advertise every capability required
-by the selected part. The core evaluates capability coverage, the fail-closed/advisory predicate,
-and feature-dependent resolution delivery. Missing required capability is
+by the selected part. The core evaluates capability coverage and the fail-closed/advisory predicate.
+Missing required capability is
 `attempt.failed {kind: adapter_unavailable, reason: capability_unavailable}` and therefore may
 select an infrastructure fallback; strict unmet enforcement follows the existing
 `grant_denied {enforcement_unavailable}` path. Only after every pre-execute rule permits execution,
-the advisory dimensions and feature-dependent resolution omissions are fixed, and the exact
-execution request's A.5 hash is computed, may the core append and fsync `adapter.probed`.
+the advisory dimensions and bounded `resolved_decisions` delivery are fixed, and the exact execution
+request's A.5 hash is computed, may the core append and fsync `adapter.probed`.
 
 Only a durable `adapter.probed` authorizes the core to send `execute` on that same process. A denied
 probe closes and verifies the adapter session under the referenced probe rules, then follows its
@@ -1437,34 +1429,12 @@ in memory for a human:
   A performer that proposed an amendment and had it refused therefore knows that it was refused and
   why, instead of re-proposing it blindly.
 
-  **The tagged form is protocol 2 and gated on a negotiated feature.** A strict protocol-1 peer
-  rejects the unknown `kind` outright, and the negotiation surface itself needs the bump (§4 version
-  table). Within protocol 2 the core sends the tagged form **only** to a peer whose `probe` advertised
-  `typed_resolutions`, and degrades otherwise:
+  Protocol 2 delivers each retained resolution in this tagged form unconditionally.
 
-  | Peer advertises `typed_resolutions` | `kind: "answer"` entry | `kind: "amendment_rejected"` entry |
-  |---|---|---|
-  | yes | sent as the tagged form | sent as the tagged form |
-  | no | sent as legacy `{decision_id, answer}` | **omitted**, and the omission is recorded |
-
-  **Omitting a rejection is not merely an optimization loss**, and the degradation is bounded
-  accordingly. A performer that returned `waiting_human` for a blocking proposal said it *cannot
-  continue* without that disposition; telling it nothing invites it to block or re-propose forever.
-  So against a protocol-1 peer the core does **not** silently omit a blocking proposal's rejection —
-  while fixing this attempt's feature-dependent delivery at the `adapter.probed` boundary, it
-  appends `attempt.failed {kind: protocol_error, reason: undeliverable_resolution, disposition}`
-  instead of `adapter.probed`, and sends no `execute`. §3.1 classifies `protocol_error` immediately
-  terminal, so the recorded `terminal_reason` is `protocol_error` and its second arm produces
-  `movement.failed {reason: protocol_error}`. The detailed reason survives on `attempt.failed`; it
-  is not also a movement reason. Only a **non-blocking** proposal's rejection is omitted, which is
-  safe because the performer did not claim to need it; that omission is recorded in
-  `adapter.probed.withheld_resolutions`, so the loss is auditable rather than silent. What closes
-  the decision remains the journal's `amendment.rejected {decision_id}`.
-
-  In the first two cases a live driver continues into a new attempt — `performer.selected`,
-  `attempt.started`, then `adapter.probed`, as for every executing attempt — and only then passes
-  the resolutions in `resolved_decisions` (plus a compatible `session_hint`); if no driver holds the
-  lease, a later `resume` does it (§7 command authority).
+  Whenever resolution returns the movement to `RUNNING`, a live driver continues into a new
+  attempt — `performer.selected`, `attempt.started`, then `adapter.probed`, as for every executing
+  attempt — and only then passes the resolutions in `resolved_decisions` (plus a compatible
+  `session_hint`); if no driver holds the lease, a later `resume` does it (§7 command authority).
 
   **Which resolutions, and how many.** A new attempt receives every decision resolved **for its own
   movement, in this run, on the current revision**, ordered by resolving `seq`. Not just the last
@@ -3599,10 +3569,8 @@ same request, it is out.
 
 Note the projection is **score-and-performer derived**, not purely score-derived: `extensions`
 comes from the resolved cast, and the adapter id is the one that actually served the attempt.
-It cannot be computed at `attempt.started`: the selected peer's negotiated features determine the
-delivered `resolved_decisions` shape and omissions, which this projection binds. The core computes
-it after the gated peer answers `probe` and records it in `adapter.probed` before sending
-`execute`.
+The core computes it after the gated peer answers `probe`, when it fixes the exact request including
+bounded `resolved_decisions` delivery, and records it in `adapter.probed` before sending `execute`.
 
 ```text
 {
@@ -3971,7 +3939,7 @@ movement.cancelled {}             # derived from run.cancelled
 |---|---|---|---|---|
 | `performer.selected` | ✓ | attempt_id | before `attempt.started` | Records the chosen performer, adapter id, model, and **why** this attempt exists (`initial`, `quality_retry`, `fallback`, `revision_restart`, `decision_resume`). **Creates the attempt in `STARTING`**, which is what makes that state reachable and lets a spawn failure be attributed to a chosen performer. Probe-derived facts cannot appear here: the selected adapter has not passed the durable gate yet. It records the *reason*; it never charges the budget — charging belongs to the failure event that caused it, so a retry cannot be double-counted |
 | `attempt.started` | ✓ | attempt_id | Attempt `STARTING` | Attempt `STARTING → RUNNING`; records `attempt_number`, the gated adapter process identity, and granted authority |
-| `adapter.probed` | ✓ | attempt_id | Attempt `RUNNING`, no prior `adapter.probed` | Records the valid observation from this attempt's own gated adapter peer, the resulting advisory and feature-degradation decisions, and the exact request's `execution_dependency_hash`. It is appended and fsynced before `execute`; no `execute` is legal without it |
+| `adapter.probed` | ✓ | attempt_id | Attempt `RUNNING`, no prior `adapter.probed` | Records the valid observation from this attempt's own gated adapter peer, the resulting advisory decisions and recognized feature set, and the exact request's `execution_dependency_hash`. It is appended and fsynced before `execute`; no `execute` is legal without it |
 | `performer.completed` | ✓ | attempt_id | Attempt `RUNNING`, `adapter.probed` present, recorded adapter session verified empty, and its `adapter` interval closed | Attempt → `VERIFYING`. **Vendor execution ended and its session is harmless; says nothing about success** (§4, §6) |
 | `attempt.completed` | ✓ | attempt_id | Attempt `VERIFYING`, acceptance and gate passed | Attempt → `COMPLETED` |
 | `attempt.blocked` | ✓ | attempt_id | Attempt `RUNNING`, `adapter.probed` present | Attempt → `BLOCKED` (terminal); carries `pending_decision_ids` |
@@ -4002,19 +3970,15 @@ adapter.probed {
   enforcement: {                  # reported by this same peer (§4)
     path_grants, read_only, network_grants, shell_grants, read_grants   # all bool
   },
-  negotiated_features: [string],  # sorted; the advertised feature tokens the core recognized
-                                  #   for admission/request shaping (§4). Unknown tokens are
-                                  #   ignored and omitted. Without this a historical request
-                                  #   cannot be reconstructed — the same score and adapter id can
-                                  #   yield different wire shapes across versions
-  withheld_resolutions: [{decision_id, why}],
-                                  # sorted; non-blocking resolutions omitted because the peer
-                                  #   lacked the feature. Empty in the ordinary case
+  negotiated_features: [string],  # sorted; empty in v0.2 because no tokens are defined.
+                                  #   Retained so future negotiated sets are authoritative and
+                                  #   historical requests remain reconstructible without a
+                                  #   payload change.
   truncated_resolutions: [decision_id],
                                   # sorted; resolutions dropped for the frame budget (§4)
   advisory_dimensions: [dimension],
                                   # sorted; exact constraints proceeding without enforcement
-  execution_dependency_hash,      # A.5; negotiated delivery shape is now fixed
+  execution_dependency_hash,      # A.5; the exact request shape is now fixed
   identity_versions
 }
 
@@ -4825,9 +4789,8 @@ runner failure.
 
 **Decision types** (Appendix B): `question`, `human_gate`, `amendment`, `finalization`.
 
-**Adapter features** (§4 `probe`) — optional capabilities the core may use only when advertised:
-`typed_resolutions` (tagged `resolved_decisions`). Absent or empty means none, so an adapter that
-predates a feature stays conformant and the core degrades.
+**Adapter features** (§4 `probe`) — no tokens are defined in v0.2. The list remains an open
+extension point; absent or empty means none, and the core ignores unknown tokens.
 
 **Output kinds** (§2) — **not a closed enum**, and the name is `output`, not `artifact`,
 because one of the reserved kinds is deliberately never an artifact:
@@ -4855,7 +4818,7 @@ artifact notification is rejected before any append and fails the attempt as
 `artifact_path_escape`, `change_set_emitted_as_artifact`, `proposal_without_authority`,
 `partial_frame_eof`, `strict_decode_failed`, `frame_too_large`, `event_limit_exceeded`,
 `blocking_set_mismatch`, `duplicate_emitted_id`, `draft_non_blocking_proposal` (§2 draft
-contract), `undeliverable_resolution` (§4 protocol-1 degradation).
+contract).
 
 **Findings coverage conclusions** (§7): `examined_none_found`, `findings_raised`.
 
