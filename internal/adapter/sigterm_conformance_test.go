@@ -256,7 +256,7 @@ func sigtermRequest(method, adapterID, workdir, outputDir string) ([]byte, error
 			Workdir:           workdir,
 			OutputDir:         outputDir,
 			Grants:            protocol.Grants{},
-			Budget:            protocol.Budget{ActiveWallClockMin: 1},
+			Budget:            protocol.Budget{RemainingMS: 60_000},
 		}
 	}
 	return json.Marshal(request)

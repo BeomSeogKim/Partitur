@@ -25,7 +25,7 @@ func TestRenderPromptIncludesContractAndBrief(t *testing.T) {
 		Workdir:           "/work",
 		OutputDir:         "/output",
 		Grants:            protocol.Grants{PathsRW: []string{"internal/**"}, PathsRO: []string{"docs/**"}, Shell: true},
-		Budget:            protocol.Budget{ActiveWallClockMin: 12.5},
+		Budget:            protocol.Budget{RemainingMS: 750_001},
 	}
 	prompt := RenderPrompt(request)
 	for _, expected := range []string{
@@ -34,7 +34,7 @@ func TestRenderPromptIncludesContractAndBrief(t *testing.T) {
 		"artifact_id=\"report\" kind=\"document\"",
 		"previous_attempt_id=\"a-1\"",
 		"decision_id=\"q-1\"",
-		"12.5 minutes",
+		"750001 milliseconds",
 		"/output/" + ResultFilename,
 		`"version": 1`,
 		"reserved file",

@@ -132,6 +132,16 @@ func TestEnforcementExtensionDefaultsFailClosed(t *testing.T) {
 	}
 }
 
+func TestBudgetMarshalsAsIntegerRemainingMilliseconds(t *testing.T) {
+	encoded, err := json.Marshal(Budget{RemainingMS: 123_456})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"remaining_ms":123456}` {
+		t.Fatalf("budget = %s", encoded)
+	}
+}
+
 func TestWriterSerializesConcurrentMessages(t *testing.T) {
 	var output bytes.Buffer
 	writer := NewWriter(&output)

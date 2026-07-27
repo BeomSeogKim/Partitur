@@ -363,7 +363,8 @@ func TestExecuteAgainstHelperCLI(t *testing.T) {
 func TestServeExecuteRoundTrip(t *testing.T) {
 	workdir := t.TempDir()
 	outputDir := t.TempDir()
-	configureHelper(t, "success", outputDir, "", "")
+	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
+	configureHelper(t, "success", outputDir, "", promptFile)
 
 	stdinReader, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()
@@ -380,6 +381,10 @@ func TestServeExecuteRoundTrip(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Contains(frame, []byte(`"budget":{"remaining_ms":330001}`)) ||
+		bytes.Contains(frame, []byte("active_wall_clock_min")) {
+		t.Fatalf("wire budget = %s", frame)
 	}
 	if _, err := stdinWriter.Write(append(frame, '\n')); err != nil {
 		t.Fatal(err)
@@ -441,6 +446,13 @@ func TestServeExecuteRoundTrip(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for adapter shutdown")
+	}
+	prompt, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(prompt, []byte("330001 milliseconds")) {
+		t.Fatalf("prompt budget = %s", prompt)
 	}
 }
 
@@ -648,7 +660,7 @@ func testRequest(workdir, outputDir string) *protocol.ExecuteRequest {
 		},
 		Workdir:   workdir,
 		OutputDir: outputDir,
-		Budget:    protocol.Budget{ActiveWallClockMin: 5.5},
+		Budget:    protocol.Budget{RemainingMS: 330_001},
 	}
 }
 

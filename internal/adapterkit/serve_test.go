@@ -219,6 +219,72 @@ func TestServeStrictParams(t *testing.T) {
 	}
 }
 
+func TestServeExecuteBudgetIngress(t *testing.T) {
+	tests := []struct {
+		name      string
+		budget    string
+		accepted  bool
+		remaining int64
+	}{
+		{name: "zero", budget: `{"remaining_ms":0}`, accepted: true},
+		{name: "safe integer maximum", budget: `{"remaining_ms":9007199254740991}`, accepted: true, remaining: 1<<53 - 1},
+		{name: "old wire field", budget: `{"active_wall_clock_min":1}`},
+		{name: "fraction", budget: `{"remaining_ms":1.5}`},
+		{name: "negative", budget: `{"remaining_ms":-1}`},
+		{name: "negative zero", budget: `{"remaining_ms":-0}`},
+		{name: "outside safe integer range", budget: `{"remaining_ms":9007199254740992}`},
+		{name: "outside int64 range", budget: `{"remaining_ms":9223372036854775808}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			observed := make(chan int64, 1)
+			handler := testHandler{execute: func(
+				_ context.Context,
+				request *protocol.ExecuteRequest,
+				_ EventSink,
+			) (*protocol.ExecuteResult, error) {
+				observed <- request.Budget.RemainingMS
+				return &protocol.ExecuteResult{Outcome: protocol.OutcomeCompleted}, nil
+			}}
+			input := fmt.Sprintf(
+				`{"jsonrpc":"2.0","id":"execute","method":"execute","params":{"attempt_id":"attempt","budget":%s}}`+"\n",
+				test.budget,
+			)
+			output, _, err := serveStatic(t, handler, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			messages := decodeMessages(t, output)
+			if len(messages) != 1 {
+				t.Fatalf("messages = %+v", messages)
+			}
+			if !test.accepted {
+				if messages[0].Error == nil ||
+					messages[0].Error.Code != protocol.CodeInvalidParams {
+					t.Fatalf("response = %+v", messages[0])
+				}
+				select {
+				case remaining := <-observed:
+					t.Fatalf("handler received rejected budget %d", remaining)
+				default:
+				}
+				return
+			}
+			if messages[0].Error != nil {
+				t.Fatalf("response = %+v", messages[0])
+			}
+			select {
+			case remaining := <-observed:
+				if remaining != test.remaining {
+					t.Fatalf("remaining_ms = %d, want %d", remaining, test.remaining)
+				}
+			default:
+				t.Fatal("execute handler was not called")
+			}
+		})
+	}
+}
+
 func TestServeRedactsSessionHintAndResultDetail(t *testing.T) {
 	handler := testHandler{execute: func(_ context.Context, _ *protocol.ExecuteRequest, sink EventSink) (*protocol.ExecuteResult, error) {
 		if err := sink.Progress("session-secret token=credential"); err != nil {
@@ -284,7 +350,11 @@ func serveStatic(t *testing.T, handler Handler, input string) (string, string, e
 }
 
 func executeLine(id, attemptID string) string {
-	return fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"method":"execute","params":{"attempt_id":%q}}`, id, attemptID) + "\n"
+	return fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":%q,"method":"execute","params":{"attempt_id":%q,"budget":{"remaining_ms":0}}}`,
+		id,
+		attemptID,
+	) + "\n"
 }
 
 func decodeMessages(t *testing.T, output string) []rpcMessage {
