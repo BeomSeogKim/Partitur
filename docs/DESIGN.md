@@ -2707,6 +2707,45 @@ option: §1's core allocation is the only creation path. For commands whose synt
 `--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
 human gate would be indefensible.
 
+**`partitur run` observable surface.** Before a run exists, `run` uses §2's score-input and
+score-compilation rules, §3's cast resolution, and the score/cast diagnostic ordering and
+suppression of `validate`'s contract above — all by reference. It does **not** perform validation's
+adapter preflight: §4's run-attempt probe is the observation made by the gated peer and owns every
+adapter failure after run creation. The additional Git repository and clean-source preconditions
+are §5's. A refusal before `run.started` exits 2; a score, cast, or §5 run-start validation
+diagnostic exits 3. Neither case creates a run or writes stdout.
+
+Once `run.started` is fsynced, `run` writes the allocated UUIDv7 as exactly one UTF-8 line
+`<run-id>\n` to stdout, with no label or surrounding whitespace. It never prints the id before that
+durability receipt: §1 makes a pre-event directory orphan state, not a run. This line is written
+exactly once even when the run later fails or recovery halts, so a caller always has the handle for
+`status` and `logs` once durable run state exists.
+
+After that line, stdout is silent. Core-generated usage, refusal, validation, terminal-outcome, and
+recovery-halt diagnostics go to stderr; raw adapter/vendor stderr remains only in the sanitized
+attempt file (§4) and is never mirrored by `run`. A terminal `FAILED` or `CANCELLED` run writes one
+stderr diagnostic naming the projected terminal state and, when the authoritative terminal event
+has one, its reason. A recovery halt writes one stderr diagnostic naming its Appendix D halt reason.
+Successful `SUCCEEDED` and quiescent `WAITING_HUMAN` returns add no stderr summary: their structured
+state and pending decisions are read with `partitur status <run-id> --json`.
+
+The command's exit codes are exhaustive over its specified outcomes:
+
+| Code | `partitur run` outcome |
+|---|---|
+| 0 | The run reached `SUCCEEDED`, or quiesced in `WAITING_HUMAN` with no adapter or criterion process left running |
+| 1 | Usage error; no run exists and stdout is empty |
+| 2 | Precondition refused before `run.started`; no run exists and stdout is empty |
+| 3 | Pre-run validation failed before `run.started`; no run exists and stdout is empty |
+| 4 | The durable run reached terminal `FAILED` or `CANCELLED`; the id was already written |
+| 5 | Recovery halted for an Appendix D reason; the id was already written and the run remains at its last durable state |
+
+v0.2 defines no `run --json` or `run --jsonl`, live progress rendering, TTY-specific mode, spinner,
+colour, or human-oriented status stream. Adapter `log` and `progress` notifications remain the
+journal observations §4/B.7 define; `partitur logs <run-id> --jsonl [--follow]` is their stream, and
+`partitur status <run-id> --json` is the structured state surface. The bare stdout id is a
+correlation handle, not a second state or event stream.
+
 `validate` acquires inputs before interpreting their contents. A missing or unreadable required
 `partitur.yaml`, or a discovered cast file that cannot be read, is a refused precondition and exits
 2. A missing optional project or user-global cast layer is simply absent and produces no
@@ -2722,8 +2761,8 @@ cast produce `binding_missing`, which is a validation result about content that 
 | 0 | success |
 | 1 | usage error: unknown command, missing or malformed operand |
 | 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state, dirty checkout, lock held |
-| 3 | validation failed: `partitur validate`, or a rejected amendment |
-| 4 | the run reached a terminal failure |
+| 3 | validation failed: `partitur validate`, pre-run validation for `partitur run`, or a rejected amendment |
+| 4 | a run-driving command reached terminal `FAILED` or `CANCELLED` |
 | 5 | recovery halt — the run cannot proceed and needs an operator (Appendix D) |
 
 ## 8. Verification and shipping
@@ -4520,12 +4559,11 @@ progress { message }              # likewise
 `log` and `progress` are the two observational rows: journaled for a later client, read by no
 projection, and incapable of changing state (B.0 authority).
 
-**Recovery-halt conditions are not events.** The `journal_idempotency_conflict`,
-`unsupported_run_format`, `missing_artifact_file`, `missing_snapshot_file`,
-`missing_changeset_ref`, and `journal_corrupt` conditions of Appendix D **never** appear as
-journal entries. They are conditions under which the core refuses to proceed and reports to the
-operator — appending to a journal whose integrity is in question is exactly the wrong response.
-They surface through command output and a nonzero exit, never through the log they distrust.
+**Recovery-halt conditions are not events.** Every condition in Appendix D's closed
+**Recovery halts** set stays outside the journal. They are conditions under which the core refuses
+to proceed and reports to the operator — appending while journal integrity, referenced state, or
+cleanup safety is in question is exactly the wrong response. They surface through command output
+and exit 5, never through the log they distrust.
 
 ---
 
