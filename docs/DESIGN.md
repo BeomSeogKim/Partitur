@@ -1397,9 +1397,13 @@ in memory for a human:
   accordingly. A performer that returned `waiting_human` for a blocking proposal said it *cannot
   continue* without that disposition; telling it nothing invites it to block or re-propose forever.
   So against a protocol-1 peer the core does **not** silently omit a blocking proposal's rejection —
-  it fails the movement with `movement.failed {reason: undeliverable_resolution}` without sending
-  `execute`. Only a **non-blocking** proposal's rejection is omitted, which is safe because the
-  performer did not claim to need it; that omission is recorded in
+  while fixing this attempt's feature-dependent delivery at the `adapter.probed` boundary, it
+  appends `attempt.failed {kind: protocol_error, reason: undeliverable_resolution, disposition}`
+  instead of `adapter.probed`, and sends no `execute`. §3.1 classifies `protocol_error` immediately
+  terminal, so the recorded `terminal_reason` is `protocol_error` and its second arm produces
+  `movement.failed {reason: protocol_error}`. The detailed reason survives on `attempt.failed`; it
+  is not also a movement reason. Only a **non-blocking** proposal's rejection is omitted, which is
+  safe because the performer did not claim to need it; that omission is recorded in
   `adapter.probed.withheld_resolutions`, so the loss is auditable rather than silent. What closes
   the decision remains the journal's `amendment.rejected {decision_id}`.
 
@@ -4662,7 +4666,7 @@ artifact notification is rejected before any append and fails the attempt as
 `artifact_path_escape`, `change_set_emitted_as_artifact`, `proposal_without_authority`,
 `partial_frame_eof`, `strict_decode_failed`, `frame_too_large`, `event_limit_exceeded`,
 `blocking_set_mismatch`, `duplicate_emitted_id`, `draft_non_blocking_proposal` (§2 draft
-contract).
+contract), `undeliverable_resolution` (§4 protocol-1 degradation).
 
 **Findings coverage conclusions** (§7): `examined_none_found`, `findings_raised`.
 
