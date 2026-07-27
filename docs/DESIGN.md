@@ -1647,6 +1647,30 @@ The handoff contract, since recovery depends on reading it (Appendix C.2):
   not "no launch process survives", which the pre-marker window makes false. The weaker statement is the
   one that matters: an unreleased trampoline holds no adapter or criterion code and will exit on gate
   EOF without executing any.
+- A held marker with no matching readable identity is **stabilized before it is classified**. A
+  multithreaded process can have a leader already observable as gone while another thread still
+  retains the shared file table and therefore the inherited marker lock. The first held sample is
+  not proof that an unattributable process remains.
+
+  The marker-stabilization deadline is **30000 integer milliseconds**, measured monotonically from
+  the first complete observation of “matching marker held, no matching readable identity.” It is
+  derived from the core's outer termination grace below, not from the spike harness: both bounds
+  allow local process teardown to settle before the core may safely advance, and a trampoline that
+  cannot yet be named and signalled receives the same pre-force allowance as a named session. This
+  is a conservative policy ceiling, not a kernel timing guarantee. The 15000 ms probe deadline and
+  first-party kit's 10000 ms grace do not apply: no probe RPC or adapter body exists in this window.
+  The spike's 3000 ms timeout and 5 ms polling cadence remain test parameters and define no
+  production behaviour.
+
+  Until that deadline, recovery re-observes in this priority order: a matching, valid
+  `identity.json` is verified and its session swept; otherwise a successful nonblocking marker-lock
+  acquisition proves the marker free, is released immediately, and selects the consuming recovery
+  row's no-released-mutator action; otherwise an expected held-lock result with no identity
+  continues stabilization. At the deadline recovery takes one final observation in the same order.
+  Still held with no identity halts `spawn_handoff_unverifiable`. Any malformed matching identity or
+  unexpected identity-read, marker-open, or lock error halts that reason immediately rather than
+  consuming the deadline. This one procedure applies to adapter and external-criterion trampolines:
+  both inherit the same marker and publish identity in the same order.
 - These are coordination files, not journal identity: the journal's copy is authoritative and the files
   are removed with the run's staging root.
 
@@ -4560,7 +4584,7 @@ replay rule holds.
 
 | Last durable state | Recovery action |
 |---|---|
-| `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). If a trampoline handoff identity was published, verify and sweep that session. If the inherited marker is *held* but no identity can be read, halt `spawn_handoff_unverifiable` — the holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name. If the marker is free, **no released mutator survives** — an unreleased trampoline may still be in its pre-marker window but contains no adapter code (§4). Only after that check, close any open `adapter` interval `recovered`/`clamped`; then append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and realize it per §3.1's second arm |
+| `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). Run §4's shared bounded handoff stabilization rather than classifying its first sample. If it yields a matching identity, verify and sweep that session. If it yields marker-free, rely only on the stated **no released mutator survives** property — an unreleased trampoline may still be in its pre-marker window but contains no adapter code. Either halt outcome stops this row. Only after a published session is verified empty or the marker is observed free, close any open `adapter` interval `recovered`/`clamped`; then append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and realize it per §3.1's second arm |
 | `attempt.started`, no `adapter.probed` | Sweep the **recorded** adapter session to verified empty **before** any failure or fallback — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped`. No durable valid probe observation exists, so append `attempt.failed {kind: adapter_unavailable, reason: probe_terminated_incomplete, disposition}`, then realize it per §3.1. Recovery does not manufacture the missing observation |
 | `adapter.probed`, **no** `performer.completed` | Sweep the recorded adapter session to verified empty before any failure or retry. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped` and append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: that event attests both verified-empty cleanup and the prior interval close, so recovery may enter verification without repeating either; without the exclusion this row would turn every normal completion into an incomplete attempt |
 | `performer.completed`, movement holds `repo_write`, no `change_set.recorded` | The worktree still exists and its tree is authoritative: capture the change set idempotently, then continue at the next row. If the worktree is gone, the candidate cannot be reconstructed — append `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}` |
@@ -4595,7 +4619,7 @@ projected from the journal rather than a judgement recovery originates.
 | Gate resolved approve, `attempt.completed` missing | Append `attempt.completed`, then `movement.succeeded` — in that order (B.1/B.2) — idempotently, including for the final movement the run's `SUCCEEDED` transition |
 | Gate resolved reject, terminal failure event missing | Append `movement.failed {reason: human_gate_rejected, decision_id, subject_tree}` idempotently, keyed on `movement_id` (Appendix B) with the gate decision id carried as causation and evidence; that one event terminalizes attempt, movement, and — for the final movement — the run |
 | `acceptance.evaluation_completed`, no gate required, `attempt.completed` missing | Append `attempt.completed`, then `movement.succeeded`, idempotently |
-| `acceptance.started`, an **unjournaled** `launch_id` directory present | A criterion launch crashed between taking its marker and its `criterion.started` append. Correlate it by the launch nonce, sweep that session to verified empty (`sweep_unverifiable` halts), remove the directory, and only then continue with the rows below — the criterion never started as far as the journal is concerned, but its process may still exist |
+| `acceptance.started`, an **unjournaled** `launch_id` directory present | A criterion launch crashed before its `criterion.started` append. Run §4's same bounded handoff stabilization. If it yields a matching identity, verify and sweep that session (`sweep_unverifiable` halts); if it yields marker-free, no released criterion mutator survives; either halt outcome stops this row. Only after the identity's session is verified empty or the marker is observed free, remove the directory and continue with the rows below — the criterion never started as far as the journal is concerned, but an unreleased pre-marker trampoline may still be exiting on gate EOF |
 | `acceptance.started`, no criterion events | Resume with the first criterion |
 | Some `criterion.completed` (all `PASS`), none in flight, criteria remaining | Resume with the next unstarted criterion |
 
@@ -4940,10 +4964,10 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 
 | Edge | Left | Right | Owning clause | Assertion across a crash |
 |---|---|---|---|---|
-| `launch.adapter.marker_held_to_identity_published` | trampoline holds the marker `B` | `identity.json` published `R` | §4; C.2 first row | A held marker with no readable identity halts `spawn_handoff_unverifiable`. The holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name |
+| `launch.adapter.marker_held_to_identity_published` | trampoline holds the marker `B` | `identity.json` published `R` | §4; C.2 first row | A first held/no-identity sample starts §4's bounded stabilization; it does not halt. §4 owns the four outcomes and their priority. The harness MUST be able to block at this existing left endpoint, terminate the trampoline before the right receipt, and start recovery immediately, so the exact pre-publication window is injectable rather than inferred from the spike's published-handoff test |
 | `launch.adapter.identity_published_to_recorded` | `identity.json` published `R` | `attempt.started` appended `R` | §4; C.2 | An unjournaled `launch_id` directory is found by listing the staging root and its session swept before recovery proceeds. Both files carry the launch nonce and a mismatch means one is from an earlier launch, so both are ignored |
 | `launch.adapter.recorded_to_gate` | `attempt.started` appended `R` | trampoline gate released `B` | §4 | No released mutator exists without a journaled identity. Marker free ⇒ no *released mutator* survives — not "no launch process survives", which the pre-marker window makes false |
-| `launch.criterion.marker_held_to_identity_published` | trampoline holds the marker `B` | `identity.json` published `R` | §7; §4; C.3 | As the adapter row |
+| `launch.criterion.marker_held_to_identity_published` | trampoline holds the marker `B` | `identity.json` published `R` | §7; §4; C.3 | The same §4 stabilization and exact pre-publication injection obligation as the adapter row. Criterion and adapter trampolines share the inherited marker and publication order, so the thread-group file-table window cannot be scoped to one launch type |
 | `launch.criterion.identity_published_to_recorded` | `identity.json` published `R` | `criterion.started` appended `R` | §7; C.3 | As the adapter row. C.3 handles the unjournaled directory explicitly, ahead of the rows that synthesize a completion |
 | `launch.criterion.recorded_to_gate` | `criterion.started` appended `R` | criterion gate released `B` | §7; §4 | As the adapter row |
 

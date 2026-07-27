@@ -108,7 +108,7 @@ required; the criterion set is not implied by the adapter set.
 
 | Edge | Blocks on | Driven by | Precondition to reach |
 |---|---|---|---|
-| `launch.adapter.marker_held_to_identity_published` | **B** → R | driver | a trampoline holding its marker, before it publishes |
+| `launch.adapter.marker_held_to_identity_published` | **B** → R | driver | block the trampoline after marker acquisition, terminate it before identity publication, and start recovery immediately |
 | `launch.adapter.identity_published_to_recorded` | R → R | driver | identity published, journal append not yet durable |
 | `launch.adapter.recorded_to_gate` | R → **B** | driver | recorded identity, gate not yet released |
 | `launch.criterion.marker_held_to_identity_published` | **B** → R | driver | as the adapter row, per criterion launch |
