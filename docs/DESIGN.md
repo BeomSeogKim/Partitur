@@ -1008,10 +1008,13 @@ the process, and force-kills after a further timeout. No daemon in v0.2.
 **Frozen wire rules.** These are normative for both sides, and "frozen" means "the contract
 will not change" — **not** "every line already exists". Implementation status:
 
-- Every rule below is implemented and conformance-tested in the adapter kit, including
-  duplicate-key and invalid-UTF-8 rejection, `shell_grants` / `read_grants` reporting, and
-  pre-persistence stderr sanitization.
-- The **core-side client is not implemented at all yet.**
+- Every adapter-side rule below is implemented and conformance-tested through the adapter kit and
+  first-party adapters, including duplicate-key and invalid-UTF-8 rejection, `shell_grants` /
+  `read_grants` reporting, and pre-persistence stderr sanitization.
+- The core-side client implements discovery, `probe`, and `execute` through `Client.Resolve`,
+  `Client.ProbeAll`, and `Client.Execute`, with `HaltError` for fail-closed conditions. Its process
+  supervision covers session leadership, process-group sweeps, bounded sanitized stderr, and one
+  deadline spanning response receipt through clean process exit.
 - Two adapter-side additions are **protocol 2**: `probe.features` and the `typed_resolutions`
   shape it gates. They cannot ship under protocol 1 because strict decoding is symmetric — a
   protocol-1 core rejects an unknown `features` field just as a protocol-1 adapter rejects an
@@ -5118,11 +5121,17 @@ it is **forbidden evidence, not a skeleton to copy**.
 
 ## E.4 Obligations on what implements this
 
-**Prospective.** No code implements this appendix yet: there are no signal types and nothing carries
-these edge IDs. This section states what must be true of that work when it exists, not what is true
-now — the whole point of freezing the contract first is that `runstore` is written against it rather
-than retrofitted. [`HARNESS.md`](HARNESS.md) is the one part that does exist, and it selects from
-E.2 rather than describing boundaries of its own.
+**Implementation status.** Appendix E is partially implemented. `DurabilityReceipt` is threaded
+through production journal appends and carries a `ReceiptAddress`. In production, `PointID` boundary
+points are emitted only by the launch trampoline, at the marker-held and gate-released seams for
+adapter and criterion launches; no prepare, quiesce, cancellation, or supersession boundary point
+is emitted. Production installs only the no-op probe. The E.2 `EdgeID` values are declared in Go and
+mechanically cross-checked against the catalog, but no production path carries one yet.
+
+The paragraph above records current implementation status. The obligations below state what must be
+true of the implementation — the whole point of freezing the contract first is that `runstore` is
+written against it rather than retrofitted. [`HARNESS.md`](HARNESS.md) selects from E.2 rather than
+describing boundaries of its own.
 
 - The Go types implement E.1's semantics and carry E.2's edge IDs verbatim.
 - They **do not restate the assertions.** An invariant in a doc comment is a second normative text,
