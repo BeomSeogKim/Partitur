@@ -6,11 +6,16 @@ import "fmt"
 // score. Invalid seeds are programmer errors.
 func NewState(seed []MovementSeed) State {
 	state := State{
-		Movements:         make(map[MovementID]MovementState, len(seed)),
-		Attempts:          make(map[AttemptID]Attempt),
-		AdapterLaunches:   make(map[AttemptID]AdapterLaunch),
-		CriterionLaunches: make(map[CriterionLaunchKey]CriterionLaunch),
-		Acceptances:       make(map[AttemptID]Acceptance),
+		Movements:           make(map[MovementID]MovementState, len(seed)),
+		RepoWriteMovements:  make(map[MovementID]bool),
+		Attempts:            make(map[AttemptID]Attempt),
+		AdapterLaunches:     make(map[AttemptID]AdapterLaunch),
+		AdapterObservations: make(map[AttemptID]AdapterObservation),
+		Artifacts:           make(map[ArtifactInstanceID]ArtifactRecord),
+		VerifiedAttempts:    make(map[AttemptID]bool),
+		MovementResults:     make(map[MovementID]MovementResult),
+		CriterionLaunches:   make(map[CriterionLaunchKey]CriterionLaunch),
+		Acceptances:         make(map[AttemptID]Acceptance),
 	}
 	for _, movement := range seed {
 		if movement.ID == "" {
@@ -23,6 +28,9 @@ func NewState(seed []MovementSeed) State {
 			panic(fmt.Sprintf("runstate: duplicate movement %q in seed", movement.ID))
 		}
 		state.Movements[movement.ID] = movement.Initial
+		if movement.RepoWrite {
+			state.RepoWriteMovements[movement.ID] = true
+		}
 	}
 	return state
 }
@@ -30,6 +38,7 @@ func NewState(seed []MovementSeed) State {
 func cloneState(input State) State {
 	output := input
 	output.Movements = cloneMap(input.Movements)
+	output.RepoWriteMovements = cloneMap(input.RepoWriteMovements)
 	output.Attempts = cloneMap(input.Attempts)
 	for id, attempt := range output.Attempts {
 		if attempt.Failure != nil {
@@ -39,6 +48,37 @@ func cloneState(input State) State {
 		}
 	}
 	output.AdapterLaunches = cloneMap(input.AdapterLaunches)
+	output.AdapterObservations = cloneMap(input.AdapterObservations)
+	for id, observation := range output.AdapterObservations {
+		observation.Capabilities = cloneMap(observation.Capabilities)
+		observation.Enforcement = cloneMap(observation.Enforcement)
+		observation.NegotiatedFeatures = append([]string(nil), observation.NegotiatedFeatures...)
+		observation.WithheldResolutions = append([]WithheldResolution(nil), observation.WithheldResolutions...)
+		observation.TruncatedResolutions = append([]string(nil), observation.TruncatedResolutions...)
+		observation.AdvisoryDimensions = append([]string(nil), observation.AdvisoryDimensions...)
+		observation.IdentityVersions = append([]byte(nil), observation.IdentityVersions...)
+		output.AdapterObservations[id] = observation
+	}
+	output.Artifacts = cloneMap(input.Artifacts)
+	output.VerifiedAttempts = cloneMap(input.VerifiedAttempts)
+	output.MovementResults = cloneMap(input.MovementResults)
+	for id, result := range output.MovementResults {
+		result.ApprovedArtifactInstanceIDs = append(
+			[]ArtifactInstanceID(nil),
+			result.ApprovedArtifactInstanceIDs...,
+		)
+		output.MovementResults[id] = result
+	}
+	if input.ApplicationCandidate != nil {
+		candidate := *input.ApplicationCandidate
+		candidate.OrderedChangeSets = append([]string(nil), input.ApplicationCandidate.OrderedChangeSets...)
+		candidate.Contributors = append(
+			[]CandidateContributor(nil),
+			input.ApplicationCandidate.Contributors...,
+		)
+		candidate.IdentityVersions = append([]byte(nil), input.ApplicationCandidate.IdentityVersions...)
+		output.ApplicationCandidate = &candidate
+	}
 	output.CriterionLaunches = cloneMap(input.CriterionLaunches)
 	output.Acceptances = make(map[AttemptID]Acceptance, len(input.Acceptances))
 	for id, acceptance := range input.Acceptances {

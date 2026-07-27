@@ -2,7 +2,8 @@
 //
 // State is a pure function of the initial movement seed derived from the
 // authenticated pinned score and the journal. This package supports only the
-// twenty-two event types needed by DESIGN Appendix E. Valid registry events
+// twenty-nine event types needed by DESIGN Appendix E and the first run success
+// path. Valid registry events
 // outside that subset fail closed with ErrUnsupportedEventType.
 //
 // Amendment projection is intentionally auto-mode only. Human histories need
@@ -16,6 +17,7 @@ type RunID string
 type MovementID string
 type AttemptID string
 type CriterionID string
+type ArtifactInstanceID string
 type PrepareID string
 type ProposalID string
 type IntervalID string
@@ -23,8 +25,9 @@ type Hash string
 
 // MovementSeed is derived from the authenticated pinned score.
 type MovementSeed struct {
-	ID      MovementID
-	Initial MovementState
+	ID        MovementID
+	Initial   MovementState
+	RepoWrite bool
 }
 
 type RunLifecycle string
@@ -47,6 +50,7 @@ const (
 	MovementPending      MovementState = "PENDING"
 	MovementReady        MovementState = "READY"
 	MovementRunning      MovementState = "RUNNING"
+	MovementSucceeded    MovementState = "SUCCEEDED"
 	MovementCancelled    MovementState = "CANCELLED"
 	MovementInapplicable MovementState = "INAPPLICABLE"
 )
@@ -156,6 +160,54 @@ type AdapterLaunch struct {
 	Process   ProcessIdentity
 }
 
+type WithheldResolution struct {
+	DecisionID string
+	Why        string
+}
+
+type AdapterObservation struct {
+	AdapterVersion          string
+	Capabilities            map[string]bool
+	Enforcement             map[string]bool
+	NegotiatedFeatures      []string
+	WithheldResolutions     []WithheldResolution
+	TruncatedResolutions    []string
+	AdvisoryDimensions      []string
+	ExecutionDependencyHash Hash
+	IdentityVersions        json.RawMessage
+}
+
+type ArtifactRecord struct {
+	AttemptID       AttemptID
+	LogicalOutputID string
+	Kind            string
+	ContentHash     Hash
+	SizeBytes       uint64
+	Source          string
+}
+
+type CandidateContributor struct {
+	MovementID  MovementID
+	ChangeSetID string
+}
+
+type ApplicationCandidate struct {
+	ID                        string
+	Revision                  uint64
+	BaseTree                  string
+	ResultTree                string
+	OrderedChangeSets         []string
+	Contributors              []CandidateContributor
+	CompositionDependencyHash Hash
+	IdentityVersions          json.RawMessage
+}
+
+type MovementResult struct {
+	AttemptID                   AttemptID
+	ApprovedArtifactInstanceIDs []ArtifactInstanceID
+	ApprovedChangeSetID         string
+}
+
 // CriterionLaunch is a strict union of the three launch variants in B.3.
 type CriterionLaunch interface {
 	isCriterionLaunch()
@@ -190,6 +242,7 @@ type CriterionRecord struct {
 
 type Acceptance struct {
 	Started             bool
+	EvaluationCompleted bool
 	SubjectTree         string
 	SpecHash            Hash
 	PlannedCriterionIDs []CriterionID
@@ -197,45 +250,58 @@ type Acceptance struct {
 }
 
 type State struct {
-	Run               RunLifecycle
-	Movements         map[MovementID]MovementState
-	Attempts          map[AttemptID]Attempt
-	ScoreHead         ScoreHead
-	Authority         Authority
-	PendingPrepare    *PendingPrepare
-	OpenExecution     *ExecutionInterval
-	ConsumedBudgetMS  int64
-	AdapterLaunches   map[AttemptID]AdapterLaunch
-	CriterionLaunches map[CriterionLaunchKey]CriterionLaunch
-	Acceptances       map[AttemptID]Acceptance
-	CancelRequested   bool
+	Run                  RunLifecycle
+	Movements            map[MovementID]MovementState
+	RepoWriteMovements   map[MovementID]bool
+	Attempts             map[AttemptID]Attempt
+	ScoreHead            ScoreHead
+	Authority            Authority
+	PendingPrepare       *PendingPrepare
+	OpenExecution        *ExecutionInterval
+	ConsumedBudgetMS     int64
+	AdapterLaunches      map[AttemptID]AdapterLaunch
+	AdapterObservations  map[AttemptID]AdapterObservation
+	Artifacts            map[ArtifactInstanceID]ArtifactRecord
+	VerifiedAttempts     map[AttemptID]bool
+	MovementResults      map[MovementID]MovementResult
+	ApplicationCandidate *ApplicationCandidate
+	CriterionLaunches    map[CriterionLaunchKey]CriterionLaunch
+	Acceptances          map[AttemptID]Acceptance
+	CancelRequested      bool
 }
 
 type EventType string
 
 const (
-	EventRunStarted                 EventType = "run.started"
-	EventRunSucceeded               EventType = "run.succeeded"
-	EventRunFailed                  EventType = "run.failed"
-	EventRunCancelled               EventType = "run.cancelled"
-	EventMovementReady              EventType = "movement.ready"
-	EventMovementStarted            EventType = "movement.started"
-	EventPerformerSelected          EventType = "performer.selected"
-	EventAttemptStarted             EventType = "attempt.started"
-	EventPerformerCompleted         EventType = "performer.completed"
-	EventAttemptFailed              EventType = "attempt.failed"
-	EventAcceptanceStarted          EventType = "acceptance.started"
-	EventCriterionStarted           EventType = "criterion.started"
-	EventCriterionCompleted         EventType = "criterion.completed"
-	EventAcceptanceFailed           EventType = "acceptance.failed"
-	EventExecutionStarted           EventType = "execution.started"
-	EventExecutionStopped           EventType = "execution.stopped"
-	EventAmendmentApprovalPrepared  EventType = "amendment.approval_prepared"
-	EventAmendmentApprovalAbandoned EventType = "amendment.approval_abandoned"
-	EventAmendmentApproved          EventType = "amendment.approved"
-	EventAuthorityGranted           EventType = "authority.granted"
-	EventCancelRequested            EventType = "cancel.requested"
-	EventJournalTailTruncated       EventType = "journal.tail_truncated"
+	EventRunStarted                    EventType = "run.started"
+	EventRunSucceeded                  EventType = "run.succeeded"
+	EventRunFailed                     EventType = "run.failed"
+	EventRunCancelled                  EventType = "run.cancelled"
+	EventMovementReady                 EventType = "movement.ready"
+	EventMovementStarted               EventType = "movement.started"
+	EventMovementSucceeded             EventType = "movement.succeeded"
+	EventPerformerSelected             EventType = "performer.selected"
+	EventAttemptStarted                EventType = "attempt.started"
+	EventAdapterProbed                 EventType = "adapter.probed"
+	EventPerformerCompleted            EventType = "performer.completed"
+	EventAttemptCompleted              EventType = "attempt.completed"
+	EventAttemptFailed                 EventType = "attempt.failed"
+	EventArtifactRecorded              EventType = "artifact.recorded"
+	EventVerificationPassed            EventType = "verification.passed"
+	EventApplicationCandidateRecorded  EventType = "application_candidate.recorded"
+	EventAcceptanceStarted             EventType = "acceptance.started"
+	EventCriterionStarted              EventType = "criterion.started"
+	EventCriterionCompleted            EventType = "criterion.completed"
+	EventAcceptanceFailed              EventType = "acceptance.failed"
+	EventAcceptanceEvaluationCompleted EventType = "acceptance.evaluation_completed"
+	EventExecutionStarted              EventType = "execution.started"
+	EventExecutionStopped              EventType = "execution.stopped"
+	EventAmendmentApprovalPrepared     EventType = "amendment.approval_prepared"
+	EventAmendmentApprovalAbandoned    EventType = "amendment.approval_abandoned"
+	EventAmendmentApproved             EventType = "amendment.approved"
+	EventAuthorityGranted              EventType = "authority.granted"
+	EventCancelRequested               EventType = "cancel.requested"
+	EventJournalTailTruncated          EventType = "journal.tail_truncated"
 )
 
 // Event is one strict journal envelope. Payload is validated before projection.
