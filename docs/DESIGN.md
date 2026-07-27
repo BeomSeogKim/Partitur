@@ -5290,21 +5290,13 @@ It defines *where* a crash may be injected and *what must hold across it*. It do
 protocol. §6's cancellation oracle is referenced by its own `(a)`–`(f)` labels, which §6 establishes
 as the single normative sequence.
 
-**Scope, stated as a selection rule rather than a list.** This appendix covers the three families
-whose orderings SPIKE-4 measured and the readiness table marks unproved: the **control channel**
-(prepare, quiesce, cancellation, supersession fencing), **authority acquisition**, and **launch
-identity handoff** — together with the C.1 rows those depend on. An ordered pair belongs here when a
-crash between its steps can strand *process state, authority state, or the control channel's own
-durable records* — the prewritten snapshot, the plan, the quarantine — such that recovery must
-reason about it from durable evidence alone.
-
-It does **not** cover the evidence and lifecycle chains — `attempt.completed` → `movement.succeeded`,
-`movement.failed` → `run.failed`, a criterion's error completion → `acceptance.failed`,
-`acceptance.evaluation_completed` → `decision.requested`. Those are ordered too, and they will need
-their own treatment. Appendix C now mechanically expands the reachable recovery cuts these chains
-pass through, removing the earlier recovery-table reason for deferral. They remain excluded because
-this appendix has not yet assigned their `R`/`B` endpoints or stated their edge assertions. Adding
-them without that boundary catalog would produce coverage that looks complete and is not.
+**Scope, stated as a selection rule rather than a list.** This appendix covers the `resume` families
+whose ordered crash cuts have a selected recovery action in Appendix C: the **control channel**
+(prepare, quiesce, cancellation, supersession fencing), **authority acquisition**, **launch
+identity handoff**, **adapter execute completion**, and the **evidence and lifecycle consequences**
+that terminalize an attempt, movement, run, or acceptance or open a required gate. An ordered pair
+belongs here when a crash between its steps can strand durable or process state such that recovery
+must reason about it from the last durable endpoint rather than infer that the right endpoint ran.
 
 ## E.1 The two signals
 
@@ -5331,9 +5323,9 @@ has not made:
 - **In-scope and recovery-neutral.** The mutation's loss is genuinely harmless, so no assertion is
   owed. `(b)`'s plan and sidecar removals are the worked example: an orphan plan is removed on sight
   and a leftover sidecar is inert.
-- **Out of scope, pending the lifecycle treatment.** The receipt is real and its loss is **not**
-  neutral — `attempt.completed` is a synced append with a recovery chain behind it — but the ordering
-  it belongs to is one this appendix's scope rule excludes. Silence here is deferral, not exemption.
+- **Outside this appendix's selection rule.** The receipt is real and its loss may be non-neutral,
+  but the ordering belongs to a recovery surface or protocol family E.2 does not select. Silence is
+  scope, not an assertion that the mutation is harmless.
 
 E.1 and E.2 therefore describe one mechanism at two granularities, not two catalogs.
 
@@ -5367,14 +5359,16 @@ point's meaning is a design change, not an implementation detail. The catalog gr
 twenty-two across three review rounds, and to twenty-four when freezing the execute-completion
 order exposed two more — supersession fencing, the interval-close ordering, authority
 acquisition, two thirds of the launch sequence, and both unconditional sweep edges were all missing
-from the first draft. A numbered scheme would have made each of those admissions expensive, which is
-the argument for semantic IDs stated as something that already happened rather than something that
-might. **This is history, not evidence of convergence.** What bounds the catalog is E's scope rule
-above and the branch expansion E.4 requires, not the fact that three rounds have run.
+from the first draft. It grew to twenty-eight when Appendix C's mechanically total recovery
+expansion removed the deferral of four evidence and lifecycle consequence chains. A numbered scheme
+would have made each of those admissions expensive, which is the argument for semantic IDs stated as
+something that already happened rather than something that might. **This is history, not evidence
+of convergence.** What bounds the catalog is E's scope rule above and the branch expansion E.4
+requires, not the number of review rounds that have run.
 
 ## E.2 The catalog
 
-`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the twenty-four
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the twenty-eight
 have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
 
 **Prepare and quiesce**
@@ -5431,6 +5425,15 @@ one sequence (§4).
 |---|---|---|---|---|
 | `execute.adapter_swept_to_interval_stopped` | complete response validated, adapter exited zero, and recorded adapter session verified empty `B` | `execution.stopped {reason: normal, charging: measured}` appended `R` | §4; §6; C.2 | A crash leaves the interval open. Recovery does not trust the volatile response: it sweeps again, closes the interval `recovered`/`clamped`, and records an incomplete-attempt failure. Closing before the left endpoint would stop charging a survivor |
 | `execute.interval_stopped_to_outcome` | ordinary adapter `execution.stopped` durable `R` | the response-derived B.2 event appended `R` | §4; B.2; C.2 | A crash records no outcome from the lost response and never enters acceptance. C.2 re-sweeps, observes the interval already closed, and records the incomplete-attempt failure without a second charge. In particular, `performer.completed` can never coexist with an open adapter interval or an unswept session |
+
+**Evidence and lifecycle consequences**
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `lifecycle.attempt_completed_to_movement_succeeded` | `attempt.completed` appended `R` | `movement.succeeded` appended `R` | B.1–B.2; C.2 `RC-RESUME-019` | The completed attempt is the movement's durable success authority. Recovery appends the missing movement success exactly once and never starts another attempt beside it |
+| `lifecycle.movement_failed_to_run_failed` | `movement.failed` appended `R` | `run.failed` appended `R` | B.1; C.2 `RC-RESUME-020` | A failed movement cannot leave the run schedulable. Recovery terminalizes the run with the run-level `movement_failed` reason and neither propagates an invalid movement reason nor schedules more work |
+| `acceptance.criterion_error_to_failed` | `criterion.completed {outcome: ERROR}` appended `R` | `acceptance.failed` appended `R` | B.3; C.3 `RC-RESUME-023` | The durable criterion error forbids another criterion or a success claim. Recovery appends the acceptance failure that terminalizes the attempt and leaves successor selection to its recorded disposition |
+| `acceptance.evaluation_completed_to_decision_requested` | `acceptance.evaluation_completed` appended for an attempt requiring a human gate `R` | required human-gate `decision.requested` appended `R` | B.3–B.4; C.3 `RC-RESUME-026` | Evaluation completion does not imply gate approval. Recovery appends the same required request idempotently and cannot complete the attempt or bypass the unresolved gate |
 
 ## E.3 `cancel.fence_decided_to_terminal` is not a lost-write boundary
 
@@ -5503,7 +5506,7 @@ produced three rounds of additions. The check that terminates is:
 
 1. Expand every in-scope branch — prepare and quiesce, all eight `(b, c, d)` combinations of the
    cancellation oracle, every supersession commit-table branch, authority acquisition, and both
-   launch types.
+   launch types, adapter execute completion, and each evidence and lifecycle consequence chain.
 2. Treat every receipt and every correctness-critical ephemeral point as an `R` or `B` node.
 3. At each reachable crash cut, require **at least one** classification: an E.2 assertion with a named
    recovery owner, an explicit recovery-neutral exemption, a recorded deferral, or a named halt. More

@@ -28,7 +28,9 @@ copies of the cancellation sequence had been normalized into one oracle:
 
 Both are crash windows between ordered steps. That is the class a harness enumerates mechanically and
 prose enumeration keeps missing by one — which the appendix's own history bears out: E.2's catalog
-went from eleven edges to twenty-four, every addition a category rather than an oversight.
+went from eleven edges to twenty-four, every addition a category rather than an oversight, and then
+to twenty-eight when Appendix C made the four previously deferred evidence and lifecycle
+consequences selectable.
 
 **The precondition, which held.** Fault injection cannot adjudicate contradictory normative text; it
 tests whichever reading the implementation chose. The oracle had to become singular first, and it is:
@@ -37,18 +39,12 @@ one `(a)`–`(f)` list, referenced from three places and restated nowhere.
 ## Scope
 
 Exactly Appendix E's: the **control channel** (prepare, quiesce, cancellation, supersession fencing),
-**authority acquisition**, and **launch identity handoff**, together with the C.1 rows those depend
-on.
-
-The evidence and lifecycle chains are **out of scope** — `attempt.completed` → `movement.succeeded`,
-`movement.failed` → `run.failed`, a criterion's error completion → `acceptance.failed`,
-`acceptance.evaluation_completed` → `decision.requested`. E defers them, and cites its own reason;
-this harness does not cover them and must not be described as covering §7 acceptance or Appendix C
-generally.
+**authority acquisition**, **launch identity handoff**, **adapter execute completion**, and the four
+**evidence and lifecycle consequence** chains selected by Appendix C.
 
 ## Selection manifest
 
-All twenty-four E.2 edges are in scope for v0.2; none is deferred. Each needs a crash injected at a
+All twenty-eight E.2 edges are in scope for v0.2; none is deferred. Each needs a crash injected at a
 cut **on either side of each endpoint**, and a resume that evaluates the assertion E.2 states for
 that edge.
 
@@ -122,6 +118,15 @@ required; the criterion set is not implied by the adapter set.
 | `execute.adapter_swept_to_interval_stopped` | **B** → R | driver | a validated execute response and a zero adapter exit, with the recorded session verified empty and the `adapter` interval not yet closed |
 | `execute.interval_stopped_to_outcome` | R → R | driver | the adapter `execution.stopped` durable, the response-derived event not yet appended |
 
+### Evidence and lifecycle consequences
+
+| Edge | Blocks on | Driven by | Precondition to reach |
+|---|---|---|---|
+| `lifecycle.attempt_completed_to_movement_succeeded` | R → R | driver | `attempt.completed` durable, `movement.succeeded` absent |
+| `lifecycle.movement_failed_to_run_failed` | R → R | driver | `movement.failed` durable, run still nonterminal |
+| `acceptance.criterion_error_to_failed` | R → R | driver | `criterion.completed {outcome: ERROR}` durable, `acceptance.failed` absent |
+| `acceptance.evaluation_completed_to_decision_requested` | R → R | driver | evaluation complete, a required human-gate request absent |
+
 ## Execution model — deterministic interleaving, not a self-racing process
 
 Killing a single sequential process would look like coverage while never exercising a concurrent
@@ -185,10 +190,15 @@ interval close before terminal or approval, terminal or approval before lease re
 is a check on the fixed point:
 
 > After a non-halted recovery reaches its fixed point, no in-scope terminal control state retains an
-> open interval, a released session or process, or residual lease, sidecar, or staging state.
+> open interval, a released session or process, or residual lease, sidecar, or staging state; and no
+> in-scope durable consequence remains unrealized — a completed attempt has its movement success, a
+> failed movement has its run failure, a criterion error has its acceptance failure, and completed
+> evaluation has its required gate request.
 
-Attempt and movement lifecycle completion stays **out** of this check. Appendix E defers those chains
-and this harness does not cover them.
+This is not a general liveness claim. An unresolved blocking decision legitimately converges in
+`WAITING_HUMAN`; a named recovery halt stops before the fixed point; and the separate
+`apply --recover` and `promote-score --recover` projections remain outside this `resume` convergence
+oracle.
 
 ## What this harness is not
 
