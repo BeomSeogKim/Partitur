@@ -2670,12 +2670,27 @@ partitur promote-score --recover   # only from PROMOTING | RECOVERY_REQUIRED
 partitur version         # prints the core version; no run state is read or written
 ```
 
-For `validate`, the invocation working directory is `<repo>`: the command reads `partitur.yaml` and
-the project cast relative to that directory and performs no parent-directory or Git-root search.
-Upward discovery could silently operate on a parent's `.partitur/`, after which run-state writes,
-tree composition, and protected-path enforcement would all use an inferred root. Partitur chooses
-the predictable explicit directory over that expensive convenience. This rule does not make Git a
-`validate` precondition; commands that use Git state define their own preconditions.
+**Command repository anchoring.** For every command, the invocation working directory is `<repo>` —
+exactly the root whose project inputs, authoritative `.partitur/runs/` state, writable
+`.partitur/work/` staging, and owned Git refs §1 lays out. Partitur never searches parent
+directories for `partitur.yaml`, `.partitur/`, or a Git worktree root, and never retargets a command
+to a parent that contains one. Upward discovery could silently operate on a parent's run state,
+after which state mutation, tree composition, checkout application, score promotion, and
+protected-path enforcement would all use an inferred root. The one explicit anchor avoids a second
+notion of “the repository.”
+
+Every project-relative fixed path is resolved from that `<repo>`. Operator-supplied relative path
+operands such as `--answer-file` and `--patch` are resolved from the same invocation directory;
+absolute operands remain absolute. Inputs whose locations are explicitly outside the project keep
+their own stated discovery rules — the user-global cast under `~/.config/partitur/` and adapter
+executables on `PATH` — and neither can redefine `<repo>`.
+
+Anchoring defines **where** a command looks, not **what must exist there**. `init` creates its files
+at the anchor; `validate` reads there without making Git a precondition; `version` reads no project
+state, so the rule has no filesystem effect. Commands that require existing run state, Git state, a
+clean checkout, or a particular projection still use their own §5–§9 preconditions. When such a
+precondition requires a Git worktree, the anchored `<repo>` itself is the worktree root the command
+uses; finding a parent worktree never changes the anchor or satisfies the command by retargeting it.
 
 `--recover` is refused outside the two states that admit it, and the normal form of each
 command is refused inside them. `apply` before `promote-score` is an enforced precondition,
