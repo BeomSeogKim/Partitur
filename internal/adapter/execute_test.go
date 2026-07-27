@@ -702,7 +702,7 @@ func executePlan(
 			Workdir:   workdir,
 			OutputDir: outputDir,
 			Grants:    protocol.Grants{},
-			Budget:    protocol.Budget{ActiveWallClockMin: 1},
+			Budget:    protocol.Budget{RemainingMS: 60_000},
 		},
 		IntervalID:     "interval-1",
 		IntervalOpened: time.Now().Add(-time.Millisecond),

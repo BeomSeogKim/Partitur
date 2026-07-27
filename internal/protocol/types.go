@@ -1,7 +1,13 @@
 // Package protocol defines the Partitur adapter wire contract from DESIGN §4.
 package protocol
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+)
 
 const (
 	MinimumProtocolVersion = 1
@@ -94,7 +100,34 @@ type Grants struct {
 }
 
 type Budget struct {
-	ActiveWallClockMin float64 `json:"active_wall_clock_min"`
+	RemainingMS int64 `json:"remaining_ms"`
+}
+
+// UnmarshalJSON keeps the wire duration in the non-negative I-JSON safe
+// integer range and rejects negative-zero spellings before they collapse to 0.
+func (budget *Budget) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		RemainingMS json.RawMessage `json:"remaining_ms"`
+	}
+	if err := DecodeStrict(data, &raw); err != nil {
+		return err
+	}
+	valueBytes := bytes.TrimSpace(raw.RemainingMS)
+	if len(valueBytes) == 0 {
+		return errors.New("remaining_ms is required")
+	}
+	if bytes.Equal(valueBytes, []byte("-0")) {
+		return errors.New("remaining_ms is negative zero")
+	}
+	value, err := strconv.ParseInt(string(valueBytes), 10, 64)
+	if err != nil {
+		return fmt.Errorf("remaining_ms is not an integer: %w", err)
+	}
+	if value < 0 || value > 1<<53-1 {
+		return errors.New("remaining_ms is outside the safe integer range")
+	}
+	budget.RemainingMS = value
+	return nil
 }
 
 type ExecuteRequest struct {

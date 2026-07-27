@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
@@ -116,8 +115,13 @@ func RenderPrompt(request *protocol.ExecuteRequest) string {
 	workspace.WriteString("- Do not represent repository code changes as artifact events.")
 	section("Workspace and authority", workspace.String())
 
-	budget := strconv.FormatFloat(request.Budget.ActiveWallClockMin, 'f', -1, 64)
-	section("Budget", "The remaining active wall-clock budget at attempt start is "+budget+" minutes. This is advisory context; Partitur enforces termination.")
+	section(
+		"Budget",
+		fmt.Sprintf(
+			"The remaining active wall-clock budget at attempt start is %d milliseconds. This is advisory context; Partitur enforces termination.",
+			request.Budget.RemainingMS,
+		),
+	)
 
 	resultPath := filepath.Join(request.OutputDir, ResultFilename)
 	proposalContract := `No partitur.score-base input was supplied, so "proposal" MUST be null. A non-null proposal is a protocol error (proposal_without_authority).`
