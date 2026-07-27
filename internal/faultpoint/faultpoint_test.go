@@ -16,26 +16,35 @@ import (
 func TestAppendixEEdgeIDsAreCompleteAndUnique(t *testing.T) {
 	designEdges := edgeIDsFromDesign(t)
 	sourceEdges := edgeIDsFromPackageSource(t)
+	harnessEdges := edgeIDsFromHarness(t)
 
 	designSet := uniqueEdgeIDs(t, "DESIGN E.2", designEdges)
 	sourceSet := uniqueEdgeIDs(t, "Go EdgeID constants", sourceEdges)
+	harnessSet := uniqueEdgeIDs(t, "HARNESS selection manifest", harnessEdges)
 
-	var onlyInDesign []string
-	for edge := range designSet {
-		if !sourceSet[edge] {
-			onlyInDesign = append(onlyInDesign, edge)
+	requireSameEdgeIDs(t, "DESIGN E.2", designSet, "Go EdgeID constants", sourceSet)
+	requireSameEdgeIDs(t, "DESIGN E.2", designSet, "HARNESS selection manifest", harnessSet)
+}
+
+func requireSameEdgeIDs(t *testing.T, leftName string, left map[string]bool, rightName string, right map[string]bool) {
+	t.Helper()
+	var onlyInLeft []string
+	for edge := range left {
+		if !right[edge] {
+			onlyInLeft = append(onlyInLeft, edge)
 		}
 	}
-	var onlyInSource []string
-	for edge := range sourceSet {
-		if !designSet[edge] {
-			onlyInSource = append(onlyInSource, edge)
+	var onlyInRight []string
+	for edge := range right {
+		if !left[edge] {
+			onlyInRight = append(onlyInRight, edge)
 		}
 	}
-	sort.Strings(onlyInDesign)
-	sort.Strings(onlyInSource)
-	if len(onlyInDesign) != 0 || len(onlyInSource) != 0 {
-		t.Fatalf("edge ID catalog mismatch: only in DESIGN E.2: %q; only in Go EdgeID constants: %q", onlyInDesign, onlyInSource)
+	sort.Strings(onlyInLeft)
+	sort.Strings(onlyInRight)
+	if len(onlyInLeft) != 0 || len(onlyInRight) != 0 {
+		t.Fatalf("edge ID catalog mismatch: only in %s: %q; only in %s: %q",
+			leftName, onlyInLeft, rightName, onlyInRight)
 	}
 }
 
@@ -140,6 +149,59 @@ func edgeIDsFromPackageSource(t *testing.T) []string {
 	}
 	if len(edges) == 0 {
 		t.Fatal("package source contains no typed EdgeID constants")
+	}
+	return edges
+}
+
+func edgeIDsFromHarness(t *testing.T) []string {
+	t.Helper()
+
+	contents, err := os.ReadFile(filepath.Join("..", "..", "docs", "HARNESS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(contents), "\n")
+
+	const manifestHeading = "## Selection manifest"
+	const nextHeading = "## Execution model — deterministic interleaving, not a self-racing process"
+	manifestStart := -1
+	manifestHeadingCount := 0
+	manifestEnd := -1
+	nextHeadingCount := 0
+	for index, line := range lines {
+		if line == manifestHeading {
+			manifestStart = index + 1
+			manifestHeadingCount++
+		}
+		if line == nextHeading {
+			manifestEnd = index
+			nextHeadingCount++
+		}
+	}
+	if manifestHeadingCount != 1 {
+		t.Fatalf("%s heading count = %d, want 1", manifestHeading, manifestHeadingCount)
+	}
+	if nextHeadingCount != 1 {
+		t.Fatalf("%s heading count = %d, want 1", nextHeading, nextHeadingCount)
+	}
+	if manifestEnd <= manifestStart {
+		t.Fatalf("%s must follow %s", nextHeading, manifestHeading)
+	}
+
+	edgeRow := regexp.MustCompile("^\\| `([a-z][a-z0-9_.]*)` \\|")
+	var edges []string
+	for _, line := range lines[manifestStart:manifestEnd] {
+		if !strings.HasPrefix(line, "|") || strings.HasPrefix(line, "| Edge |") || strings.HasPrefix(line, "|---") {
+			continue
+		}
+		match := edgeRow.FindStringSubmatch(line)
+		if match == nil {
+			t.Fatalf("unparseable %s table row %q", manifestHeading, line)
+		}
+		edges = append(edges, match[1])
+	}
+	if len(edges) == 0 {
+		t.Fatalf("%s extraction produced no edge IDs", manifestHeading)
 	}
 	return edges
 }
