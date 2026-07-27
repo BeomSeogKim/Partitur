@@ -99,7 +99,24 @@ func RenderPrompt(request *protocol.ExecuteRequest) string {
 		decisions.WriteString("No resolved decisions.")
 	} else {
 		for _, decision := range request.ResolvedDecisions {
-			fmt.Fprintf(&decisions, "- decision_id=%q answer=%q\n", decision.DecisionID, decision.Answer)
+			switch decision.Kind {
+			case protocol.ResolvedDecisionAnswer:
+				fmt.Fprintf(
+					&decisions,
+					"- decision_id=%q kind=%q answer=%q\n",
+					decision.DecisionID,
+					decision.Kind,
+					decision.Answer,
+				)
+			case protocol.ResolvedDecisionAmendmentRejected:
+				fmt.Fprintf(
+					&decisions,
+					"- decision_id=%q kind=%q reason=%q\n",
+					decision.DecisionID,
+					decision.Kind,
+					decision.Reason,
+				)
+			}
 		}
 	}
 	section("Resolved decisions", strings.TrimSpace(decisions.String()))

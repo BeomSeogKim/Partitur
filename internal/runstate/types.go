@@ -160,17 +160,11 @@ type AdapterLaunch struct {
 	Process   ProcessIdentity
 }
 
-type WithheldResolution struct {
-	DecisionID string
-	Why        string
-}
-
 type AdapterObservation struct {
 	AdapterVersion          string
 	Capabilities            map[string]bool
 	Enforcement             map[string]bool
 	NegotiatedFeatures      []string
-	WithheldResolutions     []WithheldResolution
 	TruncatedResolutions    []string
 	AdvisoryDimensions      []string
 	ExecutionDependencyHash Hash

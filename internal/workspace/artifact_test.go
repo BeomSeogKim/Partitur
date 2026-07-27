@@ -460,7 +460,6 @@ func appendArtifactRunningHistory(
 				"read_grants": true,
 			},
 			"negotiated_features":       []any{},
-			"withheld_resolutions":      []any{},
 			"truncated_resolutions":     []any{},
 			"advisory_dimensions":       []any{},
 			"execution_dependency_hash": "sha256:dependency",

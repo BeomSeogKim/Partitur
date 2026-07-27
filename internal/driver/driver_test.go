@@ -165,6 +165,13 @@ func TestProbeAdmissionRejectsEachFailClosedBoundary(t *testing.T) {
 	})
 }
 
+func TestRecognizedFeaturesIgnoresUndefinedTokens(t *testing.T) {
+	recognized := recognizedFeatures([]string{"future_token", "vendor_extension"})
+	if recognized == nil || len(recognized) != 0 {
+		t.Fatalf("recognized features = %#v, want empty non-nil list", recognized)
+	}
+}
+
 func TestRunIDWriteFailureStopsBeforeDriverAuthority(t *testing.T) {
 	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
 	writeErr := errors.New("stdout unavailable")
