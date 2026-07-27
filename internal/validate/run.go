@@ -22,23 +22,51 @@ type dependencies struct {
 // returns the complete validation result in rendering order.
 func Run() Result {
 	return run(dependencies{
-		acquisition: acquisitionDependencies{
-			workingDirectory: os.Getwd,
-			userHome:         os.UserHomeDir,
-			readFile:         os.ReadFile,
-		},
+		acquisition: systemAcquisitionDependencies(),
 		newProber: func() prober {
 			return adapter.NewClient()
 		},
 	})
 }
 
-func run(dependencies dependencies) Result {
-	input, refusal := acquire(dependencies.acquisition)
-	if refusal != nil {
-		return Result{Refusal: refusal}
+// Prepare discovers, compiles, resolves, and cross-validates the score and
+// cast without probing adapters or mutating repository state.
+func Prepare() (*Preparation, Result) {
+	return prepareValidated(systemAcquisitionDependencies())
+}
+
+func prepareValidated(
+	dependencies acquisitionDependencies,
+) (*Preparation, Result) {
+	preparation, result := prepare(dependencies)
+	if result.HasDiagnostics() {
+		return nil, result
 	}
-	return evaluate(input.score, input.layers, dependencies.newProber)
+	return preparation, result
+}
+
+func systemAcquisitionDependencies() acquisitionDependencies {
+	return acquisitionDependencies{
+		workingDirectory: os.Getwd,
+		userHome:         os.UserHomeDir,
+		readFile:         os.ReadFile,
+	}
+}
+
+func run(dependencies dependencies) Result {
+	preparation, result := prepare(dependencies.acquisition)
+	if preparation == nil {
+		return result
+	}
+	return evaluatePrepared(preparation, result, dependencies.newProber)
+}
+
+func prepare(dependencies acquisitionDependencies) (*Preparation, Result) {
+	input, refusal := acquire(dependencies)
+	if refusal != nil {
+		return nil, Result{Refusal: refusal}
+	}
+	return compilePreparation(input.root, input.score, input.layers)
 }
 
 func evaluate(
@@ -46,6 +74,15 @@ func evaluate(
 	layers []cast.Layer,
 	newProber func() prober,
 ) Result {
+	preparation, result := compilePreparation("", source, layers)
+	return evaluatePrepared(preparation, result, newProber)
+}
+
+func compilePreparation(
+	repositoryRoot string,
+	source []byte,
+	layers []cast.Layer,
+) (*Preparation, Result) {
 	compiled, scoreDiagnostics := score.Compile(source)
 	resolved, castDiagnostics := cast.Resolve(layers)
 
@@ -67,7 +104,20 @@ func evaluate(
 	for _, diagnostic := range resolved.ValidateScore(compiled) {
 		result.Entries = append(result.Entries, castEntry(diagnostic))
 	}
+	return &Preparation{
+		RepositoryRoot: repositoryRoot,
+		Score:          compiled,
+		Cast:           resolved,
+	}, result
+}
 
+func evaluatePrepared(
+	preparation *Preparation,
+	result Result,
+	newProber func() prober,
+) Result {
+	compiled := preparation.Score
+	resolved := preparation.Cast
 	adapterIDs := referencedAdapters(compiled, resolved)
 	if len(adapterIDs) == 0 {
 		return result

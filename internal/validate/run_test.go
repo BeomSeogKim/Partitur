@@ -58,6 +58,130 @@ func TestAcquisitionUsesWorkingDirectoryAndLayerPrecedence(t *testing.T) {
 	}
 }
 
+func TestPrepareReturnsAnchoredValidatedInputs(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(string(filepath.Separator), "work", "repo")
+	home := filepath.Join(string(filepath.Separator), "users", "operator")
+	scorePath := filepath.Join(root, "partitur.yaml")
+	castPath := filepath.Join(root, ".partitur", "cast.yaml")
+	workingDirectoryCalls := 0
+	preparation, result := prepareValidated(acquisitionDependencies{
+		workingDirectory: func() (string, error) {
+			workingDirectoryCalls++
+			return root, nil
+		},
+		userHome: func() (string, error) { return home, nil },
+		readFile: func(path string) ([]byte, error) {
+			switch path {
+			case scorePath:
+				return encode(t, validDraftScore("plan")), nil
+			case castPath:
+				return encode(
+					t,
+					validCast(map[string]string{"plan": "performer"}),
+				), nil
+			default:
+				return nil, os.ErrNotExist
+			}
+		},
+	})
+	if result.Refusal != nil || len(result.Entries) != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	if preparation == nil {
+		t.Fatal("preparation is nil")
+	}
+	if workingDirectoryCalls != 1 {
+		t.Fatalf("working directory calls = %d, want 1", workingDirectoryCalls)
+	}
+	if preparation.RepositoryRoot != root {
+		t.Fatalf("repository root = %q, want %q", preparation.RepositoryRoot, root)
+	}
+	if got := preparation.Score.Execution().Goal; got != "Validate the fixture." {
+		t.Fatalf("score goal = %q", got)
+	}
+	binding, exists := preparation.Cast.Binding("plan")
+	if !exists || binding.Performer != "performer" {
+		t.Fatalf("binding = %#v, exists = %t", binding, exists)
+	}
+}
+
+func TestPrepareRejectsInvalidOrIncompatibleInputs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		score      map[string]any
+		cast       map[string]any
+		wantRule   string
+		wantDetail string
+	}{
+		{
+			name: "invalid_score",
+			score: func() map[string]any {
+				document := validDraftScore("plan")
+				delete(document, "goal")
+				return document
+			}(),
+			cast:       validCast(map[string]string{"plan": "performer"}),
+			wantRule:   "score.schema",
+			wantDetail: "required",
+		},
+		{
+			name:  "invalid_cast",
+			score: validDraftScore("plan"),
+			cast: func() map[string]any {
+				document := validCast(map[string]string{"plan": "performer"})
+				delete(objectAt(objectAt(document["performers"])["performer"]), "model")
+				return document
+			}(),
+			wantRule:   "cast.schema",
+			wantDetail: "required",
+		},
+		{
+			name:       "missing_binding",
+			score:      validDraftScore("plan"),
+			cast:       validCast(map[string]string{}),
+			wantRule:   "cast.score",
+			wantDetail: "binding_missing",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(string(filepath.Separator), "repo")
+			preparation, result := prepareValidated(acquisitionDependencies{
+				workingDirectory: func() (string, error) { return root, nil },
+				userHome:         func() (string, error) { return "/home/operator", nil },
+				readFile: func(path string) ([]byte, error) {
+					switch path {
+					case filepath.Join(root, "partitur.yaml"):
+						return encode(t, test.score), nil
+					case filepath.Join(root, ".partitur", "cast.yaml"):
+						return encode(t, test.cast), nil
+					default:
+						return nil, os.ErrNotExist
+					}
+				},
+			})
+			if preparation != nil {
+				t.Fatalf("preparation = %#v, want nil", preparation)
+			}
+			if len(result.Entries) != 1 {
+				t.Fatalf("entries = %#v", result.Entries)
+			}
+			entry := result.Entries[0]
+			if entry.Rule != test.wantRule || entry.Detail != test.wantDetail {
+				t.Fatalf(
+					"entry = %#v, want rule %q detail %q",
+					entry,
+					test.wantRule,
+					test.wantDetail,
+				)
+			}
+		})
+	}
+}
+
 func TestMissingOptionalLayersAreAbsent(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(string(filepath.Separator), "repo")

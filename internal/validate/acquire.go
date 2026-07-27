@@ -15,6 +15,7 @@ type acquisitionDependencies struct {
 }
 
 type inputs struct {
+	root   string
 	score  []byte
 	layers []cast.Layer
 }
@@ -38,7 +39,10 @@ func acquire(dependencies acquisitionDependencies) (inputs, *Refusal) {
 		}
 	}
 
-	result := inputs{score: scoreData}
+	result := inputs{
+		root:  root,
+		score: scoreData,
+	}
 	projectPath := filepath.Join(root, ".partitur", "cast.yaml")
 	projectData, present, refusal := readOptional(
 		dependencies.readFile,
