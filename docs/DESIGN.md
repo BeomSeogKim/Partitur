@@ -4707,15 +4707,12 @@ tables below as their owning clauses require:
 | `RC-RESUME-036` | §6/§9 inert orphan plan and quiesced-sidecar cleanup |
 | `RC-RESUME-038` | §2 reconstruction of an orphaned core-finalization proposal on the next `resume` |
 
-These remaining holes are recorded so the registry is honest. F3 owns their actions; this section
-adds none:
+The known-hole table is deliberately retained even when empty: a later gap must be named here rather
+than hidden in a coverage row, and the mechanical guard checks the table's shape. No known holes
+remain after the branch expansion in C.4.
 
 | Recovery case | Planned closure | Open gap |
 |---|---|---|
-| `RC-RESUME-041` | F3 | A non-gate decision resolution, decision obsoletion, or amendment terminal can release a blocked movement without selecting its continuation |
-| `RC-RESUME-043` | F3 | No-in-flight scheduling is absent after run start, movement readiness/start/success, candidate materialization, or finalization |
-| `RC-RESUME-044` | F3 | A crash during movement or candidate composition, before durable verdict evidence, selects no post-close action |
-| `RC-RESUME-045` | F3 | Exhausted budget between attempts, movements, or candidate composition has no selected terminal path |
 
 The registry is a coverage index, not another recovery procedure. `direct` means a case predicate
 names the event or disposition; `structural` means a broader projected-state or phase predicate owns
@@ -4724,13 +4721,13 @@ it to one of the two §8 surfaces above. `open` entries point to the stable gap 
 
 | Kind | Entry | Classification | Cases | Coverage |
 |---|---|---|---|---|
-| event | `run.started` | structural | `RC-RESUME-010`, `RC-RESUME-043` | open |
+| event | `run.started` | structural | `RC-RESUME-010`, `RC-RESUME-043` | covered |
 | event | `run.succeeded` | direct | `RC-RESUME-002` | covered |
 | event | `run.failed` | direct | `RC-RESUME-002` | covered |
 | event | `run.cancelled` | direct | `RC-RESUME-002` | covered |
-| event | `movement.ready` | direct | `RC-RESUME-043` | open |
-| event | `movement.started` | direct | `RC-RESUME-043`, `RC-RESUME-044` | open |
-| event | `movement.succeeded` | structural | `RC-RESUME-002`, `RC-RESUME-043` | open |
+| event | `movement.ready` | direct | `RC-RESUME-043` | covered |
+| event | `movement.started` | direct | `RC-RESUME-043`, `RC-RESUME-044` | covered |
+| event | `movement.succeeded` | structural | `RC-RESUME-002`, `RC-RESUME-043` | covered |
 | event | `movement.failed` | direct | `RC-RESUME-020`, `RC-RESUME-047` | covered |
 | event | `movement.cancelled` | structural | `RC-RESUME-002` | covered |
 | event | `performer.selected` | direct | `RC-RESUME-013` | covered |
@@ -4742,28 +4739,28 @@ it to one of the two §8 surfaces above. `open` entries point to the stable gap 
 | event | `attempt.failed` | direct | `RC-RESUME-039` | covered |
 | event | `attempt.cancelled` | structural | `RC-RESUME-002` | covered |
 | event | `attempt.superseded` | structural | `RC-RESUME-042` | covered |
-| event | `execution.started` | structural | `RC-RESUME-001`, `RC-RESUME-044` | open |
-| event | `execution.stopped` | structural | `RC-RESUME-015`, `RC-RESUME-044` | open |
+| event | `execution.started` | structural | `RC-RESUME-001`, `RC-RESUME-044` | covered |
+| event | `execution.stopped` | structural | `RC-RESUME-015`, `RC-RESUME-044` | covered |
 | event | `artifact.recorded` | structural | `RC-RESUME-010`, `RC-RESUME-015`, `RC-RESUME-016`, `RC-RESUME-017` | covered |
 | event | `change_set.recorded` | direct | `RC-RESUME-018` | covered |
 | event | `verification.passed` | direct | `RC-RESUME-018` | covered |
 | event | `composition.conflicted` | direct | `RC-RESUME-011` | covered |
 | event | `composition.failed` | direct | `RC-RESUME-011` | covered |
-| event | `application_candidate.recorded` | direct | `RC-RESUME-043` | open |
+| event | `application_candidate.recorded` | direct | `RC-RESUME-043` | covered |
 | event | `acceptance.started` | direct | `RC-RESUME-031`, `RC-RESUME-032`, `RC-RESUME-033` | covered |
 | event | `criterion.started` | direct | `RC-RESUME-024` | covered |
 | event | `criterion.completed` | direct | `RC-RESUME-023`, `RC-RESUME-025`, `RC-RESUME-033` | covered |
 | event | `acceptance.failed` | direct | `RC-RESUME-022` | covered |
 | event | `acceptance.evaluation_completed` | direct | `RC-RESUME-026`, `RC-RESUME-030` | covered |
 | event | `decision.requested` | direct | `RC-RESUME-027`, `RC-RESUME-040`, `RC-RESUME-048` | covered |
-| event | `decision.resolved` | direct | `RC-RESUME-028`, `RC-RESUME-029`, `RC-RESUME-041` | open |
-| event | `decision.obsoleted` | structural | `RC-RESUME-002`, `RC-RESUME-041`, `RC-RESUME-042` | open |
-| event | `amendment.rejected` | structural | `RC-RESUME-041` | open |
+| event | `decision.resolved` | direct | `RC-RESUME-028`, `RC-RESUME-029`, `RC-RESUME-041` | covered |
+| event | `decision.obsoleted` | structural | `RC-RESUME-002`, `RC-RESUME-041`, `RC-RESUME-042` | covered |
+| event | `amendment.rejected` | structural | `RC-RESUME-041` | covered |
 | event | `amendment.approval_prepared` | direct | `RC-RESUME-007` | covered |
-| event | `amendment.approval_abandoned` | structural | `RC-RESUME-036`, `RC-RESUME-043` | open |
+| event | `amendment.approval_abandoned` | structural | `RC-RESUME-036`, `RC-RESUME-043` | covered |
 | event | `amendment.routed_human` | direct | `RC-RESUME-037` | covered |
-| event | `amendment.approved` | structural | `RC-RESUME-003`, `RC-RESUME-042`, `RC-RESUME-043` | open |
-| event | `amendment.human_rejected` | structural | `RC-RESUME-041` | open |
+| event | `amendment.approved` | structural | `RC-RESUME-003`, `RC-RESUME-042`, `RC-RESUME-043` | covered |
+| event | `amendment.human_rejected` | structural | `RC-RESUME-041` | covered |
 | event | `apply.started` | separate-surface | `RC-APPLY-001` | covered |
 | event | `apply.completed` | separate-surface | `RC-APPLY-002` | covered |
 | event | `apply.failed` | separate-surface | `RC-APPLY-002` | covered |
@@ -4834,7 +4831,7 @@ resuming work:
 | `RC-RESUME-037` | `amendment.routed_human` durable, its matching `decision.requested` absent | Apply §1's source-to-request rule idempotently, then re-evaluate C.1. The routed event fixes the request payload; recovery does not re-run routing or infer it from `attempt.blocked` |
 | `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). Do not enter C.2 or C.3 for an attempt from the superseded revision |
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
-| `RC-RESUME-012` | Otherwise | Proceed to C.2 for the movement's in-flight attempt, if any |
+| `RC-RESUME-012` | Otherwise | Proceed to C.2 for the movement's current-head, non-superseded in-flight attempt, if any; when there is none, proceed to the between-unit scheduler in C.4 |
 
 ## C.2 Attempt lifecycle recovery
 
@@ -4849,13 +4846,14 @@ recovery never verifies, fails, completes, or resumes that historical attempt. A
 `amendment.approved`, `RC-RESUME-042` owns revision-continuation selection, and a state with no
 current-head attempt belongs to the between-unit scheduler rather than falling through these
 tables. A terminal `BLOCKED` attempt whose last blocking decision has become terminal likewise
-leaves C.2 and is the still-open `RC-RESUME-041`; its source/request and intentional-wait cuts are
-closed below.
+leaves the attempt lifecycle; `RC-RESUME-041` selects its continuation and C.4 materializes it.
+Its source/request and intentional-wait cuts are closed below.
 
 | Recovery case | Last durable state | Recovery action |
 |---|---|---|
 | `RC-RESUME-039` | Current-head `attempt.failed` durable, its recorded §3.1 Arm 2 consequence absent | Realize that recorded disposition exactly once per §3.1's second arm, reading no current budget or admissibility state. A `none` consequence appends the prescribed `movement.failed` and re-evaluates from C.1. A `quality_retry` or `fallback` consequence selects the recorded pending successor and exits C.2 to the between-unit scheduler; this row does not append `performer.selected` or launch it |
 | `RC-RESUME-040` | Current-head `attempt.blocked` has a `question` in `raised` whose matching `decision.requested` is absent | Append the first missing request idempotently from the recorded source, in `raised` order, then re-evaluate this row. Proposal requests never match this row; their sole source is `amendment.routed_human` and `RC-RESUME-037` owns that cut |
+| `RC-RESUME-041` | Current-head `attempt.blocked`, every request required by a durable source is durable, no blocking decision remains unresolved, the movement and run remain nonterminal, and the score head is the attempt's revision | Select the `decision_resume` continuation §4 already fixes, preserving the blocked attempt's performer and fallback position as §3.1 requires, then hand its materialization to C.4. A terminal run is owned by `RC-RESUME-002`; an approved revision is owned by `RC-RESUME-042`; finalization that completed the draft movement returns to C.1/C.4. Those are the decision-obsoletion branches, so this row never turns obsoletion into an invented same-revision retry |
 | `RC-RESUME-048` | Current-head `attempt.blocked`, every request required by a durable source is durable, and at least one blocking decision unresolved | Append nothing and return the quiescent `WAITING_HUMAN` result §6 and §7 already define. No adapter or criterion process remains: `attempt.blocked` is terminal and §4's execute-completion boundary precedes it |
 | `RC-RESUME-013` | `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). Run §4's shared bounded handoff stabilization rather than classifying its first sample. If it yields a matching identity, verify and sweep that session. If it yields marker-free, rely only on the stated **no released mutator survives** property — an unreleased trampoline may still be in its pre-marker window but contains no adapter code. Either halt outcome stops this row. Only after a published session is verified empty or the marker is observed free, close any open `adapter` interval `recovered`/`clamped`; then append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and realize it per §3.1's second arm |
 | `RC-RESUME-014` | `attempt.started`, no `adapter.probed` | Sweep the **recorded** adapter session to verified empty **before** any failure or fallback — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped`. No durable valid probe observation exists, so append `attempt.failed {kind: adapter_unavailable, reason: probe_terminated_incomplete, disposition}`, then realize it per §3.1. Recovery does not manufacture the missing observation |
@@ -4906,6 +4904,179 @@ projected from the journal rather than a judgement recovery originates.
 | `RC-RESUME-031` | `acceptance.started`, an **unjournaled** `launch_id` directory present | A criterion launch crashed before its `criterion.started` append. Run §4's same bounded handoff stabilization. If it yields a matching identity, verify and sweep that session (`sweep_unverifiable` halts); if it yields marker-free, no released criterion mutator survives; either halt outcome stops this row. Only after the identity's session is verified empty or the marker is observed free, remove the directory and continue with the rows below — the criterion never started as far as the journal is concerned, but an unreleased pre-marker trampoline may still be exiting on gate EOF |
 | `RC-RESUME-032` | `acceptance.started`, no criterion events | Resume with the first criterion |
 | `RC-RESUME-033` | Some `criterion.completed` (all `PASS`), none in flight, criteria remaining | Resume with the next unstarted criterion |
+
+## C.4 Between-unit continuation and branch expansion
+
+C.4 runs only after C.1 has selected no higher-precedence run action and C.2/C.3 have selected no
+current-head, non-superseded in-flight attempt action. It is the owner of a nonterminal run with no
+such attempt. It does not select a successor that §3.1, §4, or §9 already selected; it makes that
+selection durable or advances the score's already-compiled lifecycle.
+
+| Recovery case | Last durable state | Recovery action |
+|---|---|---|
+| `RC-RESUME-045` | No current-head, non-superseded attempt is in flight and `remaining_time == 0` | Take §6's existing budget-exhaustion path for the unit that would otherwise run. A `RUNNING` movement awaiting an attempt or movement fan-in receives `movement.failed {budget_exhausted}` and then `RC-RESUME-020`; candidate composition, or exhaustion between movements before another movement is `RUNNING`, receives `run.failed {budget_exhausted}` directly. Append no `performer.selected`, `movement.ready`, or `movement.started` after exhaustion |
+| `RC-RESUME-044` | The generic pre-table close recorded `execution.stopped {phase: composition, reason: recovered}`, no `composition.conflicted` or `composition.failed` evidence exists for that interval's subject, and budget remains | Re-run the same §5 deterministic composition from its durable inputs. A movement fan-in resumes the current `RUNNING` movement; candidate composition resumes the run-scoped materialization. Record a conflict or execution failure only if this invocation observes that verdict; on success continue through `RC-RESUME-043`. The recovered close alone is not failure evidence and never synthesizes `composition.failed` |
+| `RC-RESUME-043` | No row above applies and the run is nonterminal with no current-head, non-superseded attempt in flight | Advance exactly one scheduler step, then re-evaluate from C.1. First materialize any pending successor already selected by §3.1, `RC-RESUME-041`, or `RC-RESUME-042` as its one `performer.selected`. Otherwise apply the compiled score in declaration order: make the first dependency-satisfied `PENDING` movement `READY`; start the first `READY` movement; for a `RUNNING` movement with no attempt, perform its §5 fan-in and durably select the `initial` attempt; after movement success, repeat readiness; when §8's candidate precondition holds, compose and record the candidate; after that event the final movement enters the same readiness path. On the waived path, when §8's completion predicate holds, append its single candidate-carrying `run.succeeded`. The scheduler never bypasses §2's final-movement or `apply_gate` rules |
+
+`RC-RESUME-048` is the intentional fixed point before this scheduler: an unresolved blocking
+decision selects “return quiescent in `WAITING_HUMAN`”. It is an action with no append, not a state
+that falls through to C.4. Conversely, a non-blocking decision does not stop scheduling, and a
+terminal blocking decision reaches `RC-RESUME-041`, `RC-RESUME-042`, terminal cleanup, or the
+finalization branch of `RC-RESUME-043`; decision obsoletion never creates an extra retry category.
+
+### C.4.1 Finite selection model
+
+The mechanical expansion operates on **selection cuts**: journal replay and the required external
+observations have been projected, but the selected recovery action has not yet run. An action that
+appends or cleans up one fact produces another cut and selection starts again at C.0. This keeps the
+model finite without pretending that a multi-step recovery is atomic.
+
+The axes are normative. `irrelevant` means an earlier branch has made that axis unreachable at this
+cut; it does not mean the implementation may ignore a value that could change the selected branch.
+
+| Axis | Values | Why it discriminates |
+|---|---|---|
+| `surface` | `resume`, `apply`, `promote` | The same journal may select different actions on the three recovery surfaces |
+| `run` | `active`, `terminal`, `irrelevant` | Terminal cleanup outranks continuation, while shipping recovery is on a separate projection |
+| `integrity` | `valid`, `repair`, `halt`, `irrelevant` | Replay repair may proceed, but an untrusted authoritative input must halt before mutation |
+| `owner` | `clear`, `stale`, `orphan`, `unverifiable`, `live`, `unowned`, `irrelevant` | Lease cleanup, refusal, halt, and authority reclamation are distinct results |
+| `control` | `none`, `cancel`, `prepare`, `irrelevant` | Cancellation and a pending prepare outrank ordinary lifecycle continuation |
+| `consequence` | `none`, `interval`, `request`, `revision`, `disposition`, `composition_terminal`, `lifecycle_terminal`, `irrelevant` | Already-determined durable consequences must close before new work |
+| `unit` | `none`, `attempt`, `acceptance`, `movement_composition`, `candidate_composition`, `application`, `promotion` | It separates attempt/criterion recovery, between-unit composition, and the two shipping projections |
+| `phase` | `idle`, `tail_repair`, `orphan_cleanup`, `control_cleanup`, `finalization_rebuild`, `root_divergence`, `missing_reference`, `interval_open`, `revision_changed`, `selected`, `started`, `probed`, `performed`, `verified`, `acceptance_ready`, `completed`, `failed`, `blocked`, `acceptance_empty`, `criterion_pending`, `criterion_running`, `criterion_failed`, `criterion_next`, `criteria_passed`, `evaluated`, `gate_free`, `gate_open`, `gate_approved`, `gate_rejected`, `ready`, `running`, `interrupted`, `recoverable`, `refused` | The last durable phase selects the idempotent continuation within a unit |
+| `decision` | `none`, `unresolved`, `released`, `irrelevant` | An unresolved blocking decision selects quiescence; a released one selects a new attempt |
+| `budget` | `available`, `exhausted`, `irrelevant` | New active work is forbidden at zero, including work between attempts |
+| `observation` | `safe`, `owner_unverifiable`, `handoff_unverifiable`, `sweep_unverifiable`, `irrelevant` | A required process or filesystem observation may turn a continuation into a specific named halt |
+
+The **reachable recovery selection cuts** table is the finite state expansion. Each row denotes one
+reachable combination; comma-separated cells denote the Cartesian alternatives in that cell.
+No wildcard is allowed here. The alternatives expose precedence interleavings rather than hiding
+them in prose. A combination not generated by this table is outside the declared reachable model.
+
+| Cut | surface | run | integrity | owner | control | consequence | unit | phase | decision | budget | observation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `RS-001` | apply | irrelevant | irrelevant | irrelevant | irrelevant | irrelevant | application | recoverable | irrelevant | irrelevant | irrelevant |
+| `RS-002` | apply | irrelevant | irrelevant | irrelevant | irrelevant | irrelevant | application | refused | irrelevant | irrelevant | irrelevant |
+| `RS-003` | promote | irrelevant | irrelevant | irrelevant | irrelevant | irrelevant | promotion | recoverable | irrelevant | irrelevant | irrelevant |
+| `RS-004` | promote | irrelevant | irrelevant | irrelevant | irrelevant | irrelevant | promotion | refused | irrelevant | irrelevant | irrelevant |
+| `RS-005` | resume | irrelevant | repair | clear | none | none | none | tail_repair,orphan_cleanup,control_cleanup,finalization_rebuild | none | available | safe |
+| `RS-006` | resume | active | halt | clear | none,cancel,prepare | none | none | root_divergence,missing_reference | none | available | safe |
+| `RS-007` | resume | terminal | valid | clear,stale,orphan | none,cancel,prepare | none,lifecycle_terminal | none | idle | none,unresolved | available,exhausted | safe |
+| `RS-008` | resume | active | valid | stale | none,cancel,prepare | none | none | idle | none | available | safe |
+| `RS-009` | resume | active | valid | orphan | none,cancel,prepare | none | none | idle | none | available | safe |
+| `RS-010` | resume | active | valid | unverifiable | none,cancel,prepare | none | none | idle | none | available | owner_unverifiable |
+| `RS-011` | resume | active | valid | live | none,cancel,prepare | none | none | idle | none | available | safe |
+| `RS-012` | resume | active | valid | clear,unowned | cancel | none,request,disposition,composition_terminal | none,attempt,acceptance,movement_composition,candidate_composition | idle,failed,interrupted | none,unresolved,released | available,exhausted | safe |
+| `RS-013` | resume | active | valid | clear,unowned | prepare | none | none | idle | none | available | safe |
+| `RS-014` | resume | active | valid | unowned | none | none | none | idle | none | available | safe |
+| `RS-015` | resume | active | valid | clear | none | request | none | blocked | none | available | safe |
+| `RS-016` | resume | active | valid | clear | none | disposition | attempt,acceptance | failed | none | available | safe |
+| `RS-017` | resume | active | valid | clear | none | composition_terminal | movement_composition,candidate_composition | completed | none | available | safe |
+| `RS-018` | resume | active | valid | clear | none | lifecycle_terminal | attempt | completed,failed,gate_rejected | none | available | safe |
+| `RS-019` | resume | active | valid | clear | none | none | attempt | selected | none | available | safe,handoff_unverifiable,sweep_unverifiable |
+| `RS-020` | resume | active | valid | clear | none | none | attempt | performed,verified,acceptance_ready | none | available | safe |
+| `RS-021` | resume | active | valid | clear | none | none | acceptance | gate_open | unresolved | available | safe |
+| `RS-022` | resume | active | valid | clear | none | none | attempt | blocked | unresolved | available | safe |
+| `RS-023` | resume | active | valid | clear | none | none | attempt | blocked | released | available | safe |
+| `RS-025` | resume | active | valid | clear | none | none | none,attempt | idle,ready,running | none | available | safe |
+| `RS-026` | resume | active | valid | clear | none | none | movement_composition,candidate_composition | interrupted | none | available | safe |
+| `RS-027` | resume | active | valid | clear | none | none | none,attempt,movement_composition,candidate_composition | idle,failed,interrupted | none,released | exhausted | safe |
+| `RS-029` | resume | active | valid | clear | none | none | acceptance | criterion_pending | none | available | safe,handoff_unverifiable,sweep_unverifiable |
+| `RS-030` | resume | active | valid | clear | none | none | acceptance | criterion_failed,criterion_next,criteria_passed,evaluated,gate_free | none | available | safe |
+| `RS-031` | resume | active | valid | clear | none | none | acceptance | gate_approved,gate_rejected | released | available | safe |
+| `RS-032` | resume | active | valid | clear | none | request | attempt | blocked | none,unresolved | available | safe |
+| `RS-033` | resume | active | valid | clear | none | interval | none | interval_open | none | available,exhausted | safe |
+| `RS-034` | resume | active | valid | clear | none | revision | none | revision_changed | released | available | safe |
+| `RS-035` | resume | active | valid | clear | none | none | acceptance | acceptance_empty | none | available | safe |
+| `RS-036` | resume | active | valid | clear | none | none | attempt | started,probed | none | available | safe,sweep_unverifiable |
+| `RS-037` | resume | active | valid | clear | none | none | acceptance | criterion_running | none | available | safe,sweep_unverifiable |
+
+The **recovery action selection expansion** is independent of that reachability declaration. A
+cell is either one axis value, a comma-separated set, or `*`. Lower numeric precedence wins.
+Every generated cut must have exactly one winning row after precedence, and every action row must
+win at least one cut.
+
+| Action row | Precedence | Recovery case | surface | run | integrity | owner | control | consequence | unit | phase | decision | budget | observation | Selected result |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `RA-001` | 10 | `RC-APPLY-001` | apply | * | * | * | * | * | application | recoverable | * | * | irrelevant | Execute §8 application recovery |
+| `RA-002` | 10 | `RC-APPLY-002` | apply | * | * | * | * | * | application | refused | * | * | irrelevant | Refuse under §7 |
+| `RA-003` | 10 | `RC-PROMOTE-001` | promote | * | * | * | * | * | promotion | recoverable | * | * | irrelevant | Execute §8 promotion recovery |
+| `RA-004` | 10 | `RC-PROMOTE-002` | promote | * | * | * | * | * | promotion | refused | * | * | irrelevant | Refuse under §7 |
+| `RA-005` | 20 | `RC-RESUME-034` | resume | irrelevant | repair | * | * | * | * | tail_repair | * | * | safe | Repair the torn tail, then re-evaluate |
+| `RA-006` | 70 | `RC-RESUME-009` | resume | active | halt | * | none | * | * | root_divergence | * | * | * | Halt `root_snapshot_divergence` |
+| `RA-007` | 30 | `RC-RESUME-002` | resume | terminal | * | * | * | * | * | * | * | * | safe | Complete terminal projections and cleanup |
+| `RA-008` | 40 | `RC-RESUME-003` | resume | active | valid | stale | * | * | * | * | * | * | safe | Remove stale lease, then re-evaluate |
+| `RA-009` | 40 | `RC-RESUME-004` | resume | active | valid | orphan | * | * | * | * | * | * | safe | Quarantine orphan lease, then re-evaluate |
+| `RA-010` | 40 | `RC-RESUME-005` | resume | active | valid | unverifiable | * | * | * | * | * | * | owner_unverifiable | Halt `owner_unverifiable` |
+| `RA-011` | 40 | `RC-RESUME-046` | resume | active | valid | live | * | * | * | * | * | * | safe | Refuse this invocation |
+| `RA-012` | 50 | `RC-RESUME-006` | resume | active | valid,halt | clear,unowned | cancel | * | * | * | * | * | safe | Execute the §6 cancellation oracle |
+| `RA-013` | 50 | `RC-RESUME-007` | resume | active | valid,halt | clear,unowned | prepare | none | none | idle,root_divergence,missing_reference | none | available | safe | Complete or abandon the prepare |
+| `RA-014` | 60 | `RC-RESUME-008` | resume | active | valid | unowned | none | none | none | idle | none | available | safe | Reclaim authority |
+| `RA-015` | 70 | `RC-RESUME-037` | resume | active | valid | clear | none | request | none | blocked | none | available | safe | Append the derived request |
+| `RA-016` | 70 | `RC-RESUME-040` | resume | active | valid | clear | none | request | attempt | blocked | none,unresolved | available | safe | Append the missing question request |
+| `RA-017` | 70 | `RC-RESUME-039` | resume | active | valid | clear | none | disposition | attempt | failed | none | available | safe | Realize the recorded attempt disposition |
+| `RA-018` | 70 | `RC-RESUME-022` | resume | active | valid | clear | none | disposition | acceptance | failed | none | available | safe | Realize the recorded acceptance disposition |
+| `RA-019` | 70 | `RC-RESUME-011` | resume | active | valid | clear | none | composition_terminal | movement_composition,candidate_composition | completed | none | available | safe | Append the evidence-selected terminal |
+| `RA-020` | 70 | `RC-RESUME-019` | resume | active | valid | clear | none | lifecycle_terminal | attempt | completed | none | available | safe | Append `movement.succeeded` |
+| `RA-021` | 70 | `RC-RESUME-020` | resume | active | valid | clear | none | lifecycle_terminal | attempt | failed | none | available | safe | Append `run.failed` |
+| `RA-022` | 70 | `RC-RESUME-021` | resume | active | valid | clear | none | lifecycle_terminal | attempt | gate_rejected | none | available | safe | Append the atomic final-movement failure |
+| `RA-023` | 80 | `RC-RESUME-013` | resume | active | valid | clear | none | none | attempt | selected | none | available | safe | Stabilize the handoff, then fail the unstarted attempt |
+| `RA-024` | 80 | `RC-RESUME-014` | resume | active | valid | clear | none | none | attempt | started | none | available | safe | Sweep, then record the incomplete probe failure |
+| `RA-025` | 80 | `RC-RESUME-015` | resume | active | valid | clear | none | none | attempt | probed | none | available | safe | Sweep, then record incomplete execution |
+| `RA-026` | 80 | `RC-RESUME-016` | resume | active | valid | clear | none | none | attempt | performed | none | available | safe | Capture the change set or record worktree loss |
+| `RA-027` | 80 | `RC-RESUME-017` | resume | active | valid | clear | none | none | attempt | verified | none | available | safe | Re-run post-hoc verification |
+| `RA-028` | 80 | `RC-RESUME-018` | resume | active | valid | clear | none | none | attempt | acceptance_ready | none | available | safe | Append `acceptance.started` |
+| `RA-029` | 80 | `RC-RESUME-031` | resume | active | valid | clear | none | none | acceptance | criterion_pending | none | available | safe | Stabilize and remove the unjournaled launch |
+| `RA-030` | 80 | `RC-RESUME-024` | resume | active | valid | clear | none | none | acceptance | criterion_running | none | available | safe | Sweep and record only the observed recovery result |
+| `RA-031` | 80 | `RC-RESUME-023` | resume | active | valid | clear | none | none | acceptance | criterion_failed | none | available | safe | Append `acceptance.failed` |
+| `RA-032` | 80 | `RC-RESUME-033` | resume | active | valid | clear | none | none | acceptance | criterion_next | none | available | safe | Resume the next unstarted criterion |
+| `RA-033` | 80 | `RC-RESUME-025` | resume | active | valid | clear | none | none | acceptance | criteria_passed | none | available | safe | Append evaluation completion |
+| `RA-034` | 80 | `RC-RESUME-026` | resume | active | valid | clear | none | none | acceptance | evaluated | none | available | safe | Append the required gate request |
+| `RA-035` | 80 | `RC-RESUME-030` | resume | active | valid | clear | none | none | acceptance | gate_free | none | available | safe | Complete the attempt and movement |
+| `RA-036` | 80 | `RC-RESUME-028` | resume | active | valid | clear | none | none | acceptance | gate_approved | released | available | safe | Complete the attempt and movement |
+| `RA-037` | 80 | `RC-RESUME-029` | resume | active | valid | clear | none | none | acceptance | gate_rejected | released | available | safe | Append the gate-selected failure |
+| `RA-038` | 90 | `RC-RESUME-027` | resume | active | valid | clear | none | none | acceptance | gate_open | unresolved | available | safe | Return quiescent in `WAITING_HUMAN` |
+| `RA-039` | 90 | `RC-RESUME-048` | resume | active | valid | clear | none | none | attempt | blocked | unresolved | available | safe | Return quiescent in `WAITING_HUMAN` |
+| `RA-040` | 90 | `RC-RESUME-041` | resume | active | valid | clear | none | none | attempt | blocked | released | available | safe | Select `decision_resume` |
+| `RA-041` | 90 | `RC-RESUME-045` | resume | active | valid | clear | none | * | none,attempt,movement_composition,candidate_composition | idle,failed,interrupted | none,released | exhausted | safe | Take the §6 budget-exhaustion path |
+| `RA-042` | 100 | `RC-RESUME-044` | resume | active | valid | clear | none | none | movement_composition,candidate_composition | interrupted | none | available | safe | Re-run deterministic composition |
+| `RA-043` | 100 | `RC-RESUME-043` | resume | active | valid | clear | none | none | none,attempt | idle,ready,running | none | available | safe | Advance one between-unit scheduler step |
+| `RA-046` | 20 | `RC-RESUME-035` | resume | irrelevant | repair | * | * | * | * | orphan_cleanup | * | * | safe | Remove orphan artifacts, then re-evaluate |
+| `RA-047` | 20 | `RC-RESUME-036` | resume | irrelevant | repair | * | * | * | * | control_cleanup | * | * | safe | Remove inert control artifacts, then re-evaluate |
+| `RA-048` | 20 | `RC-RESUME-038` | resume | irrelevant | repair | * | * | * | * | finalization_rebuild | * | * | safe | Reconstruct the finalization proposal, then re-evaluate |
+| `RA-049` | 70 | `RC-RESUME-010` | resume | active | halt | * | none | * | * | missing_reference | * | * | * | Halt with the matching Appendix D missing-reference reason |
+| `RA-050` | 65 | `RC-RESUME-001` | resume | active | valid | clear | none | interval | none | interval_open | none | * | safe | Close the open interval, then re-evaluate |
+| `RA-051` | 70 | `RC-RESUME-042` | resume | active | valid | clear | none | revision | none | revision_changed | released | available | safe | Select `revision_restart` |
+| `RA-052` | 80 | `RC-RESUME-032` | resume | active | valid | clear | none | none | acceptance | acceptance_empty | none | available | safe | Resume the first criterion |
+| `RA-053` | 75 | `RC-RESUME-013` | resume | active | valid | clear | none | none | attempt | selected | none | available | handoff_unverifiable | Halt `spawn_handoff_unverifiable` |
+| `RA-054` | 75 | `RC-RESUME-031` | resume | active | valid | clear | none | none | acceptance | criterion_pending | none | available | handoff_unverifiable | Halt `spawn_handoff_unverifiable` |
+| `RA-055` | 75 | `RC-RESUME-013` | resume | active | valid | clear | none | none | attempt | selected | none | available | sweep_unverifiable | Halt `sweep_unverifiable` |
+| `RA-056` | 75 | `RC-RESUME-014` | resume | active | valid | clear | none | none | attempt | started | none | available | sweep_unverifiable | Halt `sweep_unverifiable` |
+| `RA-057` | 75 | `RC-RESUME-015` | resume | active | valid | clear | none | none | attempt | probed | none | available | sweep_unverifiable | Halt `sweep_unverifiable` |
+| `RA-058` | 75 | `RC-RESUME-031` | resume | active | valid | clear | none | none | acceptance | criterion_pending | none | available | sweep_unverifiable | Halt `sweep_unverifiable` |
+| `RA-059` | 75 | `RC-RESUME-024` | resume | active | valid | clear | none | none | acceptance | criterion_running | none | available | sweep_unverifiable | Halt `sweep_unverifiable` |
+
+Two Appendix C identifiers deliberately are not action rows:
+
+| Non-action case | Reason |
+|---|---|
+| RC-RESUME-012 | C.1 dispatcher into the attempt, acceptance, or between-unit tables; it cannot be the relation's final selection |
+| RC-RESUME-047 | proof that `movement.failed` has no contrary branch; the selectable action is `RC-RESUME-020` |
+
+The checker expands the reachability rows, validates every value against the axis table, applies all
+matching action rows, and requires one winner at the best precedence. It also rejects duplicate
+reachable combinations, an axis value used by no reachable combination, an undeclared recovery
+case, an Appendix C case missing from both the action and non-action tables, and an action row that
+never wins. Thus the checked claim is: **for every combination
+generated by the declared axes and reachable-cut table, selection yields exactly one action,
+refusal, quiescent return, or named halt.**
+
+That claim is deliberately relative to the model. The checker cannot prove that these axes and
+reachable cuts capture every state the implementation can produce, nor that the prose action has
+been implemented correctly. Adding an event, projection value, external observation, or precedence
+condition therefore requires reviewing the axes and expanding the reachable cuts before claiming
+coverage. That branch-expansion review obligation is the boundary between a mechanical totality
+proof and “the table looked complete”.
 
 ---
 
@@ -5130,12 +5301,10 @@ reason about it from durable evidence alone.
 It does **not** cover the evidence and lifecycle chains — `attempt.completed` → `movement.succeeded`,
 `movement.failed` → `run.failed`, a criterion's error completion → `acceptance.failed`,
 `acceptance.evaluation_completed` → `decision.requested`. Those are ordered too, and they will need
-their own treatment. They are excluded for a reason that is about this document rather than about
-them, and §3.1 has since removed half of it: recovery's successor selection is now a closed rule, but
-Appendix C has not yet been mechanically expanded against it, so the reachable states these chains
-pass through are still unenumerated. Freezing boundaries against an unexpanded table would produce a
-catalog that looks complete and is not. Narrowing the claim is the honest option; asserting coverage
-this appendix cannot deliver is not.
+their own treatment. Appendix C now mechanically expands the reachable recovery cuts these chains
+pass through, removing the earlier recovery-table reason for deferral. They remain excluded because
+this appendix has not yet assigned their `R`/`B` endpoints or stated their edge assertions. Adding
+them without that boundary catalog would produce coverage that looks complete and is not.
 
 ## E.1 The two signals
 
