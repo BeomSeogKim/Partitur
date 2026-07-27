@@ -12,6 +12,7 @@ import (
 func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 	t.Parallel()
 	allowed := map[string]bool{
+		"errors":  true,
 		"slices":  true,
 		"strconv": true,
 		"strings": true,

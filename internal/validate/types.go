@@ -1,6 +1,8 @@
 package validate
 
 import (
+	"slices"
+
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
@@ -70,6 +72,16 @@ type Preparation struct {
 	RepositoryRoot string
 	Score          *score.Score
 	Cast           *cast.Cast
+	scoreSource    []byte
+}
+
+// ScoreSource returns a defensive copy of the exact root score bytes acquired
+// for this preparation.
+func (p *Preparation) ScoreSource() []byte {
+	if p == nil {
+		return nil
+	}
+	return slices.Clone(p.scoreSource)
 }
 
 // HasDiagnostics reports whether any fatal validation output exists.

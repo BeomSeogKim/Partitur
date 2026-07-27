@@ -61,8 +61,6 @@ const (
 	LeaseRemoval      MutationKind = "lease_removal"
 )
 
-// GitRefCreation has no producer in this implementation; see DESIGN Appendix E.1.
-
 // ReceiptAddress names one receipt in its owning protocol step.
 type ReceiptAddress string
 

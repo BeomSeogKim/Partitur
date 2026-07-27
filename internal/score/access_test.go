@@ -17,6 +17,9 @@ func TestExecutionReadSurface(t *testing.T) {
 		},
 	}
 	compiled := assertCompiles(t, document)
+	if got := compiled.Revision(); got != 1 {
+		t.Fatalf("Revision() = %d, want 1", got)
+	}
 
 	if got, want := compiled.Execution(), (ExecutionView{
 		Goal:                           "Compile a complete score.",
@@ -90,6 +93,9 @@ func TestExecutionReadSurfacePreservesOmissions(t *testing.T) {
 	}
 
 	var nilScore *Score
+	if got := nilScore.Revision(); got != 0 {
+		t.Fatalf("nil score revision = %d", got)
+	}
 	if got := nilScore.Execution(); got != (ExecutionView{}) {
 		t.Fatalf("nil score execution = %#v", got)
 	}

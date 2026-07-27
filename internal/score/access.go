@@ -2,6 +2,14 @@ package score
 
 import "slices"
 
+// Revision returns the validated positive score revision.
+func (s *Score) Revision() uint64 {
+	if s == nil {
+		return 0
+	}
+	return uint64(s.document.Revision)
+}
+
 // Parts returns effective parts sorted by id. Every returned slice is a copy.
 func (s *Score) Parts() []PartView {
 	if s == nil {

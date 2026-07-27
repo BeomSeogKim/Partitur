@@ -15,6 +15,7 @@ func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 		"errors":        true,
 		"os":            true,
 		"path/filepath": true,
+		"slices":        true,
 		"sort":          true,
 		"github.com/BeomSeogKim/Partitur/internal/adapter": true,
 		"github.com/BeomSeogKim/Partitur/internal/cast":    true,
