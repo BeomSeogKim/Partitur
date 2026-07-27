@@ -65,10 +65,9 @@ func TestApplyDoesNotAliasInputOnSuccessOrError(t *testing.T) {
 
 func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
 	state := NewState(nil)
-	_, err := Apply(state, fixtureEvent("movement.succeeded", map[string]any{
-		"approved_artifact_instance_ids": []any{},
-		"identity_versions":              testIdentityVersions(),
-		"run_succeeded":                  false,
+	_, err := Apply(state, fixtureEvent("movement.failed", map[string]any{
+		"reason":     "retries_exhausted",
+		"run_failed": false,
 	}, nil))
 	if !errors.Is(err, ErrUnsupportedEventType) {
 		t.Fatalf("error = %v, want ErrUnsupportedEventType", err)
@@ -78,15 +77,15 @@ func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
 	}
 }
 
-func TestEScopedSupportedEventSetHasTwentyTwoTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasTwentyNineTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 22 {
-		t.Fatalf("supported event count = %d, want 22", count)
+	if count != 29 {
+		t.Fatalf("supported event count = %d, want 29", count)
 	}
 	if isSupportedEvent("movement.cancelled") {
 		t.Fatal("derived movement.cancelled must not be accepted as an authoritative event")
@@ -226,7 +225,7 @@ func TestCriterionLaunchVariantsAreDistinct(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			state := verifyingAttemptState(t)
+			state := verifiedAttemptState(t)
 			state, err := Apply(state, fixtureEvent(EventAcceptanceStarted, map[string]any{
 				"subject_tree":          "git-sha1:tree",
 				"acceptance_spec_hash":  "sha256:acceptance",
@@ -303,10 +302,36 @@ func runningAttemptState(t *testing.T) State {
 
 func verifyingAttemptState(t *testing.T) State {
 	t.Helper()
-	state := runningAttemptState(t)
+	state := probedAttemptState(t)
 	state, err := Apply(state, fixtureEvent(EventPerformerCompleted, map[string]any{
 		"session_hint_stored": false,
 	}, func(event *Event) {
+		event.MovementID = "m1"
+		event.AttemptID = "a1"
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func probedAttemptState(t *testing.T) State {
+	t.Helper()
+	state := runningAttemptState(t)
+	state, err := Apply(state, fixtureEvent(EventAdapterProbed, adapterProbedPayload(), func(event *Event) {
+		event.MovementID = "m1"
+		event.AttemptID = "a1"
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func verifiedAttemptState(t *testing.T) State {
+	t.Helper()
+	state := verifyingAttemptState(t)
+	state, err := Apply(state, fixtureEvent(EventVerificationPassed, map[string]any{}, func(event *Event) {
 		event.MovementID = "m1"
 		event.AttemptID = "a1"
 	}))
@@ -350,22 +375,33 @@ func runStartedPayload() map[string]any {
 func performerSelectedPayload() map[string]any {
 	return map[string]any{
 		"reason": "initial", "performer_id": "p1", "adapter_id": "adapter",
-		"adapter_version": "1", "model": "model",
+		"model": "model",
+	}
+}
+
+func adapterProbedPayload() map[string]any {
+	return map[string]any{
+		"adapter_version": "1",
+		"capabilities": map[string]any{
+			"repo_read": true, "repo_write": false, "shell": false,
+			"network": false, "resumable_sessions": false,
+		},
 		"enforcement": map[string]any{
 			"path_grants": false, "read_only": false, "network_grants": false,
 			"shell_grants": false, "read_grants": false,
 		},
-		"negotiated_features":   []any{},
-		"withheld_resolutions":  []any{},
-		"truncated_resolutions": []any{},
-		"advisory_dimensions":   []any{},
+		"negotiated_features":       []any{},
+		"withheld_resolutions":      []any{},
+		"truncated_resolutions":     []any{},
+		"advisory_dimensions":       []any{},
+		"execution_dependency_hash": "sha256:dependency",
+		"identity_versions":         testIdentityVersions(),
 	}
 }
 
 func attemptStartedPayload() map[string]any {
 	return map[string]any{
-		"attempt_number":            1,
-		"execution_dependency_hash": "sha256:dependency",
+		"attempt_number": 1,
 		"adapter_process": map[string]any{
 			"pid": 10, "session_id": 10,
 			"start_identity": map[string]any{

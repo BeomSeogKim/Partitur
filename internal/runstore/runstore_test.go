@@ -451,18 +451,17 @@ func TestReplayReturnsUnsupportedEventDistinctFromCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	event := runstate.Event{
-		EventID:       "event-movement-succeeded",
+		EventID:       "event-movement-failed",
 		Seq:           2,
 		Timestamp:     "2026-07-26T00:00:00.000Z",
 		RunID:         "run-1",
 		ScoreRevision: 1,
 		MovementID:    "m1",
 		AttemptID:     "a1",
-		Type:          "movement.succeeded",
+		Type:          "movement.failed",
 		Payload: json.RawMessage(`{
-			"approved_artifact_instance_ids": [],
-			"identity_versions": {"canonical_encoding": 1, "projections": {}},
-			"run_succeeded": false
+			"reason": "retries_exhausted",
+			"run_failed": false
 		}`),
 	}
 	line, err := json.Marshal(event)
