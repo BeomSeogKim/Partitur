@@ -30,9 +30,19 @@ var (
 	ErrImmutablePublicationConflict = errors.New("immutable_publication_conflict")
 	ErrHashMismatch                 = errors.New("hash_mismatch")
 	ErrLeaseConflict                = errors.New("lease_conflict")
+	ErrLeaseOwnerUnverifiable       = errors.New("owner_unverifiable")
 	ErrReceiptAddressRequired       = errors.New("receipt address required")
 	ErrQuarantineKindRequired       = errors.New("quarantine kind required")
 )
+
+// Driver is one acquired execution authority. Its token remains in this
+// process and driver.lease; it is never journaled.
+type Driver struct {
+	store *Store
+	runID runstate.RunID
+	seed  []runstate.MovementSeed
+	lease Lease
+}
 
 type Lease struct {
 	Epoch uint64

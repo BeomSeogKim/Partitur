@@ -2,7 +2,7 @@
 //
 // State is a pure function of the initial movement seed derived from the
 // authenticated pinned score and the journal. This package supports only the
-// twenty-nine event types needed by DESIGN Appendix E and the first run success
+// thirty-one event types needed by DESIGN Appendix E and the first run success
 // path. Valid registry events
 // outside that subset fail closed with ErrUnsupportedEventType.
 //
@@ -302,6 +302,8 @@ const (
 	EventAuthorityGranted              EventType = "authority.granted"
 	EventCancelRequested               EventType = "cancel.requested"
 	EventJournalTailTruncated          EventType = "journal.tail_truncated"
+	EventLog                           EventType = "log"
+	EventProgress                      EventType = "progress"
 )
 
 // Event is one strict journal envelope. Payload is validated before projection.

@@ -77,18 +77,42 @@ func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
 	}
 }
 
-func TestEScopedSupportedEventSetHasTwentyNineTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasThirtyOneTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 29 {
-		t.Fatalf("supported event count = %d, want 29", count)
+	if count != 31 {
+		t.Fatalf("supported event count = %d, want 31", count)
 	}
 	if isSupportedEvent("movement.cancelled") {
 		t.Fatal("derived movement.cancelled must not be accepted as an authoritative event")
+	}
+}
+
+func TestObservationsValidateWithoutChangingProjection(t *testing.T) {
+	state := runningAttemptState(t)
+	for _, event := range []Event{
+		fixtureEvent(EventLog, map[string]any{
+			"level": "info", "message": "one",
+		}, attemptEnvelope),
+		fixtureEvent(EventProgress, map[string]any{
+			"message": "halfway",
+		}, attemptEnvelope),
+	} {
+		next, err := Apply(state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(next, state) {
+			t.Fatalf("%s changed projection", event.Type)
+		}
+		key, err := IdempotencyKey(event)
+		if err != nil || key != "" {
+			t.Fatalf("%s key=%q error=%v", event.Type, key, err)
+		}
 	}
 }
 

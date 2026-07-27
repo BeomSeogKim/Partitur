@@ -23,6 +23,34 @@ type journalEntry struct {
 	idempotencyKey   string
 }
 
+func (transaction *Txn) project(seed []runstate.MovementSeed) (runstate.State, error) {
+	state := runstate.NewState(seed)
+	path := filepath.Join(transaction.runRoot(), "journal.jsonl")
+	entries, err := transaction.loadJournal(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	for _, entry := range entries {
+		next, err := runstate.Apply(state, entry.event)
+		if errors.Is(err, runstate.ErrUnsupportedEventType) {
+			return state, err
+		}
+		if err != nil {
+			return state, fmt.Errorf(
+				"%w: seq=%d: %v",
+				ErrJournalCorrupt,
+				entry.event.Seq,
+				err,
+			)
+		}
+		state = next
+	}
+	return state, nil
+}
+
 // Replay projects the journal and repairs only a syntactically unparseable
 // final line while holding the repository state lock.
 func (store *Store) Replay(
@@ -151,6 +179,9 @@ func (transaction *Txn) Append(event runstate.Event) (DurabilityReceipt, error) 
 		return DurabilityReceipt{}, err
 	}
 	for _, existing := range entries {
+		if key == "" {
+			break
+		}
 		if existing.event.Type != event.Type || existing.idempotencyKey != key {
 			continue
 		}

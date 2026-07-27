@@ -1,29 +1,73 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/BeomSeogKim/Partitur/internal/acceptance"
+	"github.com/BeomSeogKim/Partitur/internal/driver"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	validation "github.com/BeomSeogKim/Partitur/internal/validate"
+	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
 var version = "dev"
 
 type validateRunner func() validation.Result
+type prepareRunner func() (*validation.Preparation, validation.Result)
+type runDriver func(
+	context.Context,
+	*validation.Preparation,
+	driver.StartedObserver,
+) driver.Result
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	return runWithValidate(args, stdout, stderr, validation.Run)
+	return runWithRunners(
+		args,
+		stdout,
+		stderr,
+		validation.Run,
+		validation.Prepare,
+		driver.Run,
+	)
 }
 
 func runWithValidate(
 	args []string,
 	stdout, stderr io.Writer,
 	validate validateRunner,
+) int {
+	return runWithRunners(
+		args,
+		stdout,
+		stderr,
+		validate,
+		func() (*validation.Preparation, validation.Result) {
+			return nil, validation.Result{}
+		},
+		func(
+			context.Context,
+			*validation.Preparation,
+			driver.StartedObserver,
+		) driver.Result {
+			return driver.Result{Err: errors.New("run driver unavailable")}
+		},
+	)
+}
+
+func runWithRunners(
+	args []string,
+	stdout, stderr io.Writer,
+	validate validateRunner,
+	prepare prepareRunner,
+	drive runDriver,
 ) int {
 	if len(args) == 1 && args[0] == "version" {
 		fmt.Fprintln(stdout, version)
@@ -43,13 +87,83 @@ func runWithValidate(
 		}
 		return 0
 	}
+	if len(args) == 1 && args[0] == "run" {
+		preparation, preparationResult := prepare()
+		if preparationResult.Refusal != nil {
+			renderRefusal(stderr, *preparationResult.Refusal)
+			return 2
+		}
+		for _, entry := range preparationResult.Entries {
+			renderEntry(stderr, entry)
+		}
+		if preparationResult.HasDiagnostics() {
+			return 3
+		}
+		result := drive(
+			context.Background(),
+			preparation,
+			func(runID runstate.RunID) error {
+				_, err := fmt.Fprintln(stdout, runID)
+				return err
+			},
+		)
+		if result.RunID == "" {
+			switch {
+			case errors.Is(result.Err, workspace.ErrDirtySource),
+				errors.Is(result.Err, workspace.ErrExternalMergeDriver),
+				errors.Is(result.Err, acceptance.ErrUnsupportedCriteria),
+				errors.Is(result.Err, driver.ErrUnsupportedSlice):
+				fmt.Fprintf(stderr, "run validation failed: %v\n", result.Err)
+				return 3
+			default:
+				fmt.Fprintf(stderr, "precondition refused: detail=%q\n", errorText(result.Err))
+				return 2
+			}
+		}
+		switch result.Outcome {
+		case driver.OutcomeSucceeded:
+			return 0
+		case driver.OutcomeFailed, driver.OutcomeCancelled:
+			fmt.Fprintf(
+				stderr,
+				"run terminal: state=%q reason=%q\n",
+				result.Outcome,
+				result.Reason,
+			)
+			return 4
+		case driver.OutcomeHalted:
+			fmt.Fprintf(stderr, "recovery halted: reason=%q\n", result.Reason)
+			return 5
+		case driver.OutcomeInterrupted:
+			renderRunInterruption(stderr, result)
+			return 6
+		}
+	}
 	printUsage(stderr)
 	return 1
 }
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate")
+	fmt.Fprintln(w, "commands: version, validate, run")
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return "run unavailable"
+	}
+	return err.Error()
+}
+
+func renderRunInterruption(w io.Writer, result driver.Result) {
+	fmt.Fprintf(
+		w,
+		"run interrupted: run_id=%q state=%q resume=%q detail=%q\n",
+		result.RunID,
+		"nonterminal",
+		"partitur resume "+string(result.RunID),
+		errorText(result.Err),
+	)
 }
 
 func renderRefusal(w io.Writer, refusal validation.Refusal) {

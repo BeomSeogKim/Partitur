@@ -93,6 +93,35 @@ func TestAppendAllocatesEnvelopeForMultipleEventsInOneMutation(t *testing.T) {
 	}
 }
 
+func TestObservationsWithEqualPayloadAppendIndependently(t *testing.T) {
+	store := newTestStore(t)
+	payload := json.RawMessage(`{"level":"info","message":"same"}`)
+	var receipts []DurabilityReceipt
+	err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		for index := 0; index < 2; index++ {
+			receipt, err := transaction.At("test/log").Append(runstate.Event{
+				RunID:         "run-1",
+				ScoreRevision: 1,
+				Type:          runstate.EventLog,
+				Payload:       payload,
+			})
+			if err != nil {
+				return err
+			}
+			receipts = append(receipts, receipt)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipts[0].Mutation.Sequence != 1 ||
+		receipts[1].Mutation.Sequence != 2 ||
+		receipts[0].Mutation.EventID == receipts[1].Mutation.EventID {
+		t.Fatalf("observation receipts = %+v", receipts)
+	}
+}
+
 func TestAppendRejectsCallerAllocatedEnvelope(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -595,37 +624,65 @@ func TestCallerTaggedLockBoundaryUsesInjectedProbe(t *testing.T) {
 }
 
 func TestLeaseCASComparesFullIdentity(t *testing.T) {
-	store := newTestStore(t)
-	lease := Lease{
-		Epoch: 7, Token: "token-a", PID: 42,
-		Start: runstate.LinuxStartIdentity{BootID: "boot", StartTicks: "100"},
+	tests := []struct {
+		name   string
+		mutate func(*LeaseIdentity)
+	}{
+		{name: "epoch", mutate: func(identity *LeaseIdentity) {
+			identity.Epoch++
+		}},
+		{name: "token", mutate: func(identity *LeaseIdentity) {
+			identity.Token = "token-b"
+		}},
+		{name: "pid", mutate: func(identity *LeaseIdentity) {
+			identity.PID++
+		}},
+		{name: "linux boot id", mutate: func(identity *LeaseIdentity) {
+			start := identity.Start.(runstate.LinuxStartIdentity)
+			start.BootID = "other-boot"
+			identity.Start = start
+		}},
+		{name: "start identity", mutate: func(identity *LeaseIdentity) {
+			start := identity.Start.(runstate.LinuxStartIdentity)
+			start.StartTicks = "101"
+			identity.Start = start
+		}},
 	}
-	err := store.Mutate("run-1", "", func(transaction *Txn) error {
-		if _, err := transaction.At("authority.granted_to_lease_created/lease").CreateLease(true, lease); err != nil {
-			return err
-		}
-		wrong := lease.Identity()
-		wrong.Start = runstate.LinuxStartIdentity{BootID: "boot", StartTicks: "101"}
-		if _, err := transaction.At("quiesce.swept_to_lease_moved/lease").CompareMoveLease(
-			wrong, "driver.quiesced.prepare-1",
-		); !errors.Is(err, ErrLeaseConflict) {
-			t.Fatalf("wrong identity move error = %v", err)
-		}
-		_, err := transaction.At("quiesce.swept_to_lease_moved/lease").CompareMoveLease(
-			lease.Identity(), "driver.quiesced.prepare-1",
-		)
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	driver := filepath.Join(store.root, ".partitur", "runs", "run-1", "driver.lease")
-	if _, err := os.Stat(driver); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("driver lease still exists: %v", err)
-	}
-	sidecar := filepath.Join(store.root, ".partitur", "runs", "run-1", "driver.quiesced.prepare-1")
-	if _, err := os.Stat(sidecar); err != nil {
-		t.Fatalf("quiesced lease: %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			lease := Lease{
+				Epoch: 7, Token: "token-a", PID: 42,
+				Start: runstate.LinuxStartIdentity{BootID: "boot", StartTicks: "100"},
+			}
+			err := store.Mutate("run-1", "", func(transaction *Txn) error {
+				if _, err := transaction.At("authority.granted_to_lease_created/lease").CreateLease(true, lease); err != nil {
+					return err
+				}
+				wrong := lease.Identity()
+				test.mutate(&wrong)
+				if _, err := transaction.At("quiesce.swept_to_lease_moved/lease").CompareMoveLease(
+					wrong, "driver.quiesced.prepare-1",
+				); !errors.Is(err, ErrLeaseConflict) {
+					t.Fatalf("wrong identity move error = %v", err)
+				}
+				_, err := transaction.At("quiesce.swept_to_lease_moved/lease").CompareMoveLease(
+					lease.Identity(), "driver.quiesced.prepare-1",
+				)
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			driver := filepath.Join(store.root, ".partitur", "runs", "run-1", "driver.lease")
+			if _, err := os.Stat(driver); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("driver lease still exists: %v", err)
+			}
+			sidecar := filepath.Join(store.root, ".partitur", "runs", "run-1", "driver.quiesced.prepare-1")
+			if _, err := os.Stat(sidecar); err != nil {
+				t.Fatalf("quiesced lease: %v", err)
+			}
+		})
 	}
 }
 
@@ -637,6 +694,258 @@ func TestLeaseOwnerMatchPreservesProcessInspectionResult(t *testing.T) {
 	lease := Lease{Epoch: 1, Token: "token", PID: os.Getpid(), Start: identity}
 	if result := lease.MatchOwner(); result.Status != procid.MatchingAndLive || result.Err != nil {
 		t.Fatalf("owner match = %+v", result)
+	}
+}
+
+func TestDriverMutationRechecksJournalEpochAndFullLease(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *Store, *Driver)
+	}{
+		{
+			name: "journal epoch",
+			mutate: func(t *testing.T, store *Store, driver *Driver) {
+				t.Helper()
+				payload, err := json.Marshal(map[string]any{
+					"authority_epoch":      driver.lease.Epoch + 1,
+					"owner_pid":            driver.lease.PID,
+					"owner_start_identity": encodeDriverStart(driver.lease.Start),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+					_, err := transaction.At("test/fence").Append(runstate.Event{
+						RunID:         "run-1",
+						ScoreRevision: 1,
+						Type:          runstate.EventAuthorityGranted,
+						Payload:       payload,
+					})
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "token",
+			mutate: func(t *testing.T, store *Store, driver *Driver) {
+				replaceDriverLease(t, store, driver, func(lease *Lease) {
+					lease.Token = "different-token"
+				})
+			},
+		},
+		{
+			name: "pid",
+			mutate: func(t *testing.T, store *Store, driver *Driver) {
+				replaceDriverLease(t, store, driver, func(lease *Lease) {
+					lease.PID++
+				})
+			},
+		},
+		{
+			name: "linux boot id",
+			mutate: func(t *testing.T, store *Store, driver *Driver) {
+				start, ok := driver.lease.Start.(runstate.LinuxStartIdentity)
+				if !ok {
+					t.Skip("Linux-only identity conjunct")
+				}
+				replaceDriverLease(t, store, driver, func(lease *Lease) {
+					start.BootID += "-different"
+					lease.Start = start
+				})
+			},
+		},
+		{
+			name: "start identity",
+			mutate: func(t *testing.T, store *Store, driver *Driver) {
+				replaceDriverLease(t, store, driver, func(lease *Lease) {
+					switch start := lease.Start.(type) {
+					case runstate.LinuxStartIdentity:
+						start.StartTicks += "1"
+						lease.Start = start
+					case runstate.DarwinStartIdentity:
+						start.StartTVUsec++
+						lease.Start = start
+					default:
+						t.Fatalf("start identity = %T", start)
+					}
+				})
+			},
+		},
+		{
+			name: "lease absent",
+			mutate: func(t *testing.T, store *Store, driver *Driver) {
+				t.Helper()
+				if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+					_, err := transaction.At("test/remove").
+						CompareRemoveLease(driver.lease.Identity())
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "terminal run",
+			mutate: func(t *testing.T, store *Store, _ *Driver) {
+				t.Helper()
+				payload, err := json.Marshal(map[string]any{"reason": "movement_failed"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+					_, err := transaction.At("test/terminal").Append(runstate.Event{
+						RunID:         "run-1",
+						ScoreRevision: 1,
+						Type:          runstate.EventRunFailed,
+						Payload:       payload,
+					})
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, driver := acquiredTestDriver(t)
+			test.mutate(t, store, driver)
+			entered := false
+			err := driver.Mutate(func(*Txn, runstate.State) error {
+				entered = true
+				return nil
+			})
+			if !errors.Is(err, ErrLeaseConflict) || entered {
+				t.Fatalf("error=%v mutation entered=%v", err, entered)
+			}
+		})
+	}
+}
+
+func TestDriverAppendProjectsBeforeDurableWrite(t *testing.T) {
+	store, driver := acquiredTestDriver(t)
+	event := movementReadyEvent()
+	event.MovementID = "missing"
+	if _, err := driver.Append(event, "test/illegal"); !errors.Is(
+		err,
+		runstate.ErrIllegalTransition,
+	) {
+		t.Fatalf("illegal append error = %v", err)
+	}
+	replay, err := store.Replay(
+		"run-1",
+		[]runstate.MovementSeed{{
+			ID:      "m1",
+			Initial: runstate.MovementPending,
+		}},
+		"test/replay",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.State.Movements["m1"] != runstate.MovementPending {
+		t.Fatalf("state after rejected append = %+v", replay.State)
+	}
+}
+
+func TestAuthorityIsDurableBeforeLeaseAndKeepsPlatformIdentity(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		_, err := transaction.At("test/run-started").Append(runStartedEvent())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingFS{delegate: realFS{}}
+	store.fs = recorder
+	driver, err := store.AcquireDriver(
+		"run-1",
+		[]runstate.MovementSeed{{
+			ID:      "m1",
+			Initial: runstate.MovementPending,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalSync := slices.Index(
+		recorder.operations,
+		"sync-file:journal.jsonl",
+	)
+	leaseTemporary := slices.Index(
+		recorder.operations,
+		"write-temp:run-1",
+	)
+	if journalSync < 0 || leaseTemporary < 0 ||
+		journalSync >= leaseTemporary {
+		t.Fatalf("authority/lease operations = %v", recorder.operations)
+	}
+	state, err := driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Authority.Owner == nil ||
+		state.Authority.Owner.PID != os.Getpid() ||
+		driver.lease.PID != os.Getpid() ||
+		!startIdentitiesEqual(
+			state.Authority.Owner.Start,
+			driver.lease.Start,
+		) {
+		t.Fatalf(
+			"authority=%+v lease=%+v",
+			state.Authority,
+			driver.lease,
+		)
+	}
+	if linux, ok := driver.lease.Start.(runstate.LinuxStartIdentity); ok &&
+		(linux.BootID == "" || linux.StartTicks == "") {
+		t.Fatalf("Linux lease identity = %+v", linux)
+	}
+}
+
+func acquiredTestDriver(t *testing.T) (*Store, *Driver) {
+	t.Helper()
+	store := newTestStore(t)
+	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		_, err := transaction.At("test/run-started").Append(runStartedEvent())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	driver, err := store.AcquireDriver(
+		"run-1",
+		[]runstate.MovementSeed{{
+			ID:      "m1",
+			Initial: runstate.MovementPending,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, driver
+}
+
+func replaceDriverLease(
+	t *testing.T,
+	store *Store,
+	driver *Driver,
+	mutate func(*Lease),
+) {
+	t.Helper()
+	replacement := driver.lease
+	mutate(&replacement)
+	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		if _, err := transaction.At("test/remove").
+			CompareRemoveLease(driver.lease.Identity()); err != nil {
+			return err
+		}
+		_, err := transaction.At("test/create").
+			CreateLease(true, replacement)
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

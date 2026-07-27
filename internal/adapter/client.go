@@ -45,6 +45,15 @@ func NewClient() *Client {
 	return newClient(os.Environ(), ProbeCompletionDeadline, OuterTerminationGrace)
 }
 
+// Resolve returns the absolute executable path for one adapter id using the
+// same immutable environment snapshot Execute will pass to the gated peer.
+func (c *Client) Resolve(adapterID string) (string, error) {
+	if c == nil {
+		return "", errors.New("nil adapter client")
+	}
+	return resolveExecutable(c.environment, adapterID)
+}
+
 func newClient(environment []string, deadline, grace time.Duration) *Client {
 	return &Client{
 		environment: append([]string(nil), environment...),

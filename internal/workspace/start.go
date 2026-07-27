@@ -236,7 +236,22 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 		return Candidate{}, err
 	}
 	var receipt faultpoint.DurabilityReceipt
-	err = run.store.Mutate(run.id, "", func(transaction *runstore.Txn) error {
+	event := runstate.Event{
+		RunID:         run.id,
+		ScoreRevision: run.scoreRevision,
+		Type:          runstate.EventApplicationCandidateRecorded,
+		Payload:       payload,
+	}
+	err = run.mutate(func(
+		transaction *runstore.Txn,
+		state runstate.State,
+		authorized bool,
+	) error {
+		if authorized {
+			if _, err := runstate.Apply(state, event); err != nil {
+				return err
+			}
+		}
 		if _, err := ensureRef(
 			run.git,
 			run.repositoryRoot,
@@ -247,12 +262,7 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 		); err != nil {
 			return err
 		}
-		receipt, err = transaction.At(receiptCandidate).Append(runstate.Event{
-			RunID:         run.id,
-			ScoreRevision: run.scoreRevision,
-			Type:          runstate.EventApplicationCandidateRecorded,
-			Payload:       payload,
-		})
+		receipt, err = transaction.At(receiptCandidate).Append(event)
 		return err
 	})
 	if err != nil {
@@ -265,6 +275,38 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 		CompositionDependencyHash: compositionHash,
 		Receipt:                   receipt,
 	}, nil
+}
+
+// BindDriver makes every subsequent workspace mutation recheck this driver's
+// durable authority. A run can be bound only once.
+func (run *Run) BindDriver(driver *runstore.Driver) error {
+	if run == nil || driver == nil {
+		return errors.New("workspace: incomplete driver binding")
+	}
+	if driver.RunID() != run.id {
+		return errors.New("workspace: driver belongs to another run")
+	}
+	if run.driver != nil {
+		return errors.New("workspace: driver already bound")
+	}
+	run.driver = driver
+	return nil
+}
+
+func (run *Run) mutate(
+	mutation func(*runstore.Txn, runstate.State, bool) error,
+) error {
+	if run.driver != nil {
+		return run.driver.Mutate(func(
+			transaction *runstore.Txn,
+			state runstate.State,
+		) error {
+			return mutation(transaction, state, true)
+		})
+	}
+	return run.store.Mutate(run.id, "", func(transaction *runstore.Txn) error {
+		return mutation(transaction, runstate.State{}, false)
+	})
 }
 
 func refuseRunCollision(

@@ -2,11 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
+	"github.com/BeomSeogKim/Partitur/internal/driver"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	validation "github.com/BeomSeogKim/Partitur/internal/validate"
+	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
 func TestVersion(t *testing.T) {
@@ -26,7 +31,6 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 		nil,
 		{"unknown"},
 		{"init"},
-		{"run"},
 		{"status"},
 		{"logs"},
 		{"answer"},
@@ -55,7 +59,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
@@ -64,6 +68,182 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestRunPrintsDurableIDOnceBeforeTerminalOutcome(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome driver.Outcome
+		reason  string
+		err     error
+		code    int
+		stderr  string
+	}{
+		{
+			name:    "succeeded ignores lease cleanup error",
+			outcome: driver.OutcomeSucceeded,
+			err:     errors.New("lease cleanup failed"),
+			code:    0,
+		},
+		{
+			name:    "failed ignores last incidental error",
+			outcome: driver.OutcomeFailed,
+			reason:  "movement_failed",
+			err:     errors.New("lease cleanup also failed"),
+			code:    4,
+			stderr:  "run terminal: state=\"FAILED\" reason=\"movement_failed\"\n",
+		},
+		{
+			name:    "cancelled is not success",
+			outcome: driver.OutcomeCancelled,
+			reason:  "cancelled",
+			code:    4,
+			stderr:  "run terminal: state=\"CANCELLED\" reason=\"cancelled\"\n",
+		},
+		{
+			name:    "halt",
+			outcome: driver.OutcomeHalted,
+			reason:  "sweep_unverifiable",
+			code:    5,
+			stderr:  "recovery halted: reason=\"sweep_unverifiable\"\n",
+		},
+		{
+			name:    "operational interruption",
+			outcome: driver.OutcomeInterrupted,
+			err:     errors.New("driver lease unavailable"),
+			code:    6,
+			stderr: "run interrupted: " +
+				"run_id=\"019d0000-0000-7000-8000-000000000001\" " +
+				"state=\"nonterminal\" " +
+				"resume=\"partitur resume 019d0000-0000-7000-8000-000000000001\" " +
+				"detail=\"driver lease unavailable\"\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runWithRunners(
+				[]string{"run"},
+				&stdout,
+				&stderr,
+				func() validation.Result {
+					t.Fatal("validate runner called")
+					return validation.Result{}
+				},
+				func() (*validation.Preparation, validation.Result) {
+					return &validation.Preparation{}, validation.Result{}
+				},
+				func(
+					_ context.Context,
+					_ *validation.Preparation,
+					started driver.StartedObserver,
+				) driver.Result {
+					if err := started("019d0000-0000-7000-8000-000000000001"); err != nil {
+						t.Fatal(err)
+					}
+					if stdout.String() != "019d0000-0000-7000-8000-000000000001\n" {
+						t.Fatalf("id was not observable before terminal result: %q", stdout.String())
+					}
+					return driver.Result{
+						RunID:   runstate.RunID("019d0000-0000-7000-8000-000000000001"),
+						Outcome: test.outcome,
+						Reason:  test.reason,
+						Err:     test.err,
+					}
+				},
+			)
+			if code != test.code ||
+				stdout.String() != "019d0000-0000-7000-8000-000000000001\n" ||
+				stderr.String() != test.stderr {
+				t.Fatalf(
+					"exit=%d stdout=%q stderr=%q",
+					code,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+		})
+	}
+}
+
+func TestRunIDWriteFailureIsOperationalInterruption(t *testing.T) {
+	stdout := &failingWriter{err: errors.New("stdout unavailable")}
+	var stderr bytes.Buffer
+	code := runWithRunners(
+		[]string{"run"},
+		stdout,
+		&stderr,
+		func() validation.Result {
+			t.Fatal("validate runner called")
+			return validation.Result{}
+		},
+		func() (*validation.Preparation, validation.Result) {
+			return &validation.Preparation{}, validation.Result{}
+		},
+		func(
+			_ context.Context,
+			_ *validation.Preparation,
+			started driver.StartedObserver,
+		) driver.Result {
+			runID := runstate.RunID("019d0000-0000-7000-8000-000000000002")
+			err := started(runID)
+			if !errors.Is(err, stdout.err) {
+				t.Fatalf("id write error = %v", err)
+			}
+			return driver.Result{
+				RunID:   runID,
+				Outcome: driver.OutcomeInterrupted,
+				Err:     err,
+			}
+		},
+	)
+	wantStderr := "run interrupted: " +
+		"run_id=\"019d0000-0000-7000-8000-000000000002\" " +
+		"state=\"nonterminal\" " +
+		"resume=\"partitur resume 019d0000-0000-7000-8000-000000000002\" " +
+		"detail=\"stdout unavailable\"\n"
+	if code != 6 || stdout.calls != 1 || stderr.String() != wantStderr {
+		t.Fatalf(
+			"exit=%d stdout_calls=%d stderr=%q",
+			code,
+			stdout.calls,
+			stderr.String(),
+		)
+	}
+}
+
+type failingWriter struct {
+	calls int
+	err   error
+}
+
+func (writer *failingWriter) Write([]byte) (int, error) {
+	writer.calls++
+	return 0, writer.err
+}
+
+func TestRunPreStartFailureDoesNotPrintID(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runWithRunners(
+		[]string{"run"},
+		&stdout,
+		&stderr,
+		func() validation.Result { return validation.Result{} },
+		func() (*validation.Preparation, validation.Result) {
+			return &validation.Preparation{}, validation.Result{}
+		},
+		func(
+			context.Context,
+			*validation.Preparation,
+			driver.StartedObserver,
+		) driver.Result {
+			return driver.Result{Err: workspace.ErrNotRepository}
+		},
+	)
+	if code != 2 || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "precondition refused") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

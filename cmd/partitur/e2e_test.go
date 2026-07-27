@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,11 +14,20 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
 
 const fakeAdapterEnvironment = "PARTITUR_VALIDATE_FAKE_ADAPTER"
+const runVendorEnvironment = "PARTITUR_RUN_VENDOR_FIXTURE"
 
 func TestMain(m *testing.M) {
+	if os.Getenv(runVendorEnvironment) == "1" {
+		runVendorFixture()
+		os.Exit(0)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Println("partitur-test 9.8.7")
 		os.Exit(0)
@@ -31,6 +41,128 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, runScore(), runCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":               t.TempDir(),
+		"PATH":               bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN": vendor,
+		runVendorEnvironment: "1",
+	})
+	code, stdout, stderr := runCommandBinary(
+		t,
+		partitur,
+		repository,
+		environment,
+		"run",
+	)
+	runID := strings.TrimSpace(stdout)
+	if code != 0 || runID == "" ||
+		stdout != runID+"\n" || stderr != "" {
+		t.Fatalf(
+			"exit=%d stdout=%q stderr=%q",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	events := journalEventTypes(
+		t,
+		filepath.Join(
+			repository,
+			".partitur",
+			"runs",
+			runID,
+			"journal.jsonl",
+		),
+	)
+	want := []string{
+		"run.started",
+		"authority.granted",
+		"application_candidate.recorded",
+		"movement.ready",
+		"movement.started",
+		"performer.selected",
+		"execution.started",
+		"attempt.started",
+		"adapter.probed",
+		"log",
+		"progress",
+		"artifact.recorded",
+		"execution.stopped",
+		"performer.completed",
+		"verification.passed",
+		"execution.started",
+		"acceptance.started",
+		"criterion.started",
+		"criterion.completed",
+		"acceptance.evaluation_completed",
+		"execution.stopped",
+		"attempt.completed",
+		"movement.succeeded",
+	}
+	if !slicesEqual(events, want) {
+		t.Fatalf("journal sequence\n got: %v\nwant: %v", events, want)
+	}
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := store.Replay(
+		runstate.RunID(runID),
+		[]runstate.MovementSeed{{
+			ID:      "inspect",
+			Initial: runstate.MovementPending,
+		}},
+		"run.e2e.replay",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified := false
+	for _, value := range replay.State.VerifiedAttempts {
+		verified = verified || value
+	}
+	if replay.State.Run != runstate.RunSucceeded ||
+		replay.State.Movements["inspect"] != runstate.MovementSucceeded ||
+		!verified {
+		t.Fatalf(
+			"run=%s movement=%s verified=%v",
+			replay.State.Run,
+			replay.State.Movements["inspect"],
+			replay.State.VerifiedAttempts,
+		)
+	}
+	if _, err := os.Stat(filepath.Join(
+		repository,
+		".partitur",
+		"runs",
+		runID,
+		"driver.lease",
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal driver lease: %v", err)
+	}
 }
 
 func TestValidateEndToEnd(t *testing.T) {
@@ -670,4 +802,196 @@ func slicesEqual(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func runVendorFixture() {
+	for _, argument := range os.Args[1:] {
+		if argument == "--version" {
+			fmt.Println("codex 9.8.7")
+			return
+		}
+	}
+	prompt, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		os.Exit(91)
+	}
+	if !bytes.Contains(
+		prompt,
+		[]byte("The remaining active wall-clock budget at attempt start is 600000 milliseconds."),
+	) {
+		os.Exit(96)
+	}
+	outputDir := ""
+	for _, line := range strings.Split(string(prompt), "\n") {
+		const prefix = "- Writable artifact directory: "
+		if strings.HasPrefix(line, prefix) {
+			outputDir = strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			break
+		}
+	}
+	if outputDir == "" {
+		os.Exit(92)
+	}
+	if err := os.WriteFile(
+		filepath.Join(outputDir, "report.txt"),
+		[]byte("one movement reached its declared verdict\n"),
+		0o600,
+	); err != nil {
+		os.Exit(93)
+	}
+	result := map[string]any{
+		"version": float64(1),
+		"artifacts": []any{
+			map[string]any{
+				"artifact_id": "report",
+				"path":        "report.txt",
+			},
+		},
+		"questions": []any{},
+		"proposal":  nil,
+		"summary":   "completed",
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		os.Exit(94)
+	}
+	if err := os.WriteFile(
+		filepath.Join(outputDir, "partitur-result.json"),
+		data,
+		0o600,
+	); err != nil {
+		os.Exit(95)
+	}
+	fmt.Println(`{"type":"fixture.ignored"}`)
+	fmt.Println(
+		`{"type":"item.started","item":{"type":"command_execution","name":"fixture"}}`,
+	)
+}
+
+func runScore() map[string]any {
+	return map[string]any{
+		"score":    "0.2",
+		"name":     "run-e2e",
+		"revision": float64(1),
+		"status":   "finalized",
+		"goal":     "Produce one declared report.",
+		"verification": map[string]any{
+			"expectation": map[string]any{
+				"intent": "pass-existing-tests",
+				"apply_gate": map[string]any{
+					"require": []any{"verified"},
+				},
+			},
+			"final_movement": "inspect",
+		},
+		"parts": map[string]any{
+			"reader": map[string]any{
+				"capabilities": []any{
+					"repo_read",
+					"shell",
+					"network",
+				},
+				"read_only": true,
+			},
+		},
+		"movements": []any{
+			map[string]any{
+				"id":          "inspect",
+				"part":        "reader",
+				"grants":      []any{"repo_read", "shell", "network"},
+				"instruction": "Write the declared report.",
+				"outputs": []any{
+					map[string]any{"id": "report", "kind": "artifact"},
+				},
+				"acceptance": map[string]any{
+					"hard": []any{
+						map[string]any{
+							"id":       "report-present",
+							"artifact": "report",
+						},
+					},
+				},
+			},
+		},
+		"policy": map[string]any{
+			"allowed_paths": []any{"**"},
+			"budget": map[string]any{
+				"active_wall_clock_min": float64(10),
+			},
+		},
+	}
+}
+
+func runCast() map[string]any {
+	return map[string]any{
+		"cast": "0.1",
+		"performers": map[string]any{
+			"worker": map[string]any{
+				"adapter": "codex",
+				"model":   "gpt-5.6-sol",
+			},
+		},
+		"bindings": map[string]any{
+			"reader": map[string]any{
+				"performer": "worker",
+			},
+		},
+	}
+}
+
+func runGit(t *testing.T, directory string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	if data, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", arguments, err, data)
+	}
+}
+
+func runCommandBinary(
+	t *testing.T,
+	binary, repository string,
+	environment []string,
+	arguments ...string,
+) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	command := exec.Command(binary, arguments...)
+	command.Dir = repository
+	command.Env = environment
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if err == nil {
+		return 0, stdout.String(), stderr.String()
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatal(err)
+	}
+	return exitError.ExitCode(), stdout.String(), stderr.String()
+}
+
+func journalEventTypes(t *testing.T, path string) []string {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var result []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var event struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		result = append(result, event.Type)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

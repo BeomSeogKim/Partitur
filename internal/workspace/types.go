@@ -104,6 +104,7 @@ type Run struct {
 	baseTreeQualified string
 	movements         []score.MovementView
 	store             *runstore.Store
+	driver            *runstore.Driver
 	git               gitCommand
 	newID             func() (string, error)
 }
