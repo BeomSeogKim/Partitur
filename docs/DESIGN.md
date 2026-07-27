@@ -2662,7 +2662,8 @@ partitur approve         # approve/reject amendments, gates, finalization
 partitur amend           # propose an amendment from the CLI
 partitur cancel          # cancel the RUN (run-scoped; §6 control channel). There is no
                          #   attempt-scoped cancel — see §6
-partitur resume          # resume after interruption; takes the lease
+partitur resume          # resume after interruption; recovers by Appendix C, then takes the
+                         #   lease only when §6 authorizes it
 partitur apply           # apply the candidate to the checkout (§8)
 partitur apply --recover           # only from APPLYING | RECOVERY_REQUIRED
 partitur promote-score             # copy a run revision to partitur.yaml (CAS, §1, §8)
@@ -2730,19 +2731,49 @@ adapter failure after run creation. The additional Git repository and clean-sour
 are §5's. A refusal before `run.started` exits 2; a score, cast, or §5 run-start validation
 diagnostic exits 3. Neither case creates a run or writes stdout.
 
-Once `run.started` is fsynced, `run` writes the allocated UUIDv7 as exactly one UTF-8 line
-`<run-id>\n` to stdout, with no label or surrounding whitespace. It never prints the id before that
-durability receipt: §1 makes a pre-event directory orphan state, not a run. This line is written
-exactly once even when the run later fails or recovery halts, so a caller always has the handle for
-`status` and `logs` once durable run state exists.
+Once `run.started` is fsynced, `run` attempts to write the allocated UUIDv7 as exactly one UTF-8
+line `<run-id>\n` to stdout, with no label or surrounding whitespace. It never attempts that write
+before the durability receipt: §1 makes a pre-event directory orphan state, not a run. A successful
+write occurs exactly once even when the run later fails, recovery halts, or this invocation is
+operationally interrupted, so a caller then has the handle for `status` and `logs` once durable run
+state exists.
+
+The id write is also the admission boundary for execution: `run` acquires no driver lease and
+performs no driver-authorized mutation or launch until the write succeeds. If the write fails, the
+run exists but this invocation stops before acquiring authority, attempts one core-generated stderr
+diagnostic that names the allocated `run_id`, and exits with the operational-interruption code
+below. The failed stdout write is not retried or redirected to stderr as a second machine-readable
+stream. The explicit id in the diagnostic preserves a recovery handle when stderr remains writable;
+when it does not, `status` or `resume` without an id can still select the run if it is the unique
+active one under the command-selection rule above.
 
 After that line, stdout is silent. Core-generated usage, refusal, validation, terminal-outcome, and
 recovery-halt diagnostics go to stderr; raw adapter/vendor stderr remains only in the sanitized
 attempt file (§4) and is never mirrored by `run`. A terminal `FAILED` or `CANCELLED` run writes one
 stderr diagnostic naming the projected terminal state and, when the authoritative terminal event
 has one, its reason. A recovery halt writes one stderr diagnostic naming its Appendix D halt reason.
+An operational interruption after a successful id write writes one stderr diagnostic stating that
+the run remains nonterminal and is continued with `partitur resume <run-id>`; it does not manufacture
+a journal reason or recovery-halt reason for an event that never occurred.
 Successful `SUCCEEDED` and quiescent `WAITING_HUMAN` returns add no stderr summary: their structured
 state and pending decisions are read with `partitur status <run-id> --json`.
+
+An **operational interruption** is an invocation outcome, not a run lifecycle state: after
+`run.started`, this invocation cannot safely continue, no terminal event has been appended, and the
+condition is not an Appendix D recovery halt. The command leaves the run at its last durable
+projection and starts no further driver-authorized work. It must still perform every cleanup whose
+ordering is already required by §4 and §6; in particular, this outcome cannot replace a
+verified-empty sweep, and an unverifiable sweep remains the `sweep_unverifiable` halt. A matching
+lease that cannot be removed before the process exits is handled as a dead-owner state by C.1; its
+presence does not authorize the failing invocation to recover in place.
+
+`partitur resume` is the sole continuation from this outcome. It applies Appendix C from the last
+durable state and acquires a driver lease only when C.1 and §6 authorize a new owner and authority
+epoch. `run` does not implement a parallel in-process recovery sequence, reuse an unleased
+`authority.granted` epoch, or turn an interruption into a false terminal or halt claim. If the
+`resume` invocation is itself operationally interrupted while the run remains nonterminal, it
+returns the same exit 6 and may be invoked again; it does not allocate or print another run id,
+because its explicit or uniquely selected id already names the existing run.
 
 The command's exit codes are exhaustive over its specified outcomes:
 
@@ -2754,6 +2785,7 @@ The command's exit codes are exhaustive over its specified outcomes:
 | 3 | Pre-run validation failed before `run.started`; no run exists and stdout is empty |
 | 4 | The durable run reached terminal `FAILED` or `CANCELLED`; the id was already written |
 | 5 | Recovery halted for an Appendix D reason; the id was already written and the run remains at its last durable state |
+| 6 | This invocation was operationally interrupted after `run.started`; the run remains nonterminal and resumable. The id was already written except when that single stdout write was itself the interruption |
 
 v0.2 defines no `run --json` or `run --jsonl`, live progress rendering, TTY-specific mode, spinner,
 colour, or human-oriented status stream. Adapter `log` and `progress` notifications remain the
@@ -2779,6 +2811,7 @@ cast produce `binding_missing`, which is a validation result about content that 
 | 3 | validation failed: `partitur validate`, pre-run validation for `partitur run`, or a rejected amendment |
 | 4 | a run-driving command reached terminal `FAILED` or `CANCELLED` |
 | 5 | recovery halt — the run cannot proceed and needs an operator (Appendix D) |
+| 6 | post-creation operational interruption — the run remains nonterminal and resumable |
 
 ## 8. Verification and shipping
 
