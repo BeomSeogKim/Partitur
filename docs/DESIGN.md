@@ -2766,6 +2766,41 @@ journal observations §4/B.7 define; `partitur logs <run-id> --jsonl [--follow]`
 `partitur status <run-id> --json` is the structured state surface. The bare stdout id is a
 correlation handle, not a second state or event stream.
 
+**`partitur resume` observable surface.** After run selection under the generic `[<run-id>]` rule
+above, `resume` takes its historical authority from the selected run's journal and the run-owned
+durable inputs and records that §1, §4, §6, and Appendix C require for its projected state. It does
+not recompile the current root `partitur.yaml`, repeat cast layering from current project,
+user-global, or factory inputs, or infer missing historical decisions from current configuration.
+If Appendix C authorizes new execution, the existing attempt-time adapter resolution and probe rules
+still apply; they do not replace the persisted score revision or resolved cast.
+
+`resume` writes no bytes to stdout on any outcome. The selected run id remains the correlation
+handle; `status --json` and `logs --jsonl` remain the structured state and event surfaces. For
+usage, refusal, projected success, quiescence, and terminal failure, `resume` uses the `run` stderr
+policy above by reference. On a recovery halt it writes exactly one core-generated stderr diagnostic
+naming the selected run id and the exact Appendix D halt reason. Because B.7 makes a recovery halt a
+condition, not a journal event, `status --json` does not gain a persistent halt result from the
+invocation; where the run remains readable, it continues to describe the last durable projection
+rather than reconstructing that stderr diagnostic.
+
+The following table is exhaustive for `resume`; the `partitur run` table above remains scoped only
+to the creating command:
+
+| Code | `partitur resume` outcome |
+|---|---|
+| 0 | The selected run reached or was already at `SUCCEEDED`, or reached or was already quiescent in `WAITING_HUMAN` with no adapter or criterion process left running |
+| 1 | Usage error |
+| 2 | Run selection or another command precondition was refused under the global exit-code table below |
+| 3 | Not used: `resume` performs neither pre-run validation nor amendment rejection |
+| 4 | The selected run reached or was already at terminal `FAILED` or `CANCELLED` |
+| 5 | Recovery halted for the Appendix D reason reported on stderr; the run remains at its last durable projection |
+| 6 | The operational-interruption outcome already defined for `resume` above |
+
+An already-terminal run is therefore not a wrong-projection-state refusal. Treating its durable
+outcome idempotently closes the normal race in which a caller repeats `resume` after exit 6 but
+another invocation completed the run first; `SUCCEEDED` returns 0, while `FAILED` or `CANCELLED`
+returns 4.
+
 `validate` acquires inputs before interpreting their contents. A missing or unreadable required
 `partitur.yaml`, or a discovered cast file that cannot be read, is a refused precondition and exits
 2. A missing optional project or user-global cast layer is simply absent and produces no
