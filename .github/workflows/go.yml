@@ -38,6 +38,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Race
+        run: go test -race -count=1 ./...
+
   # `spikes` is a nested module, so the root job's `./...` never reaches it.
   # The suites are compatibility probes, not just a compile check: they assert
   # the platform behaviour the design rests on — session sweeping, fencing,
