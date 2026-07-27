@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
+	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 )
 
@@ -22,6 +24,7 @@ type requestWriter func(io.Writer, []byte) error
 type frameReader func(io.Reader, chan<- frameEvent)
 type commandWaiter func(*exec.Cmd) error
 type stderrCopier func(io.Writer, io.Reader) (int64, error)
+type gatedLauncher func(context.Context, launch.Request) (*launch.Process, error)
 
 // Client owns an immutable environment snapshot and the probe lifecycle.
 type Client struct {
@@ -33,6 +36,8 @@ type Client struct {
 	read        frameReader
 	wait        commandWaiter
 	copyStderr  stderrCopier
+	launch      gatedLauncher
+	now         func() time.Time
 }
 
 // NewClient snapshots the operator environment for discovery and child launch.
@@ -50,6 +55,8 @@ func newClient(environment []string, deadline, grace time.Duration) *Client {
 		read:        readFrames,
 		wait:        waitCommand,
 		copyStderr:  io.Copy,
+		launch:      launch.LaunchContext,
+		now:         time.Now,
 	}
 }
 

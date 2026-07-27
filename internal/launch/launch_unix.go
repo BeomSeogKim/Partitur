@@ -3,6 +3,7 @@
 package launch
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -30,7 +31,14 @@ type launchDependencies struct {
 // Launch starts one trusted trampoline and opens its gate only after
 // RecordIdentity returns the matching durable journal receipt.
 func Launch(request Request) (*Process, error) {
-	return launch(request, launchDependencies{
+	return LaunchContext(context.Background(), request)
+}
+
+// LaunchContext applies ctx to the still-gated handoff. Once the gate is
+// released, the launched process is detached from this context and is owned by
+// its recorded session identity.
+func LaunchContext(ctx context.Context, request Request) (*Process, error) {
+	return launch(ctx, request, launchDependencies{
 		newNonce: newNonce,
 		newCommand: func(path string, arguments ...string) *exec.Cmd {
 			return exec.Command(path, arguments...)
@@ -39,6 +47,7 @@ func Launch(request Request) (*Process, error) {
 }
 
 func launch(
+	ctx context.Context,
 	request Request,
 	dependencies launchDependencies,
 ) (*Process, error) {
@@ -106,23 +115,42 @@ func launch(
 	}
 	closeParentFiles()
 
-	var receipt [1]byte
-	count, readyErr := io.ReadFull(readyRead, receipt[:])
+	type readyResult struct {
+		count int
+		err   error
+	}
+	ready := make(chan readyResult, 1)
+	go func() {
+		var receipt [1]byte
+		count, readyErr := io.ReadFull(readyRead, receipt[:])
+		ready <- readyResult{count: count, err: readyErr}
+	}()
+	var result readyResult
+	select {
+	case result = <-ready:
+	case <-ctx.Done():
+		_ = gateWrite.Close()
+		_ = command.Process.Kill()
+		result = <-ready
+		_ = readyRead.Close()
+		_ = command.Wait()
+		return nil, fmt.Errorf("launch handoff cancelled: %w", ctx.Err())
+	}
 	_ = readyRead.Close()
-	if readyErr != nil || count != 1 {
+	if result.err != nil || result.count != 1 {
 		_ = gateWrite.Close()
 		waitErr := command.Wait()
-		if readyErr == nil {
-			readyErr = io.ErrUnexpectedEOF
+		if result.err == nil {
+			result.err = io.ErrUnexpectedEOF
 		}
 		if waitErr != nil {
 			return nil, fmt.Errorf(
 				"launch trampoline did not publish identity: %v: %w",
 				waitErr,
-				readyErr,
+				result.err,
 			)
 		}
-		return nil, fmt.Errorf("launch trampoline did not publish identity: %w", readyErr)
+		return nil, fmt.Errorf("launch trampoline did not publish identity: %w", result.err)
 	}
 
 	identity, matched, err := ReadHandoff(launchDir, nonce)
@@ -156,6 +184,11 @@ func launch(
 			match.Err,
 		)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = gateWrite.Close()
+		_ = command.Wait()
+		return nil, fmt.Errorf("launch handoff cancelled: %w", err)
+	}
 
 	journalReceipt, err := request.RecordIdentity(identity)
 	if err != nil {
@@ -167,6 +200,11 @@ func launch(
 		_ = gateWrite.Close()
 		_ = command.Wait()
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = gateWrite.Close()
+		_ = command.Wait()
+		return nil, fmt.Errorf("launch handoff cancelled: %w", err)
 	}
 	if _, err := gateWrite.Write([]byte{gateReleaseByte}); err != nil {
 		_ = gateWrite.Close()

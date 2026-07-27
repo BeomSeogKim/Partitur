@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,11 +25,16 @@ import (
 const (
 	fakeModeEnv   = "PARTITUR_ADAPTER_TEST_MODE"
 	fakeMarkerEnv = "PARTITUR_ADAPTER_TEST_MARKER"
+	vendorModeEnv = "PARTITUR_EXECUTE_VENDOR_MODE"
+	vendorOutEnv  = "PARTITUR_EXECUTE_VENDOR_OUTPUT"
 )
 
 func TestMain(m *testing.M) {
 	if mode := os.Getenv(sigtermVendorModeEnv); mode != "" {
 		os.Exit(runSIGTERMVendorHelper(mode))
+	}
+	if mode := os.Getenv(vendorModeEnv); mode != "" {
+		os.Exit(runExecuteVendorHelper(mode))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Println("partitur-test 9.8.7")
@@ -472,6 +478,17 @@ func buildAdapter(t *testing.T, directory, adapterID string) {
 	}
 }
 
+func buildTrampoline(t *testing.T, directory string) string {
+	t.Helper()
+	output := filepath.Join(directory, "partitur-trampoline")
+	command := exec.Command("go", "build", "-o", output, "../../cmd/partitur-trampoline")
+	command.Env = os.Environ()
+	if data, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build trampoline: %v\n%s", err, data)
+	}
+	return output
+}
+
 func probeIDs(probes []Probe) []string {
 	ids := make([]string, len(probes))
 	for index, probe := range probes {
@@ -544,6 +561,23 @@ func runFakeAdapter(mode string) {
 	}
 
 	switch mode {
+	case "execute_completed", "execute_nonzero", "execute_extra_after_response":
+		writeValid(adapterID)
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"working"}}` + "\n")
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"progress","message":"done"}}` + "\n")
+		_ = os.WriteFile(marker, []byte("response"), 0o600)
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}` + "\n")
+		if mode == "execute_extra_after_response" {
+			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"progress","message":"late"}}` + "\n")
+		}
+		waitEOF()
+		if mode == "execute_nonzero" {
+			_, _ = os.Stderr.WriteString("token=supersecret\n")
+			_, _ = os.Stderr.WriteString(strings.Repeat("x", MaxProbeStderrBytes))
+			_, _ = os.Stderr.WriteString("BEYOND-CAP")
+			os.Exit(7)
+		}
 	case "environment":
 		data, _ := json.Marshal(struct {
 			Argv0       string
@@ -648,6 +682,29 @@ func runFakeAdapter(mode string) {
 	default:
 		os.Exit(9)
 	}
+}
+
+func runExecuteVendorHelper(mode string) int {
+	if slices.Contains(os.Args[1:], "--version") {
+		fmt.Println("partitur-test 9.8.7")
+		return 0
+	}
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	outputDir := os.Getenv(vendorOutEnv)
+	if outputDir == "" {
+		return 90
+	}
+	if mode == "completed" {
+		if err := os.WriteFile(filepath.Join(outputDir, "report.txt"), []byte("report"), 0o600); err != nil {
+			return 91
+		}
+		envelope := `{"version":1,"artifacts":[{"artifact_id":"report","path":"report.txt"}],"questions":[],"proposal":null,"summary":"complete"}`
+		if err := os.WriteFile(filepath.Join(outputDir, "partitur-result.json"), []byte(envelope), 0o600); err != nil {
+			return 92
+		}
+		return 0
+	}
+	return 93
 }
 
 func ignoreTermAndHang() {
