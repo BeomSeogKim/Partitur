@@ -4,6 +4,7 @@ package launch
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -157,7 +158,7 @@ func TestIdentityIsRecordedBeforeProgramRuns(t *testing.T) {
 				}
 				return validReceipt(kind), nil
 			}
-			process, err := launch(request, testDependencies())
+			process, err := launch(context.Background(), request, testDependencies())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,7 +191,7 @@ func TestGateEOFRunsNoProgramCode(t *testing.T) {
 	) (faultpoint.DurabilityReceipt, error) {
 		return faultpoint.DurabilityReceipt{}, recordErr
 	}
-	if _, err := launch(request, testDependencies()); !errors.Is(err, recordErr) {
+	if _, err := launch(context.Background(), request, testDependencies()); !errors.Is(err, recordErr) {
 		t.Fatalf("Launch error = %v, want record failure", err)
 	}
 	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
@@ -201,6 +202,26 @@ func TestGateEOFRunsNoProgramCode(t *testing.T) {
 		request.LaunchID,
 		markerName,
 	))
+}
+
+func TestCancelledLaunchContextNeverReleasesProgram(t *testing.T) {
+	root := t.TempDir()
+	sentinel := filepath.Join(root, "adapter-ran")
+	request := validRequest(t, Adapter, root, "launch")
+	request.Arguments = []string{
+		"-test.run=^TestAdapterHelper$",
+		"--",
+		"touch",
+		sentinel,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := LaunchContext(ctx, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("LaunchContext error = %v, want context cancellation", err)
+	}
+	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("program ran after cancelled launch: %v", err)
+	}
 }
 
 func TestMarkerLockSurvivesExecForProgramLifetime(t *testing.T) {
@@ -220,7 +241,7 @@ func TestMarkerLockSurvivesExecForProgramLifetime(t *testing.T) {
 		"--",
 		"ready-and-wait",
 	}
-	process, err := launch(request, testDependencies())
+	process, err := launch(context.Background(), request, testDependencies())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +282,7 @@ func TestLaunchControlDoesNotReachProgramEnvironmentOrArguments(t *testing.T) {
 		"--",
 		"report",
 	}
-	process, err := launch(request, testDependencies())
+	process, err := launch(context.Background(), request, testDependencies())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +335,7 @@ func TestEachLaunchHasItsOwnHandoffDirectory(t *testing.T) {
 			"--",
 			"exit",
 		}
-		process, err := launch(request, testDependencies())
+		process, err := launch(context.Background(), request, testDependencies())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -344,7 +365,7 @@ func TestExistingLaunchDirectoryIsRejected(t *testing.T) {
 	), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := launch(request, testDependencies()); !errors.Is(err, ErrLaunchCollision) {
+	if _, err := launch(context.Background(), request, testDependencies()); !errors.Is(err, ErrLaunchCollision) {
 		t.Fatalf("Launch error = %v, want collision", err)
 	}
 }
@@ -371,7 +392,7 @@ func TestInvalidRequestsAreRejectedIndependently(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := validRequest(t, Adapter, t.TempDir(), "launch")
 			test.mutate(&request)
-			if _, err := launch(request, testDependencies()); !errors.Is(err, ErrInvalidRequest) {
+			if _, err := launch(context.Background(), request, testDependencies()); !errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("Launch error = %v, want invalid request", err)
 			}
 		})
@@ -421,7 +442,7 @@ func TestReceiptGuardsKeepGateClosedIndependently(t *testing.T) {
 					test.mutate(&receipt)
 					return receipt, nil
 				}
-				if _, err := launch(request, testDependencies()); !errors.Is(err, ErrInvalidReceipt) {
+				if _, err := launch(context.Background(), request, testDependencies()); !errors.Is(err, ErrInvalidReceipt) {
 					t.Fatalf("Launch error = %v, want invalid receipt", err)
 				}
 				if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
@@ -435,7 +456,7 @@ func TestReceiptGuardsKeepGateClosedIndependently(t *testing.T) {
 func TestCoreRejectsIdentityForAnotherPID(t *testing.T) {
 	request := validRequest(t, Adapter, t.TempDir(), "launch")
 	dependencies := maliciousDependencies("other-pid")
-	process, err := launch(request, dependencies)
+	process, err := launch(context.Background(), request, dependencies)
 	if err == nil {
 		_ = process.Wait()
 	}
@@ -447,7 +468,7 @@ func TestCoreRejectsIdentityForAnotherPID(t *testing.T) {
 func TestCoreRejectsMismatchedProcessStartIdentity(t *testing.T) {
 	request := validRequest(t, Adapter, t.TempDir(), "launch")
 	dependencies := maliciousDependencies("other-start")
-	process, err := launch(request, dependencies)
+	process, err := launch(context.Background(), request, dependencies)
 	if err == nil {
 		_ = process.Wait()
 	}

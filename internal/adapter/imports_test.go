@@ -13,6 +13,7 @@ func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 	t.Parallel()
 	allowed := map[string]bool{
 		"bytes":         true,
+		"context":       true,
 		"encoding/json": true,
 		"errors":        true,
 		"fmt":           true,
@@ -22,6 +23,7 @@ func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 		"os/exec":       true,
 		"path/filepath": true,
 		"sort":          true,
+		"slices":        true,
 		"strconv":       true,
 		"strings":       true,
 		"sync":          true,
@@ -30,7 +32,10 @@ func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 		"unicode/utf8":  true,
 		"unsafe":        true,
 		"github.com/BeomSeogKim/Partitur/internal/adapterkit": true,
+		"github.com/BeomSeogKim/Partitur/internal/faultpoint": true,
+		"github.com/BeomSeogKim/Partitur/internal/launch":     true,
 		"github.com/BeomSeogKim/Partitur/internal/protocol":   true,
+		"github.com/BeomSeogKim/Partitur/internal/runstate":   true,
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {
