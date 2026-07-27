@@ -25,6 +25,10 @@ var (
 	ErrReadOnlyRequired      = errors.New("movement grants repo_write")
 	ErrProtectedPathChanged  = errors.New("protected path changed")
 	ErrReadOnlyChanged       = errors.New("read-only worktree changed")
+	ErrIncompleteArtifact    = errors.New("artifact ingest is incomplete")
+	ErrChangeSetArtifact     = errors.New("change_set is not an artifact instance")
+	ErrArtifactNotRegular    = errors.New("artifact source is not a regular file")
+	ErrArtifactChanged       = errors.New("artifact source changed during ingest")
 )
 
 // StartResult exists only after run.started has crossed its durability
@@ -57,6 +61,22 @@ type AttemptWorkspace struct {
 	run               *Run
 	readOnly          bool
 	protectedBaseline map[string]protectedEntry
+}
+
+// ArtifactInput is one adapter-admitted artifact notification.
+type ArtifactInput struct {
+	LogicalOutputID string
+	Kind            string
+	Path            string
+	SourcePath      string
+}
+
+// ArtifactInstance is the immutable copy and its two durability receipts.
+type ArtifactInstance struct {
+	ContentHash        runstate.Hash
+	SizeBytes          uint64
+	PublicationReceipt faultpoint.DurabilityReceipt
+	RecordReceipt      faultpoint.DurabilityReceipt
 }
 
 // VerificationError is an immediately-terminal grant_denied result.
