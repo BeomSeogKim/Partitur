@@ -1178,7 +1178,10 @@ compared as integer milliseconds, consistent with §6.
 
 A successful probe is not complete at the response frame. The core closes the adapter's stdin,
 which is the clean-EOF signal above, and requires the adapter to exit zero within the remaining
-probe-completion deadline. A nonzero exit before or after a response is a probe failure.
+probe-completion deadline. A nonzero exit before or after a response is a probe failure. After the
+leader exits, the core verifies the recorded session empty; a successful response and zero leader
+status do not excuse a surviving descendant. Thus the success and timeout paths converge on the
+same verified-empty boundary rather than making process exit a proxy for session cleanup.
 
 Each of the following is an adapter-environment validation diagnostic: the exact executable is
 absent from `PATH`; spawn or request/response I/O fails; EOF arrives before a complete response;
@@ -1288,6 +1291,47 @@ for execution, without manufacturing probe facts.
 There is therefore no new pre-run diagnostic or exit category: a run probe failure is durable
 attempt history, §3.1 decides whether a fallback follows, and an exhausted path reaches the existing
 movement/run failure sequence and exit 4 (§7).
+
+**Run execute completion.** A complete `execute` response is a protocol completeness marker, not
+yet a durable attempt transition. The core reuses the validation probe's clean-EOF, zero-exit, and
+verified-empty completion boundary above **by reference**: after receiving and validating the
+response, it closes adapter stdin, requires a zero adapter exit, and verifies the recorded gated
+session empty. If forced termination is required, the same §4 outer grace and session sweep apply.
+The validation probe's **15000 ms completion deadline does not carry over**: a run already has an
+open §6 `adapter` interval, and the remaining run budget plus cancellation or supersession bounds
+that interval.
+
+The run-only durable order is fixed:
+
+```text
+complete execute response (all event notifications already precede it)
+→ validation probe's clean-EOF / zero-exit / verified-empty boundary (above)
+→ execution.stopped {reason: normal, charging: measured}
+→ the response-derived B.2 transition
+```
+
+For `outcome: completed`, that final transition is `performer.completed`; the other outcomes use
+the existing one-to-one mapping in B.2. `normal` describes the living opener's ordinary interval
+close, not success: an otherwise valid response followed by a nonzero or unobtainable adapter exit
+is discarded, the session is swept, the interval is closed `normal`/`measured`, and the attempt
+fails as `attempt.failed {kind: adapter_unavailable, disposition}` with no sub-reason, through
+§3.1. If the adapter hangs after its response, the interval stays open until the existing
+budget-exhaustion, cancellation, or supersession path terminates and sweeps it; none of those paths
+appends the provisional response's transition.
+
+The interval remains open through session verification deliberately. Closing it at leader exit
+would stop charging a surviving descendant while it could still mutate the worktree; closing it
+again after the sweep would double-charge the same interval. Only verified emptiness permits the
+single ordinary close. If the sweep itself is unverifiable, the core halts
+`sweep_unverifiable` **before** closing the interval or appending any response-derived transition.
+It cannot safely convert that condition into `attempt.failed`: §3.1 could authorize a retry or
+fallback while the unverified session still holds the old attempt's authority.
+
+These are the run-specific additions to the shared process lifecycle: the adapter was launched
+through the durable gate, its session identity is journaled on the attempt, its active time is
+charged, and its response produces an authoritative event only after cleanup. The standalone
+validation probe has none of those four properties; it aggregates diagnostics and returns only
+after its in-memory session identity reaches the same empty boundary.
 
 **Event notifications** (adapter → core, during `execute`):
 
@@ -1645,9 +1689,13 @@ daemonized and lost its ancestry relationship. So:
   for v0.2 (§10).
 - **Unverifiable state fails closed for that execution.** If process enumeration or start-identity
   verification is unavailable — sandbox policy, cross-user restriction, a read that errors — the
-  core reports the sweep as *incomplete* and fails the attempt rather than claiming zero survivors.
-  Conformance cleanup being the design's ceiling is one thing; asserting a clean result from state
-  the core could not read would be another, and it is the assertion that would be dangerous.
+  core reports the sweep as *incomplete* and follows the consuming boundary's prescribed failure
+  or halt rather than claiming zero survivors. On the run execute-completion path defined above,
+  that is the `sweep_unverifiable` halt: the §6 interval stays open and no response-derived attempt
+  transition is appended; Appendix C retries the sweep before it closes that interval or
+  synthesizes a failure. Conformance cleanup being the design's ceiling is one thing; asserting a
+  clean result from state the core could not read would be another, and it is the assertion that
+  would be dangerous.
 
 ## 5. Workspace model v0.2
 
@@ -1845,10 +1893,11 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   never leak into the next attempt. A fallback performer starts from the same clean
   base, never from the failed performer's dirty workspace.
 - **Read-only post-hoc verification.** For every movement whose effective grants exclude
-  `repo_write`, the core verifies at adapter exit that the worktree is unchanged. A Git
-  tree comparison alone is insufficient: the check covers tracked content, **non-ignored
-  untracked files, symlink targets, and file modes**, plus the protected paths of §2. A violation is
-  `kind: grant_denied`, which §3.1 classes immediately terminal. For the
+  `repo_write`, the core verifies after §4's execute-completion boundary that the worktree is
+  unchanged. The adapter session is already verified empty, so the check cannot race a surviving
+  descendant. A Git tree comparison alone is insufficient: the check covers tracked content,
+  **non-ignored untracked files, symlink targets, and file modes**, plus the protected paths of §2.
+  A violation is `kind: grant_denied`, which §3.1 classes immediately terminal. For the
   final movement the same check is expressed as `candidate_mismatch` against the recorded
   candidate `result_tree` (§8).
 - **Every successful `repo_write` attempt records exactly one change set**, including a
@@ -1882,11 +1931,11 @@ Promotion:   NOT_PROMOTED | PROMOTING | PROMOTED | RECOVERY_REQUIRED
 
 - **`VERIFYING` separates vendor completion from attempt success.** The adapter's
   `outcome: completed` means only that vendor execution ended — the adapter never judges
-  success (§4). The core records `performer.completed` and the attempt enters `VERIFYING`
-  while the change set is captured, acceptance runs, and any required human gate is
-  decided. `attempt.completed` — and thus `COMPLETED` — is recorded **only** after all of
-  that succeeds. Conflating the two would let a movement look successful on the strength
-  of an adapter's self-report.
+  success (§4). After the same section's session cleanup and adapter-interval close, the core
+  records `performer.completed` and the attempt enters `VERIFYING` while the change set is
+  captured, acceptance runs, and any required human gate is decided. `attempt.completed` — and
+  thus `COMPLETED` — is recorded **only** after all of that succeeds. Conflating the two would let a
+  movement look successful on the strength of an adapter's self-report.
 - `BLOCKED` is a **terminal** attempt state: the attempt exited while waiting on human
   decisions; the follow-up work happens in a **new** attempt. Only movements and runs
   use `WAITING_HUMAN`.
@@ -1985,6 +2034,12 @@ the recovery rule below.
   A `charging: measured` close is the ordinary case and requires the closer to *be* the opener; any
   other closer uses `clamped`. That is what makes the charge a deterministic function of recorded
   state in every case.
+- An `adapter` interval that reaches `execute` closes ordinarily at §4's run execute-completion
+  boundary, not when the response or adapter leader first exits. The opening driver keeps it open
+  through the verified-empty session sweep, then appends one measured
+  `execution.stopped {reason: normal}` before the response-derived attempt event. Appendix C owns
+  the corresponding crash close and performs the sweep first. This ordering charges a same-session
+  survivor until it is gone and leaves no second close for recovery to charge again.
 - Each attempt receives the remainder at its start (`request.budget`).
 - **Exhaustion mid-flight has an explicit terminal path.** If the budget runs out while an
   adapter or an acceptance command is running, the attempt must be terminalized before the
@@ -2367,11 +2422,13 @@ there is malformed rather than ignored.
 
 ## 7. Acceptance runner and CLI v0.2
 
-When an attempt returns `completed`, the core runs acceptance **in a fixed order**,
-before the worktree is removed. The attempt is in `VERIFYING` throughout (§6):
+When an attempt's `completed` response has crossed §4's execute-completion boundary, the core runs
+acceptance **in a fixed order**, before the worktree is removed. The attempt is in `VERIFYING`
+throughout (§6):
 
 ```text
-performer.completed                       (vendor execution ended — not success)
+performer.completed                       (session verified empty and adapter interval closed;
+                                            vendor execution ended — not success)
 → artifact instances already recorded as immutable copies (§1)
 → core captures the provisional change_set checkpoint (§5) — repo_write movements only
 → read-only / protected-path post-hoc verification (§5)
@@ -2732,14 +2789,14 @@ attempts regardless of the part's capabilities. Its worktree *is* the candidate
 run's transition to `SUCCEEDED`** — one atomic journal transition. There is consequently no
 window in which the final movement has succeeded while the run is still amendable.
 
-At adapter exit the core applies the full read-only post-hoc invariant of §5 — tracked content,
-non-ignored untracked files, symlink targets, modes, protected paths — and additionally verifies
-that the worktree tree equals the recorded candidate `result_tree`. `subject_tree` equality
-alone would miss an untracked file or a mode change that a later step could observe. Any
-mismatch is `candidate_mismatch`, a `grant_denied` sub-reason (Appendix D) —
-an unauthorized write to the tree under verification — failing the attempt with a kind §3.1
-classes immediately terminal. If the core's own composition disagrees with what it recorded, that
-is internal corruption handled by recovery, never attributed to the performer.
+After §4's execute-completion boundary the core applies the full read-only post-hoc invariant of
+§5 — tracked content, non-ignored untracked files, symlink targets, modes, protected paths — and
+additionally verifies that the worktree tree equals the recorded candidate `result_tree`.
+`subject_tree` equality alone would miss an untracked file or a mode change that a later step could
+observe. Any mismatch is `candidate_mismatch`, a `grant_denied` sub-reason (Appendix D) — an
+unauthorized write to the tree under verification — failing the attempt with a kind §3.1 classes
+immediately terminal. If the core's own composition disagrees with what it recorded, that is
+internal corruption handled by recovery, never attributed to the performer.
 
 **Apply-gate predicates** (closed enum, optional, meaningful only with review evidence
 bound to the candidate): `no_unresolved_blocking_findings` passes when `review_outcome` ∈
@@ -3791,14 +3848,14 @@ movement.cancelled {}             # derived from run.cancelled
 | `performer.selected` | ✓ | attempt_id | before `attempt.started` | Records the chosen performer, adapter id, model, and **why** this attempt exists (`initial`, `quality_retry`, `fallback`, `revision_restart`, `decision_resume`). **Creates the attempt in `STARTING`**, which is what makes that state reachable and lets a spawn failure be attributed to a chosen performer. Probe-derived facts cannot appear here: the selected adapter has not passed the durable gate yet. It records the *reason*; it never charges the budget — charging belongs to the failure event that caused it, so a retry cannot be double-counted |
 | `attempt.started` | ✓ | attempt_id | Attempt `STARTING` | Attempt `STARTING → RUNNING`; records `attempt_number`, the gated adapter process identity, and granted authority |
 | `adapter.probed` | ✓ | attempt_id | Attempt `RUNNING`, no prior `adapter.probed` | Records the valid observation from this attempt's own gated adapter peer, the resulting advisory and feature-degradation decisions, and the exact request's `execution_dependency_hash`. It is appended and fsynced before `execute`; no `execute` is legal without it |
-| `performer.completed` | ✓ | attempt_id | Attempt `RUNNING`, `adapter.probed` present | Attempt → `VERIFYING`. **Vendor execution ended; says nothing about success** (§6) |
+| `performer.completed` | ✓ | attempt_id | Attempt `RUNNING`, `adapter.probed` present, recorded adapter session verified empty, and its `adapter` interval closed | Attempt → `VERIFYING`. **Vendor execution ended and its session is harmless; says nothing about success** (§4, §6) |
 | `attempt.completed` | ✓ | attempt_id | Attempt `VERIFYING`, acceptance and gate passed | Attempt → `COMPLETED` |
 | `attempt.blocked` | ✓ | attempt_id | Attempt `RUNNING`, `adapter.probed` present | Attempt → `BLOCKED` (terminal); carries `pending_decision_ids` |
 | `attempt.failed` | ✓ | attempt_id | Attempt `STARTING`/`RUNNING`/`VERIFYING` | Attempt → `FAILED`; carries the failure kind (Appendix D). Legal from `STARTING` so spawn and startup failures are representable. **Charges at most once, and only if it authorizes another attempt**; what it charges and what follows are §3.1's, selected by its first arm and recorded in `disposition` |
 | `attempt.cancelled` *derived* | — | source event_id + attempt_id | — | Attempt → `CANCELLED`; projected idempotently from `run.cancelled`, for the same reason |
 | `attempt.superseded` *derived* | — | source event_id + attempt_id | — | Attempt → `SUPERSEDED`; projected from `amendment.approved` (§9) |
 | `execution.started` | ✓ | `interval_id` | no interval open | Opens the (single) budget interval; carries `interval_id`, `phase`, `wall_start`, `remaining_at_start` (§6). Keyed on `interval_id` because one attempt legitimately opens several intervals |
-| `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration`. `charging: measured` requires the closer to **be** the process that opened it; every other closer uses `charging: clamped` and the deterministic formula of §6 — which covers recovery (`reason: recovered`), a fenced cancellation (`reason: cancelled`), and a fenced supersession (`reason: superseded`) alike |
+| `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration`. `charging: measured` requires the closer to **be** the process that opened it; every other closer uses `charging: clamped` and the deterministic formula of §6 — which covers recovery (`reason: recovered`), a fenced cancellation (`reason: cancelled`), and a fenced supersession (`reason: superseded`) alike. For an ordinary `adapter` close, §4 additionally requires the recorded session to be verified empty first |
 
 **Payloads.**
 
@@ -3865,8 +3922,9 @@ performer.completed {             # appended ONLY for outcome `completed` — se
                                   #   NEVER journaled
 }
 
-  # Adapter outcome → journal transition. Each reported outcome has exactly one authoritative
-  # event, so no outcome is left without a terminal transition:
+  # Adapter outcome → journal transition. This mapping is applied only after §4's
+  # execute-completion cleanup and interval close. Each reported outcome has exactly one
+  # authoritative event, so no outcome is left without a terminal transition:
   #
   #   completed      → performer.completed        (attempt RUNNING → VERIFYING)
   #   waiting_human  → attempt.blocked            (attempt RUNNING → BLOCKED, terminal)
@@ -4443,9 +4501,10 @@ Normative. Recovery replays the journal, rebuilds every projection, and then res
 **last durable state**. It is organised top-down over the whole run, and within each table rows are
 evaluated **top-down; the first matching row wins**.
 
-**Before any table below runs, recovery closes any open execution interval — unless a C.1 row will
-close it with a more specific reason.** §6 requires the close, and every row would otherwise have to
-remember it: an `execution.started` with no matching stop is closed with
+**Before any table below runs, recovery closes any open execution interval — unless a C.1 control
+row will close it with a more specific reason, or a C.2 unfinished-adapter row must first verify its
+recorded session empty.** §6 requires the close, and every other row would otherwise have to remember
+it: an `execution.started` with no matching stop is closed with
 `execution.stopped {reason: recovered, charging: clamped}` first, so budget consumption is correct
 before any admission decision reads it. A row that computes a disposition against a stale remainder
 would charge the wrong thing.
@@ -4457,6 +4516,13 @@ is open and independently of whether (d) fences anything; **supersession** close
 control rows *first* and performs the generic close only for an interval no row claims. The reason is
 not cosmetic: it is how a later reader distinguishes a run that was cancelled from one that merely
 crashed.
+
+The C.2 exception is about containment rather than the reason label. For an open `adapter` interval
+before `performer.completed`, the matching C.2 row sweeps the recorded launch first and then closes
+the interval `recovered`/`clamped`. A generic pre-table close would stop charging before the survivor
+check that determines whether the old attempt is harmless. If that sweep is unverifiable, recovery
+halts with the interval still open; it neither charges twice nor starts a successor beside a
+possibly-live predecessor.
 
 Two further rules govern everything below, and every row obeys them rather than restating them:
 
@@ -4494,9 +4560,9 @@ replay rule holds.
 
 | Last durable state | Recovery action |
 |---|---|
-| `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). If a trampoline handoff identity was published, verify and sweep that session. If the inherited marker is *held* but no identity can be read, halt `spawn_handoff_unverifiable` — the holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name. If the marker is free, **no released mutator survives** — an unreleased trampoline may still be in its pre-marker window but contains no adapter code (§4) — so append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}`, then realize it per §3.1's second arm |
-| `attempt.started`, no `adapter.probed` | Sweep the **recorded** adapter session to verified empty **before** any failure or fallback — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. No durable valid probe observation exists, so append `attempt.failed {kind: adapter_unavailable, reason: probe_terminated_incomplete, disposition}`, then realize it per §3.1. Recovery does not manufacture the missing observation |
-| `adapter.probed`, **no** `performer.completed` | Sweep the recorded adapter session to verified empty before any failure or retry. Inspection failure is `sweep_unverifiable`. Then append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: after it, adapter exit is *expected*, and without the exclusion this row would capture every normal completion before the rows that handle it |
+| `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). If a trampoline handoff identity was published, verify and sweep that session. If the inherited marker is *held* but no identity can be read, halt `spawn_handoff_unverifiable` — the holder cannot run adapter code, but recovery must not claim it cleaned a process it cannot name. If the marker is free, **no released mutator survives** — an unreleased trampoline may still be in its pre-marker window but contains no adapter code (§4). Only after that check, close any open `adapter` interval `recovered`/`clamped`; then append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and realize it per §3.1's second arm |
+| `attempt.started`, no `adapter.probed` | Sweep the **recorded** adapter session to verified empty **before** any failure or fallback — whether its leader is live, dead, or already a zombie, since a survivor holds repository authority either way. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped`. No durable valid probe observation exists, so append `attempt.failed {kind: adapter_unavailable, reason: probe_terminated_incomplete, disposition}`, then realize it per §3.1. Recovery does not manufacture the missing observation |
+| `adapter.probed`, **no** `performer.completed` | Sweep the recorded adapter session to verified empty before any failure or retry. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped` and append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: that event attests both verified-empty cleanup and the prior interval close, so recovery may enter verification without repeating either; without the exclusion this row would turn every normal completion into an incomplete attempt |
 | `performer.completed`, movement holds `repo_write`, no `change_set.recorded` | The worktree still exists and its tree is authoritative: capture the change set idempotently, then continue at the next row. If the worktree is gone, the candidate cannot be reconstructed — append `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}` |
 | `performer.completed`, no `verification.passed` | Re-run the **full** §5 post-hoc verification — protected paths for every movement, plus the read-only invariant where the movement holds no `repo_write` — against the surviving worktree; if it is gone, `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}`. A durable `verification.passed` event marks the boundary, because without one a crash after `change_set.recorded` but before the check would let recovery start acceptance having verified nothing |
 | `change_set.recorded` or `verification.passed`, no `acceptance.started` | Begin acceptance: append `acceptance.started` and proceed to C.3 |
@@ -4600,8 +4666,8 @@ reported to the operator instead.
 **Core-determined attempt failure kinds** — failures the core attributes to itself rather than to
 a vendor, alongside the wire kinds above: `budget_exhausted` (§6 mid-flight exhaustion).
 
-**`execution.stopped` reasons** (§6): `normal`, `cancelled`, `superseded`, `budget_exhausted`,
-`recovered`.
+**`execution.stopped` reasons** (§6): `normal` (an ordinary close by the living opener, not a
+success verdict), `cancelled`, `superseded`, `budget_exhausted`, `recovered`.
 
 **`amendment.rejected` reasons:** `run_terminal`, `run_cancelling`, `stale`, `patch_error`,
 `invalid_score`,
@@ -4880,6 +4946,14 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 | `launch.criterion.marker_held_to_identity_published` | trampoline holds the marker `B` | `identity.json` published `R` | §7; §4; C.3 | As the adapter row |
 | `launch.criterion.identity_published_to_recorded` | `identity.json` published `R` | `criterion.started` appended `R` | §7; C.3 | As the adapter row. C.3 handles the unjournaled directory explicitly, ahead of the rows that synthesize a completion |
 | `launch.criterion.recorded_to_gate` | `criterion.started` appended `R` | criterion gate released `B` | §7; §4 | As the adapter row |
+
+**Adapter execute completion** — the response-derived event names vary, but the cleanup boundary is
+one sequence (§4).
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `execute.adapter_swept_to_interval_stopped` | complete response validated, adapter exited zero, and recorded adapter session verified empty `B` | `execution.stopped {reason: normal, charging: measured}` appended `R` | §4; §6; C.2 | A crash leaves the interval open. Recovery does not trust the volatile response: it sweeps again, closes the interval `recovered`/`clamped`, and records an incomplete-attempt failure. Closing before the left endpoint would stop charging a survivor |
+| `execute.interval_stopped_to_outcome` | ordinary adapter `execution.stopped` durable `R` | the response-derived B.2 event appended `R` | §4; B.2; C.2 | A crash records no outcome from the lost response and never enters acceptance. C.2 re-sweeps, observes the interval already closed, and records the incomplete-attempt failure without a second charge. In particular, `performer.completed` can never coexist with an open adapter interval or an unswept session |
 
 ## E.3 `cancel.fence_decided_to_terminal` is not a lost-write boundary
 
