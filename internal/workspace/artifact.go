@@ -65,10 +65,26 @@ func (attempt *AttemptWorkspace) ingestArtifact(
 		ContentHash: contentHash,
 		SizeBytes:   uint64(len(contents)),
 	}
-	err = attempt.run.store.Mutate(
-		attempt.run.id,
-		"",
-		func(transaction *runstore.Txn) error {
+	event := runstate.Event{
+		RunID:         attempt.run.id,
+		ScoreRevision: attempt.run.scoreRevision,
+		MovementID:    attempt.MovementID,
+		PartID:        attempt.PartID,
+		AttemptID:     attempt.AttemptID,
+		Type:          runstate.EventArtifactRecorded,
+		Payload:       payload,
+	}
+	err = attempt.run.mutate(
+		func(
+			transaction *runstore.Txn,
+			state runstate.State,
+			authorized bool,
+		) error {
+			if authorized {
+				if _, err := runstate.Apply(state, event); err != nil {
+					return err
+				}
+			}
 			var publishErr error
 			result.PublicationReceipt, publishErr = transaction.
 				At(publicationAddress).
@@ -79,15 +95,7 @@ func (attempt *AttemptWorkspace) ingestArtifact(
 			var appendErr error
 			result.RecordReceipt, appendErr = transaction.
 				At(recordAddress).
-				Append(runstate.Event{
-					RunID:         attempt.run.id,
-					ScoreRevision: attempt.run.scoreRevision,
-					MovementID:    attempt.MovementID,
-					PartID:        attempt.PartID,
-					AttemptID:     attempt.AttemptID,
-					Type:          runstate.EventArtifactRecorded,
-					Payload:       payload,
-				})
+				Append(event)
 			return appendErr
 		},
 	)

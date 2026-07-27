@@ -11,6 +11,11 @@ func newUUIDv7() (string, error) {
 	return uuidv7(time.Now(), rand.Reader)
 }
 
+// NewID allocates one core-owned UUIDv7 for a run-scoped identity.
+func NewID() (string, error) {
+	return newUUIDv7()
+}
+
 func uuidv7(now time.Time, random io.Reader) (string, error) {
 	var value [16]byte
 	milliseconds := now.UnixMilli()

@@ -53,6 +53,8 @@ func IdempotencyKey(event Event) (string, error) {
 		return fmt.Sprintf("%d", mustUint(payload, "authority_epoch")), nil
 	case EventJournalTailTruncated:
 		return fmt.Sprintf("%d", mustUint(payload, "truncated_seq")), nil
+	case EventLog, EventProgress:
+		return "", nil
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnsupportedEventType, event.Type)
 	}
@@ -556,6 +558,8 @@ func Apply(input State, event Event) (State, error) {
 			return state, invalid(event, "truncated_seq must equal the repair event sequence")
 		}
 		// Audit event; no state effect.
+	case EventLog, EventProgress:
+		// Observational event; no state effect.
 	default:
 		if isRegistryEvent(event.Type) {
 			return state, fmt.Errorf("%w: %s", ErrUnsupportedEventType, event.Type)
@@ -892,6 +896,10 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 		return []string{"requested_by"}, nil, true
 	case EventJournalTailTruncated:
 		return []string{"truncated_seq", "discarded_bytes"}, nil, true
+	case EventLog:
+		return []string{"level", "message"}, nil, true
+	case EventProgress:
+		return []string{"message"}, nil, true
 	default:
 		return nil, nil, false
 	}
@@ -1232,6 +1240,10 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		strings = []string{"requested_by"}
 	case EventJournalTailTruncated:
 		integers = []string{"truncated_seq", "discarded_bytes"}
+	case EventLog:
+		strings = []string{"level", "message"}
+	case EventProgress:
+		strings = []string{"message"}
 	}
 	if err := namedTypes(payload, strings, objects, arrays, bools, integers); err != nil {
 		return err

@@ -153,23 +153,31 @@ func (attempt *AttemptWorkspace) VerifyReadOnlyAndRecord() (
 	}
 
 	var receipt faultpoint.DurabilityReceipt
-	err = attempt.run.store.Mutate(
-		attempt.run.id,
-		"",
-		func(transaction *runstore.Txn) error {
+	event := runstate.Event{
+		RunID:         attempt.run.id,
+		ScoreRevision: attempt.run.scoreRevision,
+		MovementID:    attempt.MovementID,
+		PartID:        attempt.PartID,
+		AttemptID:     attempt.AttemptID,
+		Type:          runstate.EventVerificationPassed,
+		Payload:       json.RawMessage(`{}`),
+	}
+	err = attempt.run.mutate(
+		func(
+			transaction *runstore.Txn,
+			state runstate.State,
+			authorized bool,
+		) error {
+			if authorized {
+				if _, err := runstate.Apply(state, event); err != nil {
+					return err
+				}
+			}
 			address := faultpoint.ReceiptAddress(
 				"attempt." + string(attempt.AttemptID) + ".verification",
 			)
 			var appendErr error
-			receipt, appendErr = transaction.At(address).Append(runstate.Event{
-				RunID:         attempt.run.id,
-				ScoreRevision: attempt.run.scoreRevision,
-				MovementID:    attempt.MovementID,
-				PartID:        attempt.PartID,
-				AttemptID:     attempt.AttemptID,
-				Type:          runstate.EventVerificationPassed,
-				Payload:       json.RawMessage(`{}`),
-			})
+			receipt, appendErr = transaction.At(address).Append(event)
 			return appendErr
 		},
 	)
