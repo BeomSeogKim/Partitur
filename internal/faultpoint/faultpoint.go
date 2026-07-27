@@ -28,6 +28,8 @@ const (
 	EdgeLaunchCriterionMarkerHeldToIdentity      EdgeID = "launch.criterion.marker_held_to_identity_published"
 	EdgeLaunchCriterionIdentityToRecorded        EdgeID = "launch.criterion.identity_published_to_recorded"
 	EdgeLaunchCriterionRecordedToGate            EdgeID = "launch.criterion.recorded_to_gate"
+	EdgeExecuteAdapterSweptToIntervalStopped     EdgeID = "execute.adapter_swept_to_interval_stopped"
+	EdgeExecuteIntervalStoppedToOutcome          EdgeID = "execute.interval_stopped_to_outcome"
 )
 
 // PointID identifies a BoundaryReached point from DESIGN Appendix E.
