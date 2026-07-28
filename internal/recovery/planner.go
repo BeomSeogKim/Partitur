@@ -12,6 +12,7 @@ import "github.com/BeomSeogKim/Partitur/internal/runstate"
 type CaseID string
 
 const (
+	CaseOpenExecution          CaseID = "RC-RESUME-001"
 	CaseTerminal               CaseID = "RC-RESUME-002"
 	CaseStaleLease             CaseID = "RC-RESUME-003"
 	CaseOrphanLease            CaseID = "RC-RESUME-004"
@@ -125,6 +126,15 @@ type LeaseObservation struct {
 	Readable bool
 	Epoch    uint64
 	Owner    OwnerState
+	Identity *LeaseIdentity
+}
+
+// LeaseIdentity identifies the lease observed before recovery planning.
+type LeaseIdentity struct {
+	Epoch uint64
+	Token string
+	PID   int
+	Start runstate.StartIdentity
 }
 
 // ReferenceKind identifies one event-named run-level object checked by
@@ -190,6 +200,8 @@ type ScheduledMovement struct {
 // or RC-RESUME-042. C.4 only makes it durable; it never chooses another one.
 type PendingSuccessor struct {
 	MovementID runstate.MovementID
+	AttemptID  runstate.AttemptID
+	Performer  string
 	Reason     string
 }
 
@@ -357,6 +369,7 @@ type Input struct {
 type ActionKind string
 
 const (
+	ActionCloseOpenExecutionInterval ActionKind = "close_open_execution_interval"
 	ActionTerminalCleanup            ActionKind = "terminal_cleanup"
 	ActionRemoveStaleLease           ActionKind = "remove_stale_lease"
 	ActionQuarantineOrphanLease      ActionKind = "quarantine_orphan_lease"
@@ -519,6 +532,12 @@ func Plan(input Input) Decision {
 	if state.Authority.Epoch > 0 && (!lease.Exists || lease.Owner == OwnerDead) {
 		return action(CaseReclaimAuthority, ActionReclaimAuthority, false)
 	}
+	// RC-RESUME-001 closes every non-adapter interval before its durable
+	// consequence is interpreted. C.2 owns open adapter intervals because it
+	// must first sweep their recorded session.
+	if state.OpenExecution != nil && state.OpenExecution.Phase != "adapter" {
+		return action(CaseOpenExecution, ActionCloseOpenExecutionInterval, true)
+	}
 	if input.Observations.RootSnapshotDivergence {
 		return halt(CaseRootSnapshotDivergence, HaltRootSnapshotDivergence)
 	}
@@ -560,21 +579,8 @@ func PlanAttempt(input Input) Decision {
 		decision.Action.Continuation = ContinuationC4
 		return decision
 	}
-	if attempt.AcceptanceStarted {
-		decision := action(CaseContinue, ActionProceedAcceptance, false)
-		decision.Action.AttemptID = attempt.AttemptID
-		decision.Action.Continuation = ContinuationC3
-		return decision
-	}
-
 	if attempt.State == runstate.AttemptFailed && !attempt.FailureDispositionRealized {
-		decision := action(CaseRealizeDisposition, ActionRealizeRecordedDisposition, false)
-		decision.Action.AttemptID = attempt.AttemptID
-		if attempt.RecordedDisposition != nil {
-			disposition := *attempt.RecordedDisposition
-			decision.Action.RecordedDisposition = &disposition
-		}
-		return decision
+		return realizeRecordedDisposition(CaseRealizeDisposition, attempt, input.Projection.Scheduler)
 	}
 	if attempt.State == runstate.AttemptBlocked {
 		if request, ok := firstMissingQuestionRequest(attempt.QuestionRequests); ok {
@@ -672,6 +678,12 @@ func PlanAttempt(input Input) Decision {
 		decision.Action.AttemptID = attempt.AttemptID
 		return decision
 	}
+	if attempt.AcceptanceStarted {
+		decision := action(CaseContinue, ActionProceedAcceptance, false)
+		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.Continuation = ContinuationC3
+		return decision
+	}
 	decision := action(CaseContinue, ActionProceedScheduler, false)
 	decision.Action.Continuation = ContinuationC4
 	return decision
@@ -692,13 +704,7 @@ func PlanAcceptance(input Input) Decision {
 	recovery := input.Projection.Acceptance
 
 	if recovery != nil && recovery.Failed {
-		decision := action(CaseAcceptanceFailed, ActionRealizeRecordedDisposition, false)
-		decision.Action.AttemptID = attempt.AttemptID
-		if attempt.RecordedDisposition != nil {
-			disposition := *attempt.RecordedDisposition
-			decision.Action.RecordedDisposition = &disposition
-		}
-		return decision
+		return realizeRecordedDisposition(CaseAcceptanceFailed, attempt, input.Projection.Scheduler)
 	}
 	if failed, ok := firstFailedCriterion(acceptance); ok {
 		return acceptanceFailureAction(CaseCriterionFailed, attempt.AttemptID, failed.ID, failed.Reason)
@@ -742,7 +748,7 @@ func PlanAcceptance(input Input) Decision {
 		return acceptanceFailureAction(caseID, attempt.AttemptID, "", "recovery_subject_mismatch")
 	case SubjectMatched:
 		if criterionID, ok := nextUnstartedCriterion(acceptance); ok {
-			decision := action(caseID, ActionResumeCriterion, false)
+			decision := action(caseID, ActionResumeCriterion, true)
 			decision.Action.AttemptID = attempt.AttemptID
 			decision.Action.CriterionID = criterionID
 			decision.Action.SubjectTree = acceptance.SubjectTree
@@ -764,7 +770,7 @@ func PlanScheduler(input Input) Decision {
 	if state.Run.Terminal() {
 		return action(CaseTerminal, ActionTerminalCleanup, false)
 	}
-	if currentHeadAttempt(input.Projection) != nil {
+	if currentHeadAttemptInFlight(input.Projection) {
 		decision := action(CaseContinue, ActionProceedAttempt, false)
 		decision.Action.Continuation = ContinuationC2
 		return decision
@@ -1015,12 +1021,47 @@ func proceedScheduler() Decision {
 	return decision
 }
 
+func realizeRecordedDisposition(caseID CaseID, attempt *AttemptRecovery, scheduler Scheduler) Decision {
+	decision := action(caseID, ActionRealizeRecordedDisposition, true)
+	decision.Action.AttemptID = attempt.AttemptID
+	if attempt.RecordedDisposition == nil {
+		return decision
+	}
+	disposition := *attempt.RecordedDisposition
+	decision.Action.RecordedDisposition = &disposition
+	if disposition.Charged != "quality_retry" && disposition.Charged != "fallback" {
+		return decision
+	}
+	pending := scheduler.PendingSuccessor
+	if pending == nil || pending.AttemptID != attempt.AttemptID {
+		return decision
+	}
+	copy := *pending
+	decision.Action.PendingSuccessor = &copy
+	decision.Action.Continuation = ContinuationC4
+	decision.Action.Replan = false
+	return decision
+}
+
 func currentHeadAttempt(projection Projection) *AttemptRecovery {
 	attempt := projection.CurrentHeadAttempt
 	if attempt == nil || attempt.ScoreRevision != projection.State.ScoreHead.Revision || attempt.State == runstate.AttemptSuperseded {
 		return nil
 	}
 	return attempt
+}
+
+func currentHeadAttemptInFlight(projection Projection) bool {
+	attempt := currentHeadAttempt(projection)
+	if attempt == nil {
+		return false
+	}
+	switch attempt.State {
+	case runstate.AttemptStarting, runstate.AttemptRunning, runstate.AttemptVerifying:
+		return true
+	default:
+		return false
+	}
 }
 
 func recoveryFailureAction(caseID CaseID, kind ActionKind, attemptID runstate.AttemptID, failureKind, failureReason string, steps []ActionStep) Decision {

@@ -31,6 +31,7 @@ type ExecutePlan struct {
 	IntervalOpened time.Time
 	MayPropose     bool
 	Draft          bool
+	Probe          faultpoint.Probe
 	RecordIdentity launch.RecordIdentity
 	Recorder       ExecuteRecorder
 }

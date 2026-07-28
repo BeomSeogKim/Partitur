@@ -163,7 +163,7 @@ func edgeIDsFromHarness(t *testing.T) []string {
 	lines := strings.Split(string(contents), "\n")
 
 	const manifestHeading = "## Selection manifest"
-	const nextHeading = "## Execution model — deterministic interleaving, not a self-racing process"
+	const nextHeading = "## Gate-cut dispositions"
 	manifestStart := -1
 	manifestHeadingCount := 0
 	manifestEnd := -1
@@ -235,6 +235,17 @@ func TestBoundaryPointIDsAreSemanticAndUnique(t *testing.T) {
 		PointLaunchAdapterGateReleased,
 		PointLaunchCriterionMarkerHeld,
 		PointLaunchCriterionGateReleased,
+		PointAuthorityGranted,
+		PointAuthorityLeaseCreated,
+		PointLaunchAdapterIdentityPublished,
+		PointLaunchAdapterIdentityRecorded,
+		PointLaunchCriterionIdentityPublished,
+		PointLaunchCriterionIdentityRecorded,
+		PointExecuteAdapterSwept,
+		PointExecuteIntervalStopped,
+		PointExecuteOutcomeRecorded,
+		PointLifecycleAttemptCompleted,
+		PointLifecycleMovementSucceeded,
 	}
 	seen := map[PointID]bool{}
 	for _, point := range points {

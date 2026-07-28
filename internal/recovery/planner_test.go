@@ -214,6 +214,12 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 			adjacent: baseInput(),
 		},
 		{
+			name:     "open non-adapter interval closes before any consequence",
+			input:    withOpenExecution(baseInput(), "acceptance"),
+			wantCase: CaseOpenExecution, wantKind: ActionCloseOpenExecutionInterval, replan: true,
+			adjacent: withOpenExecution(baseInput(), "adapter"),
+		},
+		{
 			name:     "root snapshot divergence",
 			input:    withRootDivergence(baseInput()),
 			wantCase: CaseRootSnapshotDivergence, wantHalt: HaltRootSnapshotDivergence,
@@ -271,7 +277,7 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 	}
 
 	for _, caseID := range []CaseID{
-		CaseTerminal, CaseStaleLease, CaseOrphanLease, CaseOwnerUnverifiable, CaseLiveOwner,
+		CaseOpenExecution, CaseTerminal, CaseStaleLease, CaseOrphanLease, CaseOwnerUnverifiable, CaseLiveOwner,
 		CaseCancellation, CasePendingPrepare, CaseReclaimAuthority, CaseRootSnapshotDivergence,
 		CaseMissingReference, CaseRoutedAmendment, CaseRevisionRestart, CaseCompositionTerminal,
 		CaseContinue,
@@ -385,6 +391,11 @@ func TestPlanC1Precedence(t *testing.T) {
 			want:  CasePendingPrepare,
 		},
 		{
+			name:  "generic recovered close precedes integrity checks outside the control rows",
+			input: withRootDivergence(withOpenExecution(baseInput(), "acceptance")),
+			want:  CaseOpenExecution,
+		},
+		{
 			name:  "root divergence outranks generic reference corruption",
 			input: withRootDivergence(withMissingReference(baseInput(), ReferenceArtifact)),
 			want:  CaseRootSnapshotDivergence,
@@ -462,7 +473,7 @@ func TestPlanC2RowsAndAdjacentStates(t *testing.T) {
 		{
 			name:     "recorded failed disposition is realized without reclassification",
 			input:    withFailedAttempt(c2Input(runstate.AttemptFailed), false),
-			wantCase: CaseRealizeDisposition, wantKind: ActionRealizeRecordedDisposition,
+			wantCase: CaseRealizeDisposition, wantKind: ActionRealizeRecordedDisposition, replan: true,
 			adjacent: withFailedAttempt(c2Input(runstate.AttemptFailed), true),
 		},
 		{
@@ -588,9 +599,32 @@ func TestPlanC2ScopeHaltsAndPrecedence(t *testing.T) {
 	t.Run("recorded disposition is carried unchanged to Arm 2", func(t *testing.T) {
 		input := withFailedAttempt(c2Input(runstate.AttemptFailed), false)
 		got := PlanAttempt(input)
-		assertDecision(t, got, CaseRealizeDisposition, ActionRealizeRecordedDisposition, "", false)
+		assertDecision(t, got, CaseRealizeDisposition, ActionRealizeRecordedDisposition, "", true)
 		if got.Action.RecordedDisposition == nil || *got.Action.RecordedDisposition != *input.Projection.CurrentHeadAttempt.RecordedDisposition {
 			t.Fatalf("recorded disposition = %+v, want %+v", got.Action.RecordedDisposition, input.Projection.CurrentHeadAttempt.RecordedDisposition)
+		}
+	})
+	t.Run("recorded retry selects C4 and a materialized successor prevents RC39 from refiring", func(t *testing.T) {
+		input := withFailedAttempt(c2Input(runstate.AttemptFailed), false)
+		input.Projection.Scheduler.PendingSuccessor = &PendingSuccessor{
+			MovementID: "movement", AttemptID: "attempt", Performer: "writer", Reason: "quality_retry",
+		}
+		input.Projection.Scheduler.RemainingTime = 1
+		arm2 := PlanAttempt(input)
+		assertDecision(t, arm2, CaseRealizeDisposition, ActionRealizeRecordedDisposition, "", false)
+		if arm2.Action.Continuation != ContinuationC4 || arm2.Action.PendingSuccessor == nil {
+			t.Fatalf("Arm 2 = %+v, want pending C4 continuation", arm2)
+		}
+		input.Projection.Scheduler.PendingSuccessor = arm2.Action.PendingSuccessor
+		assertDecision(t, PlanScheduler(input), CaseScheduler, ActionMaterializeSuccessor, "", true)
+
+		input.Projection.Scheduler.PendingSuccessor = nil
+		input.Projection.CurrentHeadAttempt = &AttemptRecovery{
+			AttemptID: "retry-attempt", MovementID: "movement", ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			State: runstate.AttemptStarting,
+		}
+		if next := PlanAttempt(input); next.CaseID == CaseRealizeDisposition {
+			t.Fatalf("materialized successor reselected RC39: %+v", next)
 		}
 	})
 	t.Run("C2 continuation is explicit at table boundaries", func(t *testing.T) {
@@ -641,7 +675,7 @@ func TestPlanC3RowsAndAdjacentStates(t *testing.T) {
 		{
 			name:     "recorded acceptance failure realizes its recorded disposition",
 			input:    withAcceptanceFailure(c3Input("c1")),
-			wantCase: CaseAcceptanceFailed, wantKind: ActionRealizeRecordedDisposition,
+			wantCase: CaseAcceptanceFailed, wantKind: ActionRealizeRecordedDisposition, replan: true,
 			adjacent: c3Input("c1"),
 		},
 		{
@@ -699,15 +733,19 @@ func TestPlanC3RowsAndAdjacentStates(t *testing.T) {
 			adjacent: withSubject(c3Input("c1"), SubjectMatched),
 		},
 		{
-			name:     "empty acceptance resumes its first criterion",
-			input:    withSubject(c3Input("c1"), SubjectMatched),
-			wantCase: CaseFirstCriterion, wantKind: ActionResumeCriterion,
+			name:  "empty acceptance resumes its first criterion",
+			input: withSubject(c3Input("c1"), SubjectMatched),
+			// The evaluator appends durable criterion facts, so the executor must
+			// re-enter C.1 rather than continue from a stale C.3 projection.
+			wantCase: CaseFirstCriterion, wantKind: ActionResumeCriterion, replan: true,
 			adjacent: withSubject(withCriterion(c3Input("c1"), "c1", false, ""), SubjectMatched),
 		},
 		{
-			name:     "passing completed criteria resume the next unstarted criterion",
-			input:    withSubject(withCriterion(c3Input("c1", "c2"), "c1", true, "PASS"), SubjectMatched),
-			wantCase: CaseNextCriterion, wantKind: ActionResumeCriterion,
+			name:  "passing completed criteria resume the next unstarted criterion",
+			input: withSubject(withCriterion(c3Input("c1", "c2"), "c1", true, "PASS"), SubjectMatched),
+			// See the first-criterion row: a resumed evaluator mutates durable
+			// state, making a fresh C.1 dispatch semantically required.
+			wantCase: CaseNextCriterion, wantKind: ActionResumeCriterion, replan: true,
 			adjacent: withSubject(withCriterion(withCriterion(c3Input("c1", "c2"), "c1", true, "PASS"), "c2", true, "PASS"), SubjectMatched),
 		},
 	}
@@ -738,7 +776,7 @@ func TestPlanC3RowsAndAdjacentStates(t *testing.T) {
 func TestPlanC3PrecedenceAndHalts(t *testing.T) {
 	t.Run("recorded acceptance failure precedes criterion evidence", func(t *testing.T) {
 		input := withCriterion(withAcceptanceFailure(c3Input("c1")), "c1", true, "FAIL")
-		assertDecision(t, PlanAcceptance(input), CaseAcceptanceFailed, ActionRealizeRecordedDisposition, "", false)
+		assertDecision(t, PlanAcceptance(input), CaseAcceptanceFailed, ActionRealizeRecordedDisposition, "", true)
 	})
 	t.Run("completed failure precedes an in flight criterion", func(t *testing.T) {
 		input := withSubject(withCriterion(withCriterion(c3Input("c1", "c2"), "c1", true, "ERROR"), "c2", false, ""), SubjectMatched)
@@ -758,7 +796,7 @@ func TestPlanC3PrecedenceAndHalts(t *testing.T) {
 		assertDecision(t, PlanAcceptance(input), CaseUnjournaledLaunch, "", HaltSpawnHandoffUnverifiable, false)
 	})
 	t.Run("C2 dispatches a started acceptance to C3", func(t *testing.T) {
-		input := c2Input(runstate.AttemptVerifying)
+		input := withVerificationPassed(c2Input(runstate.AttemptVerifying))
 		input.Projection.CurrentHeadAttempt.AcceptanceStarted = true
 		got := PlanAttempt(input)
 		assertDecision(t, got, CaseContinue, ActionProceedAcceptance, "", false)
@@ -856,6 +894,13 @@ func withAuthority(input Input, epoch uint64) Input {
 	input.Projection.State.Authority = runstate.Authority{
 		Epoch: epoch,
 		Owner: &runstate.AuthorityOwner{PID: 1},
+	}
+	return input
+}
+
+func withOpenExecution(input Input, phase string) Input {
+	input.Projection.State.OpenExecution = &runstate.ExecutionInterval{
+		ID: "interval", Phase: phase, WallStart: "2026-07-28T00:00:00Z", RemainingAtStart: 1,
 	}
 	return input
 }

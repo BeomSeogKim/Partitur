@@ -46,7 +46,18 @@ func Collect(store *runstore.Store, runID runstate.RunID, projection recovery.Pr
 	if err != nil {
 		observations.Lease = recovery.LeaseObservation{Exists: true, Readable: false, Owner: recovery.OwnerUnverifiable}
 	} else if present {
-		observations.Lease = recovery.LeaseObservation{Exists: true, Readable: true, Epoch: lease.Epoch, Owner: ownerState(lease.MatchOwner())}
+		observations.Lease = recovery.LeaseObservation{
+			Exists:   true,
+			Readable: true,
+			Epoch:    lease.Epoch,
+			Owner:    ownerState(lease.MatchOwner()),
+			Identity: &recovery.LeaseIdentity{
+				Epoch: lease.Epoch,
+				Token: lease.Token,
+				PID:   lease.PID,
+				Start: lease.Start,
+			},
+		}
 	}
 	observations.RootSnapshotDivergence, err = rootSnapshotDivergence(filepath.Join(root, "partitur.yaml"), projection.State.ScoreHead)
 	if err != nil {

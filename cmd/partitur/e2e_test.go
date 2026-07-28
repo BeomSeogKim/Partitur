@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 
 const fakeAdapterEnvironment = "PARTITUR_VALIDATE_FAKE_ADAPTER"
 const runVendorEnvironment = "PARTITUR_RUN_VENDOR_FIXTURE"
+const runVendorOutcomeEnvironment = "PARTITUR_RUN_VENDOR_OUTCOME"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runVendorEnvironment) == "1" {
@@ -843,10 +845,18 @@ func runVendorFixture() {
 	if err != nil {
 		os.Exit(91)
 	}
-	if !bytes.Contains(
-		prompt,
-		[]byte("The remaining active wall-clock budget at attempt start is 600000 milliseconds."),
-	) {
+	const budgetPrefix = "The remaining active wall-clock budget at attempt start is "
+	budgetStart := strings.Index(string(prompt), budgetPrefix)
+	if budgetStart < 0 {
+		os.Exit(96)
+	}
+	budgetText := string(prompt)[budgetStart+len(budgetPrefix):]
+	budgetParts := strings.SplitN(budgetText, " milliseconds.", 2)
+	if len(budgetParts) != 2 {
+		os.Exit(96)
+	}
+	remainingMS, err := strconv.ParseInt(budgetParts[0], 10, 64)
+	if err != nil || remainingMS <= 0 || remainingMS > 600000 {
 		os.Exit(96)
 	}
 	outputDir := ""
@@ -859,6 +869,18 @@ func runVendorFixture() {
 	}
 	if outputDir == "" {
 		os.Exit(92)
+	}
+	outcome := os.Getenv(runVendorOutcomeEnvironment)
+	if outcome == "task_failed" {
+		return
+	}
+	if outcome != "" && outcome != "success" && outcome != "read_only_violation" {
+		os.Exit(97)
+	}
+	if outcome == "read_only_violation" {
+		if err := os.WriteFile(filepath.Join(outputDir, "..", "worktree", "fixture-untracked.txt"), []byte("mutation\n"), 0o600); err != nil {
+			os.Exit(98)
+		}
 	}
 	if err := os.WriteFile(
 		filepath.Join(outputDir, "report.txt"),

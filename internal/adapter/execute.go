@@ -233,6 +233,7 @@ outputDrained:
 	if cleanupErr := c.verifyAndSweepExecute(running); cleanupErr != nil {
 		return state.report, sweepHalt(cleanupErr)
 	}
+	reach(plan.Probe, faultpoint.PointExecuteAdapterSwept)
 	if err := c.recordStop(&state); err != nil {
 		return state.report, err
 	}
@@ -297,6 +298,7 @@ func (c *Client) startExecute(ctx context.Context, plan ExecutePlan) (*runningEx
 		Stdout:         childStdout,
 		Stderr:         childStderr,
 		RecordIdentity: plan.RecordIdentity,
+		Probe:          plan.Probe,
 	})
 	if err != nil {
 		closeAll()
@@ -553,7 +555,11 @@ func (c *Client) recordStop(state *executeState) error {
 	if err != nil {
 		return err
 	}
-	return validateExecuteReceipt(receipt, string(runstate.EventExecutionStopped))
+	if err := validateExecuteReceipt(receipt, string(runstate.EventExecutionStopped)); err != nil {
+		return err
+	}
+	reach(state.plan.Probe, faultpoint.PointExecuteIntervalStopped)
+	return nil
 }
 
 func (c *Client) recordResult(state *executeState) error {
@@ -604,7 +610,17 @@ func (state *executeState) recordOutcome(eventType string, result protocol.Execu
 	if err != nil {
 		return err
 	}
-	return validateExecuteReceipt(receipt, eventType)
+	if err := validateExecuteReceipt(receipt, eventType); err != nil {
+		return err
+	}
+	reach(state.plan.Probe, faultpoint.PointExecuteOutcomeRecorded)
+	return nil
+}
+
+func reach(probe faultpoint.Probe, point faultpoint.PointID) {
+	if probe != nil {
+		probe.Reached(point)
+	}
 }
 
 func validateExecuteReceipt(receipt faultpoint.DurabilityReceipt, eventType string) error {

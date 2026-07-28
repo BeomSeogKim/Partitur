@@ -119,7 +119,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 
 		action := *decision.Action
 		if action.Kind == recovery.ActionReclaimAuthority || (actionRequiresDriver(action) && executor.Driver == nil) {
-			if err := executor.acquireAuthority(); err != nil {
+			if err := executor.acquireAuthority(input); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
 					result.Decision = halted
 					result.Outcome = OutcomeHalted
@@ -137,7 +137,6 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				return result, nil
 			}
 			input = refreshed
-			input.Observations.Lease.Owner = recovery.OwnerCurrentDriver
 			decision = recovery.Plan(input)
 			result.Replans++
 			continue
@@ -152,7 +151,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			}
 		}
 		if len(action.Steps) != 0 {
-			for _, step := range action.Steps {
+			for index, step := range action.Steps {
 				handler, ok := executor.stepHandler(step)
 				if !ok || handler == nil {
 					return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
@@ -167,8 +166,8 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 					return result, fmt.Errorf("execute recovery step %s: %w", step, err)
 				}
 				result.Steps = append(result.Steps, step)
-				if stepRefreshesInput(step) {
-					refreshed, halted, err := executor.refreshInput(ctx, input, decision)
+				if index+1 < len(action.Steps) || action.Continuation != "" || action.Replan {
+					refreshed, halted, err := executor.reloadAfterEffect(ctx, input, decision)
 					if err != nil {
 						return result, err
 					}
@@ -195,18 +194,29 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				return result, fmt.Errorf("execute recovery action %s: %w", action.Kind, err)
 			}
 			result.Kinds = append(result.Kinds, action.Kind)
+			if action.Continuation != "" || action.Replan {
+				refreshed, halted, err := executor.reloadAfterEffect(ctx, input, decision)
+				if err != nil {
+					return result, err
+				}
+				if halted.Halt != "" {
+					result.Decision = halted
+					result.Outcome = OutcomeHalted
+					return result, nil
+				}
+				input = refreshed
+			}
+		}
+		if action.Continuation != "" {
+			if action.PendingSuccessor != nil {
+				pending := *action.PendingSuccessor
+				input.Projection.Scheduler.PendingSuccessor = &pending
+			}
+			decision = continuePlan(input, action.Continuation)
+			continue
 		}
 		if !action.Replan {
 			result.Outcome = outcomeFor(action, input)
-			return result, nil
-		}
-		input, halted, err := executor.loadInput(ctx, decision, "reload recovery input")
-		if err != nil {
-			return result, err
-		}
-		if halted.Halt != "" {
-			result.Decision = halted
-			result.Outcome = OutcomeHalted
 			return result, nil
 		}
 		result.Replans++
@@ -214,14 +224,26 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 	}
 }
 
-func (executor *Executor) acquireAuthority() error {
+func (executor *Executor) acquireAuthority(input recovery.Input) error {
 	if executor.Driver != nil {
 		return nil
 	}
 	if executor.Store == nil || executor.RunID == "" {
 		return ErrAuthorityRequired
 	}
-	driver, err := executor.Store.AcquireRecoveryDriver(executor.RunID)
+	var driver *runstore.Driver
+	var err error
+	lease := input.Observations.Lease
+	if lease.Owner == recovery.OwnerDead && lease.Identity != nil {
+		driver, err = executor.Store.ReclaimDeadRecoveryDriver(executor.RunID, runstore.LeaseIdentity{
+			Epoch: lease.Identity.Epoch,
+			Token: lease.Identity.Token,
+			PID:   lease.Identity.PID,
+			Start: lease.Identity.Start,
+		})
+	} else {
+		driver, err = executor.Store.AcquireRecoveryDriver(executor.RunID)
+	}
 	if err != nil {
 		return fmt.Errorf("acquire recovery authority: %w", err)
 	}
@@ -263,14 +285,6 @@ func outcomeFor(action recovery.Action, input recovery.Input) Outcome {
 	return ""
 }
 
-// stepRefreshesInput marks a boundary after which the next step must use a
-// newly-derived input. The close changes durable budget facts; the criterion
-// sweep changes which subject observation is admissible. Neither handler
-// performs its own replacement read.
-func stepRefreshesInput(step recovery.ActionStep) bool {
-	return step == recovery.StepCloseAdapterInterval || step == recovery.StepSweepCriterionSession
-}
-
 func (executor *Executor) loadInput(ctx context.Context, decision recovery.Decision, description string) (recovery.Input, recovery.Decision, error) {
 	input, err := executor.Load(ctx)
 	if err != nil {
@@ -279,14 +293,36 @@ func (executor *Executor) loadInput(ctx context.Context, decision recovery.Decis
 		}
 		return recovery.Input{}, recovery.Decision{}, fmt.Errorf("%s: %w", description, err)
 	}
+	input = executor.canonicalizeDriverLease(input)
 	return input, recovery.Decision{}, nil
 }
 
-func (executor *Executor) refreshInput(ctx context.Context, previous recovery.Input, decision recovery.Decision) (recovery.Input, recovery.Decision, error) {
+func (executor *Executor) canonicalizeDriverLease(input recovery.Input) recovery.Input {
+	if executor == nil || executor.Driver == nil || executor.Driver.RunID() != executor.RunID {
+		return input
+	}
+	identity := input.Observations.Lease.Identity
+	if identity == nil || !executor.Driver.MatchesLease(runstore.LeaseIdentity{
+		Epoch: identity.Epoch,
+		Token: identity.Token,
+		PID:   identity.PID,
+		Start: identity.Start,
+	}) {
+		return input
+	}
+	input.Observations.Lease.Owner = recovery.OwnerCurrentDriver
+	return input
+}
+
+// reloadAfterEffect is the sole transition from an executed recovery effect
+// to further planning. No planning input may predate this executor's last
+// durable mutation.
+
+func (executor *Executor) reloadAfterEffect(ctx context.Context, previous recovery.Input, decision recovery.Decision) (recovery.Input, recovery.Decision, error) {
 	if executor.Load == nil {
 		return previous, recovery.Decision{}, nil
 	}
-	return executor.loadInput(ctx, decision, "reload recovery input after ordered step")
+	return executor.loadInput(ctx, decision, "reload recovery input after recovery effect")
 }
 
 func isContinuation(action recovery.Action) bool {

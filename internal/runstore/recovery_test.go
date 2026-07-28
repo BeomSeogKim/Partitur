@@ -2,15 +2,97 @@ package runstore
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
+
+func TestReclaimDeadRecoveryDriverAllowsOnlyOneConcurrentWinner(t *testing.T) {
+	store := recoveryStore(t)
+	dead := appendDeadRecoveryLease(t, store)
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var drivers [2]*Driver
+	var group sync.WaitGroup
+	for index := range drivers {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			<-start
+			driver, err := store.ReclaimDeadRecoveryDriver("run-1", dead.Identity())
+			drivers[index] = driver
+			results <- err
+		}(index)
+	}
+	close(start)
+	group.Wait()
+	close(results)
+
+	winners := 0
+	for err := range results {
+		if err == nil {
+			winners++
+			continue
+		}
+		if !errors.Is(err, ErrLeaseConflict) {
+			t.Fatalf("losing concurrent reclaim error = %v, want lease conflict", err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("concurrent reclaim winners = %d, want 1", winners)
+	}
+	var winner *Driver
+	for _, driver := range drivers {
+		if driver != nil {
+			winner = driver
+		}
+	}
+	state, err := winner.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Authority.Epoch != 2 {
+		t.Fatalf("authority epoch = %d, want 2", state.Authority.Epoch)
+	}
+}
+
+func TestReclaimDeadRecoveryDriverKeepsReusedLivePIDLease(t *testing.T) {
+	store := recoveryStore(t)
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := Lease{Epoch: 1, Token: "dead-token", PID: os.Getpid(), Start: distinctStartIdentity(t, start)}
+	appendRecoveryAuthorityAndLease(t, store, dead)
+	reused := Lease{Epoch: 1, Token: "reused-token", PID: os.Getpid(), Start: start}
+	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		if _, err := transaction.At("test.replace_dead_lease").CompareRemoveLease(dead.Identity()); err != nil {
+			return err
+		}
+		_, err := transaction.At("test.replace_reused_lease").CreateLease(true, reused)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.ReclaimDeadRecoveryDriver("run-1", dead.Identity())
+	if !errors.Is(err, ErrLeaseConflict) {
+		t.Fatalf("reclaim error = %v, want lease conflict", err)
+	}
+	remaining, present, err := store.ReadLease("run-1")
+	if err != nil || !present || !leaseMatches(remaining, reused.Identity()) {
+		t.Fatalf("remaining lease = %+v present=%t error=%v, want reused live lease", remaining, present, err)
+	}
+}
 
 func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 	tests := []struct {
@@ -38,6 +120,10 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 				facts := attempt.FailureClassification
 				if facts.CurrentPerformer != "writer" || facts.RetriesConsumed != 1 || facts.RetriesPerMovement != 0 || facts.RemainingTimeMS != 600000 {
 					t.Fatalf("failure classification facts = %+v", facts)
+				}
+				pending := input.Projection.Scheduler.PendingSuccessor
+				if pending == nil || pending.AttemptID != attempt.AttemptID || pending.Performer != "writer" || pending.Reason != "quality_retry" {
+					t.Fatalf("replay-derived pending successor = %+v", pending)
 				}
 			},
 		},
@@ -506,6 +592,52 @@ func recoveryStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func appendDeadRecoveryLease(t *testing.T, store *Store) Lease {
+	t.Helper()
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := Lease{Epoch: 1, Token: "dead-token", PID: os.Getpid(), Start: distinctStartIdentity(t, start)}
+	appendRecoveryAuthorityAndLease(t, store, lease)
+	return lease
+}
+
+func appendRecoveryAuthorityAndLease(t *testing.T, store *Store, lease Lease) {
+	t.Helper()
+	payload := recoveryPayload(t, map[string]any{
+		"authority_epoch":      lease.Epoch,
+		"owner_pid":            lease.PID,
+		"owner_start_identity": encodeDriverStart(lease.Start),
+	})
+	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		if _, err := transaction.At("test/authority_granted").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventAuthorityGranted, Payload: payload,
+		}); err != nil {
+			return err
+		}
+		_, err := transaction.At("test/dead_lease").CreateLease(true, lease)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func distinctStartIdentity(t *testing.T, identity runstate.StartIdentity) runstate.StartIdentity {
+	t.Helper()
+	switch value := identity.(type) {
+	case runstate.LinuxStartIdentity:
+		value.BootID += "-previous"
+		return value
+	case runstate.DarwinStartIdentity:
+		value.StartTVSec++
+		return value
+	default:
+		t.Fatalf("unsupported start identity %T", identity)
+		return nil
+	}
 }
 
 func appendFailedAttempt(t *testing.T, store *Store) {

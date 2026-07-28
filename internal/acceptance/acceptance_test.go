@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,10 +143,13 @@ func TestGeneratedChecksParticipateInAcceptanceSpecHash(t *testing.T) {
 		t.Fatalf("acceptance hash = %s, want %s", onePlan.Hash(), want)
 	}
 
-	withGate := movementFixture()
-	withGate.Acceptance.HumanGate = "always"
-	if got := compileFixture(t, withGate).Hash(); got == onePlan.Hash() {
-		t.Fatalf("human_gate did not change acceptance hash: %s", got)
+	for _, gate := range []string{"always", "on_contested"} {
+		withGate := movementFixture()
+		withGate.Acceptance.HumanGate = gate
+		if _, err := Compile(withGate); !errors.Is(err, ErrUnsupportedCriteria) ||
+			!strings.Contains(err.Error(), "unit 4.1") {
+			t.Fatalf("human gate %q error = %v, want unsupported criteria naming unit 4.1", gate, err)
+		}
 	}
 }
 

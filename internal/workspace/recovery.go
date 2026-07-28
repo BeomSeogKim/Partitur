@@ -1,13 +1,216 @@
 package workspace
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
+
+// RecordRecoveredZeroWriterCandidate records the same identity candidate as
+// the live run path from run-owned recovery inputs.
+func RecordRecoveredZeroWriterCandidate(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RecoveryInput,
+) (Candidate, error) {
+	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" || input.BaseTree == "" {
+		return Candidate{}, errors.New("workspace: incomplete zero-writer recovery input")
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return Candidate{}, err
+	}
+	run := &Run{
+		id:                driver.RunID(),
+		repositoryRoot:    store.RepositoryRoot(),
+		scoreRevision:     input.Projection.State.ScoreHead.Revision,
+		baseCommit:        recoveryGitObject(input.BaseCommit),
+		baseTreeQualified: input.BaseTree,
+		movements:         input.Score.Movements(),
+		store:             store,
+		git:               git,
+	}
+	if err := run.BindDriver(driver); err != nil {
+		return Candidate{}, err
+	}
+	return run.RecordZeroWriterCandidate()
+}
+
+// CreateRecoveredAttempt uses the same attempt-workspace construction as the
+// live driver, with the selected run's pinned recovery input.
+func CreateRecoveredAttempt(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RecoveryInput,
+	movementID string,
+) (*AttemptWorkspace, error) {
+	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" {
+		return nil, errors.New("workspace: incomplete recovered attempt input")
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return nil, err
+	}
+	run := &Run{
+		id:             driver.RunID(),
+		repositoryRoot: store.RepositoryRoot(),
+		scoreRevision:  input.Projection.State.ScoreHead.Revision,
+		baseCommit:     recoveryGitObject(input.BaseCommit),
+		movements:      input.Score.Movements(),
+		store:          store,
+		git:            git,
+		newID:          newUUIDv7,
+	}
+	if err := run.BindDriver(driver); err != nil {
+		return nil, err
+	}
+	return run.CreateAttempt(movementID)
+}
+
+// InitialPerformerSelectedEvent builds the shared durable initial-selection
+// event used by live execution and recovery.
+func InitialPerformerSelectedEvent(
+	attempt *AttemptWorkspace,
+	scoreRevision uint64,
+	performerID, adapterID, model string,
+) (runstate.Event, error) {
+	return PerformerSelectedEvent(
+		attempt, scoreRevision, performerID, adapterID, model, "initial", "",
+	)
+}
+
+// PerformerSelectedEvent builds the durable selection event for a fresh
+// attempt. Recovery supplies the already-recorded successor reason and
+// causation instead of recomputing either from current configuration.
+func PerformerSelectedEvent(
+	attempt *AttemptWorkspace,
+	scoreRevision uint64,
+	performerID, adapterID, model, reason, causationID string,
+) (runstate.Event, error) {
+	if attempt == nil || attempt.RunID == "" || attempt.AttemptID == "" || performerID == "" || adapterID == "" || model == "" {
+		return runstate.Event{}, errors.New("workspace: incomplete initial performer selection")
+	}
+	if reason == "" {
+		return runstate.Event{}, errors.New("workspace: performer selection reason is absent")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"reason": reason, "performer_id": performerID,
+		"adapter_id": adapterID, "model": model,
+	})
+	if err != nil {
+		return runstate.Event{}, err
+	}
+	return runstate.Event{
+		RunID: attempt.RunID, ScoreRevision: scoreRevision,
+		MovementID: attempt.MovementID, PartID: attempt.PartID, AttemptID: attempt.AttemptID,
+		Type: runstate.EventPerformerSelected, CausationID: causationID, Payload: payload,
+	}, nil
+}
+
+// VerifyRecoveredPostHoc performs the §5 check that was interrupted before
+// verification.passed crossed its durable boundary.
+func VerifyRecoveredPostHoc(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RecoveryInput,
+	attemptID runstate.AttemptID,
+) error {
+	if store == nil || driver == nil || input.Score == nil || attemptID == "" {
+		return errors.New("workspace: incomplete post-hoc recovery input")
+	}
+	state, err := driver.State()
+	if err != nil {
+		return err
+	}
+	attempt, ok := state.Attempts[attemptID]
+	if !ok {
+		return fmt.Errorf("workspace: recovery attempt %q is absent", attemptID)
+	}
+	var movementID string
+	var partID string
+	var repoWrite bool
+	for _, movement := range input.Score.Movements() {
+		if movement.ID != string(attempt.MovementID) {
+			continue
+		}
+		movementID = movement.ID
+		partID = movement.PartID
+		repoWrite = hasGrant(movement.Grants, "repo_write")
+		break
+	}
+	if movementID == "" {
+		return fmt.Errorf("%w: %s", ErrMovementNotFound, attempt.MovementID)
+	}
+	worktree := filepath.Join(store.RepositoryRoot(), ".partitur", "work", string(driver.RunID()), string(attemptID), "worktree")
+	expectedTree := input.BaseTree
+	for _, scheduled := range input.Projection.Scheduler.Movements {
+		if scheduled.ID == attempt.MovementID && scheduled.Final && state.ApplicationCandidate != nil {
+			expectedTree = state.ApplicationCandidate.ResultTree
+		}
+	}
+	if expectedTree == "" {
+		return errors.New("workspace: recovery verification tree is absent")
+	}
+	if repoWrite {
+		matched, err := verifyRecoveryProtectedPaths(store.RepositoryRoot(), worktree, input.BaseTree)
+		if err != nil {
+			return err
+		}
+		if !matched {
+			return &VerificationError{Reason: "protected_path_violation", Cause: ErrProtectedPathChanged}
+		}
+	} else {
+		matched, err := VerifyRecoverySubject(store.RepositoryRoot(), worktree, expectedTree)
+		if err != nil {
+			return err
+		}
+		if !matched {
+			reason := "read_only_violation"
+			if state.ApplicationCandidate != nil && expectedTree == state.ApplicationCandidate.ResultTree {
+				reason = "candidate_mismatch"
+			}
+			return &VerificationError{Reason: reason, Cause: ErrReadOnlyChanged}
+		}
+	}
+	_, err = driver.Append(runstate.Event{
+		RunID:         driver.RunID(),
+		ScoreRevision: state.ScoreHead.Revision,
+		MovementID:    runstate.MovementID(movementID),
+		PartID:        partID,
+		AttemptID:     attemptID,
+		Type:          runstate.EventVerificationPassed,
+		Payload:       []byte(`{}`),
+	}, faultpoint.ReceiptAddress("recovery.post_hoc_verification"))
+	return err
+}
+
+func verifyRecoveryProtectedPaths(repositoryRoot, worktree, baseTree string) (bool, error) {
+	if err := verifyRecoveryGitDir(repositoryRoot, worktree); err != nil {
+		return false, err
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return false, err
+	}
+	baseTree = recoveryGitObject(baseTree)
+	for _, path := range []string{"partitur.yaml", ".partitur"} {
+		if err := verifyRecoveryProtectedPath(git, worktree, baseTree, path); err != nil {
+			if errors.Is(err, errRecoveryProtectedMismatch) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return true, nil
+}
 
 // VerifyRecoverySubject checks the non-mutating recovery form of the workspace
 // invariant. repositoryRoot identifies the repository that owns the worktree;

@@ -17,7 +17,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 	type spec struct {
 		surface surface
 
-		terminal, staleLease, cancelled, rootDivergence, missingReference, missingRouted, revisionRestart, compositionTerminal bool
+		terminal, staleLease, cancelled, openExecution, rootDivergence, missingReference, missingRouted, revisionRestart, compositionTerminal bool
 
 		phase                                       runstate.AttemptState
 		probe, failureRealized, blocking, staleHead bool
@@ -66,6 +66,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		{name: "run", values: forSurface(surfaceC1, func(input spec) spec { input.terminal = true; return input })},
 		{name: "lease", values: forSurface(surfaceC1, func(input spec) spec { input.staleLease = true; return input })},
 		{name: "control", values: forSurface(surfaceC1, func(input spec) spec { input.cancelled = true; return input })},
+		{name: "open execution interval", values: forSurface(surfaceC1, func(input spec) spec { input.openExecution = true; return input })},
 		{name: "root snapshot", values: forSurface(surfaceC1, func(input spec) spec { input.rootDivergence = true; return input })},
 		{name: "event-named reference", values: forSurface(surfaceC1, func(input spec) spec { input.missingReference = true; return input })},
 		{name: "routed request", values: forSurface(surfaceC1, func(input spec) spec { input.missingRouted = true; return input })},
@@ -161,6 +162,9 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 			if spec.cancelled {
 				input = withCancel(input)
 			}
+			if spec.openExecution {
+				input = withOpenExecution(input, "acceptance")
+			}
 			if spec.rootDivergence {
 				input = withRootDivergence(input)
 			}
@@ -249,7 +253,6 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 			}
 			return input
 		}
-
 		input := c2Input(spec.phase)
 		attempt := input.Projection.CurrentHeadAttempt
 		if spec.phase == runstate.AttemptFailed {
@@ -327,7 +330,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		t.Fatalf("declared recovery combinations = %d, want at least 32000", count)
 	}
 	for _, caseID := range []CaseID{
-		CaseTerminal, CaseStaleLease,
+		CaseOpenExecution, CaseTerminal, CaseStaleLease,
 		CaseUnstartedAttempt, CaseIncompleteAttempt, CasePostHocVerification,
 		CaseFirstCriterion, CaseCriteriaPassed, CaseHumanGateApproved, CaseUnjournaledLaunch,
 		CaseBudgetExhausted, CaseRecoveredComposition, CaseScheduler,

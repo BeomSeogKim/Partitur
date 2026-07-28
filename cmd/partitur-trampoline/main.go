@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	if err := launch.RunTrampoline(os.Args[1:], faultpoint.Nop{}); err != nil {
+	if err := launch.RunTrampoline(os.Args[1:], faultpoint.ProbeFromEnvironment()); err != nil {
 		fmt.Fprintf(os.Stderr, "partitur-trampoline: %v\n", err)
 		os.Exit(1)
 	}
