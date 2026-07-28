@@ -122,6 +122,7 @@ func TestAttemptFailedStopsAtAttemptAndPreservesDisposition(t *testing.T) {
 		"disposition": map[string]any{
 			"charged":           "none",
 			"movement_terminal": true,
+			"terminal_reason":   "retries_exhausted",
 		},
 	}, func(event *Event) {
 		event.MovementID = "m1"
@@ -137,7 +138,8 @@ func TestAttemptFailedStopsAtAttemptAndPreservesDisposition(t *testing.T) {
 	if next.Movements["m1"] != MovementRunning || next.Run != RunRunning {
 		t.Fatalf("attempt failure cascaded: movement=%s run=%s", next.Movements["m1"], next.Run)
 	}
-	if got := next.Attempts["a1"].Failure.Disposition; got.Charged != "none" || !got.MovementTerminal {
+	if got := next.Attempts["a1"].Failure.Disposition; got.Charged != "none" ||
+		!got.MovementTerminal || got.TerminalReason != "retries_exhausted" {
 		t.Fatalf("disposition = %+v", got)
 	}
 }

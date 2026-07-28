@@ -167,6 +167,7 @@ type ExecutionInterval struct {
 type Disposition struct {
 	Charged          string `json:"charged"`
 	MovementTerminal bool   `json:"movement_terminal"`
+	TerminalReason   string `json:"terminal_reason,omitempty"`
 }
 
 type Attempt struct {
