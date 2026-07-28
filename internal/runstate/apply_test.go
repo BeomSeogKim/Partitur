@@ -74,17 +74,17 @@ func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
 	}
 }
 
-func TestEScopedSupportedEventSetHasFortyOneTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasFortyEightTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 41 {
-		t.Fatalf("supported event count = %d, want 41", count)
+	if count != 48 {
+		t.Fatalf("supported event count = %d, want 48", count)
 	}
-	for _, eventType := range []EventType{EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded} {
+	for _, eventType := range []EventType{EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded, EventDecisionObsoleted} {
 		if isSupportedEvent(eventType) {
 			t.Fatalf("derived %s must not be accepted as an authoritative event", eventType)
 		}
@@ -316,6 +316,247 @@ func TestDerivedCancellationAndSupersessionContracts(t *testing.T) {
 	})
 	if _, err := Apply(supersededState, invalidApproval); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("invalid supersession payload error = %v, want ErrInvalidEvent", err)
+	}
+}
+
+func TestDecisionAmendmentAndCompositionEvents(t *testing.T) {
+	question := fixtureEvent(EventDecisionRequested, map[string]any{
+		"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
+	}, attemptEnvelope)
+	questionState := func(t *testing.T) State { return runningAttemptState(t) }
+
+	route := fixtureEvent(EventAmendmentRoutedHuman, routedAmendmentPayload(), nil)
+	routeState := func(t *testing.T) State {
+		state := NewState(nil)
+		state.Run = RunRunning
+		state.ScoreHead = ScoreHead{Revision: 1, SemanticHash: "sha256:score-1"}
+		return state
+	}
+
+	tests := []struct {
+		name      string
+		event     Event
+		state     func(*testing.T) State
+		illegal   func(*testing.T) State
+		invalid   Event
+		key       string
+		noIllegal bool
+		want      func(State) bool
+	}{
+		{
+			name:  "decision requested",
+			event: question,
+			state: questionState,
+			illegal: func(t *testing.T) State {
+				state := questionState(t)
+				state.PendingDecisions["decision-1"] = PendingDecision{ID: "decision-1"}
+				return state
+			},
+			invalid: fixtureEvent(EventDecisionRequested, map[string]any{
+				"decision_id": "decision-1", "decision_type": "question",
+			}, attemptEnvelope),
+			key: "decision-1",
+			want: func(state State) bool {
+				return state.Run == RunWaitingHuman && state.Movements["m1"] == MovementWaitingHuman &&
+					state.PendingDecisions["decision-1"].Type == "question"
+			},
+		},
+		{
+			name: "decision resolved",
+			event: fixtureEvent(EventDecisionResolved, map[string]any{
+				"decision_id": "decision-1", "decision_type": "question", "disposition": "answered", "answer": "yes",
+			}, attemptEnvelope),
+			state: func(t *testing.T) State {
+				state, err := Apply(questionState(t), question)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return state
+			},
+			illegal: questionState,
+			invalid: fixtureEvent(EventDecisionResolved, map[string]any{
+				"decision_id": "decision-1", "decision_type": "question", "disposition": "approved", "answer": "yes",
+			}, attemptEnvelope),
+			key: "decision-1",
+			want: func(state State) bool {
+				_, pending := state.PendingDecisions["decision-1"]
+				return !pending && state.Run == RunRunning && state.Movements["m1"] == MovementRunning
+			},
+		},
+		{
+			name:    "amendment rejected",
+			event:   fixtureEvent(EventAmendmentRejected, amendmentRejectedPayload(), nil),
+			state:   func(t *testing.T) State { return NewState(nil) },
+			illegal: func(t *testing.T) State { return NewState(nil) },
+			invalid: fixtureEvent(EventAmendmentRejected, map[string]any{
+				"proposal_id": "proposal-1", "reason": "candidate_incompatible", "base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+				"patch_operations_hash": "sha256:patch", "error_location": "patch[0]", "identity_versions": testIdentityVersions(),
+			}, nil),
+			key:       "proposal-1",
+			noIllegal: true,
+			want:      func(state State) bool { return len(state.PendingDecisions) == 0 },
+		},
+		{
+			name:  "amendment routed human",
+			event: route,
+			state: routeState,
+			illegal: func(t *testing.T) State {
+				state := routeState(t)
+				state.Run = RunCancelled
+				return state
+			},
+			invalid: fixtureEvent(EventAmendmentRoutedHuman, map[string]any{
+				"proposal_id": "proposal-1", "reason": "draft_phase", "decision_type": "finalization", "blocking": false,
+				"proposal_record_hash": "sha256:proposal", "base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+				"decision_id": "decision-1", "typed_delta": []any{}, "actual_impact": emptyActualImpact(), "identity_versions": testIdentityVersions(),
+			}, nil),
+			key: "proposal-1",
+			want: func(state State) bool {
+				return state.RoutedAmendments["proposal-1"].DecisionID == "decision-1"
+			},
+		},
+		{
+			name: "amendment human rejected",
+			event: fixtureEvent(EventAmendmentHumanRejected, map[string]any{
+				"proposal_id": "proposal-1", "decision_id": "decision-1", "human_reason": "not now",
+				"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1, "identity_versions": testIdentityVersions(),
+			}, nil),
+			state: func(t *testing.T) State {
+				state, err := Apply(routeState(t), route)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state.PendingDecisions["decision-1"] = PendingDecision{ID: "decision-1", Type: "amendment", Blocking: true}
+				state.Run = RunWaitingHuman
+				return state
+			},
+			illegal: routeState,
+			invalid: fixtureEvent(EventAmendmentHumanRejected, map[string]any{
+				"proposal_id": "proposal-1", "decision_id": "decision-1", "human_reason": "",
+				"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1, "identity_versions": testIdentityVersions(),
+			}, nil),
+			key: "proposal-1",
+			want: func(state State) bool {
+				_, pending := state.PendingDecisions["decision-1"]
+				_, routed := state.RoutedAmendments["proposal-1"]
+				return !pending && !routed && state.Run == RunRunning
+			},
+		},
+		{
+			name:  "composition conflicted",
+			event: compositionConflictedEvent(),
+			state: runningAttemptState,
+			illegal: func(t *testing.T) State {
+				state := runningAttemptState(t)
+				state.Movements["m1"] = MovementReady
+				return state
+			},
+			invalid: fixtureEvent(EventCompositionConflicted, map[string]any{
+				"scope": "movement", "target_id": "m1", "composition_subject_hash": "sha256:subject", "contributors": []any{},
+				"conflicted_paths": []any{"z", "a"}, "composition_algorithm_version": "1", "identity_versions": testIdentityVersions(),
+			}, func(event *Event) { event.MovementID = "m1" }),
+			key:  "movement\x00m1\x00sha256:subject",
+			want: func(state State) bool { return state.Movements["m1"] == MovementRunning },
+		},
+		{
+			name:  "composition failed",
+			event: compositionFailedEvent(),
+			state: runningAttemptState,
+			illegal: func(t *testing.T) State {
+				state := runningAttemptState(t)
+				state.Movements["m1"] = MovementReady
+				return state
+			},
+			invalid: fixtureEvent(EventCompositionFailed, map[string]any{
+				"scope": "movement", "target_id": "m1", "composition_subject_hash": "sha256:subject", "cause": "git_exit", "diagnostic": "exit 2",
+				"contributors": []any{}, "composition_algorithm_version": "1", "identity_versions": testIdentityVersions(),
+			}, func(event *Event) { event.MovementID = "m1" }),
+			key:  "movement\x00m1\x00sha256:subject",
+			want: func(state State) bool { return state.Movements["m1"] == MovementRunning },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			next, err := Apply(test.state(t), test.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.want(next) {
+				t.Fatalf("projection = %+v", next)
+			}
+			if !test.noIllegal {
+				if _, err := Apply(test.illegal(t), test.event); !errors.Is(err, ErrIllegalTransition) {
+					t.Fatalf("illegal-from error = %v, want ErrIllegalTransition", err)
+				}
+			}
+			if _, err := Apply(test.state(t), test.invalid); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("invalid payload error = %v, want ErrInvalidEvent", err)
+			}
+			key, err := IdempotencyKey(test.event)
+			if err != nil || key != test.key {
+				t.Fatalf("idempotency key = %q, error = %v, want %q", key, err, test.key)
+			}
+		})
+	}
+}
+
+func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
+	state := runningAttemptState(t)
+	requested := fixtureEvent(EventDecisionRequested, map[string]any{
+		"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
+	}, attemptEnvelope)
+	var err error
+	state, err = Apply(state, requested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived := fixtureEvent(EventDecisionObsoleted, map[string]any{"decision_id": "decision-1"}, func(event *Event) {
+		event.CausationID = "terminal-1"
+	})
+	if err := ValidateEvent(derived); err != nil {
+		t.Fatal(err)
+	}
+	if key, err := IdempotencyKey(derived); err != nil || key != "terminal-1\x00decision-1" {
+		t.Fatalf("derived key = %q, error = %v", key, err)
+	}
+	if _, err := Apply(state, derived); !errors.Is(err, ErrUnsupportedEventType) {
+		t.Fatalf("direct derived apply error = %v, want ErrUnsupportedEventType", err)
+	}
+	cancelled := fixtureEvent(EventRunCancelled, map[string]any{
+		"cancelled_movement_ids": []any{"m1"}, "cancelled_attempt_ids": []any{"a1"}, "obsoleted_decision_ids": []any{"decision-1"},
+	}, nil)
+	next, err := Apply(state, cancelled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Run != RunCancelled || len(next.PendingDecisions) != 0 {
+		t.Fatalf("terminal obsoletion projection = %+v", next)
+	}
+
+	state = runningAttemptState(t)
+	state, err = Apply(state, requested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := autoApprovalEvent()
+	approval.Payload = mustPayload(t, map[string]any{
+		"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
+		"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+		"new_revision": 2, "new_snapshot_hash": "sha256:score-2", "new_snapshot_file_hash": "sha256:file-2",
+		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "superseded_attempt_ids": []any{"a1"},
+		"obsoleted_decision_ids": []any{"decision-1"}, "finalization": false, "identity_versions": testIdentityVersions(),
+	})
+	next, err = Apply(state, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.PendingDecisions) != 0 || next.Attempts["a1"].State != AttemptSuperseded {
+		t.Fatalf("approval obsoletion projection = %+v", next)
 	}
 }
 
@@ -715,6 +956,37 @@ func emptyActualImpact() map[string]any {
 		},
 		"budget": map[string]any{},
 	}
+}
+
+func amendmentRejectedPayload() map[string]any {
+	return map[string]any{
+		"proposal_id": "proposal-1", "reason": "patch_error", "base_revision": 1, "base_hash": "sha256:score-1",
+		"classifier_version": 1, "patch_operations_hash": "sha256:patch", "error_location": "patch[0]",
+		"identity_versions": testIdentityVersions(),
+	}
+}
+
+func routedAmendmentPayload() map[string]any {
+	return map[string]any{
+		"proposal_id": "proposal-1", "reason": "auto_disabled", "decision_type": "amendment", "blocking": true,
+		"proposal_record_hash": "sha256:proposal", "base_revision": 1, "base_hash": "sha256:score-1",
+		"classifier_version": 1, "decision_id": "decision-1", "typed_delta": []any{},
+		"actual_impact": emptyActualImpact(), "identity_versions": testIdentityVersions(),
+	}
+}
+
+func compositionConflictedEvent() Event {
+	return fixtureEvent(EventCompositionConflicted, map[string]any{
+		"scope": "movement", "target_id": "m1", "composition_subject_hash": "sha256:subject", "contributors": []any{},
+		"conflicted_paths": []any{"a"}, "composition_algorithm_version": "1", "identity_versions": testIdentityVersions(),
+	}, func(event *Event) { event.MovementID = "m1" })
+}
+
+func compositionFailedEvent() Event {
+	return fixtureEvent(EventCompositionFailed, map[string]any{
+		"scope": "movement", "target_id": "m1", "composition_subject_hash": "sha256:subject", "cause": "git_exit", "git_exit_code": 2,
+		"diagnostic": "exit 2", "contributors": []any{}, "composition_algorithm_version": "1", "identity_versions": testIdentityVersions(),
+	}, func(event *Event) { event.MovementID = "m1" })
 }
 
 func mustPayload(t *testing.T, value any) json.RawMessage {

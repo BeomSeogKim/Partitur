@@ -45,6 +45,14 @@ func IdempotencyKey(event Event) (string, error) {
 		return event.CausationID + "\x00" + string(event.AttemptID), nil
 	case EventArtifactRecorded:
 		return mustString(payload, "logical_output_id") + "\x00" + string(event.AttemptID), nil
+	case EventDecisionRequested, EventDecisionResolved:
+		return mustString(payload, "decision_id"), nil
+	case EventDecisionObsoleted:
+		return event.CausationID + "\x00" + mustString(payload, "decision_id"), nil
+	case EventAmendmentRejected, EventAmendmentRoutedHuman, EventAmendmentHumanRejected:
+		return mustString(payload, "proposal_id"), nil
+	case EventCompositionConflicted, EventCompositionFailed:
+		return mustString(payload, "scope") + "\x00" + mustString(payload, "target_id") + "\x00" + mustString(payload, "composition_subject_hash"), nil
 	case EventApplicationCandidateRecorded:
 		return mustString(payload, "candidate_id"), nil
 	case EventCriterionStarted, EventCriterionCompleted:
@@ -91,17 +99,22 @@ func Apply(input State, event Event) (State, error) {
 			return state, transition(event, "run is not RUNNING")
 		}
 		state.Run = RunSucceeded
+		closeAllPendingDecisions(&state)
 	case EventRunFailed:
 		if state.Run != RunRunning {
 			return state, transition(event, "run is not RUNNING")
 		}
 		state.Run = RunFailed
+		closeAllPendingDecisions(&state)
 	case EventRunCancelled:
 		if state.Run == RunNotStarted || state.Run.Terminal() {
 			return state, transition(event, "run is not nonterminal")
 		}
 		if state.PendingPrepare != nil {
 			return state, transition(event, "prepare is still pending")
+		}
+		if !slices.Equal(mustStrings(payload, "obsoleted_decision_ids"), pendingDecisionIDs(state)) {
+			return state, invalid(event, "obsoleted_decision_ids do not match the pre-event projection")
 		}
 		cancelledMovements := mustStrings(payload, "cancelled_movement_ids")
 		wantMovements := cancellableMovementIDs(state)
@@ -122,6 +135,7 @@ func Apply(input State, event Event) (State, error) {
 			state.Attempts[AttemptID(id)] = attempt
 		}
 		state.Run = RunCancelled
+		closeAllPendingDecisions(&state)
 		if epoch, ok := optionalUint(payload, "fenced_epoch"); ok {
 			if epoch <= state.Authority.Epoch {
 				return state, invalid(event, "fenced_epoch does not advance authority")
@@ -160,6 +174,7 @@ func Apply(input State, event Event) (State, error) {
 					return state, transition(event, "run is not nonterminal")
 				}
 				state.Run = RunFailed
+				closeAllPendingDecisions(&state)
 			}
 			attempt.State = AttemptFailed
 			state.Attempts[event.AttemptID] = attempt
@@ -204,6 +219,7 @@ func Apply(input State, event Event) (State, error) {
 		}
 		if finishesRun {
 			state.Run = RunSucceeded
+			closeAllPendingDecisions(&state)
 		}
 	case EventPerformerSelected:
 		if event.AttemptID == "" || event.MovementID == "" {
@@ -460,6 +476,93 @@ func Apply(input State, event Event) (State, error) {
 		}
 		acceptance.EvaluationCompleted = true
 		state.Acceptances[event.AttemptID] = acceptance
+	case EventDecisionRequested:
+		decisionID := mustString(payload, "decision_id")
+		if _, exists := state.PendingDecisions[decisionID]; exists {
+			return state, transition(event, "decision is already pending")
+		}
+		decisionType := mustString(payload, "decision_type")
+		if decisionType == "amendment" || decisionType == "finalization" {
+			proposalID := ProposalID(mustString(payload, "proposal_id"))
+			routed, ok := state.RoutedAmendments[proposalID]
+			if !ok || routed.DecisionID != decisionID || routed.DecisionType != decisionType || routed.Blocking != decisionBlocking(payload) {
+				return state, transition(event, "decision does not match a routed amendment")
+			}
+		}
+		decision := PendingDecision{
+			ID:            decisionID,
+			Type:          decisionType,
+			Blocking:      decisionBlocking(payload),
+			MovementID:    event.MovementID,
+			AttemptID:     event.AttemptID,
+			ScoreRevision: event.ScoreRevision,
+		}
+		if proposalID, ok := payload["proposal_id"].(string); ok {
+			decision.ProposalID = ProposalID(proposalID)
+		}
+		if gateID, ok := payload["gate_id"].(string); ok {
+			decision.GateID = gateID
+			decision.SubjectTree = mustString(payload, "subject_tree")
+		}
+		state.PendingDecisions[decisionID] = decision
+		refreshWaitingHuman(&state)
+	case EventDecisionResolved:
+		decisionID := mustString(payload, "decision_id")
+		decision, ok := state.PendingDecisions[decisionID]
+		if !ok || decision.Type != mustString(payload, "decision_type") {
+			return state, transition(event, "matching decision is not pending")
+		}
+		if decision.Type == "human_gate" && (decision.GateID != mustString(payload, "gate_id") ||
+			decision.SubjectTree != mustString(mustObject(payload, "scope"), "subject_tree")) {
+			return state, invalid(event, "human gate resolution does not match the pending decision")
+		}
+		delete(state.PendingDecisions, decisionID)
+		refreshWaitingHuman(&state)
+	case EventAmendmentRejected:
+		if decisionID, ok := payload["decision_id"].(string); ok {
+			delete(state.PendingDecisions, decisionID)
+		}
+		delete(state.RoutedAmendments, ProposalID(mustString(payload, "proposal_id")))
+		refreshWaitingHuman(&state)
+	case EventAmendmentRoutedHuman:
+		if state.Run == RunNotStarted || state.Run.Terminal() {
+			return state, transition(event, "run is not nonterminal")
+		}
+		if state.CancelRequested || state.ScoreHead.Revision != mustUint(payload, "base_revision") ||
+			state.ScoreHead.SemanticHash != Hash(mustString(payload, "base_hash")) {
+			return state, transition(event, "amendment is not admissible at the current head")
+		}
+		proposalID := ProposalID(mustString(payload, "proposal_id"))
+		if _, exists := state.RoutedAmendments[proposalID]; exists {
+			return state, transition(event, "proposal is already routed")
+		}
+		state.RoutedAmendments[proposalID] = RoutedAmendment{
+			ProposalID:        proposalID,
+			DecisionID:        mustString(payload, "decision_id"),
+			DecisionType:      mustString(payload, "decision_type"),
+			Blocking:          mustBool(payload, "blocking"),
+			BaseRevision:      mustUint(payload, "base_revision"),
+			BaseHash:          Hash(mustString(payload, "base_hash")),
+			ClassifierVersion: mustUint(payload, "classifier_version"),
+		}
+	case EventAmendmentHumanRejected:
+		proposalID := ProposalID(mustString(payload, "proposal_id"))
+		routed, ok := state.RoutedAmendments[proposalID]
+		if !ok || routed.DecisionID != mustString(payload, "decision_id") {
+			return state, transition(event, "matching proposal is not routed")
+		}
+		if routed.BaseRevision != mustUint(payload, "base_revision") ||
+			routed.BaseHash != Hash(mustString(payload, "base_hash")) ||
+			routed.ClassifierVersion != mustUint(payload, "classifier_version") {
+			return state, invalid(event, "rejection binding does not match routed amendment")
+		}
+		delete(state.RoutedAmendments, proposalID)
+		delete(state.PendingDecisions, routed.DecisionID)
+		refreshWaitingHuman(&state)
+	case EventCompositionConflicted, EventCompositionFailed:
+		if err := requireCompositionSource(state, event, payload); err != nil {
+			return state, err
+		}
 	case EventExecutionStarted:
 		if state.OpenExecution != nil {
 			return state, transition(event, "execution interval already open")
@@ -554,6 +657,9 @@ func Apply(input State, event Event) (State, error) {
 		if event.ScoreRevision != approvedHead.Revision {
 			return state, invalid(event, "approval envelope revision does not match the new head")
 		}
+		if !slices.Equal(mustStrings(payload, "obsoleted_decision_ids"), pendingDecisionIDs(state)) {
+			return state, invalid(event, "obsoleted_decision_ids do not match the pre-event projection")
+		}
 		state.ScoreHead = approvedHead
 		supersededAttemptIDs := mustStrings(payload, "superseded_attempt_ids")
 		if !slices.Equal(supersededAttemptIDs, cancellableAttemptIDs(state)) {
@@ -575,6 +681,7 @@ func Apply(input State, event Event) (State, error) {
 			state.Authority = Authority{Epoch: epoch}
 		}
 		state.PendingPrepare = nil
+		closeAllPendingDecisions(&state)
 	case EventAuthorityGranted:
 		epoch := mustUint(payload, "authority_epoch")
 		if state.Run == RunNotStarted || state.Run.Terminal() || epoch <= state.Authority.Epoch {
@@ -723,6 +830,87 @@ func requireAttemptOneOf(state State, event Event, wants ...AttemptState) (Attem
 		return Attempt{}, transition(event, "attempt is not in a legal source state")
 	}
 	return attempt, nil
+}
+
+func requireCompositionSource(state State, event Event, payload map[string]any) error {
+	scope := mustString(payload, "scope")
+	targetID := mustString(payload, "target_id")
+	switch scope {
+	case "movement":
+		if event.MovementID == "" || targetID != string(event.MovementID) {
+			return invalid(event, "movement composition target does not match envelope movement")
+		}
+		if state.Movements[event.MovementID] != MovementRunning {
+			return transition(event, "movement is not RUNNING for composition")
+		}
+	case "candidate":
+		if targetID != string(event.RunID) {
+			return invalid(event, "candidate composition target does not match run")
+		}
+		if state.Run != RunRunning || state.ApplicationCandidate != nil {
+			return transition(event, "candidate composition is not legal")
+		}
+		for movementID := range state.RepoWriteMovements {
+			if state.Movements[movementID] != MovementSucceeded && state.Movements[movementID] != MovementInapplicable {
+				return transition(event, "repo_write movement has not succeeded")
+			}
+		}
+	default:
+		return invalid(event, "invalid composition scope")
+	}
+	return nil
+}
+
+func decisionBlocking(payload map[string]any) bool {
+	switch mustString(payload, "decision_type") {
+	case "amendment":
+		return mustBool(payload, "blocking")
+	default:
+		return true
+	}
+}
+
+func pendingDecisionIDs(state State) []string {
+	ids := make([]string, 0, len(state.PendingDecisions))
+	for id := range state.PendingDecisions {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func closeAllPendingDecisions(state *State) {
+	for id := range state.PendingDecisions {
+		delete(state.PendingDecisions, id)
+	}
+	refreshWaitingHuman(state)
+}
+
+func refreshWaitingHuman(state *State) {
+	blocking := false
+	for _, decision := range state.PendingDecisions {
+		if decision.Blocking {
+			blocking = true
+			if decision.MovementID != "" && state.Movements[decision.MovementID] == MovementRunning {
+				state.Movements[decision.MovementID] = MovementWaitingHuman
+			}
+		}
+	}
+	if state.Run.Terminal() || state.Run == RunNotStarted {
+		return
+	}
+	if blocking {
+		state.Run = RunWaitingHuman
+		return
+	}
+	if state.Run == RunWaitingHuman {
+		state.Run = RunRunning
+	}
+	for id, movement := range state.Movements {
+		if movement == MovementWaitingHuman {
+			state.Movements[id] = MovementRunning
+		}
+	}
 }
 
 func cancellableMovementIDs(state State) []string {
@@ -998,6 +1186,14 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 		return []string{"reason", "subject_tree", "disposition"}, []string{"failed_criterion_id"}, true
 	case EventAcceptanceEvaluationCompleted:
 		return []string{"subject_tree", "acceptance_spec_hash", "criterion_outcomes", "identity_versions"}, nil, true
+	case EventDecisionRequested:
+		return []string{"decision_id", "decision_type"}, []string{"emitted_id", "question", "gate_id", "gate_mode", "subject_tree", "review_outcome", "blocking_findings", "proposal_id", "routed_reason", "blocking"}, true
+	case EventDecisionResolved:
+		return []string{"decision_id", "decision_type", "disposition"}, []string{"answer", "gate_id", "scope", "overridden_findings", "override_reason"}, true
+	case EventDecisionObsoleted:
+		return []string{"decision_id"}, nil, true
+	case EventAmendmentRejected:
+		return []string{"proposal_id", "reason", "base_revision", "base_hash", "classifier_version", "identity_versions"}, []string{"emitted_id", "condition", "typed_delta", "actual_impact", "patch_operations_hash", "error_location", "decision_id"}, true
 	case EventExecutionStarted:
 		return []string{"interval_id", "phase", "wall_start", "remaining_at_start"}, nil, true
 	case EventExecutionStopped:
@@ -1006,12 +1202,20 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 		return []string{"prepare_id", "proposal_id", "mode", "envelope_class", "base_revision", "base_hash", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "target_attempt_ids", "observed_authority_epoch", "quiesce_deadline", "classifier_version", "identity_versions"}, nil, true
 	case EventAmendmentApprovalAbandoned:
 		return []string{"prepare_id", "proposal_id", "reason", "base_revision", "base_hash", "classifier_version"}, nil, true
+	case EventAmendmentRoutedHuman:
+		return []string{"proposal_id", "reason", "decision_type", "blocking", "proposal_record_hash", "base_revision", "base_hash", "classifier_version", "decision_id", "typed_delta", "actual_impact", "identity_versions"}, []string{"emitted_id", "envelope_evaluation"}, true
 	case EventAmendmentApproved:
 		return []string{"proposal_id", "mode", "envelope_class", "base_revision", "base_hash", "classifier_version", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "typed_delta", "actual_impact", "superseded_attempt_ids", "obsoleted_decision_ids", "finalization", "identity_versions"}, []string{"emitted_id", "candidate_id", "fenced_epoch"}, true
 	case EventAuthorityGranted:
 		return []string{"authority_epoch", "owner_pid", "owner_start_identity"}, []string{"reclaimed_from_epoch"}, true
 	case EventCancelRequested:
 		return []string{"requested_by"}, nil, true
+	case EventAmendmentHumanRejected:
+		return []string{"proposal_id", "decision_id", "human_reason", "base_revision", "base_hash", "classifier_version", "identity_versions"}, nil, true
+	case EventCompositionConflicted:
+		return []string{"scope", "target_id", "composition_subject_hash", "contributors", "conflicted_paths", "composition_algorithm_version", "identity_versions"}, nil, true
+	case EventCompositionFailed:
+		return []string{"scope", "target_id", "composition_subject_hash", "cause", "diagnostic", "contributors", "composition_algorithm_version", "identity_versions"}, []string{"git_exit_code"}, true
 	case EventApplyStarted:
 		return []string{"txn_id", "candidate_id", "before_tree", "result_tree", "touched_paths", "recovery", "identity_versions"}, nil, true
 	case EventApplyCompleted:
@@ -1127,6 +1331,37 @@ func validateNestedPayload(eventType EventType, payload map[string]any) error {
 		if err := validateActualImpact(mustObject(payload, "actual_impact")); err != nil {
 			return err
 		}
+	case EventAmendmentRejected:
+		if typedDelta, ok := payload["typed_delta"].([]any); ok {
+			if err := validateTypedDelta(typedDelta); err != nil {
+				return err
+			}
+		}
+		if actualImpact, ok := payload["actual_impact"].(map[string]any); ok {
+			if err := validateActualImpact(actualImpact); err != nil {
+				return err
+			}
+		}
+	case EventAmendmentRoutedHuman:
+		if err := validateTypedDelta(payload["typed_delta"].([]any)); err != nil {
+			return err
+		}
+		if err := validateActualImpact(mustObject(payload, "actual_impact")); err != nil {
+			return err
+		}
+		if evaluation, ok := payload["envelope_evaluation"].(map[string]any); ok {
+			if err := validateEnvelopeEvaluation(evaluation); err != nil {
+				return err
+			}
+		}
+	case EventDecisionRequested:
+		return validateDecisionRequest(payload)
+	case EventDecisionResolved:
+		return validateDecisionResolution(payload)
+	case EventCompositionConflicted, EventCompositionFailed:
+		if err := validateContributors(payload["contributors"].([]any)); err != nil {
+			return fmt.Errorf("contributors: %w", err)
+		}
 	}
 	return nil
 }
@@ -1209,6 +1444,109 @@ func validateTypedDelta(values []any) error {
 		if err := namedTypes(entry, names, nil, nil, nil, nil); err != nil {
 			return fmt.Errorf("typed_delta: %w", err)
 		}
+	}
+	return nil
+}
+
+func validateDecisionRequest(payload map[string]any) error {
+	switch mustString(payload, "decision_type") {
+	case "question":
+		return fields(payload, []string{"decision_id", "decision_type", "question"}, []string{"emitted_id"})
+	case "human_gate":
+		if err := fields(payload, []string{"decision_id", "decision_type", "gate_id", "gate_mode", "subject_tree", "blocking_findings"}, []string{"review_outcome"}); err != nil {
+			return err
+		}
+		if gateMode := mustString(payload, "gate_mode"); gateMode != "always" && gateMode != "on_contested" {
+			return errors.New("invalid gate_mode")
+		}
+		if reviewOutcome, ok := payload["review_outcome"].(string); ok && reviewOutcome != "CLEAN" && reviewOutcome != "CONTESTED" {
+			return errors.New("invalid review_outcome")
+		}
+		return validateFindingPairs(payload["blocking_findings"].([]any))
+	case "amendment":
+		return fields(payload, []string{"decision_id", "decision_type", "proposal_id", "routed_reason", "blocking"}, []string{"emitted_id"})
+	case "finalization":
+		if err := fields(payload, []string{"decision_id", "decision_type", "proposal_id", "routed_reason"}, []string{"emitted_id"}); err != nil {
+			return err
+		}
+		if mustString(payload, "routed_reason") != "draft_phase" {
+			return errors.New("finalization routed_reason must be draft_phase")
+		}
+		return nil
+	default:
+		return errors.New("invalid decision_type")
+	}
+}
+
+func validateDecisionResolution(payload map[string]any) error {
+	switch mustString(payload, "decision_type") {
+	case "question":
+		if mustString(payload, "disposition") != "answered" {
+			return errors.New("question disposition must be answered")
+		}
+		return fields(payload, []string{"decision_id", "decision_type", "disposition", "answer"}, nil)
+	case "human_gate":
+		if disposition := mustString(payload, "disposition"); disposition != "approved" && disposition != "rejected" {
+			return errors.New("invalid human_gate disposition")
+		}
+		if err := fields(payload, []string{"decision_id", "decision_type", "disposition", "gate_id", "scope", "overridden_findings"}, []string{"override_reason"}); err != nil {
+			return err
+		}
+		scope := mustObject(payload, "scope")
+		if err := fields(scope, []string{"subject_tree"}, nil); err != nil {
+			return fmt.Errorf("scope: %w", err)
+		}
+		if _, ok := scope["subject_tree"].(string); !ok {
+			return errors.New("scope.subject_tree must be a string")
+		}
+		if err := validateFindingPairs(payload["overridden_findings"].([]any)); err != nil {
+			return err
+		}
+		_, overrideReason := payload["override_reason"]
+		if (len(payload["overridden_findings"].([]any)) != 0) != overrideReason || (overrideReason && mustString(payload, "override_reason") == "") {
+			return errors.New("override_reason is required and non-empty iff findings are overridden")
+		}
+		return nil
+	default:
+		return errors.New("invalid decision_type")
+	}
+}
+
+func validateFindingPairs(values []any) error {
+	previous := ""
+	for _, raw := range values {
+		pair, ok := raw.(map[string]any)
+		if !ok {
+			return errors.New("finding pairs must contain objects")
+		}
+		if err := fields(pair, []string{"artifact_instance_id", "finding_id"}, nil); err != nil {
+			return err
+		}
+		if err := namedTypes(pair, []string{"artifact_instance_id", "finding_id"}, nil, nil, nil, nil); err != nil {
+			return err
+		}
+		key := mustString(pair, "artifact_instance_id") + "\x00" + mustString(pair, "finding_id")
+		if key <= previous {
+			return errors.New("finding pairs must be sorted and unique")
+		}
+		previous = key
+	}
+	return nil
+}
+
+func validateEnvelopeEvaluation(value map[string]any) error {
+	if err := fields(value, []string{"guard_passed"}, []string{"class", "guard_failure_reason"}); err != nil {
+		return err
+	}
+	if err := namedTypes(value, optionalNames(value, "class", "guard_failure_reason"), nil, nil, []string{"guard_passed"}, nil); err != nil {
+		return err
+	}
+	if class, ok := value["class"].(string); ok && !validEnvelopeClass(class) {
+		return errors.New("invalid envelope_evaluation class")
+	}
+	_, failureReason := value["guard_failure_reason"]
+	if mustBool(value, "guard_passed") == failureReason {
+		return errors.New("guard_failure_reason presence must match guard_passed")
 	}
 	return nil
 }
@@ -1344,6 +1682,21 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		strings = []string{"subject_tree", "acceptance_spec_hash"}
 		arrays = []string{"criterion_outcomes"}
 		objects = []string{"identity_versions"}
+	case EventDecisionRequested:
+		strings = append([]string{"decision_id", "decision_type"}, optionalNames(payload, "emitted_id", "question", "gate_id", "gate_mode", "subject_tree", "review_outcome", "proposal_id", "routed_reason")...)
+		arrays = optionalNames(payload, "blocking_findings")
+		bools = optionalNames(payload, "blocking")
+	case EventDecisionResolved:
+		strings = append([]string{"decision_id", "decision_type", "disposition"}, optionalNames(payload, "answer", "gate_id", "override_reason")...)
+		objects = optionalNames(payload, "scope")
+		arrays = optionalNames(payload, "overridden_findings")
+	case EventDecisionObsoleted:
+		strings = []string{"decision_id"}
+	case EventAmendmentRejected:
+		strings = append([]string{"proposal_id", "reason", "base_hash"}, optionalNames(payload, "emitted_id", "condition", "patch_operations_hash", "error_location", "decision_id")...)
+		arrays = optionalNames(payload, "typed_delta")
+		objects = append([]string{"identity_versions"}, optionalNames(payload, "actual_impact")...)
+		integers = []string{"base_revision", "classifier_version"}
 	case EventExecutionStarted:
 		strings = []string{"interval_id", "phase", "wall_start"}
 		integers = []string{"remaining_at_start"}
@@ -1358,6 +1711,12 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 	case EventAmendmentApprovalAbandoned:
 		strings = []string{"prepare_id", "proposal_id", "reason", "base_hash"}
 		integers = []string{"base_revision", "classifier_version"}
+	case EventAmendmentRoutedHuman:
+		strings = append([]string{"proposal_id", "reason", "decision_type", "proposal_record_hash", "base_hash", "decision_id"}, optionalNames(payload, "emitted_id")...)
+		arrays = []string{"typed_delta"}
+		objects = append([]string{"actual_impact", "identity_versions"}, optionalNames(payload, "envelope_evaluation")...)
+		bools = []string{"blocking"}
+		integers = []string{"base_revision", "classifier_version"}
 	case EventAmendmentApproved:
 		strings = append([]string{"proposal_id", "mode", "envelope_class", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash"}, optionalNames(payload, "emitted_id", "candidate_id")...)
 		arrays = []string{"typed_delta", "superseded_attempt_ids", "obsoleted_decision_ids"}
@@ -1369,6 +1728,19 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		integers = append([]string{"authority_epoch", "owner_pid"}, optionalNames(payload, "reclaimed_from_epoch")...)
 	case EventCancelRequested:
 		strings = []string{"requested_by"}
+	case EventAmendmentHumanRejected:
+		strings = []string{"proposal_id", "decision_id", "human_reason", "base_hash"}
+		objects = []string{"identity_versions"}
+		integers = []string{"base_revision", "classifier_version"}
+	case EventCompositionConflicted:
+		strings = []string{"scope", "target_id", "composition_subject_hash", "composition_algorithm_version"}
+		arrays = []string{"contributors", "conflicted_paths"}
+		objects = []string{"identity_versions"}
+	case EventCompositionFailed:
+		strings = []string{"scope", "target_id", "composition_subject_hash", "cause", "diagnostic", "composition_algorithm_version"}
+		arrays = []string{"contributors"}
+		objects = []string{"identity_versions"}
+		integers = optionalNames(payload, "git_exit_code")
 	case EventApplyStarted:
 		strings = []string{"txn_id", "candidate_id", "before_tree", "result_tree"}
 		arrays = []string{"touched_paths"}
@@ -1408,7 +1780,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		return err
 	}
 	for _, name := range arrays {
-		if name == "typed_delta" || name == "contributors" || name == "criterion_outcomes" || name == "raised" {
+		if name == "typed_delta" || name == "contributors" || name == "criterion_outcomes" || name == "raised" || name == "blocking_findings" || name == "overridden_findings" {
 			continue
 		}
 		if err := stringArray(payload, name); err != nil {
@@ -1500,6 +1872,66 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		}
 	case EventAttemptBlocked:
 		return validatePendingDecisionIDs(payload)
+	case EventDecisionRequested:
+		return nil
+	case EventDecisionResolved:
+		return nil
+	case EventAmendmentRejected:
+		reason := mustString(payload, "reason")
+		if !validAmendmentRejectionReason(reason) {
+			return errors.New("invalid amendment rejection reason")
+		}
+		_, condition := payload["condition"]
+		if (reason == "candidate_incompatible") != condition {
+			return errors.New("condition is required iff reason is candidate_incompatible")
+		}
+		if condition && !validCandidateIncompatibleCondition(mustString(payload, "condition")) {
+			return errors.New("invalid candidate_incompatible condition")
+		}
+		_, typedDelta := payload["typed_delta"]
+		_, actualImpact := payload["actual_impact"]
+		_, patchHash := payload["patch_operations_hash"]
+		_, location := payload["error_location"]
+		if typedDelta != actualImpact || patchHash != location || typedDelta == patchHash {
+			return errors.New("amendment rejection must carry exactly one diagnostic form")
+		}
+	case EventAmendmentRoutedHuman:
+		if !validAmendmentRouteReason(mustString(payload, "reason")) {
+			return errors.New("invalid amendment routing reason")
+		}
+		decisionType := mustString(payload, "decision_type")
+		if decisionType != "amendment" && decisionType != "finalization" {
+			return errors.New("invalid amendment routing decision_type")
+		}
+		if decisionType == "finalization" && (!mustBool(payload, "blocking") || mustString(payload, "reason") != "draft_phase") {
+			return errors.New("finalization routing must be blocking draft_phase")
+		}
+	case EventAmendmentHumanRejected:
+		if mustString(payload, "human_reason") == "" {
+			return errors.New("human_reason must be non-empty")
+		}
+	case EventCompositionConflicted:
+		if err := sortedStringFields(payload, "conflicted_paths"); err != nil {
+			return err
+		}
+		if !validCompositionScope(mustString(payload, "scope")) {
+			return errors.New("invalid composition scope")
+		}
+	case EventCompositionFailed:
+		if !validCompositionScope(mustString(payload, "scope")) {
+			return errors.New("invalid composition scope")
+		}
+		cause := mustString(payload, "cause")
+		if !validCompositionFailureCause(cause) {
+			return errors.New("invalid composition failure cause")
+		}
+		_, exitCode := payload["git_exit_code"]
+		if (cause == "git_exit" || cause == "output_unusable") != exitCode {
+			return errors.New("git_exit_code is required iff the merge exited")
+		}
+		if len(mustString(payload, "diagnostic")) > 4096 {
+			return errors.New("diagnostic exceeds 4 KiB")
+		}
 	case EventPerformerSelected:
 		switch mustString(payload, "reason") {
 		case "initial", "quality_retry", "fallback", "revision_restart", "decision_resume":
@@ -1639,6 +2071,46 @@ func validMovementFailureReason(reason string) bool {
 	}
 }
 
+func validAmendmentRejectionReason(reason string) bool {
+	switch reason {
+	case "run_terminal", "run_cancelling", "stale", "patch_error", "invalid_score", "reserved_field", "no_op", "claim_narrower", "executed_dependency_changed", "candidate_incompatible":
+		return true
+	default:
+		return false
+	}
+}
+
+func validCandidateIncompatibleCondition(condition string) bool {
+	switch condition {
+	case "succeeded_dependency_changed", "composition_changed", "verification_episode_finished", "verification_mode_changed":
+		return true
+	default:
+		return false
+	}
+}
+
+func validAmendmentRouteReason(reason string) bool {
+	switch reason {
+	case "draft_phase", "auto_disabled", "unclassified_change", "recognized_non_monotone", "runtime_scope_started":
+		return true
+	default:
+		return false
+	}
+}
+
+func validCompositionScope(scope string) bool {
+	return scope == "movement" || scope == "candidate"
+}
+
+func validCompositionFailureCause(cause string) bool {
+	switch cause {
+	case "repository_unusable", "inspection_failed", "driver_rejected", "spawn_failed", "git_exit", "git_signalled", "output_unusable", "status_unobtainable":
+		return true
+	default:
+		return false
+	}
+}
+
 func fields(value map[string]any, required, optional []string) error {
 	allowed := make(map[string]bool, len(required)+len(optional))
 	for _, name := range required {
@@ -1731,7 +2203,7 @@ var registryEvents = map[EventType]bool{
 	"adapter.probed": true, "performer.completed": true, "attempt.completed": true, "attempt.blocked": true,
 	"attempt.failed": true, "attempt.cancelled": true, "attempt.superseded": true,
 	"execution.started": true, "execution.stopped": true, "artifact.recorded": true,
-	"change_set.recorded": true, "verification.passed": true, "composition.conflicted": true,
+	"change_set.recorded": true, "verification.passed": true, "composition.conflicted": true, "composition.failed": true,
 	"application_candidate.recorded": true, "acceptance.started": true, "criterion.started": true,
 	"criterion.completed": true, "acceptance.failed": true, "acceptance.evaluation_completed": true,
 	"decision.requested": true, "decision.resolved": true, "decision.obsoleted": true,
@@ -1750,7 +2222,7 @@ func isRegistryEvent(eventType EventType) bool {
 }
 
 func isSupportedEvent(eventType EventType) bool {
-	if eventType == EventMovementCancelled || eventType == EventAttemptCancelled || eventType == EventAttemptSuperseded {
+	if eventType == EventMovementCancelled || eventType == EventAttemptCancelled || eventType == EventAttemptSuperseded || eventType == EventDecisionObsoleted {
 		return false
 	}
 	_, _, known := payloadFields(eventType)

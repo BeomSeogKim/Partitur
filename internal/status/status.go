@@ -277,7 +277,7 @@ func project(runID runstate.RunID, compiled *score.Score, replay runstore.ReadRe
 				FileHash:     string(state.ScoreHead.FileHash),
 			},
 			Movements:        movementProjection(compiled, state),
-			PendingDecisions: []PendingDecision{},
+			PendingDecisions: pendingDecisions(state),
 		},
 		Application:           Application{State: string(state.Application.State)},
 		Promotion:             Promotion{State: string(state.Promotion.State)},
@@ -317,6 +317,26 @@ func project(runID runstate.RunID, compiled *score.Score, replay runstore.ReadRe
 		}
 	}
 	return report
+}
+
+func pendingDecisions(state runstate.State) []PendingDecision {
+	ids := make([]string, 0, len(state.PendingDecisions))
+	for id := range state.PendingDecisions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	decisions := make([]PendingDecision, 0, len(ids))
+	for _, id := range ids {
+		decision := state.PendingDecisions[id]
+		decisions = append(decisions, PendingDecision{
+			ID:            decision.ID,
+			Type:          decision.Type,
+			MovementID:    string(decision.MovementID),
+			AttemptID:     string(decision.AttemptID),
+			ScoreRevision: decision.ScoreRevision,
+		})
+	}
+	return decisions
 }
 
 func movementProjection(compiled *score.Score, state runstate.State) []Movement {
