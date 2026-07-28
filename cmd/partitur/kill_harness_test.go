@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
 
 type killEdge struct {
@@ -168,6 +170,28 @@ func TestFailureOutcomeHarness(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestAcceptanceFailureWindowHarness(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repository, environment := killHarnessRepositoryWithInputs(t, bin, vendor, hashMismatchScore(), runCast())
+	environment = fixtureOutcomeEnvironment(environment, "success")
+	runID := killAtPoint(t, partitur, repository, environment, faultpoint.PointAcceptanceFailureRecorded)
+	assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &expectedFailure{
+		event: runstate.EventAcceptanceFailed, reason: "artifact_hash_mismatch", terminalReason: "retries_exhausted",
+	})
 }
 
 func killHarnessEdges() []killEdge {
@@ -575,17 +599,140 @@ func assertFixedPointReplayResult(
 	if !bytes.Equal(first, second) {
 		t.Fatal("fixed-point replay appended duplicate durable events")
 	}
+	assertSettledFixedPointState(t, repository, runID)
 	if _, err := os.Stat(filepath.Join(repository, ".partitur", "runs", runID, "driver.lease")); !os.IsNotExist(err) {
 		t.Fatalf("driver lease after fixed-point recovery = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repository, ".partitur", "work", runID)); !os.IsNotExist(err) {
 		t.Fatalf("attempt worktree after fixed-point recovery = %v", err)
 	}
-	checkRef := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/partitur/runs/"+runID+"/base")
-	checkRef.Dir = repository
-	if err := checkRef.Run(); err != nil {
-		t.Fatalf("base ref is inconsistent after recovery: %v", err)
+}
+
+// assertSettledFixedPointState derives fixed-point checks from DESIGN §6's
+// durable projection rather than inferring quiescence from the journal bytes.
+func assertSettledFixedPointState(t *testing.T, repository, runID string) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	input, err := store.LoadRecoveryInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := input.Projection.State
+	if state.OpenExecution != nil {
+		t.Fatalf("open execution interval after fixed-point recovery = %+v", *state.OpenExecution)
+	}
+	if state.PendingPrepare != nil {
+		t.Fatalf("pending prepare after fixed-point recovery = %+v", *state.PendingPrepare)
+	}
+	if state.Application.State == runstate.ApplicationApplying || state.Application.State == runstate.ApplicationRecoveryRequired {
+		t.Fatalf("unsettled application projection after fixed-point recovery = %+v", state.Application)
+	}
+	if state.Promotion.State == runstate.PromotionPromoting || state.Promotion.State == runstate.PromotionRecoveryRequired {
+		t.Fatalf("unsettled promotion projection after fixed-point recovery = %+v", state.Promotion)
+	}
+	assertSettledLifecycle(t, state)
+	assertRecordedSessionsEmpty(t, state)
+	assertSettledCandidateAndRefs(t, repository, runID, input.BaseCommit, state)
+}
+
+func assertSettledLifecycle(t *testing.T, state runstate.State) {
+	t.Helper()
+	if !state.Run.Terminal() {
+		if state.Run != runstate.RunWaitingHuman || len(state.PendingDecisions) == 0 {
+			t.Fatalf("run lifecycle after fixed-point recovery = %q with pending decisions=%d", state.Run, len(state.PendingDecisions))
+		}
+		blocking := false
+		for _, decision := range state.PendingDecisions {
+			blocking = blocking || decision.Blocking
+		}
+		if !blocking {
+			t.Fatalf("WAITING_HUMAN fixed point has no blocking decision: %#v", state.PendingDecisions)
+		}
+	} else if len(state.PendingDecisions) != 0 {
+		t.Fatalf("terminal run retains pending decisions: %#v", state.PendingDecisions)
+	}
+	for movementID, movement := range state.Movements {
+		switch movement {
+		case runstate.MovementSucceeded, runstate.MovementFailed, runstate.MovementCancelled, runstate.MovementInapplicable:
+		case runstate.MovementWaitingHuman:
+			if state.Run != runstate.RunWaitingHuman {
+				t.Fatalf("movement %q waits for human while run=%q", movementID, state.Run)
+			}
+		default:
+			t.Fatalf("unsettled movement %q after fixed-point recovery = %q", movementID, movement)
+		}
+	}
+	for attemptID, attempt := range state.Attempts {
+		switch attempt.State {
+		case runstate.AttemptCompleted, runstate.AttemptBlocked, runstate.AttemptFailed, runstate.AttemptCancelled, runstate.AttemptSuperseded:
+		default:
+			t.Fatalf("unsettled attempt %q after fixed-point recovery = %q", attemptID, attempt.State)
+		}
+	}
+}
+
+func assertRecordedSessionsEmpty(t *testing.T, state runstate.State) {
+	t.Helper()
+	for attemptID, launch := range state.AdapterLaunches {
+		assertSessionEmpty(t, "adapter attempt "+string(attemptID), launch.Process)
+	}
+	for key, launch := range state.CriterionLaunches {
+		spawned, ok := launch.(runstate.SpawnedCriterionLaunch)
+		if ok {
+			assertSessionEmpty(t, "criterion "+string(key.CriterionID), spawned.Process)
+		}
+	}
+}
+
+func assertSessionEmpty(t *testing.T, label string, identity runstate.ProcessIdentity) {
+	t.Helper()
+	empty, err := adapter.SessionEmpty(identity)
+	if err != nil || !empty {
+		t.Fatalf("recorded %s session after fixed-point recovery: empty=%t err=%v", label, empty, err)
+	}
+}
+
+func assertSettledCandidateAndRefs(t *testing.T, repository, runID, baseCommit string, state runstate.State) {
+	t.Helper()
+	baseRef := "refs/partitur/runs/" + runID + "/base"
+	if got, want := gitRefCommit(t, repository, baseRef), strings.TrimPrefix(baseCommit, "git-sha1:"); got != want {
+		t.Fatalf("base ref = %q, want %q", got, want)
+	}
+	if state.Run == runstate.RunSucceeded && state.ApplicationCandidate == nil {
+		t.Fatal("succeeded run has no application candidate")
+	}
+	if state.ApplicationCandidate != nil {
+		gitRefCommit(t, repository, "refs/partitur/runs/"+runID+"/candidate")
+	}
+	for attemptID, changeSet := range state.ChangeSets {
+		if changeSet.Ref == "" {
+			t.Fatalf("change set for attempt %q has no durable ref", attemptID)
+		}
+		gitRefCommit(t, repository, changeSet.Ref)
+	}
+	refs := exec.Command("git", "for-each-ref", "--format=%(refname)", "refs/partitur/runs/"+runID)
+	refs.Dir = repository
+	output, err := refs.Output()
+	if err != nil {
+		t.Fatalf("list durable run refs: %v", err)
+	}
+	for _, ref := range strings.Fields(string(output)) {
+		gitRefCommit(t, repository, ref)
+	}
+}
+
+func gitRefCommit(t *testing.T, repository, ref string) string {
+	t.Helper()
+	command := exec.Command("git", "rev-parse", ref+"^{commit}")
+	command.Dir = repository
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("durable ref %q is invalid: %v", ref, err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func assertExpectedFailure(t *testing.T, journal []byte, expected expectedFailure) {

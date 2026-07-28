@@ -619,6 +619,9 @@ func ExecuteAttempt(
 	if err != nil {
 		return stopped(result, err)
 	}
+	if !evaluation.EvaluationCompleted {
+		dependencies.probe.Reached(faultpoint.PointAcceptanceFailureRecorded)
+	}
 	acceptanceStopped := dependencies.now()
 	acceptanceDuration := acceptanceStopped.Sub(acceptanceOpened).Milliseconds()
 	if acceptanceDuration < 0 {

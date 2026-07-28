@@ -214,6 +214,12 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 			adjacent: baseInput(),
 		},
 		{
+			name:     "open non-adapter interval closes before any consequence",
+			input:    withOpenExecution(baseInput(), "acceptance"),
+			wantCase: CaseOpenExecution, wantKind: ActionCloseOpenExecutionInterval, replan: true,
+			adjacent: withOpenExecution(baseInput(), "adapter"),
+		},
+		{
 			name:     "root snapshot divergence",
 			input:    withRootDivergence(baseInput()),
 			wantCase: CaseRootSnapshotDivergence, wantHalt: HaltRootSnapshotDivergence,
@@ -271,7 +277,7 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 	}
 
 	for _, caseID := range []CaseID{
-		CaseTerminal, CaseStaleLease, CaseOrphanLease, CaseOwnerUnverifiable, CaseLiveOwner,
+		CaseOpenExecution, CaseTerminal, CaseStaleLease, CaseOrphanLease, CaseOwnerUnverifiable, CaseLiveOwner,
 		CaseCancellation, CasePendingPrepare, CaseReclaimAuthority, CaseRootSnapshotDivergence,
 		CaseMissingReference, CaseRoutedAmendment, CaseRevisionRestart, CaseCompositionTerminal,
 		CaseContinue,
@@ -383,6 +389,11 @@ func TestPlanC1Precedence(t *testing.T) {
 			name:  "pending prepare outranks root divergence and generic missing reference",
 			input: withRootDivergence(withMissingReference(withPrepare(baseInput()), ReferenceArtifact)),
 			want:  CasePendingPrepare,
+		},
+		{
+			name:  "generic recovered close precedes integrity checks outside the control rows",
+			input: withRootDivergence(withOpenExecution(baseInput(), "acceptance")),
+			want:  CaseOpenExecution,
 		},
 		{
 			name:  "root divergence outranks generic reference corruption",
@@ -883,6 +894,13 @@ func withAuthority(input Input, epoch uint64) Input {
 	input.Projection.State.Authority = runstate.Authority{
 		Epoch: epoch,
 		Owner: &runstate.AuthorityOwner{PID: 1},
+	}
+	return input
+}
+
+func withOpenExecution(input Input, phase string) Input {
+	input.Projection.State.OpenExecution = &runstate.ExecutionInterval{
+		ID: "interval", Phase: phase, WallStart: "2026-07-28T00:00:00Z", RemainingAtStart: 1,
 	}
 	return input
 }

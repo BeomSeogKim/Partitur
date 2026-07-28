@@ -68,6 +68,7 @@ const (
 	PointExecuteAdapterSwept              PointID = "execute.adapter_swept"
 	PointExecuteIntervalStopped           PointID = "execute.interval_stopped"
 	PointExecuteOutcomeRecorded           PointID = "execute.outcome_recorded"
+	PointAcceptanceFailureRecorded        PointID = "acceptance.failure_recorded"
 	PointLifecycleAttemptCompleted        PointID = "lifecycle.attempt_completed"
 	PointLifecycleMovementSucceeded       PointID = "lifecycle.movement_succeeded"
 )

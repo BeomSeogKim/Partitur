@@ -46,6 +46,7 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 
 func defaultKinds() map[recovery.ActionKind]StepHandler {
 	return map[recovery.ActionKind]StepHandler{
+		recovery.ActionCloseOpenExecutionInterval: closeOpenExecutionInterval,
 		recovery.ActionTerminalCleanup:            terminalCleanup,
 		recovery.ActionRemoveStaleLease:           removeStaleLease,
 		recovery.ActionQuarantineOrphanLease:      quarantineOrphanLease,
@@ -552,7 +553,11 @@ func sweepRecordedSession(_ context.Context, execution HandlerContext, action re
 	return nil
 }
 
-func closeAdapterInterval(_ context.Context, execution HandlerContext, action recovery.Action) error {
+func closeAdapterInterval(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+	return closeOpenExecutionInterval(ctx, execution, action)
+}
+
+func closeOpenExecutionInterval(_ context.Context, execution HandlerContext, action recovery.Action) error {
 	state, err := execution.Driver.State()
 	if err != nil {
 		return err
@@ -560,9 +565,6 @@ func closeAdapterInterval(_ context.Context, execution HandlerContext, action re
 	interval := state.OpenExecution
 	if interval == nil {
 		return nil
-	}
-	if interval.Phase != "adapter" {
-		return fmt.Errorf("open execution interval %q is %s, not adapter", interval.ID, interval.Phase)
 	}
 	observed := time.Now().UTC()
 	started, err := time.Parse(time.RFC3339Nano, interval.WallStart)

@@ -12,6 +12,7 @@ import "github.com/BeomSeogKim/Partitur/internal/runstate"
 type CaseID string
 
 const (
+	CaseOpenExecution          CaseID = "RC-RESUME-001"
 	CaseTerminal               CaseID = "RC-RESUME-002"
 	CaseStaleLease             CaseID = "RC-RESUME-003"
 	CaseOrphanLease            CaseID = "RC-RESUME-004"
@@ -368,6 +369,7 @@ type Input struct {
 type ActionKind string
 
 const (
+	ActionCloseOpenExecutionInterval ActionKind = "close_open_execution_interval"
 	ActionTerminalCleanup            ActionKind = "terminal_cleanup"
 	ActionRemoveStaleLease           ActionKind = "remove_stale_lease"
 	ActionQuarantineOrphanLease      ActionKind = "quarantine_orphan_lease"
@@ -529,6 +531,12 @@ func Plan(input Input) Decision {
 	}
 	if state.Authority.Epoch > 0 && (!lease.Exists || lease.Owner == OwnerDead) {
 		return action(CaseReclaimAuthority, ActionReclaimAuthority, false)
+	}
+	// RC-RESUME-001 closes every non-adapter interval before its durable
+	// consequence is interpreted. C.2 owns open adapter intervals because it
+	// must first sweep their recorded session.
+	if state.OpenExecution != nil && state.OpenExecution.Phase != "adapter" {
+		return action(CaseOpenExecution, ActionCloseOpenExecutionInterval, true)
 	}
 	if input.Observations.RootSnapshotDivergence {
 		return halt(CaseRootSnapshotDivergence, HaltRootSnapshotDivergence)
