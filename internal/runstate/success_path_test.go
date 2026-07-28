@@ -534,17 +534,6 @@ func TestProbeBoundaryPayloadsMovedFromSelectionAndAttemptStart(t *testing.T) {
 	}
 }
 
-func TestAttemptBlockedRemainsUnsupported(t *testing.T) {
-	state := probedAttemptState(t)
-	_, err := Apply(state, fixtureEvent("attempt.blocked", map[string]any{
-		"raised":               []any{},
-		"pending_decision_ids": []any{},
-	}, attemptEnvelope))
-	if !errors.Is(err, ErrUnsupportedEventType) {
-		t.Fatalf("error = %v, want ErrUnsupportedEventType", err)
-	}
-}
-
 func acceptanceStartedState(t *testing.T) State {
 	t.Helper()
 	return applyFixture(

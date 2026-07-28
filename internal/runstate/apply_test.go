@@ -65,10 +65,7 @@ func TestApplyDoesNotAliasInputOnSuccessOrError(t *testing.T) {
 
 func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
 	state := NewState(nil)
-	_, err := Apply(state, fixtureEvent("movement.failed", map[string]any{
-		"reason":     "retries_exhausted",
-		"run_failed": false,
-	}, nil))
+	_, err := Apply(state, fixtureEvent("change_set.recorded", map[string]any{}, nil))
 	if !errors.Is(err, ErrUnsupportedEventType) {
 		t.Fatalf("error = %v, want ErrUnsupportedEventType", err)
 	}
@@ -77,18 +74,20 @@ func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
 	}
 }
 
-func TestEScopedSupportedEventSetHasThirtyNineTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasFortyOneTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 39 {
-		t.Fatalf("supported event count = %d, want 39", count)
+	if count != 41 {
+		t.Fatalf("supported event count = %d, want 41", count)
 	}
-	if isSupportedEvent("movement.cancelled") {
-		t.Fatal("derived movement.cancelled must not be accepted as an authoritative event")
+	for _, eventType := range []EventType{EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded} {
+		if isSupportedEvent(eventType) {
+			t.Fatalf("derived %s must not be accepted as an authoritative event", eventType)
+		}
 	}
 }
 
@@ -140,6 +139,183 @@ func TestAttemptFailedStopsAtAttemptAndPreservesDisposition(t *testing.T) {
 	}
 	if got := next.Attempts["a1"].Failure.Disposition; got.Charged != "none" || !got.MovementTerminal {
 		t.Fatalf("disposition = %+v", got)
+	}
+}
+
+func TestFailureAndBlockingEventContracts(t *testing.T) {
+	tests := []struct {
+		name         string
+		state        func(*testing.T) State
+		event        Event
+		want         func(State) bool
+		illegalState func(*testing.T) State
+		invalid      Event
+		key          string
+	}{
+		{
+			name:  "attempt blocked",
+			state: probedAttemptState,
+			event: fixtureEvent(EventAttemptBlocked, blockedPayload(), attemptEnvelope),
+			want: func(state State) bool {
+				return state.Attempts["a1"].State == AttemptBlocked
+			},
+			illegalState: runningAttemptState,
+			invalid: fixtureEvent(EventAttemptBlocked, map[string]any{
+				"raised": []any{map[string]any{
+					"decision_id": "d1", "emitted_id": "q1", "kind": "question", "question": "Continue?", "blocking": true,
+				}},
+				"pending_decision_ids": []any{},
+			}, attemptEnvelope),
+			key: "a1",
+		},
+		{
+			name:  "movement failed",
+			state: runningAttemptState,
+			event: fixtureEvent(EventMovementFailed, map[string]any{
+				"reason": "retries_exhausted", "run_failed": false,
+			}, func(event *Event) { event.MovementID = "m1" }),
+			want: func(state State) bool {
+				return state.Movements["m1"] == MovementFailed && state.Run == RunRunning &&
+					state.Attempts["a1"].State == AttemptRunning
+			},
+			illegalState: func(t *testing.T) State {
+				state := runningAttemptState(t)
+				state.Movements["m1"] = MovementReady
+				return state
+			},
+			invalid: fixtureEvent(EventMovementFailed, map[string]any{
+				"reason": "unknown", "run_failed": false,
+			}, func(event *Event) { event.MovementID = "m1" }),
+			key: "m1",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			next, err := Apply(test.state(t), test.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.want(next) {
+				t.Fatalf("projection = %+v", next)
+			}
+			if _, err := Apply(test.illegalState(t), test.event); !errors.Is(err, ErrIllegalTransition) {
+				t.Fatalf("illegal-from error = %v, want ErrIllegalTransition", err)
+			}
+			if _, err := Apply(test.state(t), test.invalid); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("invalid payload error = %v, want ErrInvalidEvent", err)
+			}
+			key, err := IdempotencyKey(test.event)
+			if err != nil || key != test.key {
+				t.Fatalf("idempotency key = %q, error = %v, want %q", key, err, test.key)
+			}
+		})
+	}
+}
+
+func TestMovementFailedHumanGateAtomicallyFailsWaitingFinalMovement(t *testing.T) {
+	state := verifyingAttemptState(t)
+	state.Run = RunWaitingHuman
+	state.Movements["m1"] = MovementWaitingHuman
+	event := fixtureEvent(EventMovementFailed, map[string]any{
+		"reason": "human_gate_rejected", "decision_id": "gate-1", "subject_tree": "git-sha1:tree", "run_failed": true,
+	}, attemptEnvelope)
+	next, err := Apply(state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Run != RunFailed || next.Movements["m1"] != MovementFailed ||
+		next.Attempts["a1"].State != AttemptFailed {
+		t.Fatalf("human-gate projection = %+v", next)
+	}
+	invalid := event
+	invalid.Payload = mustPayload(t, map[string]any{
+		"reason": "human_gate_rejected", "decision_id": "gate-1", "subject_tree": "git-sha1:tree", "run_failed": false,
+	})
+	if _, err := Apply(state, invalid); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("invalid final human-gate payload error = %v, want ErrInvalidEvent", err)
+	}
+}
+
+func TestDerivedCancellationAndSupersessionContracts(t *testing.T) {
+	cancelledState := runningAttemptState(t)
+	cancelledSource := fixtureEvent(EventRunCancelled, map[string]any{
+		"cancelled_movement_ids": []any{"m1"},
+		"cancelled_attempt_ids":  []any{"a1"},
+		"obsoleted_decision_ids": []any{},
+	}, nil)
+	next, err := Apply(cancelledState, cancelledSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Run != RunCancelled || next.Movements["m1"] != MovementCancelled ||
+		next.Attempts["a1"].State != AttemptCancelled {
+		t.Fatalf("cancellation projection = %+v", next)
+	}
+	if _, err := Apply(NewState(nil), cancelledSource); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("illegal cancellation source error = %v, want ErrIllegalTransition", err)
+	}
+	invalidCancellation := cancelledSource
+	invalidCancellation.Payload = mustPayload(t, map[string]any{
+		"cancelled_movement_ids": []any{}, "cancelled_attempt_ids": []any{"a1"}, "obsoleted_decision_ids": []any{},
+	})
+	if _, err := Apply(runningAttemptState(t), invalidCancellation); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("invalid cancellation payload error = %v, want ErrInvalidEvent", err)
+	}
+
+	for _, test := range []struct {
+		event Event
+		key   string
+	}{
+		{fixtureEvent(EventMovementCancelled, map[string]any{}, func(event *Event) {
+			event.MovementID, event.CausationID = "m1", "source-1"
+		}), "source-1\x00m1"},
+		{fixtureEvent(EventAttemptCancelled, map[string]any{}, func(event *Event) {
+			event.AttemptID, event.CausationID = "a1", "source-1"
+		}), "source-1\x00a1"},
+		{fixtureEvent(EventAttemptSuperseded, map[string]any{}, func(event *Event) {
+			event.AttemptID, event.CausationID = "a1", "source-2"
+		}), "source-2\x00a1"},
+	} {
+		if err := ValidateEvent(test.event); err != nil {
+			t.Fatalf("validate %s: %v", test.event.Type, err)
+		}
+		key, err := IdempotencyKey(test.event)
+		if err != nil || key != test.key {
+			t.Fatalf("%s key = %q, error = %v, want %q", test.event.Type, key, err, test.key)
+		}
+		if _, err := Apply(runningAttemptState(t), test.event); !errors.Is(err, ErrUnsupportedEventType) {
+			t.Fatalf("%s direct apply error = %v, want ErrUnsupportedEventType", test.event.Type, err)
+		}
+	}
+
+	supersededState := runningAttemptState(t)
+	prepared := fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil)
+	var prepareErr error
+	supersededState, prepareErr = Apply(supersededState, prepared)
+	if prepareErr != nil {
+		t.Fatal(prepareErr)
+	}
+	approval := autoApprovalEvent()
+	next, err = Apply(supersededState, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Attempts["a1"].State != AttemptSuperseded {
+		t.Fatalf("supersession projection = %+v", next)
+	}
+	if _, err := Apply(runningAttemptState(t), approval); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("illegal supersession source error = %v, want ErrIllegalTransition", err)
+	}
+	invalidApproval := autoApprovalEvent()
+	invalidApproval.Payload = mustPayload(t, map[string]any{
+		"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
+		"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+		"new_revision": 2, "new_snapshot_hash": "sha256:score-2", "new_snapshot_file_hash": "sha256:file-2",
+		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "superseded_attempt_ids": []any{},
+		"obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": testIdentityVersions(),
+	})
+	if _, err := Apply(supersededState, invalidApproval); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("invalid supersession payload error = %v, want ErrInvalidEvent", err)
 	}
 }
 
@@ -506,6 +682,48 @@ func autoPreparePayload() map[string]any {
 		"classifier_version":       1,
 		"identity_versions":        testIdentityVersions(),
 	}
+}
+
+func blockedPayload() map[string]any {
+	return map[string]any{
+		"raised": []any{map[string]any{
+			"decision_id": "d1", "emitted_id": "q1", "kind": "question", "question": "Continue?", "blocking": true,
+		}},
+		"pending_decision_ids": []any{"d1"},
+	}
+}
+
+func autoApprovalEvent() Event {
+	return fixtureEvent(EventAmendmentApproved, map[string]any{
+		"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
+		"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+		"new_revision": 2, "new_snapshot_hash": "sha256:score-2", "new_snapshot_file_hash": "sha256:file-2",
+		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "superseded_attempt_ids": []any{"a1"},
+		"obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": testIdentityVersions(),
+	}, func(event *Event) {
+		event.ScoreRevision = 2
+	})
+}
+
+func emptyActualImpact() map[string]any {
+	return map[string]any{
+		"score_changes": []any{},
+		"authority": map[string]any{
+			"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}},
+			"grants":        []any{},
+			"side_effects":  map[string]any{"added": []any{}, "removed": []any{}},
+		},
+		"budget": map[string]any{},
+	}
+}
+
+func mustPayload(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func testIdentityVersions() map[string]any {
