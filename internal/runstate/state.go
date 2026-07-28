@@ -12,6 +12,7 @@ func NewState(seed []MovementSeed) State {
 		AdapterLaunches:     make(map[AttemptID]AdapterLaunch),
 		AdapterObservations: make(map[AttemptID]AdapterObservation),
 		Artifacts:           make(map[ArtifactInstanceID]ArtifactRecord),
+		ChangeSets:          make(map[AttemptID]ChangeSetRecord),
 		VerifiedAttempts:    make(map[AttemptID]bool),
 		MovementResults:     make(map[MovementID]MovementResult),
 		CriterionLaunches:   make(map[CriterionLaunchKey]CriterionLaunch),
@@ -63,6 +64,11 @@ func cloneState(input State) State {
 		output.AdapterObservations[id] = observation
 	}
 	output.Artifacts = cloneMap(input.Artifacts)
+	output.ChangeSets = cloneMap(input.ChangeSets)
+	for id, changeSet := range output.ChangeSets {
+		changeSet.IdentityVersions = append([]byte(nil), changeSet.IdentityVersions...)
+		output.ChangeSets[id] = changeSet
+	}
 	output.VerifiedAttempts = cloneMap(input.VerifiedAttempts)
 	output.MovementResults = cloneMap(input.MovementResults)
 	for id, result := range output.MovementResults {

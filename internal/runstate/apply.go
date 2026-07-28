@@ -38,7 +38,7 @@ func IdempotencyKey(event Event) (string, error) {
 	case EventMovementSucceeded:
 		return string(event.MovementID) + "\x00" + string(event.AttemptID), nil
 	case EventPerformerSelected, EventAttemptStarted, EventAdapterProbed, EventPerformerCompleted,
-		EventAttemptCompleted, EventAttemptBlocked, EventAttemptFailed, EventVerificationPassed, EventAcceptanceStarted,
+		EventAttemptCompleted, EventAttemptBlocked, EventAttemptFailed, EventChangeSetRecorded, EventVerificationPassed, EventAcceptanceStarted,
 		EventAcceptanceFailed, EventAcceptanceEvaluationCompleted:
 		return string(event.AttemptID), nil
 	case EventAttemptCancelled, EventAttemptSuperseded:
@@ -340,6 +340,33 @@ func Apply(input State, event Event) (State, error) {
 			ContentHash:     Hash(mustString(payload, "content_hash")),
 			SizeBytes:       mustUint(payload, "size_bytes"),
 			Source:          mustString(payload, "source_path"),
+		}
+	case EventChangeSetRecorded:
+		attempt, err := requireAttempt(state, event, AttemptVerifying)
+		if err != nil {
+			return state, err
+		}
+		if attempt.MovementID != event.MovementID {
+			return state, invalid(event, "attempt does not belong to movement")
+		}
+		if !state.RepoWriteMovements[event.MovementID] {
+			return state, transition(event, "movement is not repo_write")
+		}
+		if _, exists := state.ChangeSets[event.AttemptID]; exists {
+			return state, transition(event, "change set already recorded")
+		}
+		versions, encodeErr := json.Marshal(payload["identity_versions"])
+		if encodeErr != nil {
+			return state, invalid(event, encodeErr.Error())
+		}
+		state.ChangeSets[event.AttemptID] = ChangeSetRecord{
+			AttemptID:        event.AttemptID,
+			ChangeSetID:      mustString(payload, "change_set_id"),
+			BaseTree:         mustString(payload, "base_tree"),
+			ResultTree:       mustString(payload, "result_tree"),
+			Commit:           mustString(payload, "commit"),
+			Ref:              mustString(payload, "ref"),
+			IdentityVersions: versions,
 		}
 	case EventVerificationPassed:
 		if _, err := requireAttempt(state, event, AttemptVerifying); err != nil {
@@ -1175,6 +1202,8 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 		return []string{"kind", "disposition"}, []string{"reason", "detail"}, true
 	case EventArtifactRecorded:
 		return []string{"logical_output_id", "kind", "content_hash", "size_bytes", "source_path"}, nil, true
+	case EventChangeSetRecorded:
+		return []string{"change_set_id", "base_tree", "result_tree", "commit", "ref", "identity_versions"}, nil, true
 	case EventApplicationCandidateRecorded:
 		return []string{"candidate_id", "base_tree", "result_tree", "ordered_change_sets", "contributors", "candidate_composition_dependency_hash", "identity_versions"}, nil, true
 	case EventAcceptanceStarted:
@@ -1660,6 +1689,9 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 	case EventArtifactRecorded:
 		strings = []string{"logical_output_id", "kind", "content_hash", "source_path"}
 		integers = []string{"size_bytes"}
+	case EventChangeSetRecorded:
+		strings = []string{"change_set_id", "base_tree", "result_tree", "commit", "ref"}
+		objects = []string{"identity_versions"}
 	case EventApplicationCandidateRecorded:
 		strings = []string{"candidate_id", "base_tree", "result_tree", "candidate_composition_dependency_hash"}
 		arrays = []string{"ordered_change_sets", "contributors"}
