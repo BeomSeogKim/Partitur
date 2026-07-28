@@ -122,8 +122,23 @@ func TestLoadRecoveryInputIgnoresCurrentCastLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantCast, diagnostics := cast.Resolve([]cast.Layer{{Origin: "fixture", Data: recoveryCastJSON(t)}})
+	if len(diagnostics) != 0 {
+		t.Fatalf("fixture cast diagnostics = %v", diagnostics)
+	}
+	wantHash, err := wantCast.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if input.Cast == nil {
 		t.Fatal("run-owned resolved cast was not loaded")
+	}
+	gotHash, err := input.Cast.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotHash != wantHash {
+		t.Fatalf("resolved cast hash = %q, want run-owned hash %q", gotHash, wantHash)
 	}
 }
 
@@ -226,6 +241,56 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		}
 	})
 
+	t.Run("movement terminal suppresses matching composition evidence", func(t *testing.T) {
+		store := recoveryStore(t)
+		appendRecoveryMovementStarted(t, store)
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventCompositionFailed,
+			Payload: recoveryPayload(t, map[string]any{
+				"scope": "movement", "target_id": "write", "composition_subject_hash": "sha256:subject",
+				"cause": "git_exit", "git_exit_code": 2, "diagnostic": "exit 2", "contributors": []any{},
+				"composition_algorithm_version": "1", "identity_versions": recoveryVersions(),
+			}),
+		})
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementFailed,
+			Payload: recoveryPayload(t, map[string]any{"reason": "composition_failed", "run_failed": false}),
+		})
+
+		input, err := store.LoadRecoveryInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := input.Projection.CompositionTerminals; len(got) != 0 {
+			t.Fatalf("suppressed movement composition terminals = %+v, want none", got)
+		}
+	})
+
+	t.Run("run terminal suppresses matching candidate composition evidence", func(t *testing.T) {
+		store := recoveryStore(t)
+		appendRecoveryWriteSucceeded(t, store)
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCompositionFailed,
+			Payload: recoveryPayload(t, map[string]any{
+				"scope": "candidate", "target_id": "run-1", "composition_subject_hash": "sha256:subject",
+				"cause": "git_exit", "git_exit_code": 2, "diagnostic": "exit 2", "contributors": []any{},
+				"composition_algorithm_version": "1", "identity_versions": recoveryVersions(),
+			}),
+		})
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventRunFailed,
+			Payload: recoveryPayload(t, map[string]any{"reason": "composition_failed"}),
+		})
+
+		input, err := store.LoadRecoveryInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := input.Projection.CompositionTerminals; len(got) != 0 {
+			t.Fatalf("suppressed candidate composition terminals = %+v, want none", got)
+		}
+	})
+
 	t.Run("recovered composition close restarts the interrupted movement", func(t *testing.T) {
 		store := recoveryStore(t)
 		appendRecoveryMovementStarted(t, store)
@@ -249,6 +314,56 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		got := input.Projection.CompositionRecovery
 		if got == nil || !got.Recovered || got.Scope != "movement" || got.MovementID != "write" {
 			t.Fatalf("composition recovery = %+v", got)
+		}
+	})
+
+	t.Run("recovered composition close restarts eligible candidate composition", func(t *testing.T) {
+		store := recoveryStore(t)
+		appendRecoveryWriteSucceeded(t, store)
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted,
+			Payload: recoveryPayload(t, map[string]any{
+				"interval_id": "composition-1", "phase": "composition", "wall_start": "2026-07-28T00:00:00.000Z", "remaining_at_start": 600000,
+			}),
+		})
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped,
+			Payload: recoveryPayload(t, map[string]any{
+				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+			}),
+		})
+
+		input, err := store.LoadRecoveryInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := input.Projection.CompositionRecovery; got == nil || !got.Recovered || got.Scope != "candidate" || got.MovementID != "" {
+			t.Fatalf("candidate composition recovery = %+v", got)
+		}
+	})
+
+	t.Run("ordinary composition close does not restart composition", func(t *testing.T) {
+		store := recoveryStore(t)
+		appendRecoveryWriteSucceeded(t, store)
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted,
+			Payload: recoveryPayload(t, map[string]any{
+				"interval_id": "composition-1", "phase": "composition", "wall_start": "2026-07-28T00:00:00.000Z", "remaining_at_start": 600000,
+			}),
+		})
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped,
+			Payload: recoveryPayload(t, map[string]any{
+				"interval_id": "composition-1", "reason": "normal", "charging": "measured", "charged_duration": 1,
+			}),
+		})
+
+		input, err := store.LoadRecoveryInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := input.Projection.CompositionRecovery; got != nil {
+			t.Fatalf("ordinary composition close recovery = %+v, want none", got)
 		}
 	})
 }
@@ -310,6 +425,37 @@ func TestLoadRecoveryInputProjectsRevisionRestart(t *testing.T) {
 	if got := input.Projection.RevisionRestarts; len(got) != 1 || got[0].MovementID != "write" {
 		t.Fatalf("revision restarts = %+v", got)
 	}
+}
+
+func TestRevisionRestartExclusions(t *testing.T) {
+	t.Run("attempt already selected on the approved revision", func(t *testing.T) {
+		state := runstate.NewState([]runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+		state.ScoreHead.Revision = 2
+		events := []runstate.Event{
+			{ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: recoveryPayload(t, map[string]any{})},
+			{ScoreRevision: 2, Type: runstate.EventAmendmentApproved, Payload: recoveryPayload(t, map[string]any{
+				"new_revision": 2, "finalization": false, "superseded_attempt_ids": []any{"attempt-1"},
+			})},
+			{ScoreRevision: 2, MovementID: "write", AttemptID: "attempt-2", Type: runstate.EventPerformerSelected, Payload: recoveryPayload(t, map[string]any{})},
+		}
+		if got := replayFacts(events).revisionRestarts(state); len(got) != 0 {
+			t.Fatalf("restart after revision-2 selection = %+v, want none", got)
+		}
+	})
+
+	t.Run("finalization approval", func(t *testing.T) {
+		state := runstate.NewState([]runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+		state.ScoreHead.Revision = 2
+		events := []runstate.Event{
+			{ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: recoveryPayload(t, map[string]any{})},
+			{ScoreRevision: 2, Type: runstate.EventAmendmentApproved, Payload: recoveryPayload(t, map[string]any{
+				"new_revision": 2, "finalization": true, "superseded_attempt_ids": []any{"attempt-1"},
+			})},
+		}
+		if got := replayFacts(events).revisionRestarts(state); len(got) != 0 {
+			t.Fatalf("restart after finalization approval = %+v, want none", got)
+		}
+	})
 }
 
 func recoveryStore(t *testing.T) *Store {
@@ -382,6 +528,17 @@ func appendAttemptToRunning(t *testing.T, store *Store) {
 func appendAttemptToVerifying(t *testing.T, store *Store) {
 	appendAttemptToRunning(t, store)
 	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventPerformerCompleted, Payload: recoveryPayload(t, map[string]any{"session_hint_stored": false})})
+}
+
+func appendRecoveryWriteSucceeded(t *testing.T, store *Store) {
+	t.Helper()
+	appendAttemptToVerifying(t, store)
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventChangeSetRecorded, Payload: recoveryPayload(t, changeSetPayloadForRecovery())})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventVerificationPassed, Payload: recoveryPayload(t, map[string]any{})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventAcceptanceStarted, Payload: recoveryPayload(t, map[string]any{"subject_tree": "git-sha1:result", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{}, "identity_versions": recoveryVersions()})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventAcceptanceEvaluationCompleted, Payload: recoveryPayload(t, map[string]any{"subject_tree": "git-sha1:result", "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{}, "identity_versions": recoveryVersions()})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventAttemptCompleted, Payload: recoveryPayload(t, map[string]any{})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventMovementSucceeded, Payload: recoveryPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": "change-set-1", "identity_versions": recoveryVersions(), "run_succeeded": false})})
 }
 
 func appendRecoveryEvent(t *testing.T, store *Store, event runstate.Event) DurabilityReceipt {
