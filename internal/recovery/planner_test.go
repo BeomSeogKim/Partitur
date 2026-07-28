@@ -7,6 +7,154 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
+func TestPlanC4RowsAndSchedulerOrder(t *testing.T) {
+	base := func() Input {
+		input := baseInput()
+		input.Projection.Scheduler = Scheduler{
+			RemainingTime: 1,
+			Movements: []ScheduledMovement{
+				{ID: "write", RepoWrite: true},
+				{ID: "check", Needs: []runstate.MovementID{"write"}, Final: true},
+			},
+		}
+		input.Projection.State.Movements = map[runstate.MovementID]runstate.MovementState{
+			"write": runstate.MovementPending,
+			"check": runstate.MovementPending,
+		}
+		return input
+	}
+
+	cases := []struct {
+		name   string
+		input  Input
+		caseID CaseID
+		kind   ActionKind
+	}{
+		{
+			name: "exhaustion while a movement awaits fan-in fails the movement before the run",
+			input: func() Input {
+				input := base()
+				input.Projection.Scheduler.RemainingTime = 0
+				input.Projection.State.Movements["write"] = runstate.MovementRunning
+				return input
+			}(),
+			caseID: CaseBudgetExhausted, kind: ActionAppendBudgetFailure,
+		},
+		{
+			name: "exhaustion between movements fails the run directly",
+			input: func() Input {
+				input := base()
+				input.Projection.Scheduler.RemainingTime = 0
+				return input
+			}(),
+			caseID: CaseBudgetExhausted, kind: ActionAppendRunFailed,
+		},
+		{
+			name: "recovered movement composition is rerun rather than failed",
+			input: func() Input {
+				input := base()
+				input.Projection.State.Movements["write"] = runstate.MovementRunning
+				input.Projection.CompositionRecovery = &CompositionRecovery{Scope: "movement", MovementID: "write", Recovered: true}
+				return input
+			}(),
+			caseID: CaseRecoveredComposition, kind: ActionRerunComposition,
+		},
+		{
+			name: "already selected successor materializes before compiled lifecycle",
+			input: func() Input {
+				input := base()
+				input.Projection.Scheduler.PendingSuccessor = &PendingSuccessor{MovementID: "write", Reason: "quality_retry"}
+				return input
+			}(),
+			caseID: CaseScheduler, kind: ActionMaterializeSuccessor,
+		},
+		{
+			name:   "first dependency-satisfied pending movement becomes ready",
+			input:  base(),
+			caseID: CaseScheduler, kind: ActionAppendMovementReady,
+		},
+		{
+			name: "first ready movement starts",
+			input: func() Input {
+				input := base()
+				input.Projection.State.Movements["write"] = runstate.MovementReady
+				return input
+			}(),
+			caseID: CaseScheduler, kind: ActionAppendMovementStarted,
+		},
+		{
+			name: "running movement with no attempt selects its initial performer",
+			input: func() Input {
+				input := base()
+				input.Projection.State.Movements["write"] = runstate.MovementRunning
+				return input
+			}(),
+			caseID: CaseScheduler, kind: ActionSelectInitialPerformer,
+		},
+		{
+			name: "candidate is recorded before final movement can become ready",
+			input: func() Input {
+				input := base()
+				input.Projection.State.Movements["write"] = runstate.MovementSucceeded
+				return input
+			}(),
+			caseID: CaseScheduler, kind: ActionComposeCandidate,
+		},
+		{
+			name: "final movement becomes ready only after a candidate exists",
+			input: func() Input {
+				input := base()
+				input.Projection.State.Movements["write"] = runstate.MovementSucceeded
+				input.Projection.State.ApplicationCandidate = &runstate.ApplicationCandidate{}
+				return input
+			}(),
+			caseID: CaseScheduler, kind: ActionAppendMovementReady,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := PlanScheduler(test.input)
+			assertDecision(t, got, test.caseID, test.kind, "", true)
+		})
+	}
+}
+
+func TestPlanC4RecoveredCloseNeverSynthesizesCompositionFailure(t *testing.T) {
+	input := baseInput()
+	input.Projection.Scheduler = Scheduler{
+		RemainingTime: 1,
+		Movements:     []ScheduledMovement{{ID: "write", RepoWrite: true}},
+	}
+	input.Projection.State.Movements = map[runstate.MovementID]runstate.MovementState{"write": runstate.MovementRunning}
+	input.Projection.CompositionRecovery = &CompositionRecovery{Scope: "movement", MovementID: "write", Recovered: true}
+
+	got := PlanScheduler(input)
+	assertDecision(t, got, CaseRecoveredComposition, ActionRerunComposition, "", true)
+	if got.Action.FailureReason != "" || got.Action.Kind == ActionAppendCompositionTerminal {
+		t.Fatalf("recovered close synthesized composition failure: %+v", got.Action)
+	}
+}
+
+func TestPlanC4WaivedCompletionAndC48Boundary(t *testing.T) {
+	input := baseInput()
+	input.Projection.Scheduler = Scheduler{
+		GateWaived: true, RemainingTime: 1,
+		Movements: []ScheduledMovement{{ID: "work"}},
+	}
+	input.Projection.State.Movements = map[runstate.MovementID]runstate.MovementState{"work": runstate.MovementSucceeded}
+	got := PlanScheduler(input)
+	assertDecision(t, got, CaseScheduler, ActionAppendRunSucceeded, "", true)
+	if !got.Action.CandidateCarrying {
+		t.Fatal("waived completion must append the candidate-carrying run.succeeded")
+	}
+
+	blocked := c2Input(runstate.AttemptBlocked)
+	blocked.Projection.State.PendingDecisions["blocking"] = runstate.PendingDecision{
+		ID: "blocking", AttemptID: "attempt", Blocking: true,
+	}
+	assertDecision(t, PlanAttempt(blocked), CaseWaitingHuman, ActionReturnWaitingHuman, "", false)
+}
+
 func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 	cases := []struct {
 		name     string

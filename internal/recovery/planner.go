@@ -51,6 +51,9 @@ const (
 	CaseUnjournaledLaunch      CaseID = "RC-RESUME-031"
 	CaseFirstCriterion         CaseID = "RC-RESUME-032"
 	CaseNextCriterion          CaseID = "RC-RESUME-033"
+	CaseScheduler              CaseID = "RC-RESUME-043"
+	CaseRecoveredComposition   CaseID = "RC-RESUME-044"
+	CaseBudgetExhausted        CaseID = "RC-RESUME-045"
 )
 
 // HaltReason is an Appendix D recovery halt reason.
@@ -128,6 +131,41 @@ type CompositionTerminal struct {
 	Scope    string
 	TargetID string
 	Reason   string
+}
+
+// CompositionRecovery is the replay-derived close of a composition interval.
+// A recovered close is deliberately not a conflict or failure verdict. Those
+// verdicts are represented separately by CompositionTerminal once observed.
+type CompositionRecovery struct {
+	Scope      string
+	MovementID runstate.MovementID
+	Recovered  bool
+}
+
+// ScheduledMovement is the compiled, declaration-ordered lifecycle input C.4
+// needs. It intentionally contains no adapter, process, or filesystem handle.
+type ScheduledMovement struct {
+	ID        runstate.MovementID
+	Needs     []runstate.MovementID
+	RepoWrite bool
+	Final     bool
+}
+
+// PendingSuccessor is a successor already selected by §3.1, RC-RESUME-041,
+// or RC-RESUME-042. C.4 only makes it durable; it never chooses another one.
+type PendingSuccessor struct {
+	MovementID runstate.MovementID
+	Reason     string
+}
+
+// Scheduler is the compiled score view C.4 needs after journal replay. A
+// non-waived lifecycle has exactly one Final movement; a waived lifecycle has
+// none and completes by carrying the candidate in run.succeeded.
+type Scheduler struct {
+	Movements        []ScheduledMovement
+	PendingSuccessor *PendingSuccessor
+	GateWaived       bool
+	RemainingTime    int64
 }
 
 // QuestionRequest is the replay-derived request cut for one question raised
@@ -235,8 +273,10 @@ type Projection struct {
 	State                runstate.State
 	RevisionRestarts     []RevisionRestart
 	CompositionTerminals []CompositionTerminal
+	CompositionRecovery  *CompositionRecovery
 	CurrentHeadAttempt   *AttemptRecovery
 	Acceptance           *AcceptanceRecovery
+	Scheduler            Scheduler
 }
 
 // Observations are all non-journal inputs used by C.1 and C.2.
@@ -301,6 +341,14 @@ const (
 	ActionStabilizeUnjournaledLaunch ActionKind = "stabilize_unjournaled_criterion_launch"
 	ActionRemoveUnjournaledLaunch    ActionKind = "remove_unjournaled_criterion_launch"
 	ActionResumeCriterion            ActionKind = "resume_criterion"
+	ActionAppendMovementReady        ActionKind = "append_movement_ready"
+	ActionAppendMovementStarted      ActionKind = "append_movement_started"
+	ActionSelectInitialPerformer     ActionKind = "select_initial_performer"
+	ActionMaterializeSuccessor       ActionKind = "materialize_selected_successor"
+	ActionRerunComposition           ActionKind = "rerun_deterministic_composition"
+	ActionComposeCandidate           ActionKind = "compose_application_candidate"
+	ActionAppendRunSucceeded         ActionKind = "append_run_succeeded"
+	ActionAppendBudgetFailure        ActionKind = "append_budget_exhaustion"
 )
 
 // Continuation names the next Appendix C table after one action value has
@@ -318,16 +366,18 @@ const (
 type ActionStep string
 
 const (
-	StepStabilizeHandoff          ActionStep = "stabilize_handoff_and_sweep_published_session"
-	StepSweepRecordedSession      ActionStep = "sweep_recorded_session"
-	StepCloseAdapterInterval      ActionStep = "close_adapter_interval_recovered"
-	StepClassifyAndAppendFailure  ActionStep = "classify_and_append_attempt_failure"
-	StepSweepCriterionSession     ActionStep = "sweep_criterion_session"
-	StepVerifyAcceptanceSubject   ActionStep = "verify_acceptance_subject"
-	StepSynthesizeCriterionError  ActionStep = "synthesize_criterion_error"
-	StepClassifyAcceptanceFailure ActionStep = "classify_and_append_acceptance_failure"
-	StepAppendAttemptCompleted    ActionStep = "append_attempt_completed"
-	StepAppendMovementSucceeded   ActionStep = "append_movement_succeeded"
+	StepStabilizeHandoff            ActionStep = "stabilize_handoff_and_sweep_published_session"
+	StepSweepRecordedSession        ActionStep = "sweep_recorded_session"
+	StepCloseAdapterInterval        ActionStep = "close_adapter_interval_recovered"
+	StepClassifyAndAppendFailure    ActionStep = "classify_and_append_attempt_failure"
+	StepSweepCriterionSession       ActionStep = "sweep_criterion_session"
+	StepVerifyAcceptanceSubject     ActionStep = "verify_acceptance_subject"
+	StepSynthesizeCriterionError    ActionStep = "synthesize_criterion_error"
+	StepClassifyAcceptanceFailure   ActionStep = "classify_and_append_acceptance_failure"
+	StepAppendAttemptCompleted      ActionStep = "append_attempt_completed"
+	StepAppendMovementSucceeded     ActionStep = "append_movement_succeeded"
+	StepAppendMovementBudgetFailure ActionStep = "append_movement_failed_budget_exhausted"
+	StepAppendRunFailed             ActionStep = "append_run_failed"
 )
 
 // Action is a pure description for the recovery executor. Replan means the
@@ -338,6 +388,7 @@ type Action struct {
 	RoutedProposalID    runstate.ProposalID
 	RevisionRestart     *RevisionRestart
 	CompositionTerminal *CompositionTerminal
+	PendingSuccessor    *PendingSuccessor
 	AttemptID           runstate.AttemptID
 	QuestionDecisionID  string
 	CriterionID         runstate.CriterionID
@@ -346,6 +397,7 @@ type Action struct {
 	FailureKind         string
 	FailureReason       string
 	RecordedDisposition *runstate.Disposition
+	CandidateCarrying   bool
 	Steps               []ActionStep
 	Continuation        Continuation
 }
@@ -652,6 +704,123 @@ func PlanAcceptance(input Input) Decision {
 		return verifyAcceptanceSubject(caseID, attempt.AttemptID, nil)
 	}
 	return proceedScheduler()
+}
+
+// PlanScheduler applies Appendix C.4 after C.1 selected ContinuationC4. It
+// advances one compiled lifecycle step only; the executor must replay and
+// return to Plan before taking another step.
+func PlanScheduler(input Input) Decision {
+	state := input.Projection.State
+	scheduler := input.Projection.Scheduler
+
+	if state.Run.Terminal() {
+		return action(CaseTerminal, ActionTerminalCleanup, false)
+	}
+	if currentHeadAttempt(input.Projection) != nil {
+		decision := action(CaseContinue, ActionProceedAttempt, false)
+		decision.Action.Continuation = ContinuationC2
+		return decision
+	}
+	if scheduler.RemainingTime == 0 {
+		return budgetExhaustion(state, scheduler)
+	}
+	if recovery := input.Projection.CompositionRecovery; recovery != nil && recovery.Recovered {
+		decision := action(CaseRecoveredComposition, ActionRerunComposition, true)
+		decision.Action.MovementID = recovery.MovementID
+		return decision
+	}
+	if successor := scheduler.PendingSuccessor; successor != nil {
+		decision := action(CaseScheduler, ActionMaterializeSuccessor, true)
+		copy := *successor
+		decision.Action.PendingSuccessor = &copy
+		decision.Action.MovementID = successor.MovementID
+		return decision
+	}
+
+	for _, movement := range scheduler.Movements {
+		if state.Movements[movement.ID] != runstate.MovementPending || !dependenciesSucceeded(state, movement.Needs) {
+			continue
+		}
+		// §8 requires the candidate before the final movement may become READY.
+		if movement.Final && !scheduler.GateWaived && state.ApplicationCandidate == nil {
+			continue
+		}
+		decision := action(CaseScheduler, ActionAppendMovementReady, true)
+		decision.Action.MovementID = movement.ID
+		return decision
+	}
+	for _, movement := range scheduler.Movements {
+		switch state.Movements[movement.ID] {
+		case runstate.MovementReady:
+			decision := action(CaseScheduler, ActionAppendMovementStarted, true)
+			decision.Action.MovementID = movement.ID
+			return decision
+		case runstate.MovementRunning:
+			decision := action(CaseScheduler, ActionSelectInitialPerformer, true)
+			decision.Action.MovementID = movement.ID
+			return decision
+		}
+	}
+	if !scheduler.GateWaived && state.ApplicationCandidate == nil && candidatePrecondition(state, scheduler) {
+		return action(CaseScheduler, ActionComposeCandidate, true)
+	}
+	if scheduler.GateWaived && waivedCompletion(state, scheduler) {
+		decision := action(CaseScheduler, ActionAppendRunSucceeded, true)
+		decision.Action.CandidateCarrying = true
+		return decision
+	}
+
+	// A compiled lifecycle never reaches this fixed point: it either has a
+	// pending/ready/running movement, needs candidate materialization, or is
+	// complete on the waived path. Keep the pure planner total for an empty
+	// caller-provided lifecycle without manufacturing a journal append.
+	return action(CaseScheduler, ActionProceedScheduler, false)
+}
+
+func budgetExhaustion(state runstate.State, scheduler Scheduler) Decision {
+	for _, movement := range scheduler.Movements {
+		if state.Movements[movement.ID] == runstate.MovementRunning {
+			decision := action(CaseBudgetExhausted, ActionAppendBudgetFailure, true)
+			decision.Action.MovementID = movement.ID
+			decision.Action.FailureReason = "budget_exhausted"
+			decision.Action.Steps = []ActionStep{StepAppendMovementBudgetFailure, StepAppendRunFailed}
+			return decision
+		}
+	}
+	decision := action(CaseBudgetExhausted, ActionAppendRunFailed, true)
+	decision.Action.FailureReason = "budget_exhausted"
+	return decision
+}
+
+func dependenciesSucceeded(state runstate.State, needs []runstate.MovementID) bool {
+	for _, need := range needs {
+		if state.Movements[need] != runstate.MovementSucceeded {
+			return false
+		}
+	}
+	return true
+}
+
+func candidatePrecondition(state runstate.State, scheduler Scheduler) bool {
+	for _, movement := range scheduler.Movements {
+		if movement.Final || !movement.RepoWrite {
+			continue
+		}
+		if state.Movements[movement.ID] != runstate.MovementSucceeded {
+			return false
+		}
+	}
+	return true
+}
+
+func waivedCompletion(state runstate.State, scheduler Scheduler) bool {
+	for _, movement := range scheduler.Movements {
+		if state.Movements[movement.ID] != runstate.MovementSucceeded &&
+			state.Movements[movement.ID] != runstate.MovementInapplicable {
+			return false
+		}
+	}
+	return len(scheduler.Movements) != 0
 }
 
 func planEvaluatedAcceptance(input Input, attempt *AttemptRecovery, acceptance runstate.Acceptance, recovery *AcceptanceRecovery) Decision {
