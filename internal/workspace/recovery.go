@@ -10,17 +10,18 @@ import (
 )
 
 // VerifyRecoverySubject checks the non-mutating recovery form of the workspace
-// invariant. subjectTree is the tree recorded by acceptance.started.
+// invariant. repositoryRoot identifies the repository that owns the worktree;
+// subjectTree is the tree recorded by acceptance.started.
 //
 // Git's tree comparison covers tracked content, modes, and symlink targets.
 // Non-ignored untracked files are checked separately. The protected paths are
 // also required to be represented by the recorded tree rather than being
 // tolerated merely because Git ignores them.
-func VerifyRecoverySubject(worktree, subjectTree string) (bool, error) {
-	if worktree == "" || subjectTree == "" {
+func VerifyRecoverySubject(repositoryRoot, worktree, subjectTree string) (bool, error) {
+	if repositoryRoot == "" || worktree == "" || subjectTree == "" {
 		return false, errors.New("workspace: recovery subject is incomplete")
 	}
-	if err := verifyRecoveryGitDir(worktree); err != nil {
+	if err := verifyRecoveryGitDir(repositoryRoot, worktree); err != nil {
 		return false, err
 	}
 	git, err := newSystemGit()
@@ -71,9 +72,6 @@ var (
 )
 
 func verifyRecoveryProtectedPath(git gitCommand, worktree, subjectTree, path string) error {
-	if path == ".git" {
-		return verifyRecoveryGitDir(worktree)
-	}
 	tracked, err := gitOutput(git, worktree, nil, "ls-tree", "-z", subjectTree, "--", path)
 	if err != nil {
 		return err
@@ -94,33 +92,82 @@ func verifyRecoveryProtectedPath(git gitCommand, worktree, subjectTree, path str
 	return nil
 }
 
-func verifyRecoveryGitDir(worktree string) error {
-	gitFile := filepath.Join(worktree, ".git")
-	info, err := os.Lstat(gitFile)
+func verifyRecoveryGitDir(repositoryRoot, worktree string) error {
+	expectedCommonDir, err := commonGitDir(repositoryRoot, false)
 	if err != nil {
-		return fmt.Errorf("%w: inspect .git: %v", errRecoveryGitDirUnverified, err)
+		return err
 	}
-	if !info.Mode().IsRegular() {
-		return errRecoveryGitDirUnverified
-	}
-	contents, err := os.ReadFile(gitFile)
+	gitDir, err := linkedGitDir(worktree)
 	if err != nil {
-		return fmt.Errorf("%w: read .git: %v", errRecoveryGitDirUnverified, err)
-	}
-	gitDir, ok := gitDirPath(filepath.Dir(gitFile), string(contents))
-	if !ok {
-		return errRecoveryGitDirUnverified
+		return err
 	}
 	backlink, err := os.ReadFile(filepath.Join(gitDir, "gitdir"))
 	if err != nil {
 		return fmt.Errorf("%w: read gitdir backlink: %v", errRecoveryGitDirUnverified, err)
 	}
 	expected, ok := gitDirBacklinkPath(gitDir, string(backlink))
-	matches, err := samePath(expected, gitFile)
+	matches, err := samePath(expected, filepath.Join(worktree, ".git"))
 	if !ok || err != nil || !matches {
 		return errRecoveryGitDirUnverified
 	}
+	actualCommonDir, err := commonGitDir(gitDir, true)
+	if err != nil {
+		return err
+	}
+	matches, err = samePath(expectedCommonDir, actualCommonDir)
+	if err != nil || !matches {
+		return errRecoveryGitDirUnverified
+	}
 	return nil
+}
+
+func linkedGitDir(worktree string) (string, error) {
+	gitFile := filepath.Join(worktree, ".git")
+	info, err := os.Lstat(gitFile)
+	if err != nil {
+		return "", fmt.Errorf("%w: inspect .git: %v", errRecoveryGitDirUnverified, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errRecoveryGitDirUnverified
+	}
+	contents, err := os.ReadFile(gitFile)
+	if err != nil {
+		return "", fmt.Errorf("%w: read .git: %v", errRecoveryGitDirUnverified, err)
+	}
+	gitDir, ok := gitDirPath(filepath.Dir(gitFile), string(contents))
+	if !ok {
+		return "", errRecoveryGitDirUnverified
+	}
+	return gitDir, nil
+}
+
+func commonGitDir(root string, linked bool) (string, error) {
+	gitDir := filepath.Join(root, ".git")
+	if linked {
+		gitDir = root
+	} else if info, err := os.Lstat(gitDir); err != nil {
+		return "", fmt.Errorf("%w: inspect repository .git: %v", errRecoveryGitDirUnverified, err)
+	} else if info.Mode().IsRegular() {
+		var err error
+		gitDir, err = linkedGitDir(root)
+		if err != nil {
+			return "", err
+		}
+	} else if !info.IsDir() {
+		return "", errRecoveryGitDirUnverified
+	}
+	contents, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return gitDir, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: read common gitdir: %v", errRecoveryGitDirUnverified, err)
+	}
+	commonDir, ok := gitDirBacklinkPath(gitDir, string(contents))
+	if !ok {
+		return "", errRecoveryGitDirUnverified
+	}
+	return commonDir, nil
 }
 
 func gitDirBacklinkPath(base, contents string) (string, bool) {

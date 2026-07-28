@@ -112,6 +112,41 @@ func TestCollectDefaultReachableObservations(t *testing.T) {
 	}
 }
 
+func TestCollectMapsAcceptanceWorktreeSubjectVerification(t *testing.T) {
+	store := collectorGitStore(t)
+	root := store.RepositoryRoot()
+	attemptRoot := filepath.Join(root, ".partitur", "work", "run-1", "attempt-1")
+	worktree := filepath.Join(attemptRoot, "worktree")
+	if err := os.MkdirAll(attemptRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	collectorGit(t, root, "worktree", "add", "--detach", worktree, "HEAD")
+	subjectTree := collectorGit(t, worktree, "rev-parse", "HEAD^{tree}")
+	state := runstate.NewState(nil)
+	state.Run = runstate.RunRunning
+	state.Acceptances["attempt-1"] = runstate.Acceptance{Started: true, SubjectTree: subjectTree}
+	projection := recovery.Projection{
+		State:              state,
+		CurrentHeadAttempt: &recovery.AttemptRecovery{AttemptID: "attempt-1", ScoreRevision: 1, State: runstate.AttemptRunning, AcceptanceStarted: true},
+	}
+
+	observations, err := Collect(store, "run-1", projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observations.AcceptanceSubject != recovery.SubjectMatched {
+		t.Fatalf("acceptance subject = %q, want matched", observations.AcceptanceSubject)
+	}
+	writeCollectorFile(t, filepath.Join(worktree, "tracked"), []byte("changed\n"))
+	observations, err = Collect(store, "run-1", projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observations.AcceptanceSubject != recovery.SubjectMismatched {
+		t.Fatalf("acceptance subject = %q, want mismatched", observations.AcceptanceSubject)
+	}
+}
+
 func TestCollectReferencesCoversEveryReferenceKind(t *testing.T) {
 	root := t.TempDir()
 	collectorGit(t, root, "init", "-b", "main")
@@ -170,7 +205,7 @@ func TestCollectReferencesCoversEveryReferenceKind(t *testing.T) {
 	}
 }
 
-func TestCollectBindsPendingPrepareToItsPlan(t *testing.T) {
+func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 	store := collectorStore(t)
 	root := store.RepositoryRoot()
 	snapshot := scoreSource(2, "prepared")
@@ -180,53 +215,100 @@ func TestCollectBindsPendingPrepareToItsPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepare := runstate.PendingPrepare{
-		ID: "prepare-1", ProposalID: "proposal-1", Mode: "auto",
+		ID: "prepare-1", ProposalID: "proposal-1", Mode: "auto", EnvelopeClass: "NARROW_PATHS",
 		BaseHead:         runstate.ScoreHead{Revision: 1, SemanticHash: "sha256:base"},
 		NewHead:          runstate.ScoreHead{Revision: 2, SemanticHash: runstate.Hash(semanticHash), FileHash: fileHash(snapshot)},
 		TargetAttemptIDs: []runstate.AttemptID{"attempt-1"},
 	}
-	plan := preparePlan{
-		ProposalID: prepare.ProposalID, BaseRevision: prepare.BaseHead.Revision, BaseHash: prepare.BaseHead.SemanticHash,
-		NewRevision: prepare.NewHead.Revision, NewSnapshotHash: prepare.NewHead.SemanticHash,
-		NewSnapshotFileHash: prepare.NewHead.FileHash, SupersededAttemptIDs: prepare.TargetAttemptIDs, Mode: prepare.Mode,
-	}
 	planPath := filepath.Join(root, ".partitur", "runs", "run-1", "prepares", "prepare-1.json")
-	writeJSONFile(t, planPath, plan)
-	planBytes, err := os.ReadFile(planPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepare.PlanRecordHash = fileHash(planBytes)
 	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml"), snapshot)
-	state := runstate.NewState(nil)
-	state.Run = runstate.RunRunning
-	state.PendingPrepare = &prepare
 
-	observations, err := Collect(store, "run-1", recovery.Projection{State: state})
-	if err != nil {
-		t.Fatal(err)
+	validPlan := func(pending runstate.PendingPrepare) preparePlan {
+		return preparePlan{
+			ProposalID: pending.ProposalID, BaseRevision: pending.BaseHead.Revision, BaseHash: pending.BaseHead.SemanticHash,
+			NewRevision: pending.NewHead.Revision, NewSnapshotHash: pending.NewHead.SemanticHash,
+			NewSnapshotFileHash: pending.NewHead.FileHash, SupersededAttemptIDs: pending.TargetAttemptIDs, Mode: pending.Mode,
+			EnvelopeClass: stringPointer(pending.EnvelopeClass),
+		}
 	}
-	if !observations.Prepare.PlanPresent || !observations.Prepare.SnapshotPresent {
-		t.Fatalf("valid prepare observation = %+v", observations.Prepare)
+	observe := func(t *testing.T, pending runstate.PendingPrepare, plan preparePlan) recovery.PrepareObservation {
+		t.Helper()
+		writeJSONFile(t, planPath, plan)
+		bytes, err := os.ReadFile(planPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending.PlanRecordHash = fileHash(bytes)
+		state := runstate.NewState(nil)
+		state.Run = runstate.RunRunning
+		state.PendingPrepare = &pending
+		observations, err := Collect(store, "run-1", recovery.Projection{State: state})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return observations.Prepare
 	}
 
-	// Discriminator: preserve a valid plan hash but bind it to another proposal.
-	plan.ProposalID = "other-proposal"
-	writeJSONFile(t, planPath, plan)
-	planBytes, err = os.ReadFile(planPath)
-	if err != nil {
-		t.Fatal(err)
+	if observed := observe(t, prepare, validPlan(prepare)); !observed.PlanPresent || !observed.SnapshotPresent {
+		t.Fatalf("valid prepare observation = %+v", observed)
 	}
-	prepare.PlanRecordHash = fileHash(planBytes)
-	state.PendingPrepare = &prepare
-	observations, err = Collect(store, "run-1", recovery.Projection{State: state})
-	if err != nil {
-		t.Fatal(err)
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*preparePlan)
+	}{
+		{name: "proposal id", mutate: func(plan *preparePlan) { plan.ProposalID = "other-proposal" }},
+		{name: "base revision", mutate: func(plan *preparePlan) { plan.BaseRevision++ }},
+		{name: "base hash", mutate: func(plan *preparePlan) { plan.BaseHash = "sha256:other-base" }},
+		{name: "new revision", mutate: func(plan *preparePlan) { plan.NewRevision++ }},
+		{name: "new snapshot hash", mutate: func(plan *preparePlan) { plan.NewSnapshotHash = "sha256:other-snapshot" }},
+		{name: "new snapshot file hash", mutate: func(plan *preparePlan) { plan.NewSnapshotFileHash = "sha256:other-file" }},
+		{name: "target attempts", mutate: func(plan *preparePlan) { plan.SupersededAttemptIDs = []runstate.AttemptID{"other-attempt"} }},
+		{name: "mode", mutate: func(plan *preparePlan) {
+			plan.Mode, plan.DecisionID, plan.EnvelopeClass = "human", stringPointer("decision-1"), nil
+		}},
+		{name: "auto rejects decision id", mutate: func(plan *preparePlan) { plan.DecisionID = stringPointer("decision-1") }},
+		{name: "auto requires envelope class", mutate: func(plan *preparePlan) { plan.EnvelopeClass = nil }},
+		{name: "auto envelope class", mutate: func(plan *preparePlan) { plan.EnvelopeClass = stringPointer("NARROW_GRANTS") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := validPlan(prepare)
+			test.mutate(&plan)
+			observed := observe(t, prepare, plan)
+			if observed.PlanPresent || !observed.SnapshotPresent {
+				t.Fatalf("prepare mismatch observation = %+v", observed)
+			}
+		})
 	}
-	if observations.Prepare.PlanPresent || !observations.Prepare.SnapshotPresent {
-		t.Fatalf("mismatched prepare observation = %+v", observations.Prepare)
+
+	human := prepare
+	human.Mode = "human"
+	human.EnvelopeClass = ""
+	humanPlan := validPlan(human)
+	humanPlan.EnvelopeClass = nil
+	humanPlan.DecisionID = stringPointer("decision-1")
+	if observed := observe(t, human, humanPlan); !observed.PlanPresent || !observed.SnapshotPresent {
+		t.Fatalf("valid human prepare observation = %+v", observed)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*preparePlan)
+	}{
+		{name: "human requires decision id", mutate: func(plan *preparePlan) { plan.DecisionID = nil }},
+		{name: "human rejects envelope class", mutate: func(plan *preparePlan) { plan.EnvelopeClass = stringPointer("NARROW_PATHS") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := humanPlan
+			test.mutate(&plan)
+			observed := observe(t, human, plan)
+			if observed.PlanPresent || !observed.SnapshotPresent {
+				t.Fatalf("human prepare mismatch observation = %+v", observed)
+			}
+		})
 	}
 }
+
+func stringPointer(value string) *string { return &value }
 
 func TestCollectDiscriminatesJournaledAdapterAndUnjournaledLaunches(t *testing.T) {
 	store := collectorStore(t)
@@ -298,6 +380,76 @@ func TestCollectTreatsLiveSessionAsObservedAndInspectionFailureAsUnverifiable(t 
 	}
 	if observations.AdapterSweep != recovery.SweepUnverifiable {
 		t.Fatalf("incomplete session identity = %q, want unverifiable", observations.AdapterSweep)
+	}
+}
+
+func TestCollectDistinguishesHandoffSweepFailureAndAdapterLaunchExclusions(t *testing.T) {
+	identity := testProcessIdentity(t)
+	t.Run("inspectable handoff identity with failed sweep", func(t *testing.T) {
+		store := collectorStore(t)
+		attemptRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "work", "run-1", "attempt-1")
+		writeHandoff(t, filepath.Join(attemptRoot, "launch"), identity)
+		state := runstate.NewState(nil)
+		state.Run = runstate.RunRunning
+		observations, err := Collect(store, "run-1", recovery.Projection{
+			State:              state,
+			CurrentHeadAttempt: &recovery.AttemptRecovery{AttemptID: "attempt-1", ScoreRevision: 1, State: runstate.AttemptStarting},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if observations.Handoff != recovery.HandoffSweepFailed {
+			t.Fatalf("handoff = %q, want sweep failure", observations.Handoff)
+		}
+	})
+
+	for _, test := range []struct {
+		name  string
+		write func(*testing.T, string)
+	}{
+		{
+			name: "absent identity is not excluded",
+			write: func(t *testing.T, directory string) {
+				writeCollectorFile(t, filepath.Join(directory, "marker"), []byte("nonce"))
+			},
+		},
+		{
+			name: "nonce stale identity is not excluded",
+			write: func(t *testing.T, directory string) {
+				writeHandoff(t, directory, identity)
+				writeJSONFile(t, filepath.Join(directory, "identity.json"), map[string]any{
+					"nonce": "stale", "pid": identity.PID, "session_id": identity.SessionID, "start_identity": handoffStart(t, identity.Start),
+				})
+			},
+		},
+		{
+			name: "reused pid with different start identity is not excluded",
+			write: func(t *testing.T, directory string) {
+				reused := identity
+				reused.Start = differentStartIdentity(identity.Start)
+				writeHandoff(t, directory, reused)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := collectorStore(t)
+			attemptRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "work", "run-1", "attempt-1")
+			test.write(t, filepath.Join(attemptRoot, "launch"))
+			state := runstate.NewState(nil)
+			state.Run = runstate.RunRunning
+			state.AdapterLaunches["attempt-1"] = runstate.AdapterLaunch{AttemptID: "attempt-1", Process: identity}
+			state.Acceptances["attempt-1"] = runstate.Acceptance{Started: true}
+			observations, err := Collect(store, "run-1", recovery.Projection{
+				State:              state,
+				CurrentHeadAttempt: &recovery.AttemptRecovery{AttemptID: "attempt-1", ScoreRevision: 1, State: runstate.AttemptRunning, AcceptanceStarted: true},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observations.UnjournaledLaunch == recovery.UnjournaledLaunchAbsent {
+				t.Fatalf("adapter exclusion hid %s", test.name)
+			}
+		})
 	}
 }
 
@@ -387,6 +539,24 @@ func collectorStore(t *testing.T) *runstore.Store {
 	return store
 }
 
+func collectorGitStore(t *testing.T) *runstore.Store {
+	t.Helper()
+	root := t.TempDir()
+	collectorGit(t, root, "init", "-b", "main")
+	collectorGit(t, root, "config", "user.name", "Partitur Test")
+	collectorGit(t, root, "config", "user.email", "partitur@example.invalid")
+	writeCollectorFile(t, filepath.Join(root, "tracked"), []byte("tracked\n"))
+	writeCollectorFile(t, filepath.Join(root, "partitur.yaml"), scoreSource(1, "pinned"))
+	writeCollectorFile(t, filepath.Join(root, ".gitignore"), []byte(".partitur/work/\n"))
+	collectorGit(t, root, "add", ".")
+	collectorGit(t, root, "commit", "-m", "fixture")
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
 func writeCollectorFile(t *testing.T, path string, contents []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -417,19 +587,36 @@ func testProcessIdentity(t *testing.T) runstate.ProcessIdentity {
 
 func writeHandoff(t *testing.T, directory string, identity runstate.ProcessIdentity) {
 	t.Helper()
-	start := map[string]any{"platform": identity.Start.Platform()}
-	switch value := identity.Start.(type) {
+	start := handoffStart(t, identity.Start)
+	writeCollectorFile(t, filepath.Join(directory, "marker"), []byte("nonce"))
+	writeJSONFile(t, filepath.Join(directory, "identity.json"), map[string]any{
+		"nonce": "nonce", "pid": identity.PID, "session_id": identity.SessionID, "start_identity": start,
+	})
+}
+
+func handoffStart(t *testing.T, identity runstate.StartIdentity) map[string]any {
+	t.Helper()
+	start := map[string]any{"platform": identity.Platform()}
+	switch value := identity.(type) {
 	case runstate.LinuxStartIdentity:
 		start["boot_id"], start["start_ticks"] = value.BootID, value.StartTicks
 	case runstate.DarwinStartIdentity:
 		start["start_tvsec"], start["start_tvusec"] = value.StartTVSec, value.StartTVUsec
 	default:
-		t.Fatalf("unsupported test start identity %T", identity.Start)
+		t.Fatalf("unsupported test start identity %T", identity)
 	}
-	writeCollectorFile(t, filepath.Join(directory, "marker"), []byte("nonce"))
-	writeJSONFile(t, filepath.Join(directory, "identity.json"), map[string]any{
-		"nonce": "nonce", "pid": identity.PID, "session_id": identity.SessionID, "start_identity": start,
-	})
+	return start
+}
+
+func differentStartIdentity(identity runstate.StartIdentity) runstate.StartIdentity {
+	switch value := identity.(type) {
+	case runstate.LinuxStartIdentity:
+		return runstate.LinuxStartIdentity{BootID: "different-boot-id", StartTicks: value.StartTicks}
+	case runstate.DarwinStartIdentity:
+		return runstate.DarwinStartIdentity{StartTVSec: value.StartTVSec + 1, StartTVUsec: value.StartTVUsec}
+	default:
+		panic(fmt.Sprintf("unsupported test start identity %T", identity))
+	}
 }
 
 func collectorGit(t *testing.T, root string, arguments ...string) string {

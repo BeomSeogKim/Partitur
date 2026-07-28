@@ -76,7 +76,7 @@ func Collect(store *runstore.Store, runID runstate.RunID, projection recovery.Pr
 		}
 		if acceptance, ok := projection.State.Acceptances[attempt.AttemptID]; ok && acceptance.Started {
 			observations.CriterionSweep = observeCriteria(projection.State, attempt.AttemptID, acceptance)
-			matched, verifyErr := workspace.VerifyRecoverySubject(filepath.Join(attemptRoot, "worktree"), acceptance.SubjectTree)
+			matched, verifyErr := workspace.VerifyRecoverySubject(root, filepath.Join(attemptRoot, "worktree"), acceptance.SubjectTree)
 			switch {
 			case verifyErr != nil:
 				observations.AcceptanceSubject = recovery.SubjectUnverified
@@ -176,6 +176,8 @@ type preparePlan struct {
 	NewSnapshotFileHash  runstate.Hash        `json:"new_snapshot_file_hash"`
 	SupersededAttemptIDs []runstate.AttemptID `json:"superseded_attempt_ids"`
 	Mode                 string               `json:"mode"`
+	DecisionID           *string              `json:"decision_id"`
+	EnvelopeClass        *string              `json:"envelope_class"`
 }
 
 func preparePlanMatches(path string, prepare runstate.PendingPrepare) bool {
@@ -187,14 +189,24 @@ func preparePlanMatches(path string, prepare runstate.PendingPrepare) bool {
 	if json.Unmarshal(contents, &plan) != nil {
 		return false
 	}
-	return plan.ProposalID == prepare.ProposalID &&
-		plan.BaseRevision == prepare.BaseHead.Revision &&
-		plan.BaseHash == prepare.BaseHead.SemanticHash &&
-		plan.NewRevision == prepare.NewHead.Revision &&
-		plan.NewSnapshotHash == prepare.NewHead.SemanticHash &&
-		plan.NewSnapshotFileHash == prepare.NewHead.FileHash &&
-		plan.Mode == prepare.Mode &&
-		slices.Equal(plan.SupersededAttemptIDs, prepare.TargetAttemptIDs)
+	if plan.ProposalID != prepare.ProposalID ||
+		plan.BaseRevision != prepare.BaseHead.Revision ||
+		plan.BaseHash != prepare.BaseHead.SemanticHash ||
+		plan.NewRevision != prepare.NewHead.Revision ||
+		plan.NewSnapshotHash != prepare.NewHead.SemanticHash ||
+		plan.NewSnapshotFileHash != prepare.NewHead.FileHash ||
+		!slices.Equal(plan.SupersededAttemptIDs, prepare.TargetAttemptIDs) ||
+		plan.Mode != prepare.Mode {
+		return false
+	}
+	switch plan.Mode {
+	case "human":
+		return plan.DecisionID != nil && plan.EnvelopeClass == nil
+	case "auto":
+		return plan.DecisionID == nil && plan.EnvelopeClass != nil && *plan.EnvelopeClass == prepare.EnvelopeClass
+	default:
+		return false
+	}
 }
 
 func fileMatches(path string, want runstate.Hash) bool {
