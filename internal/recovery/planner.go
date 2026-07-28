@@ -39,6 +39,18 @@ const (
 	CaseMovementSucceeded      CaseID = "RC-RESUME-019"
 	CaseRunFailed              CaseID = "RC-RESUME-020"
 	CaseFinalGateRejected      CaseID = "RC-RESUME-021"
+	CaseAcceptanceFailed       CaseID = "RC-RESUME-022"
+	CaseCriterionFailed        CaseID = "RC-RESUME-023"
+	CaseIncompleteCriterion    CaseID = "RC-RESUME-024"
+	CaseCriteriaPassed         CaseID = "RC-RESUME-025"
+	CaseRequestHumanGate       CaseID = "RC-RESUME-026"
+	CaseHumanGateWaiting       CaseID = "RC-RESUME-027"
+	CaseHumanGateApproved      CaseID = "RC-RESUME-028"
+	CaseHumanGateRejected      CaseID = "RC-RESUME-029"
+	CaseGateFreeCompletion     CaseID = "RC-RESUME-030"
+	CaseUnjournaledLaunch      CaseID = "RC-RESUME-031"
+	CaseFirstCriterion         CaseID = "RC-RESUME-032"
+	CaseNextCriterion          CaseID = "RC-RESUME-033"
 )
 
 // HaltReason is an Appendix D recovery halt reason.
@@ -171,6 +183,50 @@ const (
 	WorktreeMissing WorktreeState = "missing"
 )
 
+// SubjectVerification is the caller's full-invariant observation for an
+// acceptance worktree. It covers the recorded subject tree, non-ignored
+// untracked files, symlink targets, modes, and protected-path integrity.
+type SubjectVerification string
+
+const (
+	SubjectUnverified SubjectVerification = ""
+	SubjectMatched    SubjectVerification = "matched"
+	SubjectMismatched SubjectVerification = "mismatched"
+)
+
+// UnjournaledLaunchState is the caller's observation of a launch directory
+// which has no criterion.started event. Safe states have already established
+// that no released criterion mutator remains.
+type UnjournaledLaunchState string
+
+const (
+	UnjournaledLaunchAbsent              UnjournaledLaunchState = ""
+	UnjournaledLaunchUnstabilized        UnjournaledLaunchState = "unstabilized"
+	UnjournaledLaunchMarkerFree          UnjournaledLaunchState = "marker_free"
+	UnjournaledLaunchSessionEmpty        UnjournaledLaunchState = "session_empty"
+	UnjournaledLaunchHandoffUnverifiable UnjournaledLaunchState = "handoff_unverifiable"
+	UnjournaledLaunchSweepUnverifiable   UnjournaledLaunchState = "sweep_unverifiable"
+)
+
+// GateRecovery is a journal-replayed human-gate fact. A resolved gate remains
+// here after decision.resolved removes it from runstate.PendingDecisions.
+type GateRecovery struct {
+	Required   bool
+	Requested  bool
+	Resolved   bool
+	Approved   bool
+	DecisionID string
+	GateID     string
+}
+
+// AcceptanceRecovery holds the C.3 facts which ordinary lifecycle projection
+// intentionally does not retain, including a durable acceptance.failed origin
+// and a resolved human-gate result.
+type AcceptanceRecovery struct {
+	Failed bool
+	Gate   GateRecovery
+}
+
 // Projection is the recovery-specific view built while replaying the journal.
 // State is the ordinary runstate projection. The additional facts preserve
 // evidence-only and derived recovery state without making the planner inspect
@@ -180,6 +236,7 @@ type Projection struct {
 	RevisionRestarts     []RevisionRestart
 	CompositionTerminals []CompositionTerminal
 	CurrentHeadAttempt   *AttemptRecovery
+	Acceptance           *AcceptanceRecovery
 }
 
 // Observations are all non-journal inputs used by C.1 and C.2.
@@ -191,6 +248,9 @@ type Observations struct {
 	Handoff                HandoffState
 	AdapterSweep           SweepState
 	Worktree               WorktreeState
+	CriterionSweep         SweepState
+	AcceptanceSubject      SubjectVerification
+	UnjournaledLaunch      UnjournaledLaunchState
 }
 
 // Input is the complete, already-replayed input to the pure recovery planner.
@@ -230,6 +290,17 @@ const (
 	ActionAppendMovementSucceeded    ActionKind = "append_movement_succeeded"
 	ActionAppendRunFailed            ActionKind = "append_run_failed"
 	ActionAppendFinalGateFailure     ActionKind = "append_final_gate_failure"
+	ActionProceedAcceptance          ActionKind = "proceed_c3"
+	ActionAppendAcceptanceFailure    ActionKind = "append_acceptance_failure"
+	ActionRecoverIncompleteCriterion ActionKind = "recover_incomplete_criterion"
+	ActionVerifyAcceptanceSubject    ActionKind = "verify_acceptance_subject"
+	ActionAppendEvaluationCompleted  ActionKind = "append_acceptance_evaluation_completed"
+	ActionAppendHumanGateRequest     ActionKind = "append_human_gate_request"
+	ActionAppendAcceptanceSuccess    ActionKind = "append_acceptance_success"
+	ActionAppendGateRejectedFailure  ActionKind = "append_gate_rejected_failure"
+	ActionStabilizeUnjournaledLaunch ActionKind = "stabilize_unjournaled_criterion_launch"
+	ActionRemoveUnjournaledLaunch    ActionKind = "remove_unjournaled_criterion_launch"
+	ActionResumeCriterion            ActionKind = "resume_criterion"
 )
 
 // Continuation names the next Appendix C table after one action value has
@@ -247,10 +318,16 @@ const (
 type ActionStep string
 
 const (
-	StepStabilizeHandoff         ActionStep = "stabilize_handoff_and_sweep_published_session"
-	StepSweepRecordedSession     ActionStep = "sweep_recorded_session"
-	StepCloseAdapterInterval     ActionStep = "close_adapter_interval_recovered"
-	StepClassifyAndAppendFailure ActionStep = "classify_and_append_attempt_failure"
+	StepStabilizeHandoff          ActionStep = "stabilize_handoff_and_sweep_published_session"
+	StepSweepRecordedSession      ActionStep = "sweep_recorded_session"
+	StepCloseAdapterInterval      ActionStep = "close_adapter_interval_recovered"
+	StepClassifyAndAppendFailure  ActionStep = "classify_and_append_attempt_failure"
+	StepSweepCriterionSession     ActionStep = "sweep_criterion_session"
+	StepVerifyAcceptanceSubject   ActionStep = "verify_acceptance_subject"
+	StepSynthesizeCriterionError  ActionStep = "synthesize_criterion_error"
+	StepClassifyAcceptanceFailure ActionStep = "classify_and_append_acceptance_failure"
+	StepAppendAttemptCompleted    ActionStep = "append_attempt_completed"
+	StepAppendMovementSucceeded   ActionStep = "append_movement_succeeded"
 )
 
 // Action is a pure description for the recovery executor. Replan means the
@@ -263,6 +340,9 @@ type Action struct {
 	CompositionTerminal *CompositionTerminal
 	AttemptID           runstate.AttemptID
 	QuestionDecisionID  string
+	CriterionID         runstate.CriterionID
+	MovementID          runstate.MovementID
+	SubjectTree         string
 	FailureKind         string
 	FailureReason       string
 	RecordedDisposition *runstate.Disposition
@@ -373,6 +453,12 @@ func PlanAttempt(input Input) Decision {
 		decision.Action.Continuation = ContinuationC4
 		return decision
 	}
+	if attempt.AcceptanceStarted {
+		decision := action(CaseContinue, ActionProceedAcceptance, false)
+		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.Continuation = ContinuationC3
+		return decision
+	}
 
 	if attempt.State == runstate.AttemptFailed && !attempt.FailureDispositionRealized {
 		decision := action(CaseRealizeDisposition, ActionRealizeRecordedDisposition, false)
@@ -479,6 +565,234 @@ func PlanAttempt(input Input) Decision {
 		decision.Action.AttemptID = attempt.AttemptID
 		return decision
 	}
+	decision := action(CaseContinue, ActionProceedScheduler, false)
+	decision.Action.Continuation = ContinuationC4
+	return decision
+}
+
+// PlanAcceptance applies Appendix C.3 after C.2 selects ContinuationC3. It
+// receives only replayed facts and caller-supplied observations; no worktree,
+// process, or launch-directory inspection occurs here.
+func PlanAcceptance(input Input) Decision {
+	attempt := currentHeadAttempt(input.Projection)
+	if attempt == nil {
+		return proceedScheduler()
+	}
+	acceptance, ok := input.Projection.State.Acceptances[attempt.AttemptID]
+	if !ok || !acceptance.Started {
+		return proceedScheduler()
+	}
+	recovery := input.Projection.Acceptance
+
+	if recovery != nil && recovery.Failed {
+		decision := action(CaseAcceptanceFailed, ActionRealizeRecordedDisposition, false)
+		decision.Action.AttemptID = attempt.AttemptID
+		if attempt.RecordedDisposition != nil {
+			disposition := *attempt.RecordedDisposition
+			decision.Action.RecordedDisposition = &disposition
+		}
+		return decision
+	}
+	if failed, ok := firstFailedCriterion(acceptance); ok {
+		return acceptanceFailureAction(CaseCriterionFailed, attempt.AttemptID, failed.ID, failed.Reason)
+	}
+	if inFlight, ok := firstInFlightCriterion(acceptance); ok {
+		if input.Observations.CriterionSweep == SweepUnverifiable {
+			return halt(CaseIncompleteCriterion, HaltSweepUnverifiable)
+		}
+		switch input.Observations.AcceptanceSubject {
+		case SubjectMismatched:
+			return acceptanceFailureAction(CaseIncompleteCriterion, attempt.AttemptID, inFlight, "recovery_subject_mismatch")
+		case SubjectMatched:
+			decision := action(CaseIncompleteCriterion, ActionRecoverIncompleteCriterion, true)
+			decision.Action.AttemptID = attempt.AttemptID
+			decision.Action.CriterionID = inFlight
+			decision.Action.FailureReason = "criterion_errored"
+			decision.Action.Steps = []ActionStep{StepSweepCriterionSession, StepSynthesizeCriterionError, StepClassifyAcceptanceFailure}
+			return decision
+		default:
+			return verifyAcceptanceSubject(CaseIncompleteCriterion, attempt.AttemptID, []ActionStep{StepSweepCriterionSession, StepVerifyAcceptanceSubject})
+		}
+	}
+	if acceptance.EvaluationCompleted {
+		return planEvaluatedAcceptance(input, attempt, acceptance, recovery)
+	}
+	if allCriteriaPassed(acceptance) {
+		switch input.Observations.AcceptanceSubject {
+		case SubjectMismatched:
+			return acceptanceFailureAction(CaseCriteriaPassed, attempt.AttemptID, "", "recovery_subject_mismatch")
+		case SubjectMatched:
+			decision := action(CaseCriteriaPassed, ActionAppendEvaluationCompleted, true)
+			decision.Action.AttemptID = attempt.AttemptID
+			decision.Action.SubjectTree = acceptance.SubjectTree
+			return decision
+		default:
+			return verifyAcceptanceSubject(CaseCriteriaPassed, attempt.AttemptID, nil)
+		}
+	}
+	if input.Observations.UnjournaledLaunch != UnjournaledLaunchAbsent {
+		return planUnjournaledLaunch(input, attempt.AttemptID)
+	}
+	caseID := CaseFirstCriterion
+	if hasCompletedCriteria(acceptance) {
+		caseID = CaseNextCriterion
+	}
+	switch input.Observations.AcceptanceSubject {
+	case SubjectMismatched:
+		return acceptanceFailureAction(caseID, attempt.AttemptID, "", "recovery_subject_mismatch")
+	case SubjectMatched:
+		if criterionID, ok := nextUnstartedCriterion(acceptance); ok {
+			decision := action(caseID, ActionResumeCriterion, false)
+			decision.Action.AttemptID = attempt.AttemptID
+			decision.Action.CriterionID = criterionID
+			decision.Action.SubjectTree = acceptance.SubjectTree
+			return decision
+		}
+	default:
+		return verifyAcceptanceSubject(caseID, attempt.AttemptID, nil)
+	}
+	return proceedScheduler()
+}
+
+func planEvaluatedAcceptance(input Input, attempt *AttemptRecovery, acceptance runstate.Acceptance, recovery *AcceptanceRecovery) Decision {
+	gate := GateRecovery{}
+	if recovery != nil {
+		gate = recovery.Gate
+	}
+	if gate.Required && !gate.Requested {
+		decision := action(CaseRequestHumanGate, ActionAppendHumanGateRequest, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.QuestionDecisionID = gate.DecisionID
+		decision.Action.SubjectTree = acceptance.SubjectTree
+		return decision
+	}
+	if gate.Required && gate.Requested && !gate.Resolved {
+		return action(CaseHumanGateWaiting, ActionReturnWaitingHuman, false)
+	}
+	if gate.Required && gate.Resolved && !gate.Approved {
+		decision := action(CaseHumanGateRejected, ActionAppendGateRejectedFailure, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.MovementID = attempt.MovementID
+		decision.Action.QuestionDecisionID = gate.DecisionID
+		decision.Action.SubjectTree = acceptance.SubjectTree
+		return decision
+	}
+	caseID := CaseGateFreeCompletion
+	if gate.Required {
+		caseID = CaseHumanGateApproved
+	}
+	switch input.Observations.AcceptanceSubject {
+	case SubjectMismatched:
+		return acceptanceFailureAction(caseID, attempt.AttemptID, "", "recovery_subject_mismatch")
+	case SubjectMatched:
+		decision := action(caseID, ActionAppendAcceptanceSuccess, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.MovementID = attempt.MovementID
+		decision.Action.SubjectTree = acceptance.SubjectTree
+		decision.Action.Steps = []ActionStep{StepAppendAttemptCompleted, StepAppendMovementSucceeded}
+		return decision
+	default:
+		return verifyAcceptanceSubject(caseID, attempt.AttemptID, nil)
+	}
+}
+
+func planUnjournaledLaunch(input Input, attemptID runstate.AttemptID) Decision {
+	switch input.Observations.UnjournaledLaunch {
+	case UnjournaledLaunchHandoffUnverifiable:
+		return halt(CaseUnjournaledLaunch, HaltSpawnHandoffUnverifiable)
+	case UnjournaledLaunchSweepUnverifiable:
+		return halt(CaseUnjournaledLaunch, HaltSweepUnverifiable)
+	case UnjournaledLaunchMarkerFree, UnjournaledLaunchSessionEmpty:
+		decision := action(CaseUnjournaledLaunch, ActionRemoveUnjournaledLaunch, true)
+		decision.Action.AttemptID = attemptID
+		decision.Action.Continuation = ContinuationC3
+		return decision
+	default:
+		decision := action(CaseUnjournaledLaunch, ActionStabilizeUnjournaledLaunch, true)
+		decision.Action.AttemptID = attemptID
+		return decision
+	}
+}
+
+func acceptanceFailureAction(caseID CaseID, attemptID runstate.AttemptID, criterionID runstate.CriterionID, reason string) Decision {
+	decision := action(caseID, ActionAppendAcceptanceFailure, true)
+	decision.Action.AttemptID = attemptID
+	decision.Action.CriterionID = criterionID
+	decision.Action.FailureReason = reason
+	decision.Action.Steps = []ActionStep{StepClassifyAcceptanceFailure}
+	return decision
+}
+
+func verifyAcceptanceSubject(caseID CaseID, attemptID runstate.AttemptID, prefix []ActionStep) Decision {
+	decision := action(caseID, ActionVerifyAcceptanceSubject, true)
+	decision.Action.AttemptID = attemptID
+	decision.Action.Steps = append(prefix, StepVerifyAcceptanceSubject)
+	return decision
+}
+
+type failedCriterion struct {
+	ID     runstate.CriterionID
+	Reason string
+}
+
+func firstFailedCriterion(acceptance runstate.Acceptance) (failedCriterion, bool) {
+	for _, criterionID := range acceptance.PlannedCriterionIDs {
+		record := acceptance.Criteria[criterionID]
+		if !record.Completed {
+			continue
+		}
+		switch record.Outcome {
+		case "FAIL":
+			return failedCriterion{ID: criterionID, Reason: "criterion_failed"}, true
+		case "ERROR":
+			return failedCriterion{ID: criterionID, Reason: "criterion_errored"}, true
+		}
+	}
+	return failedCriterion{}, false
+}
+
+func firstInFlightCriterion(acceptance runstate.Acceptance) (runstate.CriterionID, bool) {
+	for _, criterionID := range acceptance.PlannedCriterionIDs {
+		record := acceptance.Criteria[criterionID]
+		if record.Started && !record.Completed {
+			return criterionID, true
+		}
+	}
+	return "", false
+}
+
+func allCriteriaPassed(acceptance runstate.Acceptance) bool {
+	if len(acceptance.PlannedCriterionIDs) == 0 {
+		return true
+	}
+	for _, criterionID := range acceptance.PlannedCriterionIDs {
+		record := acceptance.Criteria[criterionID]
+		if !record.Completed || record.Outcome != "PASS" {
+			return false
+		}
+	}
+	return true
+}
+
+func hasCompletedCriteria(acceptance runstate.Acceptance) bool {
+	for _, criterionID := range acceptance.PlannedCriterionIDs {
+		if acceptance.Criteria[criterionID].Completed {
+			return true
+		}
+	}
+	return false
+}
+
+func nextUnstartedCriterion(acceptance runstate.Acceptance) (runstate.CriterionID, bool) {
+	for _, criterionID := range acceptance.PlannedCriterionIDs {
+		if !acceptance.Criteria[criterionID].Started {
+			return criterionID, true
+		}
+	}
+	return "", false
+}
+
+func proceedScheduler() Decision {
 	decision := action(CaseContinue, ActionProceedScheduler, false)
 	decision.Action.Continuation = ContinuationC4
 	return decision
