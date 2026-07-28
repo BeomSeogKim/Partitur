@@ -104,13 +104,13 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		if err := executor.authorizeDriver(); err != nil {
 			return result, err
 		}
-		handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
 		if len(action.Steps) != 0 {
 			for _, step := range action.Steps {
 				handler, ok := executor.stepHandler(step)
 				if !ok || handler == nil {
 					return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
 				}
+				handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
 				if err := handler(ctx, handlerContext, action); err != nil {
 					if halted, ok := haltDecision(decision, err); ok {
 						result.Decision = halted
@@ -119,8 +119,16 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 					return result, fmt.Errorf("execute recovery step %s: %w", step, err)
 				}
 				result.Steps = append(result.Steps, step)
+				if stepRefreshesInput(step) {
+					refreshed, err := executor.refreshInput(ctx, input)
+					if err != nil {
+						return result, err
+					}
+					input = refreshed
+				}
 			}
 		} else {
+			handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
 			handler, ok := executor.kindHandler(action.Kind)
 			if !ok {
 				return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
@@ -144,6 +152,25 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		result.Replans++
 		decision = recovery.Plan(input)
 	}
+}
+
+// stepRefreshesInput marks a boundary after which the next step must use a
+// newly-derived input. The close changes durable budget facts; the criterion
+// sweep changes which subject observation is admissible. Neither handler
+// performs its own replacement read.
+func stepRefreshesInput(step recovery.ActionStep) bool {
+	return step == recovery.StepCloseAdapterInterval || step == recovery.StepSweepCriterionSession
+}
+
+func (executor *Executor) refreshInput(ctx context.Context, previous recovery.Input) (recovery.Input, error) {
+	if executor.Load == nil {
+		return previous, nil
+	}
+	input, err := executor.Load(ctx)
+	if err != nil {
+		return recovery.Input{}, fmt.Errorf("reload recovery input after ordered step: %w", err)
+	}
+	return input, nil
 }
 
 func isContinuation(action recovery.Action) bool {

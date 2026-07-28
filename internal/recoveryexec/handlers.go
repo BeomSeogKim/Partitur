@@ -17,7 +17,6 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/successor"
-	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
 const recoverySweepGrace = 30 * time.Second
@@ -41,9 +40,13 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 
 func defaultKinds() map[recovery.ActionKind]StepHandler {
 	return map[recovery.ActionKind]StepHandler{
-		recovery.ActionAppendMovementSucceeded: appendMovementSucceeded,
-		recovery.ActionAppendRunFailed:         appendRunFailed,
-		recovery.ActionAppendBudgetFailure:     appendMovementBudgetFailure,
+		recovery.ActionAppendMovementSucceeded:    appendMovementSucceeded,
+		recovery.ActionAppendRunFailed:            appendRunFailed,
+		recovery.ActionAppendBudgetFailure:        appendMovementBudgetFailure,
+		recovery.ActionReturnWaitingHuman:         returnWaitingHuman,
+		recovery.ActionRefuseResume:               refuseResume,
+		recovery.ActionStabilizeUnjournaledLaunch: stabilizeUnjournaledLaunch,
+		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
 	}
 }
 
@@ -125,7 +128,7 @@ func closeAdapterInterval(_ context.Context, execution HandlerContext, action re
 	}
 	return appendEvent(execution, state, action, runstate.EventExecutionStopped, map[string]any{
 		"interval_id": interval.ID, "reason": "recovered", "charging": "clamped",
-		"charged_duration": duration, "observed_at": observed.Format(time.RFC3339Nano),
+		"charged_duration": duration, "observed_at": observed.Format("2006-01-02T15:04:05.000Z"),
 	})
 }
 
@@ -165,27 +168,11 @@ func sweepCriterionSession(_ context.Context, execution HandlerContext, action r
 }
 
 func verifyAcceptanceSubject(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil {
-		return errors.New("recovery executor requires store access for subject verification")
-	}
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	acceptance, ok := state.Acceptances[action.AttemptID]
-	if !ok || !acceptance.Started {
-		return fmt.Errorf("acceptance for %q is not started", action.AttemptID)
-	}
-	matched, err := workspace.VerifyRecoverySubject(
-		execution.Store.RepositoryRoot(),
-		filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.Driver.RunID()), string(action.AttemptID), "worktree"),
-		acceptance.SubjectTree,
-	)
-	if err != nil {
-		return err
-	}
-	if !matched {
-		return nil // Replan reloads the observed mismatch and selects C.3's failure row.
+	// The executor has refreshed Input after the preceding sweep. Verification
+	// facts are collected by the supplied loader, never by a private handler
+	// path; the following replan consumes that post-sweep observation.
+	if execution.Input.Observations.AcceptanceSubject == recovery.SubjectUnverified {
+		return errors.New("post-sweep acceptance subject is unverified")
 	}
 	return nil
 }
@@ -225,7 +212,7 @@ func appendAcceptanceFailure(_ context.Context, execution HandlerContext, action
 		return fmt.Errorf("acceptance for %q is absent", action.AttemptID)
 	}
 	payload := map[string]any{"reason": action.FailureReason, "subject_tree": acceptance.SubjectTree, "disposition": dispositionPayload(disposition)}
-	if action.CriterionID != "" {
+	if action.CriterionID != "" && action.FailureReason != "recovery_subject_mismatch" {
 		payload["failed_criterion_id"] = action.CriterionID
 	}
 	return appendEvent(execution, state, action, runstate.EventAcceptanceFailed, payload)
@@ -300,6 +287,26 @@ func appendRunFailed(_ context.Context, execution HandlerContext, action recover
 	return appendEvent(execution, state, action, runstate.EventRunFailed, map[string]any{"reason": reason})
 }
 
+func returnWaitingHuman(context.Context, HandlerContext, recovery.Action) error { return nil }
+
+func refuseResume(context.Context, HandlerContext, recovery.Action) error { return nil }
+
+func stabilizeUnjournaledLaunch(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+	directory, err := unjournaledLaunchDirectory(execution, action.AttemptID)
+	if err != nil || directory == "" {
+		return err
+	}
+	return stabilizeLaunchDirectory(ctx, directory)
+}
+
+func removeUnjournaledLaunch(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	directory, err := unjournaledLaunchDirectory(execution, action.AttemptID)
+	if err != nil || directory == "" {
+		return err
+	}
+	return os.RemoveAll(directory)
+}
+
 func classify(input recovery.Input, action recovery.Action, failure successor.FailureCase) (runstate.Disposition, error) {
 	attempt := input.Projection.CurrentHeadAttempt
 	if attempt == nil || attempt.AttemptID != action.AttemptID {
@@ -346,8 +353,109 @@ func appendEvent(execution HandlerContext, state runstate.State, action recovery
 	} else {
 		event.AttemptID = ""
 	}
+	causationID, err := sourceAuthority(execution, state, action, eventType)
+	if err != nil {
+		return err
+	}
+	event.CausationID = causationID
 	_, err = execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery."+string(eventType)))
 	return err
+}
+
+func sourceAuthority(execution HandlerContext, state runstate.State, action recovery.Action, eventType runstate.EventType) (string, error) {
+	if execution.Store == nil || execution.Driver == nil {
+		return "", errors.New("recovery executor requires store access for causation")
+	}
+	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
+	if err != nil {
+		return "", err
+	}
+	match := func(event runstate.Event) bool { return event.AttemptID == action.AttemptID }
+	switch eventType {
+	case runstate.EventExecutionStopped:
+		if state.OpenExecution == nil {
+			return "", errors.New("recovered interval source is absent")
+		}
+		return latestEventID(journal.Events, func(event runstate.Event) bool {
+			return event.Type == runstate.EventExecutionStarted && payloadString(event.Payload, "interval_id") == string(state.OpenExecution.ID)
+		})
+	case runstate.EventAttemptFailed:
+		source := runstate.EventPerformerSelected
+		switch action.FailureReason {
+		case "probe_terminated_incomplete":
+			source = runstate.EventAttemptStarted
+		case "attempt_terminated_incomplete":
+			source = runstate.EventAdapterProbed
+		case "worktree_lost":
+			source = runstate.EventPerformerCompleted
+		}
+		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == source && match(event) })
+	case runstate.EventCriterionCompleted:
+		return latestEventID(journal.Events, func(event runstate.Event) bool {
+			return event.Type == runstate.EventCriterionStarted && match(event) && payloadString(event.Payload, "criterion_id") == string(action.CriterionID)
+		})
+	case runstate.EventAcceptanceFailed:
+		if action.FailureReason == "recovery_subject_mismatch" {
+			return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == runstate.EventAcceptanceStarted && match(event) })
+		}
+		return latestEventID(journal.Events, func(event runstate.Event) bool {
+			return event.Type == runstate.EventCriterionCompleted && match(event) && payloadString(event.Payload, "criterion_id") == string(action.CriterionID)
+		})
+	case runstate.EventAttemptCompleted:
+		source := runstate.EventAcceptanceEvaluationCompleted
+		if execution.Input.Projection.Acceptance != nil && execution.Input.Projection.Acceptance.Gate.Required {
+			source = runstate.EventDecisionResolved
+		}
+		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == source && match(event) })
+	case runstate.EventMovementSucceeded:
+		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == runstate.EventAttemptCompleted && match(event) })
+	case runstate.EventMovementFailed:
+		if source, err := latestEventID(journal.Events, func(event runstate.Event) bool {
+			return event.Type == runstate.EventAttemptFailed && match(event)
+		}); err == nil {
+			return source, nil
+		}
+		movementID, err := actionMovement(state, action)
+		if err != nil {
+			return "", err
+		}
+		return latestEventID(journal.Events, func(event runstate.Event) bool {
+			return event.Type == runstate.EventMovementStarted && event.MovementID == movementID
+		})
+	case runstate.EventRunFailed:
+		if action.MovementID != "" || action.AttemptID != "" {
+			movementID, err := actionMovement(state, action)
+			if err != nil {
+				return "", err
+			}
+			return latestEventID(journal.Events, func(event runstate.Event) bool {
+				return event.Type == runstate.EventMovementFailed && event.MovementID == movementID
+			})
+		}
+		return latestEventID(journal.Events, func(event runstate.Event) bool {
+			return event.Type == runstate.EventMovementFailed
+		})
+	default:
+		return "", fmt.Errorf("no recovery causation source for %s", eventType)
+	}
+}
+
+func latestEventID(events []runstate.Event, matches func(runstate.Event) bool) (string, error) {
+	for index := len(events) - 1; index >= 0; index-- {
+		if matches(events[index]) {
+			return events[index].EventID, nil
+		}
+	}
+	return "", errors.New("recovery source authority is absent")
+}
+
+func payloadString(payload json.RawMessage, key string) string {
+	var value map[string]any
+	if json.Unmarshal(payload, &value) != nil {
+		return ""
+	}
+	result, _ := value[key].(string)
+	return result
 }
 
 func actionMovement(state runstate.State, action recovery.Action) (runstate.MovementID, error) {
@@ -412,4 +520,53 @@ func attemptLaunchDirectory(execution HandlerContext, attemptID runstate.Attempt
 		}
 	}
 	return "", nil
+}
+
+func unjournaledLaunchDirectory(execution HandlerContext, attemptID runstate.AttemptID) (string, error) {
+	directory, err := attemptLaunchDirectory(execution, attemptID)
+	if err != nil || directory == "" {
+		return directory, err
+	}
+	state, err := execution.Driver.State()
+	if err != nil {
+		return "", err
+	}
+	observation, err := launch.ObserveHandoff(directory)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrHandoffUnverifiable, err)
+	}
+	if adapterLaunch, ok := state.AdapterLaunches[attemptID]; ok && observation.HasIdentity && adapterLaunch.Process == observation.Identity {
+		return "", nil
+	}
+	return directory, nil
+}
+
+func stabilizeLaunchDirectory(ctx context.Context, directory string) error {
+	deadline := time.Now().Add(recoverySweepGrace)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		observation, err := launch.ObserveHandoff(directory)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrHandoffUnverifiable, err)
+		}
+		if observation.HasIdentity {
+			if err := adapter.SweepSession(observation.Identity, recoverySweepGrace); err != nil {
+				return fmt.Errorf("%w: %v", ErrSweepUnverifiable, err)
+			}
+			return nil
+		}
+		if observation.MarkerFree {
+			return nil
+		}
+		if !observation.MarkerHeld || !time.Now().Before(deadline) {
+			return ErrHandoffUnverifiable
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,6 +45,11 @@ func TestAppendixC41SelectsThisPlanner(t *testing.T) {
 			assertAppendixC41CutMatches(t, row)
 			if got := planner(input); got.CaseID != row.caseID {
 				t.Fatalf("%s selected %s, want %s", row.id, got.CaseID, row.caseID)
+			} else if row.caseID == CaseIncompleteCriterion && got.Action != nil {
+				want := []ActionStep{StepSweepCriterionSession, StepVerifyAcceptanceSubject}
+				if !slices.Equal(got.Action.Steps, want) {
+					t.Fatalf("%s steps = %v, want %v", row.id, got.Action.Steps, want)
+				}
 			}
 			checked++
 		})

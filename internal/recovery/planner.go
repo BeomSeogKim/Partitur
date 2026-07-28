@@ -666,23 +666,14 @@ func PlanAcceptance(input Input) Decision {
 	if failed, ok := firstFailedCriterion(acceptance); ok {
 		return acceptanceFailureAction(CaseCriterionFailed, attempt.AttemptID, failed.ID, failed.Reason)
 	}
-	if inFlight, ok := firstInFlightCriterion(acceptance); ok {
+	if _, ok := firstInFlightCriterion(acceptance); ok {
 		if input.Observations.CriterionSweep == SweepUnverifiable {
 			return halt(CaseIncompleteCriterion, HaltSweepUnverifiable)
 		}
-		switch input.Observations.AcceptanceSubject {
-		case SubjectMismatched:
-			return acceptanceFailureAction(CaseIncompleteCriterion, attempt.AttemptID, inFlight, "recovery_subject_mismatch")
-		case SubjectMatched:
-			decision := action(CaseIncompleteCriterion, ActionRecoverIncompleteCriterion, true)
-			decision.Action.AttemptID = attempt.AttemptID
-			decision.Action.CriterionID = inFlight
-			decision.Action.FailureReason = "criterion_errored"
-			decision.Action.Steps = []ActionStep{StepSweepCriterionSession, StepSynthesizeCriterionError, StepClassifyAcceptanceFailure}
-			return decision
-		default:
-			return verifyAcceptanceSubject(CaseIncompleteCriterion, attempt.AttemptID, []ActionStep{StepSweepCriterionSession, StepVerifyAcceptanceSubject})
-		}
+		// RC-RESUME-024 always sweeps before the subject verdict. The supplied
+		// subject observation may have been collected while the criterion still
+		// held the worktree, so it cannot choose the post-sweep consequence.
+		return verifyAcceptanceSubject(CaseIncompleteCriterion, attempt.AttemptID, []ActionStep{StepSweepCriterionSession})
 	}
 	if acceptance.EvaluationCompleted {
 		return planEvaluatedAcceptance(input, attempt, acceptance, recovery)

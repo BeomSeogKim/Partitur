@@ -651,9 +651,9 @@ func TestPlanC3RowsAndAdjacentStates(t *testing.T) {
 			adjacent: withCriterion(c3Input("c1"), "c1", true, "PASS"),
 		},
 		{
-			name:     "in flight criterion is recovered only after a matching subject observation",
+			name:     "in flight criterion always sweeps then verifies the post-sweep subject",
 			input:    withSubject(withCriterion(c3Input("c1"), "c1", false, ""), SubjectMatched),
-			wantCase: CaseIncompleteCriterion, wantKind: ActionRecoverIncompleteCriterion, replan: true,
+			wantCase: CaseIncompleteCriterion, wantKind: ActionVerifyAcceptanceSubject, replan: true,
 			adjacent: withSubject(withCriterion(c3Input("c1"), "c1", true, "PASS"), SubjectMatched),
 		},
 		{
@@ -799,13 +799,20 @@ func TestPlanC3FullInvariantGate(t *testing.T) {
 		})
 	}
 	t.Run("every synthesized acceptance failure invokes Arm 1 classification", func(t *testing.T) {
-		for _, input := range []Input{
-			withCriterion(c3Input("c1"), "c1", true, "FAIL"),
-			withSubject(withCriterion(c3Input("c1"), "c1", false, ""), SubjectMismatched),
-		} {
+		for _, input := range []Input{withCriterion(c3Input("c1"), "c1", true, "FAIL")} {
 			got := PlanAcceptance(input)
 			if got.Action == nil || got.Action.Kind != ActionAppendAcceptanceFailure || !slices.Contains(got.Action.Steps, StepClassifyAcceptanceFailure) {
 				t.Fatalf("failure action = %+v, want Arm 1 classification before append", got.Action)
+			}
+		}
+	})
+	t.Run("in-flight criterion defers every subject verdict until after its sweep", func(t *testing.T) {
+		for _, observation := range []SubjectVerification{SubjectUnverified, SubjectMatched, SubjectMismatched} {
+			got := PlanAcceptance(withSubject(withCriterion(c3Input("c1"), "c1", false, ""), observation))
+			assertDecision(t, got, CaseIncompleteCriterion, ActionVerifyAcceptanceSubject, "", true)
+			want := []ActionStep{StepSweepCriterionSession, StepVerifyAcceptanceSubject}
+			if !slices.Equal(got.Action.Steps, want) {
+				t.Fatalf("observation %q steps = %v, want %v", observation, got.Action.Steps, want)
 			}
 		}
 	})

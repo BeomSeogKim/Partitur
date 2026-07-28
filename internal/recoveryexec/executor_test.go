@@ -347,7 +347,7 @@ func TestExecutorReplansOnlyWhenPlannerRequestsIt(t *testing.T) {
 		return second, nil
 	}
 	result, err := executor.Execute(context.Background())
-	if err != nil || loads != 2 || handoffCalls != 1 || result.Replans != 1 || result.Decision.Halt != recovery.HaltRootSnapshotDivergence {
+	if err != nil || loads != 3 || handoffCalls != 1 || result.Replans != 1 || result.Decision.Halt != recovery.HaltRootSnapshotDivergence {
 		t.Fatalf("result=%+v loads=%d handoffCalls=%d error=%v", result, loads, handoffCalls, err)
 	}
 }
