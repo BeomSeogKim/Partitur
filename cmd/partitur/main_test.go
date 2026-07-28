@@ -731,6 +731,46 @@ func TestResumeMapsRealStoreHaltsToExitFive(t *testing.T) {
 			},
 			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"spawn_handoff_unverifiable\"\n",
 		},
+		{
+			name: "malformed current driver lease leaves owner unverifiable",
+			fixture: func(t *testing.T) string {
+				root, store := resumeFixture(t, "")
+				if _, err := store.AcquireRecoveryDriver("run-1"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease"), []byte("not a lease"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"owner_unverifiable\"\n",
+		},
+		{
+			name: "deleted recorded artifact",
+			fixture: func(t *testing.T) string {
+				root, store := resumeAttemptFixture(t)
+				appendResumeAttempt(t, store, true)
+				artifact := appendResumeRecordedArtifact(t, store)
+				if err := os.Remove(artifact); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_artifact_file\"\n",
+		},
+		{
+			name: "hash-mismatched recorded artifact",
+			fixture: func(t *testing.T) string {
+				root, store := resumeAttemptFixture(t)
+				appendResumeAttempt(t, store, true)
+				artifact := appendResumeRecordedArtifact(t, store)
+				if err := os.WriteFile(artifact, []byte("changed artifact"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_artifact_file\"\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := test.fixture(t)
@@ -866,6 +906,28 @@ func appendResumeAttempt(t *testing.T, store *runstore.Store, started bool) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func appendResumeRecordedArtifact(t *testing.T, store *runstore.Store) string {
+	t.Helper()
+	contents := []byte("durably recorded artifact\n")
+	path := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "artifacts", "report", "attempt-1")
+	event := runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, MovementID: "review", PartID: "reviewer", AttemptID: "attempt-1", Type: runstate.EventArtifactRecorded,
+		Payload: resumePayload(t, map[string]any{
+			"logical_output_id": "report", "kind": "artifact", "content_hash": resumeHash(contents), "size_bytes": len(contents), "source_path": "report.txt",
+		}),
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		if _, err := tx.At("fixture.artifact.published").PublishImmutable("artifacts/report/attempt-1", contents, runstore.Hash(resumeHash(contents))); err != nil {
+			return err
+		}
+		_, err := tx.At("fixture.artifact.recorded").Append(event)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func appendResumeApprovedSnapshot(t *testing.T, store *runstore.Store) {

@@ -94,12 +94,12 @@ func (executor *Executor) Execute(ctx context.Context) (Result, error) {
 	if executor == nil || executor.Load == nil {
 		return Result{}, ErrIncompleteExecutor
 	}
-	input, err := executor.Load(ctx)
+	input, halted, err := executor.loadInput(ctx, recovery.Decision{}, "load recovery input")
 	if err != nil {
-		if halted, ok := haltDecision(recovery.Decision{}, err); ok {
-			return Result{Decision: halted, Outcome: OutcomeHalted}, nil
-		}
-		return Result{}, fmt.Errorf("load recovery input: %w", err)
+		return Result{}, err
+	}
+	if halted.Halt != "" {
+		return Result{Decision: halted, Outcome: OutcomeHalted}, nil
 	}
 	return executor.execute(ctx, input, recovery.Plan(input))
 }
@@ -122,9 +122,14 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			if err := executor.acquireAuthority(); err != nil {
 				return result, err
 			}
-			refreshed, err := executor.Load(ctx)
+			refreshed, halted, err := executor.loadInput(ctx, decision, "reload recovery input after authority acquisition")
 			if err != nil {
-				return result, fmt.Errorf("reload recovery input after authority acquisition: %w", err)
+				return result, err
+			}
+			if halted.Halt != "" {
+				result.Decision = halted
+				result.Outcome = OutcomeHalted
+				return result, nil
 			}
 			input = refreshed
 			input.Observations.Lease.Owner = recovery.OwnerCurrentDriver
@@ -158,9 +163,14 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				}
 				result.Steps = append(result.Steps, step)
 				if stepRefreshesInput(step) {
-					refreshed, err := executor.refreshInput(ctx, input)
+					refreshed, halted, err := executor.refreshInput(ctx, input, decision)
 					if err != nil {
 						return result, err
+					}
+					if halted.Halt != "" {
+						result.Decision = halted
+						result.Outcome = OutcomeHalted
+						return result, nil
 					}
 					input = refreshed
 				}
@@ -185,9 +195,14 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			result.Outcome = outcomeFor(action, input)
 			return result, nil
 		}
-		input, err := executor.Load(ctx)
+		input, halted, err := executor.loadInput(ctx, decision, "reload recovery input")
 		if err != nil {
-			return result, fmt.Errorf("reload recovery input: %w", err)
+			return result, err
+		}
+		if halted.Halt != "" {
+			result.Decision = halted
+			result.Outcome = OutcomeHalted
+			return result, nil
 		}
 		result.Replans++
 		decision = recovery.Plan(input)
@@ -251,15 +266,22 @@ func stepRefreshesInput(step recovery.ActionStep) bool {
 	return step == recovery.StepCloseAdapterInterval || step == recovery.StepSweepCriterionSession
 }
 
-func (executor *Executor) refreshInput(ctx context.Context, previous recovery.Input) (recovery.Input, error) {
-	if executor.Load == nil {
-		return previous, nil
-	}
+func (executor *Executor) loadInput(ctx context.Context, decision recovery.Decision, description string) (recovery.Input, recovery.Decision, error) {
 	input, err := executor.Load(ctx)
 	if err != nil {
-		return recovery.Input{}, fmt.Errorf("reload recovery input after ordered step: %w", err)
+		if halted, ok := haltDecision(decision, err); ok {
+			return recovery.Input{}, halted, nil
+		}
+		return recovery.Input{}, recovery.Decision{}, fmt.Errorf("%s: %w", description, err)
 	}
-	return input, nil
+	return input, recovery.Decision{}, nil
+}
+
+func (executor *Executor) refreshInput(ctx context.Context, previous recovery.Input, decision recovery.Decision) (recovery.Input, recovery.Decision, error) {
+	if executor.Load == nil {
+		return previous, recovery.Decision{}, nil
+	}
+	return executor.loadInput(ctx, decision, "reload recovery input after ordered step")
 }
 
 func isContinuation(action recovery.Action) bool {

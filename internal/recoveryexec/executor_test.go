@@ -434,6 +434,62 @@ func TestExecutorMapsLoadErrorsToAppendixDHalts(t *testing.T) {
 	}
 }
 
+func TestExecutorMapsEveryReloadSiteToAppendixDHalts(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want recovery.HaltReason
+		run  func(*testing.T, error) (Result, error)
+	}{
+		{
+			name: "post-reclaim reload maps corrupt journal",
+			err:  runstore.ErrJournalCorrupt,
+			want: recovery.HaltJournalCorrupt,
+			run: func(t *testing.T, loadErr error) (Result, error) {
+				executor := &Executor{Store: acquirableRecoveryStore(t), RunID: "run-1", Load: func(context.Context) (recovery.Input, error) {
+					return recovery.Input{}, loadErr
+				}}
+				return executor.execute(context.Background(), recovery.Input{}, recovery.Decision{
+					CaseID: recovery.CaseReclaimAuthority,
+					Action: &recovery.Action{Kind: recovery.ActionReclaimAuthority},
+				})
+			},
+		},
+		{
+			name: "post-step refresh maps missing pinned snapshot",
+			err:  runstore.ErrMissingPinnedSnapshot,
+			want: recovery.HaltMissingSnapshotFile,
+			run: func(t *testing.T, loadErr error) (Result, error) {
+				executor := testExecutor(map[recovery.ActionStep]StepHandler{
+					recovery.StepCloseAdapterInterval: func(context.Context, HandlerContext, recovery.Action) error { return nil },
+				})
+				executor.Load = func(context.Context) (recovery.Input, error) { return recovery.Input{}, loadErr }
+				return executor.execute(context.Background(), recovery.Input{}, stepDecision(false, recovery.StepCloseAdapterInterval))
+			},
+		},
+		{
+			name: "ordinary replan maps missing resolved cast",
+			err:  runstore.ErrMissingResolvedCast,
+			want: recovery.HaltMissingResolvedCast,
+			run: func(t *testing.T, loadErr error) (Result, error) {
+				executor := testExecutor(map[recovery.ActionStep]StepHandler{
+					recovery.StepStabilizeHandoff: func(context.Context, HandlerContext, recovery.Action) error { return nil },
+				})
+				executor.Load = func(context.Context) (recovery.Input, error) { return recovery.Input{}, loadErr }
+				return executor.execute(context.Background(), recovery.Input{}, stepDecision(true, recovery.StepStabilizeHandoff))
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := test.run(t, test.err)
+			if err != nil || result.Outcome != OutcomeHalted || result.Decision.Halt != test.want {
+				t.Fatalf("result=%+v error=%v, want halt=%q", result, err, test.want)
+			}
+		})
+	}
+}
+
 func advanceHandlerAcceptance(t *testing.T, driver *runstore.Driver, criterion bool) {
 	t.Helper()
 	appendDriverEvent := func(eventType runstate.EventType, payload any) {
