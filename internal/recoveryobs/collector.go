@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"time"
 
@@ -158,10 +160,41 @@ func collectReferences(root string, runID runstate.RunID, state runstate.State, 
 
 func collectPrepare(root string, runID runstate.RunID, prepare runstate.PendingPrepare) recovery.PrepareObservation {
 	runRoot := filepath.Join(root, ".partitur", "runs", string(runID))
+	planPath := filepath.Join(runRoot, "prepares", string(prepare.ID)+".json")
 	return recovery.PrepareObservation{
-		PlanPresent:     fileMatches(filepath.Join(runRoot, "prepares", string(prepare.ID)+".json"), prepare.PlanRecordHash),
+		PlanPresent:     preparePlanMatches(planPath, prepare),
 		SnapshotPresent: scoreMatches(filepath.Join(runRoot, "scores", fmt.Sprintf("revision-%d.yaml", prepare.NewHead.Revision)), prepare.NewHead.FileHash, prepare.NewHead.SemanticHash),
 	}
+}
+
+type preparePlan struct {
+	ProposalID           runstate.ProposalID  `json:"proposal_id"`
+	BaseRevision         uint64               `json:"base_revision"`
+	BaseHash             runstate.Hash        `json:"base_hash"`
+	NewRevision          uint64               `json:"new_revision"`
+	NewSnapshotHash      runstate.Hash        `json:"new_snapshot_hash"`
+	NewSnapshotFileHash  runstate.Hash        `json:"new_snapshot_file_hash"`
+	SupersededAttemptIDs []runstate.AttemptID `json:"superseded_attempt_ids"`
+	Mode                 string               `json:"mode"`
+}
+
+func preparePlanMatches(path string, prepare runstate.PendingPrepare) bool {
+	contents, err := os.ReadFile(path)
+	if err != nil || !fileMatches(path, prepare.PlanRecordHash) {
+		return false
+	}
+	var plan preparePlan
+	if json.Unmarshal(contents, &plan) != nil {
+		return false
+	}
+	return plan.ProposalID == prepare.ProposalID &&
+		plan.BaseRevision == prepare.BaseHead.Revision &&
+		plan.BaseHash == prepare.BaseHead.SemanticHash &&
+		plan.NewRevision == prepare.NewHead.Revision &&
+		plan.NewSnapshotHash == prepare.NewHead.SemanticHash &&
+		plan.NewSnapshotFileHash == prepare.NewHead.FileHash &&
+		plan.Mode == prepare.Mode &&
+		slices.Equal(plan.SupersededAttemptIDs, prepare.TargetAttemptIDs)
 }
 
 func fileMatches(path string, want runstate.Hash) bool {
@@ -241,10 +274,12 @@ func unqualifiedGitObject(value string) string {
 }
 
 func observeSession(identity runstate.ProcessIdentity) recovery.SweepState {
-	empty, err := adapter.SessionEmpty(identity)
-	if err != nil || !empty {
+	_, err := adapter.SessionEmpty(identity)
+	if err != nil {
 		return recovery.SweepUnverifiable
 	}
+	// Both an empty session and a live, inspectable session are successful
+	// observations. The executor owns sweeping a live session.
 	return recovery.SweepSafe
 }
 
@@ -298,7 +333,10 @@ func observePendingHandoff(attemptRoot string) recovery.HandoffState {
 }
 
 func stabilizeHandoff(launchDir string) recovery.HandoffState {
-	deadline := time.Now().Add(30 * time.Second)
+	return stabilizeHandoffUntil(launchDir, time.Now().Add(30*time.Second))
+}
+
+func stabilizeHandoffUntil(launchDir string, deadline time.Time) recovery.HandoffState {
 	for {
 		observation, err := launch.ObserveHandoff(launchDir)
 		if err != nil {
@@ -320,7 +358,7 @@ func stabilizeHandoff(launchDir string) recovery.HandoffState {
 	}
 }
 
-func observeUnjournaledLaunch(attemptRoot string, _ runstate.State, _ runstate.AttemptID) recovery.UnjournaledLaunchState {
+func observeUnjournaledLaunch(attemptRoot string, state runstate.State, attemptID runstate.AttemptID) recovery.UnjournaledLaunchState {
 	entries, err := os.ReadDir(attemptRoot)
 	if errors.Is(err, fs.ErrNotExist) {
 		return recovery.UnjournaledLaunchAbsent
@@ -330,7 +368,16 @@ func observeUnjournaledLaunch(attemptRoot string, _ runstate.State, _ runstate.A
 	}
 	for _, entry := range entries {
 		if entry.IsDir() && entry.Name() != "worktree" && entry.Name() != "output" {
-			return stabilizeUnjournaledLaunch(filepath.Join(attemptRoot, entry.Name()))
+			launchDir := filepath.Join(attemptRoot, entry.Name())
+			observation, observeErr := launch.ObserveHandoff(launchDir)
+			if observeErr != nil {
+				return recovery.UnjournaledLaunchHandoffUnverifiable
+			}
+			if adapterLaunch, ok := state.AdapterLaunches[attemptID]; ok &&
+				observation.HasIdentity && reflect.DeepEqual(observation.Identity, adapterLaunch.Process) {
+				continue
+			}
+			return stabilizeUnjournaledLaunch(launchDir)
 		}
 	}
 	return recovery.UnjournaledLaunchAbsent
