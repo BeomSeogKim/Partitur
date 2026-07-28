@@ -63,26 +63,26 @@ func TestApplyDoesNotAliasInputOnSuccessOrError(t *testing.T) {
 	}
 }
 
-func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
+func TestUnregisteredEventFailsAsInvalid(t *testing.T) {
 	state := NewState(nil)
-	_, err := Apply(state, fixtureEvent("change_set.recorded", map[string]any{}, nil))
-	if !errors.Is(err, ErrUnsupportedEventType) {
-		t.Fatalf("error = %v, want ErrUnsupportedEventType", err)
+	_, err := Apply(state, fixtureEvent("unknown.event", map[string]any{}, nil))
+	if !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("error = %v, want ErrInvalidEvent", err)
 	}
-	if errors.Is(err, ErrInvalidEvent) {
-		t.Fatalf("unsupported valid registry type was classified as invalid: %v", err)
+	if errors.Is(err, ErrUnsupportedEventType) {
+		t.Fatalf("unregistered event was classified as supported-registry-only: %v", err)
 	}
 }
 
-func TestEScopedSupportedEventSetHasFortyEightTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasFortyNineTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 48 {
-		t.Fatalf("supported event count = %d, want 48", count)
+	if count != 49 {
+		t.Fatalf("supported event count = %d, want 49", count)
 	}
 	for _, eventType := range []EventType{EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded, EventDecisionObsoleted} {
 		if isSupportedEvent(eventType) {
@@ -112,6 +112,47 @@ func TestObservationsValidateWithoutChangingProjection(t *testing.T) {
 		if err != nil || key != "" {
 			t.Fatalf("%s key=%q error=%v", event.Type, key, err)
 		}
+	}
+}
+
+func TestChangeSetRecordedProjectsOnlyForVerifyingRepoWriteAttempt(t *testing.T) {
+	state := verifyingAttemptState(t)
+	state.RepoWriteMovements["m1"] = true
+	event := fixtureEvent(EventChangeSetRecorded, changeSetPayload(), func(event *Event) {
+		event.MovementID = "m1"
+		event.AttemptID = "a1"
+	})
+
+	next, err := Apply(state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := next.ChangeSets["a1"]
+	if !ok || got.ChangeSetID != "change-set-1" || got.BaseTree != "git-sha1:base" ||
+		got.ResultTree != "git-sha1:result" || got.Commit != "git-sha1:commit" ||
+		got.Ref != "refs/partitur/runs/run-1/attempts/a1/changeset" {
+		t.Fatalf("change set projection = %+v, present=%t", got, ok)
+	}
+	if next.VerifiedAttempts["a1"] {
+		t.Fatal("change_set.recorded must not infer verification.passed")
+	}
+	if _, err := Apply(next, event); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("duplicate direct projection error = %v, want ErrIllegalTransition", err)
+	}
+
+	wrongPhase := probedAttemptState(t)
+	wrongPhase.RepoWriteMovements["m1"] = true
+	if _, err := Apply(wrongPhase, event); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("RUNNING change_set.recorded error = %v, want ErrIllegalTransition", err)
+	}
+	nonWriter := verifyingAttemptState(t)
+	if _, err := Apply(nonWriter, event); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("non-writer change_set.recorded error = %v, want ErrIllegalTransition", err)
+	}
+	invalid := event
+	invalid.Payload = mustPayload(t, map[string]any{"change_set_id": "change-set-1"})
+	if _, err := Apply(state, invalid); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("invalid change_set.recorded error = %v, want ErrInvalidEvent", err)
 	}
 }
 
@@ -866,6 +907,17 @@ func runStartedPayload() map[string]any {
 		"score_file_hash":    "sha256:file-1",
 		"resolved_cast_hash": "sha256:cast",
 		"identity_versions":  testIdentityVersions(),
+	}
+}
+
+func changeSetPayload() map[string]any {
+	return map[string]any{
+		"change_set_id":     "change-set-1",
+		"base_tree":         "git-sha1:base",
+		"result_tree":       "git-sha1:result",
+		"commit":            "git-sha1:commit",
+		"ref":               "refs/partitur/runs/run-1/attempts/a1/changeset",
+		"identity_versions": testIdentityVersions(),
 	}
 }
 

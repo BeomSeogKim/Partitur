@@ -56,6 +56,7 @@ type MovementView struct {
 	ID          string
 	PartID      string
 	Phase       string
+	Needs       []string
 	Grants      []string
 	MayPropose  bool
 	Instruction string
@@ -97,6 +98,7 @@ type ExecutionView struct {
 	VerificationExpectation        string
 	VerificationExpectationPresent bool
 	FinalMovementID                string
+	GateWaived                     bool
 }
 
 // PolicyView is a defensive read view of effective score policy.

@@ -69,6 +69,10 @@ func (s *Score) Execution() ExecutionView {
 			result.VerificationExpectation = *expectation.Intent
 			result.VerificationExpectationPresent = true
 		}
+		if expectation := s.document.Verification.Expectation; expectation != nil &&
+			expectation.ApplyGate != nil && expectation.ApplyGate.Waived != nil {
+			result.GateWaived = *expectation.ApplyGate.Waived
+		}
 	}
 	return result
 }
@@ -126,6 +130,7 @@ func movementView(value movement) MovementView {
 		ID:          value.ID,
 		PartID:      value.PartID,
 		Phase:       phase,
+		Needs:       sortedStrings(value.Needs),
 		Grants:      sortedStrings(value.Grants),
 		MayPropose:  value.MayPropose,
 		Instruction: value.Instruction,

@@ -36,6 +36,7 @@ func TestExecutionReadSurface(t *testing.T) {
 	if got, want := movements[0], (MovementView{
 		ID:          "plan",
 		PartID:      "plan",
+		Needs:       []string{},
 		Grants:      []string{"repo_read"},
 		Instruction: "Plan the work.",
 		Inputs:      []string{},

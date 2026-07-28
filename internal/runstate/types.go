@@ -2,7 +2,7 @@
 //
 // State is a pure function of the initial movement seed derived from the
 // authenticated pinned score and the journal. This package supports only the
-// forty-eight event types needed by DESIGN Appendix E, the first run success
+// forty-nine event types needed by DESIGN Appendix E, the first run success
 // path, and the shipping status projection. Valid registry events
 // outside that subset fail closed with ErrUnsupportedEventType.
 //
@@ -207,6 +207,18 @@ type ArtifactRecord struct {
 	Source          string
 }
 
+// ChangeSetRecord is the pinned repository result captured for one verifying
+// repo-write attempt.
+type ChangeSetRecord struct {
+	AttemptID        AttemptID
+	ChangeSetID      string
+	BaseTree         string
+	ResultTree       string
+	Commit           string
+	Ref              string
+	IdentityVersions json.RawMessage
+}
+
 type CandidateContributor struct {
 	MovementID  MovementID
 	ChangeSetID string
@@ -316,6 +328,7 @@ type State struct {
 	AdapterLaunches      map[AttemptID]AdapterLaunch
 	AdapterObservations  map[AttemptID]AdapterObservation
 	Artifacts            map[ArtifactInstanceID]ArtifactRecord
+	ChangeSets           map[AttemptID]ChangeSetRecord
 	VerifiedAttempts     map[AttemptID]bool
 	MovementResults      map[MovementID]MovementResult
 	ApplicationCandidate *ApplicationCandidate
@@ -350,6 +363,7 @@ const (
 	EventAttemptCancelled               EventType = "attempt.cancelled"
 	EventAttemptSuperseded              EventType = "attempt.superseded"
 	EventArtifactRecorded               EventType = "artifact.recorded"
+	EventChangeSetRecorded              EventType = "change_set.recorded"
 	EventVerificationPassed             EventType = "verification.passed"
 	EventApplicationCandidateRecorded   EventType = "application_candidate.recorded"
 	EventAcceptanceStarted              EventType = "acceptance.started"
