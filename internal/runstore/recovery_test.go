@@ -104,6 +104,114 @@ func TestChangeSetRecordedAppendIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
+	t.Run("terminal evidence remains visible until its movement terminal", func(t *testing.T) {
+		store := recoveryStore(t)
+		appendRecoveryMovementStarted(t, store)
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventCompositionFailed,
+			Payload: recoveryPayload(t, map[string]any{
+				"scope": "movement", "target_id": "write", "composition_subject_hash": "sha256:subject",
+				"cause": "git_exit", "git_exit_code": 2, "diagnostic": "exit 2", "contributors": []any{},
+				"composition_algorithm_version": "1", "identity_versions": recoveryVersions(),
+			}),
+		})
+
+		input, err := store.LoadRecoveryInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := input.Projection.CompositionTerminals; len(got) != 1 || got[0].Scope != "movement" || got[0].TargetID != "write" || got[0].Reason != "composition_failed" {
+			t.Fatalf("composition terminals = %+v", got)
+		}
+	})
+
+	t.Run("recovered composition close restarts the interrupted movement", func(t *testing.T) {
+		store := recoveryStore(t)
+		appendRecoveryMovementStarted(t, store)
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted,
+			Payload: recoveryPayload(t, map[string]any{
+				"interval_id": "composition-1", "phase": "composition", "wall_start": "2026-07-28T00:00:00.000Z", "remaining_at_start": 600000,
+			}),
+		})
+		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped,
+			Payload: recoveryPayload(t, map[string]any{
+				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+			}),
+		})
+
+		input, err := store.LoadRecoveryInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := input.Projection.CompositionRecovery
+		if got == nil || !got.Recovered || got.Scope != "movement" || got.MovementID != "write" {
+			t.Fatalf("composition recovery = %+v", got)
+		}
+	})
+}
+
+func TestLoadRecoveryInputProjectsRevisionRestart(t *testing.T) {
+	store := recoveryStore(t)
+	appendAttemptToRunning(t, store)
+
+	baseScore, diagnostics := score.Compile(recoveryScoreJSON(t, 1, "pinned recovery fixture"))
+	if len(diagnostics) != 0 {
+		t.Fatalf("base score diagnostics = %v", diagnostics)
+	}
+	baseHash, err := baseScore.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedScore := recoveryScoreJSON(t, 2, "approved revision")
+	updated, diagnostics := score.Compile(updatedScore)
+	if len(diagnostics) != 0 {
+		t.Fatalf("updated score diagnostics = %v", diagnostics)
+	}
+	updatedHash, err := updated.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		_, err := transaction.At("test/score-2").PublishImmutable("scores/revision-2.yaml", updatedScore, Hash(rawHash(updatedScore)))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	appendRecoveryEvent(t, store, runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, Type: runstate.EventAmendmentApprovalPrepared,
+		Payload: recoveryPayload(t, map[string]any{
+			"prepare_id": "prepare-1", "proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
+			"base_revision": 1, "base_hash": baseHash, "new_revision": 2, "new_snapshot_hash": updatedHash,
+			"new_snapshot_file_hash": rawHash(updatedScore), "plan_record_hash": "sha256:plan", "target_attempt_ids": []any{"attempt-1"},
+			"observed_authority_epoch": 0, "quiesce_deadline": "2026-07-28T00:00:00.000Z", "classifier_version": 1, "identity_versions": recoveryVersions(),
+		}),
+	})
+	appendRecoveryEvent(t, store, runstate.Event{
+		RunID: "run-1", ScoreRevision: 2, Type: runstate.EventAmendmentApproved,
+		Payload: recoveryPayload(t, map[string]any{
+			"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS", "base_revision": 1, "base_hash": baseHash,
+			"classifier_version": 1, "new_revision": 2, "new_snapshot_hash": updatedHash, "new_snapshot_file_hash": rawHash(updatedScore),
+			"typed_delta": []any{}, "actual_impact": recoveryActualImpact(), "superseded_attempt_ids": []any{"attempt-1"},
+			"obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": recoveryVersions(),
+		}),
+	})
+
+	input, err := store.LoadRecoveryInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Score.Revision() != 2 {
+		t.Fatalf("current pinned score revision = %d, want 2", input.Score.Revision())
+	}
+	if got := input.Projection.RevisionRestarts; len(got) != 1 || got[0].MovementID != "write" {
+		t.Fatalf("revision restarts = %+v", got)
+	}
+}
+
 func recoveryStore(t *testing.T) *Store {
 	t.Helper()
 	store := newTestStore(t)
@@ -158,9 +266,12 @@ func appendPendingDecision(t *testing.T, store *Store) {
 }
 
 func appendAttemptPrefix(t *testing.T, store *Store) {
+	appendRecoveryMovementStarted(t, store)
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: recoveryPayload(t, map[string]any{"reason": "initial", "performer_id": "writer", "adapter_id": "adapter", "model": "model"})})
+}
+func appendRecoveryMovementStarted(t *testing.T, store *Store) {
 	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementReady, Payload: recoveryPayload(t, map[string]any{})})
 	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementStarted, Payload: recoveryPayload(t, map[string]any{})})
-	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: recoveryPayload(t, map[string]any{"reason": "initial", "performer_id": "writer", "adapter_id": "adapter", "model": "model"})})
 }
 func appendAttemptToRunning(t *testing.T, store *Store) {
 	appendAttemptPrefix(t, store)
@@ -195,6 +306,17 @@ func recoveryPayload(t *testing.T, value any) json.RawMessage {
 }
 func recoveryVersions() map[string]any {
 	return map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+}
+func recoveryActualImpact() map[string]any {
+	return map[string]any{
+		"score_changes": []any{},
+		"authority": map[string]any{
+			"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}},
+			"grants":        []any{},
+			"side_effects":  map[string]any{"added": []any{}, "removed": []any{}},
+		},
+		"budget": map[string]any{},
+	}
 }
 
 func recoveryScoreJSON(t *testing.T, revision int, goal string) []byte {

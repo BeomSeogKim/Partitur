@@ -113,9 +113,12 @@ func (store *Store) loadResolvedCast(runID runstate.RunID, payload map[string]an
 func recoveryProjection(state runstate.State, events []runstate.Event, pinned *score.Score) recovery.Projection {
 	facts := replayFacts(events)
 	projection := recovery.Projection{
-		State:     state,
-		Scheduler: schedulerFromScore(state, pinned),
+		State:                state,
+		RevisionRestarts:     facts.revisionRestarts(state),
+		CompositionTerminals: facts.compositionTerminals(events),
+		Scheduler:            schedulerFromScore(state, pinned),
 	}
+	projection.CompositionRecovery = facts.compositionRecovery(state, projection.Scheduler)
 	current := facts.currentHeadAttempt(state)
 	if current == nil {
 		return projection
@@ -169,18 +172,28 @@ func movementSeed(pinned *score.Score) []runstate.MovementSeed {
 }
 
 type replayFact struct {
-	attempts map[runstate.AttemptID]*recovery.AttemptRecovery
-	gates    map[runstate.AttemptID]*recovery.GateRecovery
-	sequence map[runstate.AttemptID]uint64
-	failed   map[runstate.AttemptID]bool
+	attempts          map[runstate.AttemptID]*recovery.AttemptRecovery
+	gates             map[runstate.AttemptID]*recovery.GateRecovery
+	sequence          map[runstate.AttemptID]uint64
+	failed            map[runstate.AttemptID]bool
+	approvals         []revisionApproval
+	compositionCloses map[string]bool
+	compositionEvents []recovery.CompositionTerminal
+}
+
+type revisionApproval struct {
+	Revision            uint64
+	Finalization        bool
+	SupersededAttemptID []runstate.AttemptID
 }
 
 func replayFacts(events []runstate.Event) replayFact {
 	facts := replayFact{
-		attempts: make(map[runstate.AttemptID]*recovery.AttemptRecovery),
-		gates:    make(map[runstate.AttemptID]*recovery.GateRecovery),
-		sequence: make(map[runstate.AttemptID]uint64),
-		failed:   make(map[runstate.AttemptID]bool),
+		attempts:          make(map[runstate.AttemptID]*recovery.AttemptRecovery),
+		gates:             make(map[runstate.AttemptID]*recovery.GateRecovery),
+		sequence:          make(map[runstate.AttemptID]uint64),
+		failed:            make(map[runstate.AttemptID]bool),
+		compositionCloses: make(map[string]bool),
 	}
 	type questionRef struct {
 		attemptID runstate.AttemptID
@@ -254,9 +267,167 @@ func replayFacts(events []runstate.Event) replayFact {
 					facts.failed[event.AttemptID] = true
 				}
 			}
+		case runstate.EventAmendmentApproved:
+			approval := revisionApproval{
+				Revision:     uintValue(payload, "new_revision"),
+				Finalization: boolValue(payload, "finalization"),
+			}
+			for _, attemptID := range arrayValue(payload, "superseded_attempt_ids") {
+				if value, ok := attemptID.(string); ok {
+					approval.SupersededAttemptID = append(approval.SupersededAttemptID, runstate.AttemptID(value))
+				}
+			}
+			facts.approvals = append(facts.approvals, approval)
+		case runstate.EventExecutionStarted:
+			if stringValue(payload, "phase") == "composition" {
+				facts.compositionCloses[stringValue(payload, "interval_id")] = false
+			}
+		case runstate.EventExecutionStopped:
+			intervalID := stringValue(payload, "interval_id")
+			if _, tracked := facts.compositionCloses[intervalID]; tracked && stringValue(payload, "reason") == "recovered" {
+				facts.compositionCloses[intervalID] = true
+			}
+		case runstate.EventCompositionConflicted, runstate.EventCompositionFailed:
+			evidence := recovery.CompositionTerminal{
+				Scope:    stringValue(payload, "scope"),
+				TargetID: stringValue(payload, "target_id"),
+				Reason:   "composition_unresolvable",
+			}
+			if event.Type == runstate.EventCompositionFailed {
+				evidence.Reason = "composition_failed"
+			}
+			facts.compositionEvents = append(facts.compositionEvents, evidence)
 		}
 	}
 	return facts
+}
+
+func (facts replayFact) revisionRestarts(state runstate.State) []recovery.RevisionRestart {
+	var restarts []recovery.RevisionRestart
+	for _, approval := range facts.approvals {
+		if approval.Revision != state.ScoreHead.Revision || approval.Finalization {
+			continue
+		}
+		for _, attemptID := range approval.SupersededAttemptID {
+			attempt, ok := facts.attempts[attemptID]
+			if !ok || facts.hasAttemptOnRevision(attempt.MovementID, approval.Revision) {
+				continue
+			}
+			restarts = append(restarts, recovery.RevisionRestart{MovementID: attempt.MovementID})
+		}
+	}
+	return restarts
+}
+
+func (facts replayFact) hasAttemptOnRevision(movementID runstate.MovementID, revision uint64) bool {
+	for _, attempt := range facts.attempts {
+		if attempt.MovementID == movementID && attempt.ScoreRevision == revision {
+			return true
+		}
+	}
+	return false
+}
+
+func (facts replayFact) compositionTerminals(events []runstate.Event) []recovery.CompositionTerminal {
+	var terminals []recovery.CompositionTerminal
+	for index, event := range events {
+		if event.Type != runstate.EventCompositionConflicted && event.Type != runstate.EventCompositionFailed {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			continue
+		}
+		terminal := recovery.CompositionTerminal{
+			Scope:    stringValue(payload, "scope"),
+			TargetID: stringValue(payload, "target_id"),
+			Reason:   "composition_unresolvable",
+		}
+		if event.Type == runstate.EventCompositionFailed {
+			terminal.Reason = "composition_failed"
+		}
+		if !compositionTerminalFollows(events[index+1:], terminal) {
+			terminals = append(terminals, terminal)
+		}
+	}
+	return terminals
+}
+
+func compositionTerminalFollows(events []runstate.Event, terminal recovery.CompositionTerminal) bool {
+	for _, event := range events {
+		payload, err := eventPayload(event)
+		if err != nil {
+			continue
+		}
+		switch terminal.Scope {
+		case "movement":
+			if event.Type == runstate.EventMovementFailed && event.MovementID == runstate.MovementID(terminal.TargetID) && stringValue(payload, "reason") == terminal.Reason {
+				return true
+			}
+		case "candidate":
+			if event.Type == runstate.EventRunFailed && stringValue(payload, "reason") == terminal.Reason {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (facts replayFact) compositionRecovery(state runstate.State, scheduler recovery.Scheduler) *recovery.CompositionRecovery {
+	for _, recovered := range facts.compositionCloses {
+		if !recovered {
+			continue
+		}
+		if movementID, ok := compositionMovement(state, scheduler); ok && !facts.hasCompositionEvidence("movement", string(movementID)) {
+			return &recovery.CompositionRecovery{Scope: "movement", MovementID: movementID, Recovered: true}
+		}
+		if candidateCompositionPending(state, scheduler) && !facts.hasCompositionEvidenceScope("candidate") {
+			return &recovery.CompositionRecovery{Scope: "candidate", Recovered: true}
+		}
+	}
+	return nil
+}
+
+func compositionMovement(state runstate.State, scheduler recovery.Scheduler) (runstate.MovementID, bool) {
+	for _, movement := range scheduler.Movements {
+		if state.Movements[movement.ID] == runstate.MovementRunning {
+			return movement.ID, true
+		}
+	}
+	return "", false
+}
+
+func candidateCompositionPending(state runstate.State, scheduler recovery.Scheduler) bool {
+	if state.ApplicationCandidate != nil {
+		return false
+	}
+	for _, movement := range scheduler.Movements {
+		if movement.Final || !movement.RepoWrite {
+			continue
+		}
+		if state.Movements[movement.ID] != runstate.MovementSucceeded {
+			return false
+		}
+	}
+	return true
+}
+
+func (facts replayFact) hasCompositionEvidence(scope, targetID string) bool {
+	for _, event := range facts.compositionEvents {
+		if event.Scope == scope && event.TargetID == targetID {
+			return true
+		}
+	}
+	return false
+}
+
+func (facts replayFact) hasCompositionEvidenceScope(scope string) bool {
+	for _, event := range facts.compositionEvents {
+		if event.Scope == scope {
+			return true
+		}
+	}
+	return false
 }
 
 func (facts replayFact) currentHeadAttempt(state runstate.State) *recovery.AttemptRecovery {
@@ -331,6 +502,10 @@ func stringValue(value map[string]any, name string) string {
 func boolValue(value map[string]any, name string) bool {
 	result, _ := value[name].(bool)
 	return result
+}
+func uintValue(value map[string]any, name string) uint64 {
+	result, _ := value[name].(float64)
+	return uint64(result)
 }
 func objectValue(value map[string]any, name string) map[string]any {
 	result, _ := value[name].(map[string]any)
