@@ -26,20 +26,35 @@ const (
 	CaseRevisionRestart        CaseID = "RC-RESUME-042"
 	CaseCompositionTerminal    CaseID = "RC-RESUME-011"
 	CaseContinue               CaseID = "RC-RESUME-012"
+	CaseRealizeDisposition     CaseID = "RC-RESUME-039"
+	CaseAppendQuestionRequest  CaseID = "RC-RESUME-040"
+	CaseDecisionResume         CaseID = "RC-RESUME-041"
+	CaseWaitingHuman           CaseID = "RC-RESUME-048"
+	CaseUnstartedAttempt       CaseID = "RC-RESUME-013"
+	CaseUnprobedAttempt        CaseID = "RC-RESUME-014"
+	CaseIncompleteAttempt      CaseID = "RC-RESUME-015"
+	CaseCaptureChangeSet       CaseID = "RC-RESUME-016"
+	CasePostHocVerification    CaseID = "RC-RESUME-017"
+	CaseStartAcceptance        CaseID = "RC-RESUME-018"
+	CaseMovementSucceeded      CaseID = "RC-RESUME-019"
+	CaseRunFailed              CaseID = "RC-RESUME-020"
+	CaseFinalGateRejected      CaseID = "RC-RESUME-021"
 )
 
 // HaltReason is an Appendix D recovery halt reason.
 type HaltReason string
 
 const (
-	HaltOwnerUnverifiable      HaltReason = "owner_unverifiable"
-	HaltRootSnapshotDivergence HaltReason = "root_snapshot_divergence"
-	HaltMissingArtifactFile    HaltReason = "missing_artifact_file"
-	HaltMissingSnapshotFile    HaltReason = "missing_snapshot_file"
-	HaltMissingChangeSetRef    HaltReason = "missing_changeset_ref"
-	HaltMissingProposalRecord  HaltReason = "missing_proposal_record"
-	HaltMissingResolvedCast    HaltReason = "missing_resolved_cast"
-	HaltMissingPreparePlan     HaltReason = "missing_prepare_plan"
+	HaltOwnerUnverifiable        HaltReason = "owner_unverifiable"
+	HaltRootSnapshotDivergence   HaltReason = "root_snapshot_divergence"
+	HaltMissingArtifactFile      HaltReason = "missing_artifact_file"
+	HaltMissingSnapshotFile      HaltReason = "missing_snapshot_file"
+	HaltMissingChangeSetRef      HaltReason = "missing_changeset_ref"
+	HaltMissingProposalRecord    HaltReason = "missing_proposal_record"
+	HaltMissingResolvedCast      HaltReason = "missing_resolved_cast"
+	HaltMissingPreparePlan       HaltReason = "missing_prepare_plan"
+	HaltSweepUnverifiable        HaltReason = "sweep_unverifiable"
+	HaltSpawnHandoffUnverifiable HaltReason = "spawn_handoff_unverifiable"
 )
 
 // OwnerState is the caller's observation of the owner named by a readable
@@ -103,26 +118,82 @@ type CompositionTerminal struct {
 	Reason   string
 }
 
+// QuestionRequest is the replay-derived request cut for one question raised
+// by a blocked attempt. Entries retain attempt.blocked's raised order; a
+// proposal is deliberately absent because RC-RESUME-037 owns its request.
+type QuestionRequest struct {
+	DecisionID string
+	Durable    bool
+}
+
+// AttemptRecovery is the replay-derived C.2 view of one attempt. ScoreRevision
+// is compared to State.ScoreHead by the planner, so an event-tail predicate on
+// an older revision cannot make its attempt current.
+type AttemptRecovery struct {
+	AttemptID     runstate.AttemptID
+	MovementID    runstate.MovementID
+	ScoreRevision uint64
+	State         runstate.AttemptState
+
+	// FailureDispositionRealized says Arm 2 has already consumed the durable
+	// disposition on a current-head attempt.failed event.
+	FailureDispositionRealized bool
+	RecordedDisposition        *runstate.Disposition
+	QuestionRequests           []QuestionRequest
+	ChangeSetRecorded          bool
+	AcceptanceStarted          bool
+	MovementSucceeded          bool
+	MovementFailed             bool
+	FinalGateRejected          bool
+}
+
+// HandoffState and SweepState are caller-supplied observations. The planner
+// names the later executor operation but never inspects a process itself.
+type HandoffState string
+
+const (
+	HandoffSafe         HandoffState = "safe"
+	HandoffUnverifiable HandoffState = "handoff_unverifiable"
+	HandoffSweepFailed  HandoffState = "sweep_unverifiable"
+)
+
+type SweepState string
+
+const (
+	SweepSafe         SweepState = "safe"
+	SweepUnverifiable SweepState = "sweep_unverifiable"
+)
+
+type WorktreeState string
+
+const (
+	WorktreePresent WorktreeState = "present"
+	WorktreeMissing WorktreeState = "missing"
+)
+
 // Projection is the recovery-specific view built while replaying the journal.
-// State is the ordinary runstate projection. The two additional facts preserve
+// State is the ordinary runstate projection. The additional facts preserve
 // evidence-only and derived recovery state without making the planner inspect
 // the journal itself.
 type Projection struct {
-	State                 runstate.State
-	RevisionRestarts      []RevisionRestart
-	CompositionTerminals  []CompositionTerminal
-	HasCurrentHeadAttempt bool
+	State                runstate.State
+	RevisionRestarts     []RevisionRestart
+	CompositionTerminals []CompositionTerminal
+	CurrentHeadAttempt   *AttemptRecovery
 }
 
-// Observations are all non-journal inputs used by C.1.
+// Observations are all non-journal inputs used by C.1 and C.2.
 type Observations struct {
 	Lease                  LeaseObservation
 	RootSnapshotDivergence bool
 	References             []ReferenceObservation
 	Prepare                PrepareObservation
+	Handoff                HandoffState
+	AdapterSweep           SweepState
+	Worktree               WorktreeState
 }
 
-// Input is the complete, already-replayed input to the pure C.1 planner.
+// Input is the complete, already-replayed input to the pure recovery planner.
 type Input struct {
 	Projection   Projection
 	Observations Observations
@@ -133,18 +204,53 @@ type Input struct {
 type ActionKind string
 
 const (
-	ActionTerminalCleanup           ActionKind = "terminal_cleanup"
-	ActionRemoveStaleLease          ActionKind = "remove_stale_lease"
-	ActionQuarantineOrphanLease     ActionKind = "quarantine_orphan_lease"
-	ActionRefuseResume              ActionKind = "refuse_resume"
-	ActionExecuteCancellation       ActionKind = "execute_cancellation_oracle"
-	ActionCompleteOrAbandonPrepare  ActionKind = "complete_or_abandon_prepare"
-	ActionReclaimAuthority          ActionKind = "reclaim_authority"
-	ActionAppendRoutedRequest       ActionKind = "append_routed_request"
-	ActionSelectRevisionRestart     ActionKind = "select_revision_restart"
-	ActionAppendCompositionTerminal ActionKind = "append_composition_terminal"
-	ActionProceedAttempt            ActionKind = "proceed_c2"
-	ActionProceedScheduler          ActionKind = "proceed_c4"
+	ActionTerminalCleanup            ActionKind = "terminal_cleanup"
+	ActionRemoveStaleLease           ActionKind = "remove_stale_lease"
+	ActionQuarantineOrphanLease      ActionKind = "quarantine_orphan_lease"
+	ActionRefuseResume               ActionKind = "refuse_resume"
+	ActionExecuteCancellation        ActionKind = "execute_cancellation_oracle"
+	ActionCompleteOrAbandonPrepare   ActionKind = "complete_or_abandon_prepare"
+	ActionReclaimAuthority           ActionKind = "reclaim_authority"
+	ActionAppendRoutedRequest        ActionKind = "append_routed_request"
+	ActionSelectRevisionRestart      ActionKind = "select_revision_restart"
+	ActionAppendCompositionTerminal  ActionKind = "append_composition_terminal"
+	ActionProceedAttempt             ActionKind = "proceed_c2"
+	ActionProceedScheduler           ActionKind = "proceed_c4"
+	ActionRealizeRecordedDisposition ActionKind = "realize_recorded_disposition"
+	ActionAppendQuestionRequest      ActionKind = "append_question_request"
+	ActionSelectDecisionResume       ActionKind = "select_decision_resume"
+	ActionReturnWaitingHuman         ActionKind = "return_waiting_human"
+	ActionRecoverUnstartedAttempt    ActionKind = "recover_unstarted_attempt"
+	ActionRecoverUnprobedAttempt     ActionKind = "recover_unprobed_attempt"
+	ActionRecoverIncompleteAttempt   ActionKind = "recover_incomplete_attempt"
+	ActionCaptureChangeSet           ActionKind = "capture_change_set"
+	ActionFailWorktreeLost           ActionKind = "fail_worktree_lost"
+	ActionRerunPostHocVerification   ActionKind = "rerun_post_hoc_verification"
+	ActionAppendAcceptanceStarted    ActionKind = "append_acceptance_started"
+	ActionAppendMovementSucceeded    ActionKind = "append_movement_succeeded"
+	ActionAppendRunFailed            ActionKind = "append_run_failed"
+	ActionAppendFinalGateFailure     ActionKind = "append_final_gate_failure"
+)
+
+// Continuation names the next Appendix C table after one action value has
+// been materialized. It is not an execution request.
+type Continuation string
+
+const (
+	ContinuationC2 Continuation = "c2"
+	ContinuationC3 Continuation = "c3"
+	ContinuationC4 Continuation = "c4"
+)
+
+// ActionStep makes order-sensitive executor work explicit. In particular, an
+// open adapter interval is never closed before its recorded session is swept.
+type ActionStep string
+
+const (
+	StepStabilizeHandoff         ActionStep = "stabilize_handoff_and_sweep_published_session"
+	StepSweepRecordedSession     ActionStep = "sweep_recorded_session"
+	StepCloseAdapterInterval     ActionStep = "close_adapter_interval_recovered"
+	StepClassifyAndAppendFailure ActionStep = "classify_and_append_attempt_failure"
 )
 
 // Action is a pure description for the recovery executor. Replan means the
@@ -155,6 +261,13 @@ type Action struct {
 	RoutedProposalID    runstate.ProposalID
 	RevisionRestart     *RevisionRestart
 	CompositionTerminal *CompositionTerminal
+	AttemptID           runstate.AttemptID
+	QuestionDecisionID  string
+	FailureKind         string
+	FailureReason       string
+	RecordedDisposition *runstate.Disposition
+	Steps               []ActionStep
+	Continuation        Continuation
 }
 
 // Decision always carries exactly one Appendix C case. It contains either an
@@ -240,10 +353,183 @@ func Plan(input Input) Decision {
 		decision.Action.CompositionTerminal = &terminal
 		return decision
 	}
-	if input.Projection.HasCurrentHeadAttempt {
-		return action(CaseContinue, ActionProceedAttempt, false)
+	if currentHeadAttempt(input.Projection) != nil {
+		decision := action(CaseContinue, ActionProceedAttempt, false)
+		decision.Action.Continuation = ContinuationC2
+		return decision
 	}
-	return action(CaseContinue, ActionProceedScheduler, false)
+	decision := action(CaseContinue, ActionProceedScheduler, false)
+	decision.Action.Continuation = ContinuationC4
+	return decision
+}
+
+// PlanAttempt applies Appendix C.2 after C.1 selects ActionProceedAttempt.
+// It is intentionally separate from Plan: C.1 remains the run-level
+// dispatcher, while C.2 owns only the current-head, non-superseded attempt.
+func PlanAttempt(input Input) Decision {
+	attempt := currentHeadAttempt(input.Projection)
+	if attempt == nil {
+		decision := action(CaseContinue, ActionProceedScheduler, false)
+		decision.Action.Continuation = ContinuationC4
+		return decision
+	}
+
+	if attempt.State == runstate.AttemptFailed && !attempt.FailureDispositionRealized {
+		decision := action(CaseRealizeDisposition, ActionRealizeRecordedDisposition, false)
+		decision.Action.AttemptID = attempt.AttemptID
+		if attempt.RecordedDisposition != nil {
+			disposition := *attempt.RecordedDisposition
+			decision.Action.RecordedDisposition = &disposition
+		}
+		return decision
+	}
+	if attempt.State == runstate.AttemptBlocked {
+		if request, ok := firstMissingQuestionRequest(attempt.QuestionRequests); ok {
+			decision := action(CaseAppendQuestionRequest, ActionAppendQuestionRequest, true)
+			decision.Action.AttemptID = attempt.AttemptID
+			decision.Action.QuestionDecisionID = request.DecisionID
+			return decision
+		}
+		if hasUnresolvedBlockingDecision(input.Projection.State, attempt.AttemptID) {
+			return action(CaseWaitingHuman, ActionReturnWaitingHuman, false)
+		}
+		decision := action(CaseDecisionResume, ActionSelectDecisionResume, false)
+		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.Continuation = ContinuationC4
+		return decision
+	}
+
+	if attempt.State == runstate.AttemptStarting {
+		switch input.Observations.Handoff {
+		case HandoffUnverifiable:
+			return halt(CaseUnstartedAttempt, HaltSpawnHandoffUnverifiable)
+		case HandoffSweepFailed:
+			return halt(CaseUnstartedAttempt, HaltSweepUnverifiable)
+		default:
+			return recoveryFailureAction(
+				CaseUnstartedAttempt,
+				ActionRecoverUnstartedAttempt,
+				attempt.AttemptID,
+				"task_failed",
+				"attempt_never_started",
+				[]ActionStep{StepStabilizeHandoff, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+			)
+		}
+	}
+	if attempt.State == runstate.AttemptRunning && !hasAdapterProbe(input.Projection.State, attempt.AttemptID) {
+		if input.Observations.AdapterSweep == SweepUnverifiable {
+			return halt(CaseUnprobedAttempt, HaltSweepUnverifiable)
+		}
+		return recoveryFailureAction(
+			CaseUnprobedAttempt,
+			ActionRecoverUnprobedAttempt,
+			attempt.AttemptID,
+			"adapter_unavailable",
+			"probe_terminated_incomplete",
+			[]ActionStep{StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+		)
+	}
+	if attempt.State == runstate.AttemptRunning && hasAdapterProbe(input.Projection.State, attempt.AttemptID) {
+		if input.Observations.AdapterSweep == SweepUnverifiable {
+			return halt(CaseIncompleteAttempt, HaltSweepUnverifiable)
+		}
+		return recoveryFailureAction(
+			CaseIncompleteAttempt,
+			ActionRecoverIncompleteAttempt,
+			attempt.AttemptID,
+			"task_failed",
+			"attempt_terminated_incomplete",
+			[]ActionStep{StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+		)
+	}
+	if attempt.State == runstate.AttemptVerifying && movementHasRepoWrite(input.Projection.State, attempt.MovementID) && !attempt.ChangeSetRecorded {
+		if input.Observations.Worktree == WorktreeMissing {
+			return recoveryFailureAction(CaseCaptureChangeSet, ActionFailWorktreeLost, attempt.AttemptID, "task_failed", "worktree_lost", []ActionStep{StepClassifyAndAppendFailure})
+		}
+		decision := action(CaseCaptureChangeSet, ActionCaptureChangeSet, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		return decision
+	}
+	if attempt.State == runstate.AttemptVerifying && !hasVerificationPassed(input.Projection.State, attempt.AttemptID) {
+		if input.Observations.Worktree == WorktreeMissing {
+			return recoveryFailureAction(CasePostHocVerification, ActionFailWorktreeLost, attempt.AttemptID, "task_failed", "worktree_lost", []ActionStep{StepClassifyAndAppendFailure})
+		}
+		decision := action(CasePostHocVerification, ActionRerunPostHocVerification, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		return decision
+	}
+	if attempt.State == runstate.AttemptVerifying && (attempt.ChangeSetRecorded || hasVerificationPassed(input.Projection.State, attempt.AttemptID)) && !attempt.AcceptanceStarted {
+		decision := action(CaseStartAcceptance, ActionAppendAcceptanceStarted, false)
+		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.Continuation = ContinuationC3
+		return decision
+	}
+	if attempt.State == runstate.AttemptCompleted && !attempt.MovementSucceeded {
+		decision := action(CaseMovementSucceeded, ActionAppendMovementSucceeded, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		return decision
+	}
+	if attempt.MovementFailed && !input.Projection.State.Run.Terminal() {
+		decision := action(CaseRunFailed, ActionAppendRunFailed, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		return decision
+	}
+	if attempt.FinalGateRejected && !attempt.MovementFailed {
+		decision := action(CaseFinalGateRejected, ActionAppendFinalGateFailure, true)
+		decision.Action.AttemptID = attempt.AttemptID
+		return decision
+	}
+	decision := action(CaseContinue, ActionProceedScheduler, false)
+	decision.Action.Continuation = ContinuationC4
+	return decision
+}
+
+func currentHeadAttempt(projection Projection) *AttemptRecovery {
+	attempt := projection.CurrentHeadAttempt
+	if attempt == nil || attempt.ScoreRevision != projection.State.ScoreHead.Revision || attempt.State == runstate.AttemptSuperseded {
+		return nil
+	}
+	return attempt
+}
+
+func recoveryFailureAction(caseID CaseID, kind ActionKind, attemptID runstate.AttemptID, failureKind, failureReason string, steps []ActionStep) Decision {
+	decision := action(caseID, kind, true)
+	decision.Action.AttemptID = attemptID
+	decision.Action.FailureKind = failureKind
+	decision.Action.FailureReason = failureReason
+	decision.Action.Steps = steps
+	return decision
+}
+
+func firstMissingQuestionRequest(requests []QuestionRequest) (QuestionRequest, bool) {
+	for _, request := range requests {
+		if request.DecisionID != "" && !request.Durable {
+			return request, true
+		}
+	}
+	return QuestionRequest{}, false
+}
+
+func hasUnresolvedBlockingDecision(state runstate.State, attemptID runstate.AttemptID) bool {
+	for _, decision := range state.PendingDecisions {
+		if decision.AttemptID == attemptID && decision.Blocking {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAdapterProbe(state runstate.State, attemptID runstate.AttemptID) bool {
+	_, ok := state.AdapterObservations[attemptID]
+	return ok
+}
+
+func movementHasRepoWrite(state runstate.State, movementID runstate.MovementID) bool {
+	return state.RepoWriteMovements[movementID]
+}
+
+func hasVerificationPassed(state runstate.State, attemptID runstate.AttemptID) bool {
+	return state.VerifiedAttempts[attemptID]
 }
 
 func action(caseID CaseID, kind ActionKind, replan bool) Decision {
