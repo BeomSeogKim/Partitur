@@ -15,8 +15,21 @@ import (
 
 // ReadLease reads the current driver lease.
 func (transaction *Txn) ReadLease() (Lease, bool, error) {
-	path := filepath.Join(transaction.runRoot(), "driver.lease")
-	contents, err := transaction.store.fs.ReadFile(path)
+	return readLease(transaction.store.fs, transaction.runRoot())
+}
+
+// ReadLease observes the current driver lease without taking the state lock or
+// creating any run-store paths. It is suitable for recovery observations.
+func (store *Store) ReadLease(runID runstate.RunID) (Lease, bool, error) {
+	if err := validateRunID(runID); err != nil {
+		return Lease{}, false, err
+	}
+	return readLease(store.fs, filepath.Join(store.root, ".partitur", "runs", string(runID)))
+}
+
+func readLease(fileSystem fsOperations, runRoot string) (Lease, bool, error) {
+	path := filepath.Join(runRoot, "driver.lease")
+	contents, err := fileSystem.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Lease{}, false, nil
 	}

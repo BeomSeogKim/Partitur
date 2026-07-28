@@ -459,6 +459,120 @@ func TestCreateAttemptUsesFreshBaseAndSeparatesOutput(t *testing.T) {
 	}
 }
 
+func TestVerifyRecoverySubjectChecksCompleteInvariant(t *testing.T) {
+	t.Run("matching linked worktree", func(t *testing.T) {
+		repository, worktree, subjectTree := recoverySubjectFixture(t)
+		matched, err := VerifyRecoverySubject(repository, worktree, subjectTree)
+		if err != nil || !matched {
+			t.Fatalf("VerifyRecoverySubject() = (%v, %v), want (true, nil)", matched, err)
+		}
+	})
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{
+			name: "tracked content",
+			mutate: func(t *testing.T, worktree string) {
+				writeFile(t, filepath.Join(worktree, "README.md"), []byte("changed\n"), 0o600)
+			},
+		},
+		{
+			name: "non-ignored untracked file",
+			mutate: func(t *testing.T, worktree string) {
+				writeFile(t, filepath.Join(worktree, "new.txt"), []byte("new\n"), 0o600)
+			},
+		},
+		{
+			name: "file mode",
+			mutate: func(t *testing.T, worktree string) {
+				if err := os.Chmod(filepath.Join(worktree, "script.sh"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "symlink target",
+			mutate: func(t *testing.T, worktree string) {
+				path := filepath.Join(worktree, "link")
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("script.sh", path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "protected path",
+			mutate: func(t *testing.T, worktree string) {
+				writeFile(t, filepath.Join(worktree, "partitur.yaml"), []byte("altered\n"), 0o600)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository, worktree, subjectTree := recoverySubjectFixture(t)
+			test.mutate(t, worktree)
+			matched, err := VerifyRecoverySubject(repository, worktree, subjectTree)
+			if err != nil || matched {
+				t.Fatalf("VerifyRecoverySubject() = (%v, %v), want (false, nil)", matched, err)
+			}
+		})
+	}
+
+	t.Run("replaced gitdir indirection is unverified", func(t *testing.T) {
+		repository, worktree, subjectTree := recoverySubjectFixture(t)
+		alternate := filepath.Join(t.TempDir(), "alternate")
+		gitRun(t, worktree, "worktree", "add", "--detach", alternate, "HEAD")
+		contents := readFile(t, filepath.Join(alternate, ".git"))
+		writeFile(t, filepath.Join(worktree, ".git"), contents, 0o600)
+		matched, err := VerifyRecoverySubject(repository, worktree, subjectTree)
+		if err == nil || matched {
+			t.Fatalf("VerifyRecoverySubject() = (%v, %v), want unverified", matched, err)
+		}
+	})
+
+	t.Run("foreign self-consistent gitdir is unverified", func(t *testing.T) {
+		repository, worktree, subjectTree := recoverySubjectFixture(t)
+		foreign := t.TempDir()
+		gitRun(t, foreign, "init", "-b", "main")
+		gitRun(t, foreign, "config", "user.name", "Partitur Test")
+		gitRun(t, foreign, "config", "user.email", "partitur@example.invalid")
+		writeFile(t, filepath.Join(foreign, "README.md"), []byte("base\n"), 0o600)
+		writeFile(t, filepath.Join(foreign, "script.sh"), []byte("#!/bin/sh\n"), 0o600)
+		if err := os.Symlink("README.md", filepath.Join(foreign, "link")); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(foreign, "partitur.yaml"), readFile(t, filepath.Join(repository, "partitur.yaml")), 0o600)
+		writeFile(t, filepath.Join(foreign, ".partitur", "cast.yaml"), readFile(t, filepath.Join(repository, ".partitur", "cast.yaml")), 0o600)
+		writeFile(t, filepath.Join(foreign, ".gitignore"), readFile(t, filepath.Join(repository, ".gitignore")), 0o600)
+		gitRun(t, foreign, "add", ".")
+		gitRun(t, foreign, "commit", "-m", "foreign fixture")
+		if err := os.RemoveAll(worktree); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, foreign, "worktree", "add", "--detach", worktree, "HEAD")
+
+		matched, err := VerifyRecoverySubject(repository, worktree, subjectTree)
+		if err == nil || matched {
+			t.Fatalf("VerifyRecoverySubject() = (%v, %v), want unverified foreign repository", matched, err)
+		}
+	})
+}
+
+func recoverySubjectFixture(t *testing.T) (string, string, string) {
+	t.Helper()
+	_, preparation := prepareRepository(t)
+	started := startFixture(t, preparation, newRecordingGit(t), testRunID)
+	started.Run.newID = idSequence(testAttemptID)
+	attempt, err := started.Run.CreateAttempt(preparation.Score.Movements()[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return preparation.RepositoryRoot, attempt.Worktree, gitText(t, attempt.Worktree, "rev-parse", "HEAD^{tree}")
+}
+
 func TestCreateAttemptRejectsMovementOutsidePinnedScore(t *testing.T) {
 	_, preparation := prepareRepository(t)
 	started := startFixture(t, preparation, newRecordingGit(t), testRunID)
