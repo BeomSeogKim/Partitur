@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -299,7 +300,187 @@ func TestPlanC1ReplanActionsClearTheirOwnSelectionCut(t *testing.T) {
 	}
 }
 
-func TestPlanC1TotalOverDeclaredAxes(t *testing.T) {
+func TestPlanC2RowsAndAdjacentStates(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    Input
+		wantCase CaseID
+		wantKind ActionKind
+		wantHalt HaltReason
+		replan   bool
+		steps    []ActionStep
+		adjacent Input
+	}{
+		{
+			name:     "recorded failed disposition is realized without reclassification",
+			input:    withFailedAttempt(c2Input(runstate.AttemptFailed), false),
+			wantCase: CaseRealizeDisposition, wantKind: ActionRealizeRecordedDisposition,
+			adjacent: withFailedAttempt(c2Input(runstate.AttemptFailed), true),
+		},
+		{
+			name:     "first missing raised question request",
+			input:    withQuestionRequests(c2Input(runstate.AttemptBlocked), false, true),
+			wantCase: CaseAppendQuestionRequest, wantKind: ActionAppendQuestionRequest, replan: true,
+			adjacent: withQuestionRequests(c2Input(runstate.AttemptBlocked), true, true),
+		},
+		{
+			name:     "released blocking decision selects decision resume",
+			input:    withQuestionRequests(c2Input(runstate.AttemptBlocked), true, false),
+			wantCase: CaseDecisionResume, wantKind: ActionSelectDecisionResume,
+			adjacent: withQuestionRequests(c2Input(runstate.AttemptBlocked), true, true),
+		},
+		{
+			name:     "unresolved blocking decision remains quiescent",
+			input:    withQuestionRequests(c2Input(runstate.AttemptBlocked), true, true),
+			wantCase: CaseWaitingHuman, wantKind: ActionReturnWaitingHuman,
+			adjacent: withQuestionRequests(c2Input(runstate.AttemptBlocked), true, false),
+		},
+		{
+			name:     "selected attempt stabilizes before recovered close and failure",
+			input:    c2Input(runstate.AttemptStarting),
+			wantCase: CaseUnstartedAttempt, wantKind: ActionRecoverUnstartedAttempt, replan: true,
+			steps:    []ActionStep{StepStabilizeHandoff, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+			adjacent: c2Input(runstate.AttemptRunning),
+		},
+		{
+			name:     "started unprobed attempt sweeps before close and infrastructure failure",
+			input:    c2Input(runstate.AttemptRunning),
+			wantCase: CaseUnprobedAttempt, wantKind: ActionRecoverUnprobedAttempt, replan: true,
+			steps:    []ActionStep{StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+			adjacent: withAdapterProbe(c2Input(runstate.AttemptRunning)),
+		},
+		{
+			name:     "probed incomplete attempt sweeps before quality failure",
+			input:    withAdapterProbe(c2Input(runstate.AttemptRunning)),
+			wantCase: CaseIncompleteAttempt, wantKind: ActionRecoverIncompleteAttempt, replan: true,
+			steps:    []ActionStep{StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+			adjacent: withChangeSet(c2Input(runstate.AttemptVerifying)),
+		},
+		{
+			name:     "repo write completion captures its missing change set first",
+			input:    withRepoWrite(c2Input(runstate.AttemptVerifying)),
+			wantCase: CaseCaptureChangeSet, wantKind: ActionCaptureChangeSet, replan: true,
+			adjacent: withChangeSet(withRepoWrite(c2Input(runstate.AttemptVerifying))),
+		},
+		{
+			name:     "completed adapter work is fully verified before acceptance",
+			input:    withChangeSet(c2Input(runstate.AttemptVerifying)),
+			wantCase: CasePostHocVerification, wantKind: ActionRerunPostHocVerification, replan: true,
+			adjacent: withVerificationPassed(withChangeSet(c2Input(runstate.AttemptVerifying))),
+		},
+		{
+			name:     "verified attempt enters acceptance",
+			input:    withVerificationPassed(withChangeSet(c2Input(runstate.AttemptVerifying))),
+			wantCase: CaseStartAcceptance, wantKind: ActionAppendAcceptanceStarted,
+			adjacent: withAcceptanceStarted(withVerificationPassed(withChangeSet(c2Input(runstate.AttemptVerifying)))),
+		},
+		{
+			name:     "completed attempt finalizes its movement",
+			input:    c2Input(runstate.AttemptCompleted),
+			wantCase: CaseMovementSucceeded, wantKind: ActionAppendMovementSucceeded, replan: true,
+			adjacent: withMovementSucceeded(c2Input(runstate.AttemptCompleted)),
+		},
+		{
+			name:     "failed movement finalizes its nonterminal run",
+			input:    withMovementFailed(withFailedAttempt(c2Input(runstate.AttemptFailed), true)),
+			wantCase: CaseRunFailed, wantKind: ActionAppendRunFailed, replan: true,
+			adjacent: withTerminal(withMovementFailed(withFailedAttempt(c2Input(runstate.AttemptFailed), true))),
+		},
+		{
+			name:     "final gate rejection is an atomic movement failure",
+			input:    withFinalGateRejected(withFailedAttempt(c2Input(runstate.AttemptFailed), true)),
+			wantCase: CaseFinalGateRejected, wantKind: ActionAppendFinalGateFailure, replan: true,
+			adjacent: withMovementFailed(withFinalGateRejected(withFailedAttempt(c2Input(runstate.AttemptFailed), true))),
+		},
+	}
+
+	seen := map[CaseID]bool{}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := PlanAttempt(test.input)
+			assertDecision(t, got, test.wantCase, test.wantKind, test.wantHalt, test.replan)
+			if !slices.Equal(got.Action.Steps, test.steps) {
+				t.Fatalf("steps = %v, want %v", got.Action.Steps, test.steps)
+			}
+			adjacent := PlanAttempt(test.adjacent)
+			if adjacent.CaseID == test.wantCase && adjacent.Action != nil && adjacent.Action.Kind == test.wantKind && adjacent.Halt == test.wantHalt {
+				t.Fatalf("adjacent state selected the same result: %+v", adjacent)
+			}
+		})
+		seen[test.wantCase] = true
+	}
+	for _, caseID := range []CaseID{
+		CaseRealizeDisposition, CaseAppendQuestionRequest, CaseDecisionResume, CaseWaitingHuman,
+		CaseUnstartedAttempt, CaseUnprobedAttempt, CaseIncompleteAttempt, CaseCaptureChangeSet,
+		CasePostHocVerification, CaseStartAcceptance, CaseMovementSucceeded, CaseRunFailed,
+		CaseFinalGateRejected,
+	} {
+		if !seen[caseID] {
+			t.Fatalf("C.2 case %s has no direct selection test", caseID)
+		}
+	}
+}
+
+func TestPlanC2ScopeHaltsAndPrecedence(t *testing.T) {
+	t.Run("historical attempt cannot enter C2", func(t *testing.T) {
+		input := c2Input(runstate.AttemptRunning)
+		input.Projection.CurrentHeadAttempt.ScoreRevision = input.Projection.State.ScoreHead.Revision + 1
+		assertDecision(t, Plan(input), CaseContinue, ActionProceedScheduler, "", false)
+		assertDecision(t, PlanAttempt(input), CaseContinue, ActionProceedScheduler, "", false)
+	})
+	t.Run("superseded attempt cannot enter C2", func(t *testing.T) {
+		input := c2Input(runstate.AttemptSuperseded)
+		assertDecision(t, Plan(input), CaseContinue, ActionProceedScheduler, "", false)
+		assertDecision(t, PlanAttempt(input), CaseContinue, ActionProceedScheduler, "", false)
+	})
+	t.Run("missing request precedes waiting human", func(t *testing.T) {
+		input := withQuestionRequests(c2Input(runstate.AttemptBlocked), false, true)
+		assertDecision(t, PlanAttempt(input), CaseAppendQuestionRequest, ActionAppendQuestionRequest, "", true)
+	})
+	t.Run("recorded disposition is carried unchanged to Arm 2", func(t *testing.T) {
+		input := withFailedAttempt(c2Input(runstate.AttemptFailed), false)
+		got := PlanAttempt(input)
+		assertDecision(t, got, CaseRealizeDisposition, ActionRealizeRecordedDisposition, "", false)
+		if got.Action.RecordedDisposition == nil || *got.Action.RecordedDisposition != *input.Projection.CurrentHeadAttempt.RecordedDisposition {
+			t.Fatalf("recorded disposition = %+v, want %+v", got.Action.RecordedDisposition, input.Projection.CurrentHeadAttempt.RecordedDisposition)
+		}
+	})
+	t.Run("C2 continuation is explicit at table boundaries", func(t *testing.T) {
+		if got := PlanAttempt(withQuestionRequests(c2Input(runstate.AttemptBlocked), true, false)); got.Action.Continuation != ContinuationC4 {
+			t.Fatalf("decision resume continuation = %q, want %q", got.Action.Continuation, ContinuationC4)
+		}
+		if got := PlanAttempt(withVerificationPassed(withChangeSet(c2Input(runstate.AttemptVerifying)))); got.Action.Continuation != ContinuationC3 {
+			t.Fatalf("acceptance continuation = %q, want %q", got.Action.Continuation, ContinuationC3)
+		}
+	})
+	t.Run("change set capture precedes post hoc verification", func(t *testing.T) {
+		input := withRepoWrite(c2Input(runstate.AttemptVerifying))
+		assertDecision(t, PlanAttempt(input), CaseCaptureChangeSet, ActionCaptureChangeSet, "", true)
+	})
+	t.Run("performer completed excludes incomplete execution recovery", func(t *testing.T) {
+		input := withAdapterProbe(withChangeSet(c2Input(runstate.AttemptVerifying)))
+		assertDecision(t, PlanAttempt(input), CasePostHocVerification, ActionRerunPostHocVerification, "", true)
+	})
+	t.Run("unverifiable sweep halts before interval close", func(t *testing.T) {
+		input := withAdapterProbe(c2Input(runstate.AttemptRunning))
+		input.Observations.AdapterSweep = SweepUnverifiable
+		assertDecision(t, PlanAttempt(input), CaseIncompleteAttempt, "", HaltSweepUnverifiable, false)
+	})
+	t.Run("unverifiable handoff halts", func(t *testing.T) {
+		input := c2Input(runstate.AttemptStarting)
+		input.Observations.Handoff = HandoffUnverifiable
+		assertDecision(t, PlanAttempt(input), CaseUnstartedAttempt, "", HaltSpawnHandoffUnverifiable, false)
+	})
+	t.Run("attempt terminated incomplete is a quality failure instruction", func(t *testing.T) {
+		got := PlanAttempt(withAdapterProbe(c2Input(runstate.AttemptRunning)))
+		assertDecision(t, got, CaseIncompleteAttempt, ActionRecoverIncompleteAttempt, "", true)
+		if got.Action.FailureKind != "task_failed" || got.Action.FailureReason != "attempt_terminated_incomplete" {
+			t.Fatalf("failure = %q/%q, want task_failed/attempt_terminated_incomplete", got.Action.FailureKind, got.Action.FailureReason)
+		}
+	})
+}
+
+func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 	type axis struct {
 		name   string
 		values []func(Input) Input
@@ -380,6 +561,104 @@ func TestPlanC1TotalOverDeclaredAxes(t *testing.T) {
 	expand(0, baseInput())
 	if count == 0 {
 		t.Fatal("declared recovery axes produced no inputs")
+	}
+
+	c2Axes := []axis{
+		{
+			name: "attempt phase",
+			values: []func(Input) Input{
+				noChange,
+				func(input Input) Input {
+					input.Projection.CurrentHeadAttempt.State = runstate.AttemptRunning
+					return input
+				},
+				func(input Input) Input {
+					input.Projection.CurrentHeadAttempt.State = runstate.AttemptVerifying
+					return input
+				},
+				func(input Input) Input {
+					input.Projection.CurrentHeadAttempt.State = runstate.AttemptCompleted
+					return input
+				},
+				func(input Input) Input { return withFailedAttempt(input, false) },
+				func(input Input) Input {
+					input.Projection.CurrentHeadAttempt.State = runstate.AttemptBlocked
+					return input
+				},
+			},
+		},
+		{
+			name:   "probe",
+			values: []func(Input) Input{noChange, withAdapterProbe},
+		},
+		{
+			name:   "failure realization",
+			values: []func(Input) Input{noChange, func(input Input) Input { return withFailedAttempt(input, true) }},
+		},
+		{
+			name:   "question request",
+			values: []func(Input) Input{noChange, func(input Input) Input { return withQuestionRequests(input, false, false) }},
+		},
+		{
+			name:   "blocking decision",
+			values: []func(Input) Input{noChange, func(input Input) Input { return withQuestionRequests(input, true, true) }},
+		},
+		{
+			name: "completion boundary",
+			values: []func(Input) Input{
+				noChange,
+				withChangeSet,
+				withVerificationPassed,
+				withAcceptanceStarted,
+				withMovementSucceeded,
+				withMovementFailed,
+				withFinalGateRejected,
+			},
+		},
+		{
+			name: "external observation",
+			values: []func(Input) Input{
+				noChange,
+				func(input Input) Input { input.Observations.Handoff = HandoffUnverifiable; return input },
+				func(input Input) Input { input.Observations.Handoff = HandoffSweepFailed; return input },
+				func(input Input) Input { input.Observations.AdapterSweep = SweepUnverifiable; return input },
+				func(input Input) Input { input.Observations.Worktree = WorktreeMissing; return input },
+			},
+		},
+		{
+			name: "scope",
+			values: []func(Input) Input{
+				noChange,
+				func(input Input) Input {
+					input.Projection.CurrentHeadAttempt.ScoreRevision = input.Projection.State.ScoreHead.Revision + 1
+					return input
+				},
+				func(input Input) Input {
+					input.Projection.CurrentHeadAttempt.State = runstate.AttemptSuperseded
+					return input
+				},
+			},
+		},
+	}
+
+	count = 0
+	var expandC2 func(int, Input)
+	expandC2 = func(index int, input Input) {
+		if index == len(c2Axes) {
+			count++
+			decision := PlanAttempt(input)
+			if !decision.Valid() {
+				t.Fatalf("invalid C.2 decision for declared input %d: %+v", count, decision)
+			}
+			return
+		}
+		for _, set := range c2Axes[index].values {
+			expandC2(index+1, set(input))
+		}
+	}
+	expandC2(0, c2Input(runstate.AttemptStarting))
+	if count == 0 {
+		t.Fatal("declared C.2 recovery axes produced no inputs")
 	}
 }
 
@@ -490,6 +769,98 @@ func withCompositionTerminal(input Input) Input {
 }
 
 func withCurrentHeadAttempt(input Input) Input {
-	input.Projection.HasCurrentHeadAttempt = true
+	input.Projection.CurrentHeadAttempt = &AttemptRecovery{
+		AttemptID:     "attempt",
+		MovementID:    "movement",
+		ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		State:         runstate.AttemptStarting,
+	}
+	return input
+}
+
+func c2Input(state runstate.AttemptState) Input {
+	input := baseInput()
+	input.Projection.State.Attempts = map[runstate.AttemptID]runstate.Attempt{}
+	input.Projection.State.AdapterObservations = map[runstate.AttemptID]runstate.AdapterObservation{}
+	input.Projection.State.VerifiedAttempts = map[runstate.AttemptID]bool{}
+	input.Projection.State.RepoWriteMovements = map[runstate.MovementID]bool{}
+	input.Projection.CurrentHeadAttempt = &AttemptRecovery{
+		AttemptID:     "attempt",
+		MovementID:    "movement",
+		ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		State:         state,
+	}
+	return input
+}
+
+func withFailedAttempt(input Input, realized bool) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	attempt.State = runstate.AttemptFailed
+	attempt.FailureDispositionRealized = realized
+	disposition := runstate.Disposition{Charged: "quality_retry"}
+	attempt.RecordedDisposition = &disposition
+	input.Projection.State.Attempts[attempt.AttemptID] = runstate.Attempt{
+		MovementID: attempt.MovementID,
+		State:      runstate.AttemptFailed,
+		Failure: &runstate.AttemptFailure{
+			Kind:        "task_failed",
+			Reason:      "attempt_terminated_incomplete",
+			Disposition: disposition,
+		},
+	}
+	return input
+}
+
+func withQuestionRequests(input Input, durable, unresolved bool) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	attempt.QuestionRequests = []QuestionRequest{{DecisionID: "question-1", Durable: durable}}
+	if unresolved {
+		input.Projection.State.PendingDecisions["question-1"] = runstate.PendingDecision{
+			ID: "question-1", AttemptID: attempt.AttemptID, Blocking: true,
+		}
+	}
+	return input
+}
+
+func withAdapterProbe(input Input) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	input.Projection.State.AdapterObservations[attempt.AttemptID] = runstate.AdapterObservation{}
+	return input
+}
+
+func withRepoWrite(input Input) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	input.Projection.State.RepoWriteMovements[attempt.MovementID] = true
+	return input
+}
+
+func withChangeSet(input Input) Input {
+	input.Projection.CurrentHeadAttempt.ChangeSetRecorded = true
+	return input
+}
+
+func withVerificationPassed(input Input) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	input.Projection.State.VerifiedAttempts[attempt.AttemptID] = true
+	return input
+}
+
+func withAcceptanceStarted(input Input) Input {
+	input.Projection.CurrentHeadAttempt.AcceptanceStarted = true
+	return input
+}
+
+func withMovementSucceeded(input Input) Input {
+	input.Projection.CurrentHeadAttempt.MovementSucceeded = true
+	return input
+}
+
+func withMovementFailed(input Input) Input {
+	input.Projection.CurrentHeadAttempt.MovementFailed = true
+	return input
+}
+
+func withFinalGateRejected(input Input) Input {
+	input.Projection.CurrentHeadAttempt.FinalGateRejected = true
 	return input
 }
