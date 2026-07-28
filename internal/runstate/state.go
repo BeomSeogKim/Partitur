@@ -16,6 +16,8 @@ func NewState(seed []MovementSeed) State {
 		MovementResults:     make(map[MovementID]MovementResult),
 		CriterionLaunches:   make(map[CriterionLaunchKey]CriterionLaunch),
 		Acceptances:         make(map[AttemptID]Acceptance),
+		PendingDecisions:    make(map[string]PendingDecision),
+		RoutedAmendments:    make(map[ProposalID]RoutedAmendment),
 		Application:         ApplicationProjection{State: ApplicationNotApplied},
 		Promotion:           PromotionProjection{State: PromotionNotPromoted},
 	}
@@ -81,6 +83,8 @@ func cloneState(input State) State {
 		output.ApplicationCandidate = &candidate
 	}
 	output.CriterionLaunches = cloneMap(input.CriterionLaunches)
+	output.PendingDecisions = cloneMap(input.PendingDecisions)
+	output.RoutedAmendments = cloneMap(input.RoutedAmendments)
 	output.Acceptances = make(map[AttemptID]Acceptance, len(input.Acceptances))
 	for id, acceptance := range input.Acceptances {
 		acceptance.PlannedCriterionIDs = append([]CriterionID(nil), acceptance.PlannedCriterionIDs...)

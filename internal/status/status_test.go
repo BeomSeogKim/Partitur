@@ -165,6 +165,27 @@ func TestProjectRendersFailureCancellationAndSupersessionStates(t *testing.T) {
 	}
 }
 
+func TestProjectRendersPendingDecisions(t *testing.T) {
+	compiled := mustCompile(t, statusScore())
+	state := runstate.NewState(movementSeeds(compiled))
+	state.Run = runstate.RunWaitingHuman
+	state.Movements["inspect"] = runstate.MovementWaitingHuman
+	state.PendingDecisions["decision-b"] = runstate.PendingDecision{
+		ID: "decision-b", Type: "human_gate", Blocking: true, MovementID: "inspect", AttemptID: "attempt-1", ScoreRevision: 2,
+	}
+	state.PendingDecisions["decision-a"] = runstate.PendingDecision{
+		ID: "decision-a", Type: "question", Blocking: true, MovementID: "inspect", AttemptID: "attempt-1", ScoreRevision: 1,
+	}
+
+	report := project("run-1", compiled, runstore.ReadReplayResult{State: state})
+	if report.Run.Lifecycle != string(runstate.RunWaitingHuman) || report.Run.Movements[0].State != string(runstate.MovementWaitingHuman) ||
+		len(report.Run.PendingDecisions) != 2 || report.Run.PendingDecisions[0] != (PendingDecision{
+		ID: "decision-a", Type: "question", MovementID: "inspect", AttemptID: "attempt-1", ScoreRevision: 1,
+	}) || report.Run.PendingDecisions[1].ID != "decision-b" {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
 func TestReadWithoutExactlyOneActiveRunIsRefused(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".partitur", "runs", "orphan"), 0o700); err != nil {

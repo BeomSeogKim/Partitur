@@ -2,13 +2,13 @@
 //
 // State is a pure function of the initial movement seed derived from the
 // authenticated pinned score and the journal. This package supports only the
-// forty-one event types needed by DESIGN Appendix E, the first run success
+// forty-eight event types needed by DESIGN Appendix E, the first run success
 // path, and the shipping status projection. Valid registry events
 // outside that subset fail closed with ErrUnsupportedEventType.
 //
-// Amendment projection is intentionally auto-mode only. Human histories need
-// decision-lifecycle projection and revision-aware movement-set handling,
-// neither of which is in this E-scoped projector.
+// Amendment projection records human routing and rejection histories, while
+// approval preparation and commit remain auto-mode only in this E-scoped
+// projector.
 package runstate
 
 import "encoding/json"
@@ -133,6 +133,28 @@ type PendingPrepare struct {
 	TargetAttemptIDs       []AttemptID
 	ClassifierVersion      uint64
 	IdentityVersions       json.RawMessage
+}
+
+type PendingDecision struct {
+	ID            string
+	Type          string
+	Blocking      bool
+	MovementID    MovementID
+	AttemptID     AttemptID
+	ScoreRevision uint64
+	ProposalID    ProposalID
+	GateID        string
+	SubjectTree   string
+}
+
+type RoutedAmendment struct {
+	ProposalID        ProposalID
+	DecisionID        string
+	DecisionType      string
+	Blocking          bool
+	BaseRevision      uint64
+	BaseHash          Hash
+	ClassifierVersion uint64
 }
 
 type ExecutionInterval struct {
@@ -300,6 +322,8 @@ type State struct {
 	Promotion            PromotionProjection
 	CriterionLaunches    map[CriterionLaunchKey]CriterionLaunch
 	Acceptances          map[AttemptID]Acceptance
+	PendingDecisions     map[string]PendingDecision
+	RoutedAmendments     map[ProposalID]RoutedAmendment
 	CancelRequested      bool
 }
 
@@ -332,11 +356,19 @@ const (
 	EventCriterionCompleted             EventType = "criterion.completed"
 	EventAcceptanceFailed               EventType = "acceptance.failed"
 	EventAcceptanceEvaluationCompleted  EventType = "acceptance.evaluation_completed"
+	EventDecisionRequested              EventType = "decision.requested"
+	EventDecisionResolved               EventType = "decision.resolved"
+	EventDecisionObsoleted              EventType = "decision.obsoleted"
+	EventAmendmentRejected              EventType = "amendment.rejected"
 	EventExecutionStarted               EventType = "execution.started"
 	EventExecutionStopped               EventType = "execution.stopped"
 	EventAmendmentApprovalPrepared      EventType = "amendment.approval_prepared"
 	EventAmendmentApprovalAbandoned     EventType = "amendment.approval_abandoned"
+	EventAmendmentRoutedHuman           EventType = "amendment.routed_human"
 	EventAmendmentApproved              EventType = "amendment.approved"
+	EventAmendmentHumanRejected         EventType = "amendment.human_rejected"
+	EventCompositionConflicted          EventType = "composition.conflicted"
+	EventCompositionFailed              EventType = "composition.failed"
 	EventAuthorityGranted               EventType = "authority.granted"
 	EventCancelRequested                EventType = "cancel.requested"
 	EventJournalTailTruncated           EventType = "journal.tail_truncated"

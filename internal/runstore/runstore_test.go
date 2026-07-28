@@ -552,6 +552,84 @@ func TestJournalIdempotencyUsesCanonicalPayloadOnly(t *testing.T) {
 	}
 }
 
+func TestJournalIdempotencyForDirectionEvents(t *testing.T) {
+	identityVersions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	tests := []struct {
+		name  string
+		event runstate.Event
+	}{
+		{
+			name: "decision requested",
+			event: directionEvent(runstate.EventDecisionRequested, map[string]any{
+				"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
+			}),
+		},
+		{
+			name: "decision resolved",
+			event: directionEvent(runstate.EventDecisionResolved, map[string]any{
+				"decision_id": "decision-1", "decision_type": "question", "disposition": "answered", "answer": "yes",
+			}),
+		},
+		{
+			name: "amendment rejected",
+			event: directionEvent(runstate.EventAmendmentRejected, map[string]any{
+				"proposal_id": "proposal-1", "reason": "patch_error", "base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+				"patch_operations_hash": "sha256:patch", "error_location": "patch[0]", "identity_versions": identityVersions,
+			}),
+		},
+		{
+			name: "amendment routed human",
+			event: directionEvent(runstate.EventAmendmentRoutedHuman, map[string]any{
+				"proposal_id": "proposal-1", "reason": "auto_disabled", "decision_type": "amendment", "blocking": true,
+				"proposal_record_hash": "sha256:proposal", "base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+				"decision_id": "decision-1", "typed_delta": []any{}, "actual_impact": emptyActualImpactPayload(), "identity_versions": identityVersions,
+			}),
+		},
+		{
+			name: "amendment human rejected",
+			event: directionEvent(runstate.EventAmendmentHumanRejected, map[string]any{
+				"proposal_id": "proposal-1", "decision_id": "decision-1", "human_reason": "not now",
+				"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1, "identity_versions": identityVersions,
+			}),
+		},
+		{
+			name: "composition conflicted",
+			event: directionEvent(runstate.EventCompositionConflicted, map[string]any{
+				"scope": "movement", "target_id": "m1", "composition_subject_hash": "sha256:subject", "contributors": []any{},
+				"conflicted_paths": []any{"a"}, "composition_algorithm_version": "1", "identity_versions": identityVersions,
+			}),
+		},
+		{
+			name: "composition failed",
+			event: directionEvent(runstate.EventCompositionFailed, map[string]any{
+				"scope": "movement", "target_id": "m1", "composition_subject_hash": "sha256:subject", "cause": "git_exit", "git_exit_code": 2,
+				"diagnostic": "exit 2", "contributors": []any{}, "composition_algorithm_version": "1", "identity_versions": identityVersions,
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			var first, replay DurabilityReceipt
+			err := store.Mutate("run-1", "", func(transaction *Txn) error {
+				var err error
+				first, err = transaction.At("direction/journal_append").Append(test.event)
+				if err != nil {
+					return err
+				}
+				replay, err = transaction.At("direction/journal_append").Append(test.event)
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replay.Mutation.Sequence != first.Mutation.Sequence || replay.Mutation.EventID != first.Mutation.EventID {
+				t.Fatalf("replay receipt = %+v, first receipt = %+v", replay, first)
+			}
+		})
+	}
+}
+
 func TestRepositoryLockSerializesRunsAndPersists(t *testing.T) {
 	store := newTestStore(t)
 	entered := make(chan struct{})
@@ -1033,6 +1111,31 @@ func movementReadyEvent() runstate.Event {
 		MovementID:    "m1",
 		Type:          runstate.EventMovementReady,
 		Payload:       json.RawMessage(`{}`),
+	}
+}
+
+func directionEvent(eventType runstate.EventType, payload any) runstate.Event {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return runstate.Event{
+		RunID:         "run-1",
+		ScoreRevision: 1,
+		Type:          eventType,
+		Payload:       encoded,
+	}
+}
+
+func emptyActualImpactPayload() map[string]any {
+	return map[string]any{
+		"score_changes": []any{},
+		"authority": map[string]any{
+			"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}},
+			"grants":        []any{},
+			"side_effects":  map[string]any{"added": []any{}, "removed": []any{}},
+		},
+		"budget": map[string]any{},
 	}
 }
 
