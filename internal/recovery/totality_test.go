@@ -12,6 +12,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		surfaceC1 surface = iota + 1
 		surfaceC2
 		surfaceC3
+		surfaceC4
 	)
 	type spec struct {
 		surface surface
@@ -32,6 +33,9 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		subject             SubjectVerification
 		criterionSweep      SweepState
 		unjournaled         UnjournaledLaunchState
+
+		schedulerState                                                   int
+		compositionRecovered, schedulerBudgetExhausted, pendingSuccessor bool
 	}
 	type axis struct {
 		name   string
@@ -56,6 +60,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 				{surface: surfaceC1},
 				{surface: surfaceC2, phase: runstate.AttemptStarting},
 				{surface: surfaceC3, phase: runstate.AttemptVerifying},
+				{surface: surfaceC4},
 			}
 		}},
 		{name: "run", values: forSurface(surfaceC1, func(input spec) spec { input.terminal = true; return input })},
@@ -123,16 +128,25 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 			func(input spec) spec { input.unjournaled = UnjournaledLaunchSweepUnverifiable; return input },
 		)},
 		{name: "current-head scope", values: func(input spec) []spec {
-			if input.surface == surfaceC1 {
+			if input.surface == surfaceC1 || input.surface == surfaceC4 {
 				return []spec{input}
 			}
 			stale := input
 			stale.staleHead = true
 			return []spec{input, stale}
 		}},
+		{name: "C.4 compiled lifecycle position", values: forSurface(surfaceC4,
+			func(input spec) spec { input.schedulerState = 1; return input },
+			func(input spec) spec { input.schedulerState = 2; return input },
+			func(input spec) spec { input.schedulerState = 3; return input },
+			func(input spec) spec { input.schedulerState = 4; return input },
+		)},
+		{name: "C.4 recovered composition close", values: forSurface(surfaceC4, func(input spec) spec { input.compositionRecovered = true; return input })},
+		{name: "C.4 budget boundary", values: forSurface(surfaceC4, func(input spec) spec { input.schedulerBudgetExhausted = true; return input })},
+		{name: "C.4 pending successor", values: forSurface(surfaceC4, func(input spec) spec { input.pendingSuccessor = true; return input })},
 	}
-	if len(axes) < 25 {
-		t.Fatalf("declared recovery axes = %d, want at least 25", len(axes))
+	if len(axes) < 29 {
+		t.Fatalf("declared recovery axes = %d, want at least 29", len(axes))
 	}
 
 	materialize := func(spec spec) Input {
@@ -199,6 +213,42 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 			}
 			return input
 		}
+		if spec.surface == surfaceC4 {
+			input := baseInput()
+			input.Projection.Scheduler = Scheduler{
+				RemainingTime: 1,
+				Movements: []ScheduledMovement{
+					{ID: "write", RepoWrite: true},
+					{ID: "check", Needs: []runstate.MovementID{"write"}, Final: true},
+				},
+			}
+			input.Projection.State.Movements = map[runstate.MovementID]runstate.MovementState{
+				"write": runstate.MovementPending,
+				"check": runstate.MovementPending,
+			}
+			switch spec.schedulerState {
+			case 1:
+				input.Projection.State.Movements["write"] = runstate.MovementReady
+			case 2:
+				input.Projection.State.Movements["write"] = runstate.MovementRunning
+			case 3:
+				input.Projection.State.Movements["write"] = runstate.MovementSucceeded
+			case 4:
+				input.Projection.Scheduler.GateWaived = true
+				input.Projection.Scheduler.Movements = []ScheduledMovement{{ID: "write"}}
+				input.Projection.State.Movements = map[runstate.MovementID]runstate.MovementState{"write": runstate.MovementSucceeded}
+			}
+			if spec.compositionRecovered {
+				input.Projection.CompositionRecovery = &CompositionRecovery{Scope: "movement", MovementID: "write", Recovered: true}
+			}
+			if spec.schedulerBudgetExhausted {
+				input.Projection.Scheduler.RemainingTime = 0
+			}
+			if spec.pendingSuccessor {
+				input.Projection.Scheduler.PendingSuccessor = &PendingSuccessor{MovementID: "write", Reason: "quality_retry"}
+			}
+			return input
+		}
 
 		input := c2Input(spec.phase)
 		attempt := input.Projection.CurrentHeadAttempt
@@ -257,6 +307,8 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 				decision = PlanAttempt(materialized)
 			case surfaceC3:
 				decision = PlanAcceptance(materialized)
+			case surfaceC4:
+				decision = PlanScheduler(materialized)
 			default:
 				t.Fatalf("unknown planner surface %d", input.surface)
 			}
@@ -278,6 +330,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		CaseTerminal, CaseStaleLease,
 		CaseUnstartedAttempt, CaseIncompleteAttempt, CasePostHocVerification,
 		CaseFirstCriterion, CaseCriteriaPassed, CaseHumanGateApproved, CaseUnjournaledLaunch,
+		CaseBudgetExhausted, CaseRecoveredComposition, CaseScheduler,
 	} {
 		if !seen[caseID] {
 			t.Fatalf("declared recovery axes did not select %s", caseID)
