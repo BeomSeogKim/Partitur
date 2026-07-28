@@ -600,7 +600,7 @@ func appendDeadRecoveryLease(t *testing.T, store *Store) Lease {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lease := Lease{Epoch: 1, Token: "dead-token", PID: 1 << 30, Start: start}
+	lease := Lease{Epoch: 1, Token: "dead-token", PID: os.Getpid(), Start: distinctStartIdentity(t, start)}
 	appendRecoveryAuthorityAndLease(t, store, lease)
 	return lease
 }
@@ -629,10 +629,10 @@ func distinctStartIdentity(t *testing.T, identity runstate.StartIdentity) runsta
 	t.Helper()
 	switch value := identity.(type) {
 	case runstate.LinuxStartIdentity:
-		value.StartTicks += "-previous"
+		value.BootID += "-previous"
 		return value
 	case runstate.DarwinStartIdentity:
-		value.StartTVUsec++
+		value.StartTVSec++
 		return value
 	default:
 		t.Fatalf("unsupported start identity %T", identity)
