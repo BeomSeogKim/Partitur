@@ -1026,6 +1026,7 @@ func disposition(value map[string]any) Disposition {
 	return Disposition{
 		Charged:          mustString(value, "charged"),
 		MovementTerminal: mustBool(value, "movement_terminal"),
+		TerminalReason:   stringOrEmpty(value, "terminal_reason"),
 	}
 }
 
@@ -1788,7 +1789,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		}
 	}
 	if dispositionValue, ok := payload["disposition"].(map[string]any); ok {
-		if err := fields(dispositionValue, []string{"charged", "movement_terminal"}, nil); err != nil {
+		if err := fields(dispositionValue, []string{"charged", "movement_terminal"}, []string{"terminal_reason"}); err != nil {
 			return fmt.Errorf("disposition: %w", err)
 		}
 		if _, ok := dispositionValue["charged"].(string); !ok {
@@ -1796,6 +1797,11 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		}
 		if _, ok := dispositionValue["movement_terminal"].(bool); !ok {
 			return errors.New("disposition.movement_terminal must be a boolean")
+		}
+		if value, present := dispositionValue["terminal_reason"]; present {
+			if _, ok := value.(string); !ok {
+				return errors.New("disposition.terminal_reason must be a string")
+			}
 		}
 		charged := mustString(dispositionValue, "charged")
 		if charged != "quality_retry" && charged != "fallback" && charged != "none" {
