@@ -666,14 +666,16 @@ func PlanAcceptance(input Input) Decision {
 	if failed, ok := firstFailedCriterion(acceptance); ok {
 		return acceptanceFailureAction(CaseCriterionFailed, attempt.AttemptID, failed.ID, failed.Reason)
 	}
-	if _, ok := firstInFlightCriterion(acceptance); ok {
+	if criterionID, ok := firstInFlightCriterion(acceptance); ok {
 		if input.Observations.CriterionSweep == SweepUnverifiable {
 			return halt(CaseIncompleteCriterion, HaltSweepUnverifiable)
 		}
 		// RC-RESUME-024 always sweeps before the subject verdict. The supplied
 		// subject observation may have been collected while the criterion still
 		// held the worktree, so it cannot choose the post-sweep consequence.
-		return verifyAcceptanceSubject(CaseIncompleteCriterion, attempt.AttemptID, []ActionStep{StepSweepCriterionSession})
+		decision := verifyAcceptanceSubject(CaseIncompleteCriterion, attempt.AttemptID, []ActionStep{StepSweepCriterionSession})
+		decision.Action.CriterionID = criterionID
+		return decision
 	}
 	if acceptance.EvaluationCompleted {
 		return planEvaluatedAcceptance(input, attempt, acceptance, recovery)

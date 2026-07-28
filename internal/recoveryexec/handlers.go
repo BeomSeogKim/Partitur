@@ -167,14 +167,30 @@ func sweepCriterionSession(_ context.Context, execution HandlerContext, action r
 	return nil
 }
 
-func verifyAcceptanceSubject(_ context.Context, execution HandlerContext, action recovery.Action) error {
+func verifyAcceptanceSubject(ctx context.Context, execution HandlerContext, action recovery.Action) error {
 	// The executor has refreshed Input after the preceding sweep. Verification
 	// facts are collected by the supplied loader, never by a private handler
-	// path; the following replan consumes that post-sweep observation.
-	if execution.Input.Observations.AcceptanceSubject == recovery.SubjectUnverified {
+	// path. RC-RESUME-024 is the one prescribed execution-time branch: its
+	// criterion id marks the recorded in-flight criterion which needs a
+	// terminal observation after the refreshed verification.
+	subject := execution.Input.Observations.AcceptanceSubject
+	if subject == recovery.SubjectUnverified {
 		return errors.New("post-sweep acceptance subject is unverified")
 	}
-	return nil
+	if action.CriterionID == "" {
+		return nil
+	}
+	if subject == recovery.SubjectMismatched {
+		mismatch := action
+		mismatch.FailureReason = "recovery_subject_mismatch"
+		return appendAcceptanceFailure(ctx, execution, mismatch)
+	}
+	recovered := action
+	recovered.FailureReason = "criterion_errored"
+	if err := synthesizeCriterionError(ctx, execution, recovered); err != nil {
+		return err
+	}
+	return appendAcceptanceFailure(ctx, execution, recovered)
 }
 
 func synthesizeCriterionError(_ context.Context, execution HandlerContext, action recovery.Action) error {
@@ -410,6 +426,11 @@ func sourceAuthority(execution HandlerContext, state runstate.State, action reco
 	case runstate.EventMovementSucceeded:
 		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == runstate.EventAttemptCompleted && match(event) })
 	case runstate.EventMovementFailed:
+		if action.FailureReason == "budget_exhausted" {
+			return latestEventID(journal.Events, func(event runstate.Event) bool {
+				return event.Type == runstate.EventExecutionStopped && payloadString(event.Payload, "reason") == "budget_exhausted"
+			})
+		}
 		if source, err := latestEventID(journal.Events, func(event runstate.Event) bool {
 			return event.Type == runstate.EventAttemptFailed && match(event)
 		}); err == nil {
@@ -423,6 +444,11 @@ func sourceAuthority(execution HandlerContext, state runstate.State, action reco
 			return event.Type == runstate.EventMovementStarted && event.MovementID == movementID
 		})
 	case runstate.EventRunFailed:
+		if action.FailureReason == "budget_exhausted" {
+			return latestEventID(journal.Events, func(event runstate.Event) bool {
+				return event.Type == runstate.EventExecutionStopped && payloadString(event.Payload, "reason") == "budget_exhausted"
+			})
+		}
 		if action.MovementID != "" || action.AttemptID != "" {
 			movementID, err := actionMovement(state, action)
 			if err != nil {

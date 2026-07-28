@@ -45,9 +45,9 @@ func TestAppendixC41SelectsThisPlanner(t *testing.T) {
 			assertAppendixC41CutMatches(t, row)
 			if got := planner(input); got.CaseID != row.caseID {
 				t.Fatalf("%s selected %s, want %s", row.id, got.CaseID, row.caseID)
-			} else if row.caseID == CaseIncompleteCriterion && got.Action != nil {
-				want := []ActionStep{StepSweepCriterionSession, StepVerifyAcceptanceSubject}
-				if !slices.Equal(got.Action.Steps, want) {
+			} else if got.Action != nil && len(got.Action.Steps) != 0 {
+				want, ok := appendixC41Steps[row.caseID]
+				if !ok || !slices.Equal(got.Action.Steps, want) {
 					t.Fatalf("%s steps = %v, want %v", row.id, got.Action.Steps, want)
 				}
 			}
@@ -58,6 +58,17 @@ func TestAppendixC41SelectsThisPlanner(t *testing.T) {
 		t.Fatalf("C.4.1 oracle checked=%d out_of_scope=%d; both sets must be visible", checked, outOfScope)
 	}
 	t.Logf("C.4.1 planner oracle: %d resume rows checked, %d explicit out-of-scope rows", checked, outOfScope)
+}
+
+var appendixC41Steps = map[CaseID][]ActionStep{
+	CaseUnstartedAttempt:    {StepStabilizeHandoff, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+	CaseUnprobedAttempt:     {StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+	CaseIncompleteAttempt:   {StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+	CaseCriterionFailed:     {StepClassifyAcceptanceFailure},
+	CaseIncompleteCriterion: {StepSweepCriterionSession, StepVerifyAcceptanceSubject},
+	CaseHumanGateApproved:   {StepAppendAttemptCompleted, StepAppendMovementSucceeded},
+	CaseGateFreeCompletion:  {StepAppendAttemptCompleted, StepAppendMovementSucceeded},
+	CaseBudgetExhausted:     {StepAppendMovementBudgetFailure, StepAppendRunFailed},
 }
 
 func appendixC41ActionRows(t *testing.T) []appendixActionRow {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
@@ -47,9 +48,69 @@ func TestDefaultHandlersAppendRecoveredAttemptFailureToRealStore(t *testing.T) {
 	assertLastEventType(t, store, runstate.EventAttemptFailed)
 }
 
+func TestClampedCloseRefreshesBudgetBeforeFailureClassification(t *testing.T) {
+	store, driver := handlerStore(t, true)
+	appendMeasuredExecution(t, driver, "spent", "adapter", 600000, 599999)
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{
+		"interval_id": "last-millisecond", "phase": "adapter", "wall_start": time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), "remaining_at_start": 1,
+	})}, "test.last_millisecond.started"); err != nil {
+		t.Fatal(err)
+	}
+	load := func(context.Context) (recovery.Input, error) {
+		state, err := driver.State()
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		remaining := int64(600000) - state.ConsumedBudgetMS
+		attempt := handlerAttempt(state)
+		attempt.FailureClassification.RemainingTimeMS = remaining
+		return recovery.Input{Projection: recovery.Projection{State: state, CurrentHeadAttempt: attempt}}, nil
+	}
+	input, err := load(context.Background())
+	if err != nil || input.Projection.CurrentHeadAttempt.FailureClassification.RemainingTimeMS != 1 {
+		t.Fatalf("pre-close input=%+v error=%v", input, err)
+	}
+	executor := &Executor{Store: store, Driver: driver, Load: load}
+	_, err = executor.execute(context.Background(), input, recovery.Decision{CaseID: recovery.CaseUnstartedAttempt, Action: &recovery.Action{
+		Kind: recovery.ActionRecoverUnstartedAttempt, AttemptID: "attempt-1", FailureKind: "task_failed", FailureReason: "attempt_never_started",
+		Steps: []recovery.ActionStep{recovery.StepCloseAdapterInterval, recovery.StepClassifyAndAppendFailure},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := journal.Events[len(journal.Events)-1]
+	var payload map[string]any
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	disposition, _ := payload["disposition"].(map[string]any)
+	if disposition["charged"] != "none" || disposition["terminal_reason"] != "budget_exhausted" {
+		t.Fatalf("post-close failure disposition = %s, want exhausted budget", last.Payload)
+	}
+}
+
+func appendMeasuredExecution(t *testing.T, driver *runstore.Driver, intervalID, phase string, remaining, charged int64) {
+	t.Helper()
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{
+		"interval_id": intervalID, "phase": phase, "wall_start": "2026-07-28T00:00:00.000Z", "remaining_at_start": remaining,
+	})}, faultpoint.ReceiptAddress("test."+intervalID+".started")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: handlerPayload(t, map[string]any{
+		"interval_id": intervalID, "reason": "normal", "charging": "measured", "charged_duration": charged,
+	})}, faultpoint.ReceiptAddress("test."+intervalID+".stopped")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDefaultDirectKindsAppendToRealStore(t *testing.T) {
 	t.Run("budget failure", func(t *testing.T) {
 		store, driver := handlerStore(t, false)
+		appendBudgetExhaustedInterval(t, store, driver)
 		executor := &Executor{Store: store, Driver: driver}
 		result, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: "RC-test", Action: &recovery.Action{
 			Kind: recovery.ActionAppendBudgetFailure, MovementID: "write", FailureReason: "budget_exhausted",
@@ -80,6 +141,71 @@ func TestDefaultDirectKindsAppendToRealStore(t *testing.T) {
 		}
 		assertLastEventType(t, store, runstate.EventRunFailed)
 	})
+}
+
+func TestBudgetFailureCitesBudgetExhaustingExecutionStop(t *testing.T) {
+	t.Run("movement fan-in binds both terminal events to its closed interval", func(t *testing.T) {
+		store, driver := handlerStore(t, false)
+		stopID := appendBudgetExhaustedInterval(t, store, driver)
+		executor := &Executor{Store: store, Driver: driver}
+		_, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseBudgetExhausted, Action: &recovery.Action{
+			Kind: recovery.ActionAppendBudgetFailure, MovementID: "write", FailureReason: "budget_exhausted",
+			Steps: []recovery.ActionStep{recovery.StepAppendMovementBudgetFailure, recovery.StepAppendRunFailed},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range journal.Events {
+			if event.Type == runstate.EventMovementFailed || event.Type == runstate.EventRunFailed {
+				if event.CausationID != stopID {
+					t.Fatalf("%s causation = %q, want budget execution stop %q", event.Type, event.CausationID, stopID)
+				}
+			}
+		}
+	})
+
+	t.Run("candidate composition fails the run directly from its closed interval", func(t *testing.T) {
+		store, driver := handlerStore(t, false)
+		stopID := appendBudgetExhaustedInterval(t, store, driver)
+		executor := &Executor{Store: store, Driver: driver}
+		_, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseBudgetExhausted, Action: &recovery.Action{
+			Kind: recovery.ActionAppendRunFailed, FailureReason: "budget_exhausted",
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		last := journal.Events[len(journal.Events)-1]
+		if last.Type != runstate.EventRunFailed || last.CausationID != stopID {
+			t.Fatalf("run failure = %+v, want direct causation %q", last, stopID)
+		}
+	})
+}
+
+func appendBudgetExhaustedInterval(t *testing.T, store *runstore.Store, driver *runstore.Driver) string {
+	t.Helper()
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{
+		"interval_id": "composition-1", "phase": "composition", "wall_start": "2026-07-28T00:00:00.000Z", "remaining_at_start": 1,
+	})}, "test.execution_started"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: handlerPayload(t, map[string]any{
+		"interval_id": "composition-1", "reason": "budget_exhausted", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+	})}, "test.execution_stopped"); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return journal.Events[len(journal.Events)-1].EventID
 }
 
 func TestDefaultAcceptanceHandlersAppendToRealStore(t *testing.T) {
@@ -128,6 +254,97 @@ func TestDefaultAcceptanceHandlersAppendToRealStore(t *testing.T) {
 		}
 		assertLastEventType(t, store, runstate.EventMovementSucceeded)
 	})
+}
+
+func TestExecutorRecoversIncompleteCriterionAfterSweep(t *testing.T) {
+	tests := []struct {
+		name              string
+		subject           recovery.SubjectVerification
+		wantEventTypes    []runstate.EventType
+		wantFailureReason string
+	}{
+		{
+			name:              "matched post-sweep subject records an unobserved completion then fails acceptance",
+			subject:           recovery.SubjectMatched,
+			wantEventTypes:    []runstate.EventType{runstate.EventCriterionCompleted, runstate.EventAcceptanceFailed},
+			wantFailureReason: "criterion_errored",
+		},
+		{
+			name:              "mismatched post-sweep subject fails acceptance without inventing a completion",
+			subject:           recovery.SubjectMismatched,
+			wantEventTypes:    []runstate.EventType{runstate.EventAcceptanceFailed},
+			wantFailureReason: "recovery_subject_mismatch",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, driver := handlerStore(t, true)
+			advanceHandlerAcceptance(t, driver, true)
+			stop := errors.New("stop after recovery replan")
+			loads := 0
+			executor := &Executor{Store: store, Driver: driver}
+			executor.Load = func(context.Context) (recovery.Input, error) {
+				loads++
+				if loads == 3 {
+					return recovery.Input{}, stop
+				}
+				state, err := driver.State()
+				if err != nil {
+					return recovery.Input{}, err
+				}
+				return incompleteCriterionInput(state, test.subject), nil
+			}
+
+			result, err := executor.Execute(context.Background())
+			if !errors.Is(err, stop) || result.Replans != 0 || loads != 3 {
+				t.Fatalf("result=%+v loads=%d error=%v", result, loads, err)
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]runstate.EventType, 0, len(test.wantEventTypes))
+			for _, event := range journal.Events {
+				if event.Type == runstate.EventCriterionCompleted || event.Type == runstate.EventAcceptanceFailed {
+					got = append(got, event.Type)
+				}
+			}
+			if !slices.Equal(got, test.wantEventTypes) {
+				t.Fatalf("terminal recovery events = %v, want %v", got, test.wantEventTypes)
+			}
+			last := journal.Events[len(journal.Events)-1]
+			var payload map[string]any
+			if err := json.Unmarshal(last.Payload, &payload); err != nil || payload["reason"] != test.wantFailureReason {
+				t.Fatalf("acceptance failure payload = %s error=%v", last.Payload, err)
+			}
+			if test.subject == recovery.SubjectMatched {
+				criterion := journal.Events[len(journal.Events)-2]
+				var criterionPayload map[string]any
+				if err := json.Unmarshal(criterion.Payload, &criterionPayload); err != nil {
+					t.Fatal(err)
+				}
+				for _, absent := range []string{"exit_code", "duration_ms", "output_ref"} {
+					if _, ok := criterionPayload[absent]; ok {
+						t.Fatalf("criterion completion unexpectedly carries %s: %s", absent, criterion.Payload)
+					}
+				}
+				if criterionPayload["error_detail"] != "recovered_without_observed_completion" {
+					t.Fatalf("criterion completion payload = %s", criterion.Payload)
+				}
+			}
+		})
+	}
+}
+
+func incompleteCriterionInput(state runstate.State, subject recovery.SubjectVerification) recovery.Input {
+	state.Authority.Epoch = 0
+	attempt := handlerAttempt(state)
+	attempt.AcceptanceStarted = true
+	return recovery.Input{Projection: recovery.Projection{
+		State:              state,
+		CurrentHeadAttempt: attempt,
+		Acceptance:         &recovery.AcceptanceRecovery{},
+	}, Observations: recovery.Observations{AcceptanceSubject: subject}}
 }
 
 func TestExecutorMapsSweepFailureToHaltWithoutJournalWrite(t *testing.T) {
