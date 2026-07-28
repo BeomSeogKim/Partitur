@@ -19,6 +19,12 @@ type appendixActionRow struct {
 	guards  map[string]string
 }
 
+type appendixStepBranch struct {
+	name  string
+	input Input
+	want  []ActionStep
+}
+
 // TestAppendixC41SelectsThisPlanner makes the finite selection table an
 // executable oracle for the pure planner. C.4.1's own runstate test expands
 // wildcard guards over reachable cuts. Here a representative is sufficient
@@ -43,6 +49,22 @@ func TestAppendixC41SelectsThisPlanner(t *testing.T) {
 			}
 			input, planner := appendixC41Cut(t, row)
 			assertAppendixC41CutMatches(t, row)
+			for _, branch := range appendixC41StepBranches(row, input) {
+				branch := branch
+				t.Run(branch.name, func(t *testing.T) {
+					got := planner(branch.input)
+					if got.CaseID != row.caseID {
+						t.Fatalf("%s/%s selected %s, want %s", row.id, branch.name, got.CaseID, row.caseID)
+					}
+					var steps []ActionStep
+					if got.Action != nil {
+						steps = got.Action.Steps
+					}
+					if !slices.Equal(steps, branch.want) {
+						t.Fatalf("%s/%s steps = %v, want %v", row.id, branch.name, steps, branch.want)
+					}
+				})
+			}
 			if got := planner(input); got.CaseID != row.caseID {
 				t.Fatalf("%s selected %s, want %s", row.id, got.CaseID, row.caseID)
 			} else if got.Action != nil && len(got.Action.Steps) != 0 {
@@ -69,6 +91,38 @@ var appendixC41Steps = map[CaseID][]ActionStep{
 	CaseHumanGateApproved:   {StepAppendAttemptCompleted, StepAppendMovementSucceeded},
 	CaseGateFreeCompletion:  {StepAppendAttemptCompleted, StepAppendMovementSucceeded},
 	CaseBudgetExhausted:     {StepAppendMovementBudgetFailure, StepAppendRunFailed},
+}
+
+// appendixC41StepBranches closes the observation branches that share an
+// Appendix C.4.1 row but select different recovery steps. The normal cut
+// above continues to prove row selection; these cuts prove every exact step
+// sequence reachable within the affected row.
+func appendixC41StepBranches(row appendixActionRow, input Input) []appendixStepBranch {
+	branch := func(name string, observation SubjectVerification, want []ActionStep) appendixStepBranch {
+		return appendixStepBranch{name: name, input: withSubject(input, observation), want: want}
+	}
+	subjectBranches := func(matched []ActionStep) []appendixStepBranch {
+		return []appendixStepBranch{
+			branch("subject_unverified", SubjectUnverified, []ActionStep{StepVerifyAcceptanceSubject}),
+			branch("subject_matched", SubjectMatched, matched),
+			branch("subject_mismatched", SubjectMismatched, []ActionStep{StepClassifyAcceptanceFailure}),
+		}
+	}
+	switch row.caseID {
+	case CaseCaptureChangeSet, CasePostHocVerification:
+		missing := input
+		missing.Observations.Worktree = WorktreeMissing
+		return []appendixStepBranch{
+			{name: "worktree_present", input: input, want: []ActionStep{}},
+			{name: "worktree_missing", input: missing, want: []ActionStep{StepClassifyAndAppendFailure}},
+		}
+	case CaseCriteriaPassed, CaseFirstCriterion, CaseNextCriterion:
+		return subjectBranches([]ActionStep{})
+	case CaseHumanGateApproved, CaseGateFreeCompletion:
+		return subjectBranches([]ActionStep{StepAppendAttemptCompleted, StepAppendMovementSucceeded})
+	default:
+		return nil
+	}
 }
 
 func appendixC41ActionRows(t *testing.T) []appendixActionRow {
