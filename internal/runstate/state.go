@@ -16,6 +16,8 @@ func NewState(seed []MovementSeed) State {
 		MovementResults:     make(map[MovementID]MovementResult),
 		CriterionLaunches:   make(map[CriterionLaunchKey]CriterionLaunch),
 		Acceptances:         make(map[AttemptID]Acceptance),
+		Application:         ApplicationProjection{State: ApplicationNotApplied},
+		Promotion:           PromotionProjection{State: PromotionNotPromoted},
 	}
 	for _, movement := range seed {
 		if movement.ID == "" {

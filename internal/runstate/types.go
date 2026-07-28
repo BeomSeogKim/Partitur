@@ -2,8 +2,8 @@
 //
 // State is a pure function of the initial movement seed derived from the
 // authenticated pinned score and the journal. This package supports only the
-// thirty-one event types needed by DESIGN Appendix E and the first run success
-// path. Valid registry events
+// thirty-nine event types needed by DESIGN Appendix E, the first run success
+// path, and the shipping status projection. Valid registry events
 // outside that subset fail closed with ErrUnsupportedEventType.
 //
 // Amendment projection is intentionally auto-mode only. Human histories need
@@ -196,6 +196,39 @@ type ApplicationCandidate struct {
 	IdentityVersions          json.RawMessage
 }
 
+type ApplicationState string
+
+const (
+	ApplicationNotApplied       ApplicationState = "NOT_APPLIED"
+	ApplicationApplying         ApplicationState = "APPLYING"
+	ApplicationApplied          ApplicationState = "APPLIED"
+	ApplicationFailedClean      ApplicationState = "FAILED_CLEAN"
+	ApplicationRecoveryRequired ApplicationState = "RECOVERY_REQUIRED"
+)
+
+type ApplicationProjection struct {
+	State         ApplicationState
+	TransactionID string
+	CandidateID   string
+	Reason        string
+}
+
+type PromotionState string
+
+const (
+	PromotionNotPromoted      PromotionState = "NOT_PROMOTED"
+	PromotionPromoting        PromotionState = "PROMOTING"
+	PromotionPromoted         PromotionState = "PROMOTED"
+	PromotionRecoveryRequired PromotionState = "RECOVERY_REQUIRED"
+)
+
+type PromotionProjection struct {
+	State         PromotionState
+	TransactionID string
+	CandidateID   string
+	Reason        string
+}
+
 type MovementResult struct {
 	AttemptID                   AttemptID
 	ApprovedArtifactInstanceIDs []ArtifactInstanceID
@@ -259,6 +292,8 @@ type State struct {
 	VerifiedAttempts     map[AttemptID]bool
 	MovementResults      map[MovementID]MovementResult
 	ApplicationCandidate *ApplicationCandidate
+	Application          ApplicationProjection
+	Promotion            PromotionProjection
 	CriterionLaunches    map[CriterionLaunchKey]CriterionLaunch
 	Acceptances          map[AttemptID]Acceptance
 	CancelRequested      bool
@@ -267,37 +302,45 @@ type State struct {
 type EventType string
 
 const (
-	EventRunStarted                    EventType = "run.started"
-	EventRunSucceeded                  EventType = "run.succeeded"
-	EventRunFailed                     EventType = "run.failed"
-	EventRunCancelled                  EventType = "run.cancelled"
-	EventMovementReady                 EventType = "movement.ready"
-	EventMovementStarted               EventType = "movement.started"
-	EventMovementSucceeded             EventType = "movement.succeeded"
-	EventPerformerSelected             EventType = "performer.selected"
-	EventAttemptStarted                EventType = "attempt.started"
-	EventAdapterProbed                 EventType = "adapter.probed"
-	EventPerformerCompleted            EventType = "performer.completed"
-	EventAttemptCompleted              EventType = "attempt.completed"
-	EventAttemptFailed                 EventType = "attempt.failed"
-	EventArtifactRecorded              EventType = "artifact.recorded"
-	EventVerificationPassed            EventType = "verification.passed"
-	EventApplicationCandidateRecorded  EventType = "application_candidate.recorded"
-	EventAcceptanceStarted             EventType = "acceptance.started"
-	EventCriterionStarted              EventType = "criterion.started"
-	EventCriterionCompleted            EventType = "criterion.completed"
-	EventAcceptanceFailed              EventType = "acceptance.failed"
-	EventAcceptanceEvaluationCompleted EventType = "acceptance.evaluation_completed"
-	EventExecutionStarted              EventType = "execution.started"
-	EventExecutionStopped              EventType = "execution.stopped"
-	EventAmendmentApprovalPrepared     EventType = "amendment.approval_prepared"
-	EventAmendmentApprovalAbandoned    EventType = "amendment.approval_abandoned"
-	EventAmendmentApproved             EventType = "amendment.approved"
-	EventAuthorityGranted              EventType = "authority.granted"
-	EventCancelRequested               EventType = "cancel.requested"
-	EventJournalTailTruncated          EventType = "journal.tail_truncated"
-	EventLog                           EventType = "log"
-	EventProgress                      EventType = "progress"
+	EventRunStarted                     EventType = "run.started"
+	EventRunSucceeded                   EventType = "run.succeeded"
+	EventRunFailed                      EventType = "run.failed"
+	EventRunCancelled                   EventType = "run.cancelled"
+	EventMovementReady                  EventType = "movement.ready"
+	EventMovementStarted                EventType = "movement.started"
+	EventMovementSucceeded              EventType = "movement.succeeded"
+	EventPerformerSelected              EventType = "performer.selected"
+	EventAttemptStarted                 EventType = "attempt.started"
+	EventAdapterProbed                  EventType = "adapter.probed"
+	EventPerformerCompleted             EventType = "performer.completed"
+	EventAttemptCompleted               EventType = "attempt.completed"
+	EventAttemptFailed                  EventType = "attempt.failed"
+	EventArtifactRecorded               EventType = "artifact.recorded"
+	EventVerificationPassed             EventType = "verification.passed"
+	EventApplicationCandidateRecorded   EventType = "application_candidate.recorded"
+	EventAcceptanceStarted              EventType = "acceptance.started"
+	EventCriterionStarted               EventType = "criterion.started"
+	EventCriterionCompleted             EventType = "criterion.completed"
+	EventAcceptanceFailed               EventType = "acceptance.failed"
+	EventAcceptanceEvaluationCompleted  EventType = "acceptance.evaluation_completed"
+	EventExecutionStarted               EventType = "execution.started"
+	EventExecutionStopped               EventType = "execution.stopped"
+	EventAmendmentApprovalPrepared      EventType = "amendment.approval_prepared"
+	EventAmendmentApprovalAbandoned     EventType = "amendment.approval_abandoned"
+	EventAmendmentApproved              EventType = "amendment.approved"
+	EventAuthorityGranted               EventType = "authority.granted"
+	EventCancelRequested                EventType = "cancel.requested"
+	EventJournalTailTruncated           EventType = "journal.tail_truncated"
+	EventApplyStarted                   EventType = "apply.started"
+	EventApplyCompleted                 EventType = "apply.completed"
+	EventApplyFailed                    EventType = "apply.failed"
+	EventApplyRecoveryRequired          EventType = "apply.recovery_required"
+	EventApplyRecoveryResolved          EventType = "apply.recovery_resolved"
+	EventScorePromotionStarted          EventType = "score.promotion_started"
+	EventScorePromoted                  EventType = "score.promoted"
+	EventScorePromotionRecoveryRequired EventType = "score.promotion_recovery_required"
+	EventLog                            EventType = "log"
+	EventProgress                       EventType = "progress"
 )
 
 // Event is one strict journal envelope. Payload is validated before projection.

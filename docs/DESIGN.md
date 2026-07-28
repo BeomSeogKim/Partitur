@@ -2724,6 +2724,96 @@ option: §1's core allocation is the only creation path. For commands whose synt
 `--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
 human gate would be indefensible.
 
+**`partitur status` observable surface.** `status` is an observation of the selected run's
+authoritative journal and its immutable pinned score snapshots. It takes neither a driver lease nor
+the repository state lock; it never creates a directory, repairs a tail, rebuilds a checkpoint, or
+writes a journal event. In particular, it does not turn the B.7 torn-tail repair into a read
+operation. Its projection uses the same event application and score-derived movement seed as
+`resume` and `apply`; it is not a second state model. A missing selected run, missing or unreadable
+pinned snapshot, malformed journal prefix, or an event the core cannot project is a refused
+precondition or recovery halt as applicable — `status` never guesses a state from the root score,
+current cast, worktree, or a manifest.
+
+`--json` writes exactly one UTF-8 JSON document followed by `\n`, and writes no prose to stdout.
+The top-level `schema` is the required literal `partitur/status+json;v=1`. It is the stable
+interface surface shared with a later GUI: a compatible producer may add fields but must not change
+the meaning or type of a v=1 field; a consumer must ignore unknown fields. Every array is present
+even when empty. Movement order is the pinned score's declaration order; attempts, advisories, and
+marks for the same movement are stable by their durable identifiers. `candidate` is `null` until a
+candidate is recorded. The complete v=1 shape is:
+
+```text
+{
+  schema: "partitur/status+json;v=1",
+  run: {
+    id, lifecycle: RUNNING | SUCCEEDED | FAILED | CANCELLED,
+    score: { revision, semantic_hash, file_hash },
+    pending_decisions: [{ id, type, movement_id?, attempt_id?, score_revision }],
+    movements: [{
+      id, state,
+      attempts: [{ id, state, failure: null | { kind, reason? } }],
+      marks: [{
+        grade: VERIFIED | APPROVED | REVIEWED,
+        attempt_id,
+        criteria: [{ id, spec_hash }],
+        subject_tree, score_revision, failed_attempts,
+        findings_instance_id?, review_outcome?, gate_decision_id?
+      }]
+    }]
+  },
+  application: {
+    state: NOT_APPLIED | APPLYING | APPLIED | FAILED_CLEAN | RECOVERY_REQUIRED,
+    candidate: null | {
+      id, score_revision, base_tree, result_tree, ordered_change_sets,
+      contributors: [{ movement_id, change_set_id }], composition_dependency_hash
+    }
+  },
+  promotion: { state: NOT_PROMOTED | PROMOTING | PROMOTED | RECOVERY_REQUIRED },
+  enforcement_advisories: [{ attempt_id, dimensions }],
+  journal: { integrity: INTACT | TAIL_UNPARSEABLE, truncated_seq?, discarded_bytes? },
+  recovery: { state: NOT_REQUIRED | RECOVERY_REQUIRED, reason? }
+}
+```
+
+`criteria` is the full completed acceptance set, including core-generated checks, in acceptance
+plan order; it is never replaced by a count alone. A VERIFIED mark exists only with the complete
+criterion list, exact subject tree, revision, and failed-attempt count. A REVIEWED mark additionally
+carries its findings artifact instance and one of `CLEAN`, `CONTESTED`, or `OVERRIDDEN` as
+`review_outcome`; an APPROVED mark carries its exact gate decision id. Fields inapplicable to a
+grade are omitted, not filled with a misleading empty identifier. `enforcement_advisories` is the
+per-attempt record of the §4 predicate's explicitly allowed advisory exceptions; a fail-closed
+rejection has no successful attempt observation to disguise as an advisory.
+
+Without `--json`, `status` renders the same projection as deterministic lines: the run id and
+lifecycle, pinned score head, journal integrity and recovery state, application and promotion
+states, then its pending decisions and each movement with its attempts, marks, and enforcement
+advisories. A mark line is never bare: it renders, for example, `VERIFIED (2 criteria: lint
+[sha256:...], tests [sha256:...]; tree abc123; rev 4; after 1 failed attempt)`, and appends
+`findings <instance>; review outcome <outcome>` for REVIEWED and `gate decision <id>` for APPROVED.
+Thus the human surface retains the same evidence binding as the JSON surface rather than collapsing
+a grade into a reassuring label.
+
+**Observation outcome.** `status` exits on the success of the observation, never on the health of
+what it observed. It returns 0 whenever it produced and reported a projection, including RUNNING,
+SUCCEEDED, FAILED, CANCELLED, Application or Promotion `RECOVERY_REQUIRED`, and a journal whose
+only defect is an unparseable final line. Those facts are data: callers read `run.lifecycle`,
+`application.state`, `promotion.state`, and `journal.integrity`, so `status --json | jq ...` remains
+usable under `set -e`. A genuine Application or Promotion `RECOVERY_REQUIRED` therefore retains its
+authoritative `recovery.state: RECOVERY_REQUIRED` and cause while `status` remains observational.
+
+An unparseable final line is reported as `journal.integrity: TAIL_UNPARSEABLE`, with its would-be
+sequence and discarded byte count, but does **not** manufacture `recovery.state: RECOVERY_REQUIRED`.
+Appendix C classifies that tail as safe automatic repair: a later `resume` truncates it, appends
+`journal.tail_truncated`, and re-evaluates without operator intervention. A subsequent status then
+reports the normal post-repair projection. An unparseable line anywhere before the final line is
+different corruption: no projection can be built.
+
+The status-specific exit mapping is exhaustive: 0 for a reported projection; 1 for usage; 2 for a
+refused selection or required readable input, including no active run, a non-unique active-run set,
+or an unreadable pinned snapshot; and 5 only when the projection cannot be built, including a
+corrupt journal prefix or an event the core cannot project. `status` never returns 3, 4, or 6: it
+neither validates nor drives a run.
+
 **`partitur run` observable surface.** Before a run exists, `run` uses §2's score-input and
 score-compilation rules, §3's cast resolution, and the score/cast diagnostic ordering and
 suppression of `validate`'s contract above — all by reference. It does **not** perform validation's

@@ -552,6 +552,71 @@ func Apply(input State, event Event) (State, error) {
 			return state, transition(event, "cancellation cannot be requested")
 		}
 		state.CancelRequested = true
+	case EventApplyStarted:
+		if state.Application.State != ApplicationNotApplied && state.Application.State != ApplicationFailedClean {
+			return state, transition(event, "application is not startable")
+		}
+		if state.ApplicationCandidate == nil || state.ApplicationCandidate.ID != mustString(payload, "candidate_id") {
+			return state, invalid(event, "candidate does not match application candidate")
+		}
+		state.Application = ApplicationProjection{
+			State:         ApplicationApplying,
+			TransactionID: mustString(payload, "txn_id"),
+			CandidateID:   mustString(payload, "candidate_id"),
+		}
+	case EventApplyCompleted:
+		if (state.Application.State != ApplicationApplying && state.Application.State != ApplicationRecoveryRequired) ||
+			!matchesApplicationTransaction(state, payload) {
+			return state, transition(event, "application transaction is not recoverable")
+		}
+		state.Application.State = ApplicationApplied
+		state.Application.Reason = ""
+	case EventApplyFailed:
+		if state.Application.State != ApplicationApplying || !matchesApplicationTransaction(state, payload) {
+			return state, transition(event, "application transaction is not applying")
+		}
+		state.Application.State = ApplicationFailedClean
+		state.Application.Reason = mustString(payload, "failure_detail")
+	case EventApplyRecoveryRequired:
+		if state.Application.State != ApplicationApplying || !matchesApplicationTransaction(state, payload) {
+			return state, transition(event, "application transaction is not applying")
+		}
+		state.Application.State = ApplicationRecoveryRequired
+		state.Application.Reason = mustString(payload, "failure_detail")
+	case EventApplyRecoveryResolved:
+		if state.Application.State != ApplicationRecoveryRequired || !matchesApplicationTransaction(state, payload) {
+			return state, transition(event, "application transaction is not recovery-required")
+		}
+		state.Application.State = ApplicationFailedClean
+		state.Application.Reason = ""
+	case EventScorePromotionStarted:
+		if state.Promotion.State == PromotionPromoting {
+			if !matchesPromotionTransaction(state, payload) {
+				return state, transition(event, "promotion transaction differs from the active transaction")
+			}
+			break
+		}
+		if state.Promotion.State != PromotionNotPromoted {
+			return state, transition(event, "promotion is not startable")
+		}
+		state.Promotion = PromotionProjection{
+			State:         PromotionPromoting,
+			TransactionID: mustString(payload, "txn_id"),
+			CandidateID:   mustString(payload, "candidate_id"),
+		}
+	case EventScorePromoted:
+		if (state.Promotion.State != PromotionPromoting && state.Promotion.State != PromotionRecoveryRequired) ||
+			!matchesPromotionTransaction(state, payload) {
+			return state, transition(event, "promotion transaction is not recoverable")
+		}
+		state.Promotion.State = PromotionPromoted
+		state.Promotion.Reason = ""
+	case EventScorePromotionRecoveryRequired:
+		if state.Promotion.State != PromotionPromoting || !matchesPromotionTransaction(state, payload) {
+			return state, transition(event, "promotion transaction is not promoting")
+		}
+		state.Promotion.State = PromotionRecoveryRequired
+		state.Promotion.Reason = mustString(payload, "failure_detail")
 	case EventJournalTailTruncated:
 		if mustUint(payload, "truncated_seq") != event.Seq {
 			return state, invalid(event, "truncated_seq must equal the repair event sequence")
@@ -566,6 +631,16 @@ func Apply(input State, event Event) (State, error) {
 		return state, invalid(event, "event type is not in the registry")
 	}
 	return state, nil
+}
+
+func matchesApplicationTransaction(state State, payload map[string]any) bool {
+	return state.Application.TransactionID == mustString(payload, "txn_id") &&
+		state.Application.CandidateID == mustString(payload, "candidate_id")
+}
+
+func matchesPromotionTransaction(state State, payload map[string]any) bool {
+	return state.Promotion.TransactionID == mustString(payload, "txn_id") &&
+		state.Promotion.CandidateID == mustString(payload, "candidate_id")
 }
 
 func transition(event Event, reason string) error {
@@ -881,6 +956,22 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 		return []string{"authority_epoch", "owner_pid", "owner_start_identity"}, []string{"reclaimed_from_epoch"}, true
 	case EventCancelRequested:
 		return []string{"requested_by"}, nil, true
+	case EventApplyStarted:
+		return []string{"txn_id", "candidate_id", "before_tree", "result_tree", "touched_paths", "recovery", "identity_versions"}, nil, true
+	case EventApplyCompleted:
+		return []string{"txn_id", "candidate_id", "result_tree", "identity_versions"}, nil, true
+	case EventApplyFailed:
+		return []string{"txn_id", "candidate_id", "identity_versions", "failure_detail", "rollback_verified"}, nil, true
+	case EventApplyRecoveryRequired:
+		return []string{"txn_id", "candidate_id", "identity_versions", "failure_detail"}, []string{"observed_tree"}, true
+	case EventApplyRecoveryResolved:
+		return []string{"txn_id", "candidate_id", "identity_versions", "outcome"}, nil, true
+	case EventScorePromotionStarted:
+		return []string{"txn_id", "candidate_id", "identity_versions", "expected_root_file_hash", "target_snapshot_file_hash", "target_revision"}, nil, true
+	case EventScorePromoted:
+		return []string{"txn_id", "candidate_id", "identity_versions", "target_revision", "target_snapshot_file_hash"}, nil, true
+	case EventScorePromotionRecoveryRequired:
+		return []string{"txn_id", "candidate_id", "identity_versions", "failure_detail"}, []string{"observed_root_file_hash"}, true
 	case EventJournalTailTruncated:
 		return []string{"truncated_seq", "discarded_bytes"}, nil, true
 	case EventLog:
@@ -1213,6 +1304,34 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		integers = append([]string{"authority_epoch", "owner_pid"}, optionalNames(payload, "reclaimed_from_epoch")...)
 	case EventCancelRequested:
 		strings = []string{"requested_by"}
+	case EventApplyStarted:
+		strings = []string{"txn_id", "candidate_id", "before_tree", "result_tree"}
+		arrays = []string{"touched_paths"}
+		objects = []string{"recovery", "identity_versions"}
+	case EventApplyCompleted:
+		strings = []string{"txn_id", "candidate_id", "result_tree"}
+		objects = []string{"identity_versions"}
+	case EventApplyFailed:
+		strings = []string{"txn_id", "candidate_id", "failure_detail"}
+		objects = []string{"identity_versions"}
+		bools = []string{"rollback_verified"}
+	case EventApplyRecoveryRequired:
+		strings = append([]string{"txn_id", "candidate_id", "failure_detail"}, optionalNames(payload, "observed_tree")...)
+		objects = []string{"identity_versions"}
+	case EventApplyRecoveryResolved:
+		strings = []string{"txn_id", "candidate_id", "outcome"}
+		objects = []string{"identity_versions"}
+	case EventScorePromotionStarted:
+		strings = []string{"txn_id", "candidate_id", "expected_root_file_hash", "target_snapshot_file_hash"}
+		objects = []string{"identity_versions"}
+		integers = []string{"target_revision"}
+	case EventScorePromoted:
+		strings = []string{"txn_id", "candidate_id", "target_snapshot_file_hash"}
+		objects = []string{"identity_versions"}
+		integers = []string{"target_revision"}
+	case EventScorePromotionRecoveryRequired:
+		strings = append([]string{"txn_id", "candidate_id", "failure_detail"}, optionalNames(payload, "observed_root_file_hash")...)
+		objects = []string{"identity_versions"}
 	case EventJournalTailTruncated:
 		integers = []string{"truncated_seq", "discarded_bytes"}
 	case EventLog:
@@ -1362,6 +1481,14 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 	case EventCancelRequested:
 		if mustString(payload, "requested_by") != "cli" {
 			return errors.New("requested_by must be cli")
+		}
+	case EventApplyFailed:
+		if !mustBool(payload, "rollback_verified") {
+			return errors.New("rollback_verified must be true")
+		}
+	case EventApplyRecoveryResolved:
+		if mustString(payload, "outcome") != "rolled_back" {
+			return errors.New("invalid apply recovery outcome")
 		}
 	}
 	return nil

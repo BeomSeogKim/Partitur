@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 	validation "github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
@@ -25,13 +28,124 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestStatusRendersProjectionAndClassifiesOutcomes(t *testing.T) {
+	base := statusprojection.Report{
+		Schema: "partitur/status+json;v=1",
+		Run: statusprojection.Run{
+			ID:        "run-1",
+			Lifecycle: string(runstate.RunSucceeded),
+			Score:     statusprojection.ScoreHead{Revision: 4, SemanticHash: "sha256:score", FileHash: "sha256:file"},
+			Movements: []statusprojection.Movement{{
+				ID:    "inspect",
+				State: string(runstate.MovementSucceeded),
+				Marks: []statusprojection.Mark{{
+					Grade: "VERIFIED", AttemptID: "attempt-2", SubjectTree: "tree", ScoreRevision: 4,
+					FailedAttempts: 1,
+					Criteria:       []statusprojection.Criterion{{ID: "lint", SpecHash: "sha256:lint"}},
+				}},
+			}},
+		},
+		Application: statusprojection.Application{State: "NOT_APPLIED"},
+		Promotion:   statusprojection.Promotion{State: "NOT_PROMOTED"},
+		Journal:     statusprojection.Journal{Integrity: "INTACT"},
+		Recovery:    statusprojection.Recovery{State: "NOT_REQUIRED"},
+	}
+	for _, test := range []struct {
+		name       string
+		args       []string
+		adjust     func(*statusprojection.Report)
+		wantCode   int
+		wantStderr string
+	}{
+		{name: "success", args: []string{"status", "run-1"}, wantCode: 0},
+		{name: "terminal failed is reported data", args: []string{"status", "run-1"}, adjust: func(report *statusprojection.Report) { report.Run.Lifecycle = string(runstate.RunFailed) }, wantCode: 0},
+		{name: "shipping recovery is reported data", args: []string{"status", "run-1"}, adjust: func(report *statusprojection.Report) {
+			report.Application.State = "RECOVERY_REQUIRED"
+			report.Recovery = statusprojection.Recovery{State: "RECOVERY_REQUIRED", Reason: "tree mismatch"}
+		}, wantCode: 0},
+		{name: "torn tail is reported data", args: []string{"status", "run-1"}, adjust: func(report *statusprojection.Report) {
+			report.Journal = statusprojection.Journal{Integrity: "TAIL_UNPARSEABLE", TruncatedSeq: 9, DiscardedBytes: 7}
+		}, wantCode: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := base
+			if test.adjust != nil {
+				test.adjust(&report)
+			}
+			var stdout, stderr bytes.Buffer
+			code := runWithStatusReader(
+				test.args, &stdout, &stderr, nil, nil, nil,
+				func(requested string) (statusprojection.Report, error) {
+					if requested != "run-1" {
+						t.Fatalf("requested run = %q", requested)
+					}
+					return report, nil
+				},
+			)
+			if code != test.wantCode || stderr.String() != test.wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "Mark: VERIFIED (1 criteria: lint [sha256:lint]; tree tree; rev 4; after 1 failed attempt)") {
+				t.Fatalf("mark provenance missing from %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestStatusCorruptProjectionExitsFive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runWithStatusReader(
+		[]string{"status", "run-1"}, &stdout, &stderr, nil, nil, nil,
+		func(string) (statusprojection.Report, error) {
+			return statusprojection.Report{}, runstore.ErrJournalCorrupt
+		},
+	)
+	if code != 5 || stdout.Len() != 0 ||
+		stderr.String() != "recovery halted: detail=\"journal_corrupt\"\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestStatusJSONAndArgumentErrors(t *testing.T) {
+	report := statusprojection.Report{
+		Schema:      "partitur/status+json;v=1",
+		Run:         statusprojection.Run{ID: "run-1", Lifecycle: string(runstate.RunRunning)},
+		Application: statusprojection.Application{State: "NOT_APPLIED"},
+		Promotion:   statusprojection.Promotion{State: "NOT_PROMOTED"},
+		Journal:     statusprojection.Journal{Integrity: "INTACT"},
+		Recovery:    statusprojection.Recovery{State: "NOT_REQUIRED"},
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithStatusReader(
+		[]string{"status", "--json", "run-1"}, &stdout, &stderr, nil, nil, nil,
+		func(string) (statusprojection.Report, error) { return report, nil },
+	)
+	var decoded statusprojection.Report
+	if code != 0 || stderr.Len() != 0 || json.Unmarshal(stdout.Bytes(), &decoded) != nil ||
+		decoded.Schema != report.Schema || decoded.Run.ID != report.Run.ID {
+		t.Fatalf("exit=%d stdout=%q stderr=%q decoded=%+v", code, stdout.String(), stderr.String(), decoded)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = runWithStatusReader(
+		[]string{"status", "--nope"}, &stdout, &stderr, nil, nil, nil,
+		func(string) (statusprojection.Report, error) {
+			t.Fatal("reader called")
+			return statusprojection.Report{}, nil
+		},
+	)
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{
 		nil,
 		{"unknown"},
 		{"init"},
-		{"status"},
 		{"logs"},
 		{"answer"},
 		{"approve"},
@@ -59,7 +173,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
