@@ -3,19 +3,25 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryexec"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/score"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 	validation "github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
@@ -481,6 +487,180 @@ func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResumeRootObservationAndCastIsolationUseRealStore(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		root       []byte
+		wantCode   int
+		wantStderr string
+	}{
+		{name: "absent root is ignored", wantCode: 6, wantStderr: resumeUnreachableStderr()},
+		{name: "malformed root is ignored", root: []byte("score: ["), wantCode: 6, wantStderr: resumeUnreachableStderr()},
+		{name: "different root revision is ignored", root: resumeScore(2, "same otherwise"), wantCode: 6, wantStderr: resumeUnreachableStderr()},
+		{name: "same revision semantic divergence halts", root: resumeScore(1, "different semantics"), wantCode: 5, wantStderr: "recovery halted: run_id=\"run-1\" reason=\"root_snapshot_divergence\"\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, _ := resumeFixture(t, "")
+			if test.root != nil {
+				if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), test.root, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Join(root, ".partitur"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".partitur", "cast.yaml"), []byte("cast: ["), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+			before, err := os.ReadFile(journal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(root)
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != test.wantCode || stdout.Len() != 0 || stderr.String() != test.wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			after, err := os.ReadFile(journal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantCode == 5 && !bytes.Equal(before, after) {
+				t.Fatal("halt mutated journal")
+			}
+		})
+	}
+}
+
+func TestResumeRefusesLiveOwnerWithoutMutation(t *testing.T) {
+	root, store := resumeFixture(t, "")
+	driver, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Release()
+	journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	lease := filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease")
+	beforeJournal, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLease, err := os.ReadFile(lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"driver authority is already held\"\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	afterJournal, _ := os.ReadFile(journal)
+	afterLease, _ := os.ReadFile(lease)
+	if !bytes.Equal(beforeJournal, afterJournal) || !bytes.Equal(beforeLease, afterLease) {
+		t.Fatal("live-owner refusal mutated journal or lease")
+	}
+}
+
+func TestResumeTreatsTerminalProjectionIdempotently(t *testing.T) {
+	for _, test := range []struct {
+		state string
+		code  int
+	}{
+		{state: "SUCCEEDED", code: 0},
+		{state: "FAILED", code: 4},
+		{state: "CANCELLED", code: 4},
+	} {
+		t.Run(test.state, func(t *testing.T) {
+			root, _ := resumeFixture(t, test.state)
+			t.Chdir(root)
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != test.code || stdout.Len() != 0 || stderr.Len() != 0 {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func resumeFixture(t *testing.T, terminal string) (string, *runstore.Store) {
+	t.Helper()
+	root := t.TempDir()
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := resumeScore(1, "pinned run authority")
+	compiled, diagnostics := score.Compile(snapshot)
+	if len(diagnostics) != 0 {
+		t.Fatalf("score diagnostics=%v", diagnostics)
+	}
+	scoreHash, err := compiled.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedCast := []byte("cast: \"0.1\"\nperformers: {}\nbindings: {}\n")
+	resolved, castDiagnostics := cast.Resolve([]cast.Layer{{Origin: "fixture", Data: resolvedCast}})
+	if len(castDiagnostics) != 0 {
+		t.Fatalf("cast diagnostics=%v", castDiagnostics)
+	}
+	castHash, err := resolved.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		if _, err := tx.At("fixture.score").PublishImmutable("scores/revision-1.yaml", snapshot, runstore.Hash(resumeHash(snapshot))); err != nil {
+			return err
+		}
+		if _, err := tx.At("fixture.cast").PublishImmutable("resolved-cast.yaml", resolvedCast, runstore.Hash(resumeHash(resolvedCast))); err != nil {
+			return err
+		}
+		if _, err := tx.At("fixture.start").Append(resumeEvent("run-1", runstate.EventRunStarted, map[string]any{"base_commit": "base", "base_tree": "tree", "score_hash": scoreHash, "score_file_hash": resumeHash(snapshot), "resolved_cast_hash": castHash, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})); err != nil {
+			return err
+		}
+		if terminal != "" {
+			return appendFixtureTerminal(tx, terminal)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return root, store
+}
+
+func appendFixtureTerminal(tx *runstore.Txn, terminal string) error {
+	switch terminal {
+	case "FAILED":
+		_, err := tx.At("fixture.failed").Append(resumeEvent("run-1", runstate.EventRunFailed, map[string]any{"reason": "fixture"}))
+		return err
+	case "CANCELLED":
+		_, err := tx.At("fixture.cancelled").Append(resumeEvent("run-1", runstate.EventRunCancelled, map[string]any{"cancelled_movement_ids": []any{}, "cancelled_attempt_ids": []any{}, "obsoleted_decision_ids": []any{}}))
+		return err
+	case "SUCCEEDED":
+		_, err := tx.At("fixture.succeeded").Append(resumeEvent("run-1", runstate.EventRunSucceeded, map[string]any{"candidate": map[string]any{"candidate_id": "candidate", "base_tree": "base", "result_tree": "result", "ordered_change_sets": []any{}, "contributors": []any{}, "candidate_composition_dependency_hash": "hash"}, "waiver": map[string]any{"reason": "fixture"}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}}))
+		return err
+	default:
+		return fmt.Errorf("unknown terminal %q", terminal)
+	}
+}
+
+func resumeEvent(runID string, eventType runstate.EventType, payload any) runstate.Event {
+	encoded, _ := json.Marshal(payload)
+	return runstate.Event{RunID: runstate.RunID(runID), ScoreRevision: 1, Type: eventType, Payload: encoded}
+}
+
+func resumeHash(value []byte) string {
+	digest := sha256.Sum256(value)
+	return fmt.Sprintf("sha256:%x", digest)
+}
+
+func resumeScore(revision int, goal string) []byte {
+	return []byte(fmt.Sprintf("score: \"0.2\"\nname: resume-fixture\nrevision: %d\nstatus: finalized\ngoal: %s\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts: {}\nmovements: []\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n", revision, goal))
+}
+
+func resumeUnreachableStderr() string {
+	return "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery action is unreachable in this slice: proceed_c4\"\n"
 }
 
 type failingWriter struct {
