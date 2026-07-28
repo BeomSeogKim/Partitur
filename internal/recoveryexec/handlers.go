@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
@@ -66,17 +68,62 @@ func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Act
 	if execution.Store == nil || execution.RunID == "" {
 		return errors.New("recovery executor requires store and run id for terminal cleanup")
 	}
+	residues, err := terminalCleanupResidues(execution.Store.RepositoryRoot(), execution.RunID)
+	if err != nil {
+		return err
+	}
 	if err := execution.Store.Mutate(execution.RunID, "", func(transaction *runstore.Txn) error {
 		lease, present, err := transaction.ReadLease()
-		if err != nil || !present {
+		if err != nil {
 			return err
 		}
-		_, err = transaction.At("recovery.terminal_cleanup").CompareRemoveLease(lease.Identity())
-		return err
+		if present {
+			if _, err := transaction.At("recovery.terminal_cleanup/lease").CompareRemoveLease(lease.Identity()); err != nil {
+				return err
+			}
+		}
+		for _, residue := range residues {
+			if _, err := transaction.At("recovery.terminal_cleanup/" + faultpoint.ReceiptAddress(residue)).RemoveDurable(runstore.Path(residue)); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
 	return os.RemoveAll(filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID)))
+}
+
+func terminalCleanupResidues(root string, runID runstate.RunID) ([]string, error) {
+	runRoot := filepath.Join(root, ".partitur", "runs", string(runID))
+	entries, err := os.ReadDir(runRoot)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read terminal cleanup run root: %w", err)
+	}
+	residues := make([]string, 0)
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), "driver.quiesced.") && entry.Name() != "driver.quiesced." {
+			residues = append(residues, entry.Name())
+		}
+	}
+	prepares := filepath.Join(runRoot, "prepares")
+	entries, err = os.ReadDir(prepares)
+	if errors.Is(err, fs.ErrNotExist) {
+		return residues, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read terminal cleanup prepares: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".json") {
+			residues = append(residues, filepath.ToSlash(filepath.Join("prepares", entry.Name())))
+		}
+	}
+	slices.Sort(residues)
+	return residues, nil
 }
 
 func removeStaleLease(_ context.Context, execution HandlerContext, _ recovery.Action) error {

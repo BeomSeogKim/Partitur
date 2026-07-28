@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
@@ -95,6 +96,9 @@ func (executor *Executor) Execute(ctx context.Context) (Result, error) {
 	}
 	input, err := executor.Load(ctx)
 	if err != nil {
+		if halted, ok := haltDecision(recovery.Decision{}, err); ok {
+			return Result{Decision: halted, Outcome: OutcomeHalted}, nil
+		}
 		return Result{}, fmt.Errorf("load recovery input: %w", err)
 	}
 	return executor.execute(ctx, input, recovery.Plan(input))
@@ -313,10 +317,20 @@ func (executor *Executor) kindHandler(kind recovery.ActionKind) (StepHandler, bo
 
 func haltDecision(decision recovery.Decision, err error) (recovery.Decision, bool) {
 	switch {
+	case errors.Is(err, runstore.ErrJournalIdempotencyConflict):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltJournalIdempotencyConflict}, true
+	case errors.Is(err, canonical.ErrUnsupportedRunFormat):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltUnsupportedRunFormat}, true
+	case errors.Is(err, runstore.ErrMissingPinnedSnapshot):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingSnapshotFile}, true
+	case errors.Is(err, runstore.ErrMissingResolvedCast):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingResolvedCast}, true
 	case errors.Is(err, ErrSweepUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSweepUnverifiable}, true
 	case errors.Is(err, ErrHandoffUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSpawnHandoffUnverifiable}, true
+	case errors.Is(err, runstore.ErrJournalCorrupt):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltJournalCorrupt}, true
 	default:
 		return recovery.Decision{}, false
 	}

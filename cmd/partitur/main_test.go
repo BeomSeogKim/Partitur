@@ -489,6 +489,38 @@ func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 	}
 }
 
+func TestResumeMapsEveryAppendixDHaltAndNoOtherReasonToExitFive(t *testing.T) {
+	for _, reason := range recovery.AppendixDHaltReasons() {
+		t.Run(string(reason), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+				return recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: reason}}, nil
+			})
+			if code != 5 || stdout.Len() != 0 || !strings.Contains(stderr.String(), fmt.Sprintf("reason=%q", reason)) {
+				t.Fatalf("reason=%q exit=%d stdout=%q stderr=%q", reason, code, stdout.String(), stderr.String())
+			}
+		})
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+		return recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: "not_an_appendix_d_reason"}}, nil
+	})
+	if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown halt reason") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestResumeSelectionSnapshotInvalidIsNotAnAppendixDHalt(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+		return recoveryexec.Result{}, resumeSelectionError{err: statusprojection.ErrSnapshotInvalid}
+	})
+	if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "run score snapshot is invalid") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestResumeRootObservationAndCastIsolationUseRealStore(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -604,7 +636,75 @@ func TestResumeMapsRealStoreHaltsToExitFive(t *testing.T) {
 				}
 				return root
 			},
-			wantStderr: "recovery halted: detail=\"journal_corrupt: unparseable non-final line: invalid JSON\"\n",
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"journal_corrupt\"\n",
+		},
+		{
+			name: "missing resolved cast",
+			fixture: func(t *testing.T) string {
+				root, _ := resumeFixture(t, "")
+				if err := os.Remove(filepath.Join(root, ".partitur", "runs", "run-1", "resolved-cast.yaml")); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_resolved_cast\"\n",
+		},
+		{
+			name: "resolved cast hash mismatch",
+			fixture: func(t *testing.T) string {
+				root, _ := resumeFixture(t, "")
+				if err := os.WriteFile(filepath.Join(root, ".partitur", "runs", "run-1", "resolved-cast.yaml"), []byte("cast: \"0.1\"\nperformers:\n  reviewer:\n    adapter: adapter\n    model: changed-model\nbindings:\n  reviewer:\n    performer: reviewer\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_resolved_cast\"\n",
+		},
+		{
+			name: "missing initial pinned snapshot",
+			fixture: func(t *testing.T) string {
+				root, _ := resumeFixture(t, "")
+				if err := os.Remove(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-1.yaml")); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_snapshot_file\"\n",
+		},
+		{
+			name: "initial pinned snapshot hash mismatch",
+			fixture: func(t *testing.T) string {
+				root, _ := resumeFixture(t, "")
+				if err := os.WriteFile(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-1.yaml"), resumeScore(1, "different bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_snapshot_file\"\n",
+		},
+		{
+			name: "missing later pinned snapshot",
+			fixture: func(t *testing.T) string {
+				root, store := resumeFixture(t, "")
+				appendResumeApprovedSnapshot(t, store)
+				if err := os.Remove(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml")); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_snapshot_file\"\n",
+		},
+		{
+			name: "later pinned snapshot hash mismatch",
+			fixture: func(t *testing.T) string {
+				root, store := resumeFixture(t, "")
+				appendResumeApprovedSnapshot(t, store)
+				if err := os.WriteFile(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml"), resumeScore(2, "different bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_snapshot_file\"\n",
 		},
 		{
 			name: "recorded adapter session is unverifiable",
@@ -643,7 +743,7 @@ func TestResumeMapsRealStoreHaltsToExitFive(t *testing.T) {
 	}
 }
 
-func TestResumeTerminalCleanupRemovesLeaseAndStagingRoot(t *testing.T) {
+func TestResumeTerminalCleanupRemovesEveryC1Residue(t *testing.T) {
 	root, store := resumeFixture(t, "")
 	driver, err := store.AcquireRecoveryDriver("run-1")
 	if err != nil {
@@ -659,17 +759,32 @@ func TestResumeTerminalCleanupRemovesLeaseAndStagingRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stagingRoot, "residue"), []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	sidecar := filepath.Join(root, ".partitur", "runs", "run-1", "driver.quiesced.prepare-1")
+	if err := os.WriteFile(sidecar, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.Join(root, ".partitur", "runs", "run-1", "prepares", "prepare-1.json")
+	if err := os.MkdirAll(filepath.Dir(plan), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plan, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Chdir(root)
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if _, err := os.Stat(filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("lease stat error=%v, want not exist", err)
-	}
-	if _, err := os.Stat(stagingRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("staging root stat error=%v, want not exist", err)
+	for _, residue := range []string{
+		filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease"),
+		sidecar,
+		plan,
+		stagingRoot,
+	} {
+		if _, err := os.Stat(residue); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("residue %q stat error=%v, want not exist", residue, err)
+		}
 	}
 }
 
@@ -748,6 +863,57 @@ func appendResumeAttempt(t *testing.T, store *runstore.Store, started bool) {
 			}
 		}
 		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendResumeApprovedSnapshot(t *testing.T, store *runstore.Store) {
+	t.Helper()
+	root := store.RepositoryRoot()
+	initial, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialScore, diagnostics := score.Compile(initial)
+	if len(diagnostics) != 0 {
+		t.Fatalf("initial score diagnostics=%v", diagnostics)
+	}
+	initialHash, err := initialScore.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := resumeScore(2, "approved snapshot")
+	updatedScore, diagnostics := score.Compile(updated)
+	if len(diagnostics) != 0 {
+		t.Fatalf("updated score diagnostics=%v", diagnostics)
+	}
+	updatedHash, err := updatedScore.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := resumeIdentityVersions()
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		if _, err := tx.At("fixture.approved_snapshot").PublishImmutable("scores/revision-2.yaml", updated, runstore.Hash(resumeHash(updated))); err != nil {
+			return err
+		}
+		if _, err := tx.At("fixture.approval_prepared").Append(resumeEvent("run-1", runstate.EventAmendmentApprovalPrepared, map[string]any{
+			"prepare_id": "prepare-1", "proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
+			"base_revision": 1, "base_hash": initialHash, "new_revision": 2, "new_snapshot_hash": updatedHash,
+			"new_snapshot_file_hash": resumeHash(updated), "plan_record_hash": "sha256:plan", "target_attempt_ids": []any{},
+			"observed_authority_epoch": 0, "quiesce_deadline": "2026-07-28T00:00:00.000Z", "classifier_version": 1, "identity_versions": versions,
+		})); err != nil {
+			return err
+		}
+		approval := resumeEvent("run-1", runstate.EventAmendmentApproved, map[string]any{
+			"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS", "base_revision": 1, "base_hash": initialHash,
+			"classifier_version": 1, "new_revision": 2, "new_snapshot_hash": updatedHash, "new_snapshot_file_hash": resumeHash(updated),
+			"typed_delta": []any{}, "actual_impact": map[string]any{"score_changes": []any{}, "authority": map[string]any{"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}}, "grants": []any{}, "side_effects": map[string]any{"added": []any{}, "removed": []any{}}}, "budget": map[string]any{}},
+			"superseded_attempt_ids": []any{}, "obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": versions,
+		})
+		approval.ScoreRevision = 2
+		_, err := tx.At("fixture.approved").Append(approval)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}

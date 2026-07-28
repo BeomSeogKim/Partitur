@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
@@ -381,6 +382,53 @@ func TestExecutorMapsSweepFailureToHaltWithoutJournalWrite(t *testing.T) {
 			after, err := os.ReadFile(journalPath)
 			if err != nil || string(after) != string(before) {
 				t.Fatalf("journal changed=%t error=%v", string(after) != string(before), err)
+			}
+		})
+	}
+}
+
+func TestExecutorMapsAppendErrorsToAppendixDHalts(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want recovery.HaltReason
+	}{
+		{name: "append idempotency conflict", err: runstore.ErrJournalIdempotencyConflict, want: recovery.HaltJournalIdempotencyConflict},
+		{name: "append unsupported format", err: canonical.ErrUnsupportedRunFormat, want: recovery.HaltUnsupportedRunFormat},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			step := recovery.StepAppendRunFailed
+			executor := &Executor{Steps: map[recovery.ActionStep]StepHandler{
+				step: func(context.Context, HandlerContext, recovery.Action) error { return test.err },
+			}}
+			result, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{
+				CaseID: "RC-test",
+				Action: &recovery.Action{Kind: recovery.ActionReturnWaitingHuman, Steps: []recovery.ActionStep{step}},
+			})
+			if err != nil || result.Outcome != OutcomeHalted || result.Decision.Halt != test.want {
+				t.Fatalf("result=%+v error=%v, want halt=%q", result, err, test.want)
+			}
+		})
+	}
+}
+
+func TestExecutorMapsLoadErrorsToAppendixDHalts(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want recovery.HaltReason
+	}{
+		{name: "load corrupt journal", err: runstore.ErrJournalCorrupt, want: recovery.HaltJournalCorrupt},
+		{name: "load missing pinned snapshot", err: runstore.ErrMissingPinnedSnapshot, want: recovery.HaltMissingSnapshotFile},
+		{name: "load missing resolved cast", err: runstore.ErrMissingResolvedCast, want: recovery.HaltMissingResolvedCast},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor := &Executor{Load: func(context.Context) (recovery.Input, error) {
+				return recovery.Input{}, test.err
+			}}
+			result, err := executor.Execute(context.Background())
+			if err != nil || result.Outcome != OutcomeHalted || result.Decision.Halt != test.want {
+				t.Fatalf("result=%+v error=%v, want halt=%q", result, err, test.want)
 			}
 		})
 	}

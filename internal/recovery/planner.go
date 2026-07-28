@@ -60,17 +60,51 @@ const (
 type HaltReason string
 
 const (
-	HaltOwnerUnverifiable        HaltReason = "owner_unverifiable"
-	HaltRootSnapshotDivergence   HaltReason = "root_snapshot_divergence"
-	HaltMissingArtifactFile      HaltReason = "missing_artifact_file"
-	HaltMissingSnapshotFile      HaltReason = "missing_snapshot_file"
-	HaltMissingChangeSetRef      HaltReason = "missing_changeset_ref"
-	HaltMissingProposalRecord    HaltReason = "missing_proposal_record"
-	HaltMissingResolvedCast      HaltReason = "missing_resolved_cast"
-	HaltMissingPreparePlan       HaltReason = "missing_prepare_plan"
-	HaltSweepUnverifiable        HaltReason = "sweep_unverifiable"
-	HaltSpawnHandoffUnverifiable HaltReason = "spawn_handoff_unverifiable"
+	HaltJournalIdempotencyConflict HaltReason = "journal_idempotency_conflict"
+	HaltUnsupportedRunFormat       HaltReason = "unsupported_run_format"
+	HaltOwnerUnverifiable          HaltReason = "owner_unverifiable"
+	HaltRootSnapshotDivergence     HaltReason = "root_snapshot_divergence"
+	HaltMissingArtifactFile        HaltReason = "missing_artifact_file"
+	HaltMissingSnapshotFile        HaltReason = "missing_snapshot_file"
+	HaltMissingChangeSetRef        HaltReason = "missing_changeset_ref"
+	HaltMissingProposalRecord      HaltReason = "missing_proposal_record"
+	HaltMissingResolvedCast        HaltReason = "missing_resolved_cast"
+	HaltMissingPreparePlan         HaltReason = "missing_prepare_plan"
+	HaltSweepUnverifiable          HaltReason = "sweep_unverifiable"
+	HaltSpawnHandoffUnverifiable   HaltReason = "spawn_handoff_unverifiable"
+	HaltJournalCorrupt             HaltReason = "journal_corrupt"
 )
+
+var appendixDHaltReasonSet = map[HaltReason]bool{
+	HaltJournalIdempotencyConflict: true,
+	HaltUnsupportedRunFormat:       true,
+	HaltOwnerUnverifiable:          true,
+	HaltRootSnapshotDivergence:     true,
+	HaltMissingArtifactFile:        true,
+	HaltMissingSnapshotFile:        true,
+	HaltMissingChangeSetRef:        true,
+	HaltMissingProposalRecord:      true,
+	HaltMissingResolvedCast:        true,
+	HaltMissingPreparePlan:         true,
+	HaltSweepUnverifiable:          true,
+	HaltSpawnHandoffUnverifiable:   true,
+	HaltJournalCorrupt:             true,
+}
+
+// IsHaltReason reports whether reason is one of Appendix D's closed recovery
+// halt reasons.
+func IsHaltReason(reason HaltReason) bool {
+	return appendixDHaltReasonSet[reason]
+}
+
+// AppendixDHaltReasons returns the closed set used at the command boundary.
+func AppendixDHaltReasons() []HaltReason {
+	reasons := make([]HaltReason, 0, len(appendixDHaltReasonSet))
+	for reason := range appendixDHaltReasonSet {
+		reasons = append(reasons, reason)
+	}
+	return reasons
+}
 
 // OwnerState is the caller's observation of the owner named by a readable
 // current lease. It is deliberately an observation, not a process probe.

@@ -30,6 +30,8 @@ var (
 	ErrImmutablePublicationConflict = errors.New("immutable_publication_conflict")
 	ErrHashMismatch                 = errors.New("hash_mismatch")
 	ErrLeaseConflict                = errors.New("lease_conflict")
+	ErrMissingPinnedSnapshot        = errors.New("missing pinned score snapshot")
+	ErrMissingResolvedCast          = errors.New("missing resolved cast")
 	ErrLeaseOwnerUnverifiable       = errors.New("owner_unverifiable")
 	ErrReceiptAddressRequired       = errors.New("receipt address required")
 	ErrQuarantineKindRequired       = errors.New("quarantine kind required")

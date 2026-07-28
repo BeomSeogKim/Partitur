@@ -280,6 +280,10 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 		fmt.Fprintln(stderr, "precondition refused: detail=\"driver authority is already held\"")
 		return 2
 	case recoveryexec.OutcomeHalted:
+		if !recovery.IsHaltReason(result.Decision.Halt) {
+			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced an unknown halt reason")
+			return 6
+		}
 		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", requestedID, result.Decision.Halt)
 		return 5
 	default:
@@ -293,14 +297,17 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 	if err != nil {
 		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
-	report, err := statusprojection.Read(root, requestedID)
-	if err != nil {
-		return recoveryexec.Result{}, resumeSelectionError{err: err}
-	}
-	runID := runstate.RunID(report.Run.ID)
 	store, err := runstore.New(root, faultpoint.Nop{})
 	if err != nil {
 		return recoveryexec.Result{}, err
+	}
+	runID := runstate.RunID(requestedID)
+	if requestedID == "" {
+		report, err := statusprojection.Read(root, requestedID)
+		if err != nil {
+			return recoveryexec.Result{}, resumeSelectionError{err: err}
+		}
+		runID = runstate.RunID(report.Run.ID)
 	}
 	executor := &recoveryexec.Executor{Store: store, RunID: runID}
 	executor.Load = func(context.Context) (recovery.Input, error) {
@@ -400,8 +407,10 @@ func statusErrorCode(err error) int {
 		errors.Is(err, statusprojection.ErrRequiredInput),
 		errors.Is(err, errOutputStream):
 		return 2
-	default:
+	case errors.Is(err, runstore.ErrJournalCorrupt):
 		return 5
+	default:
+		return 6
 	}
 }
 
