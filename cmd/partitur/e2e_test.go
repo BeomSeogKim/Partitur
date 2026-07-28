@@ -18,6 +18,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 )
 
 const fakeAdapterEnvironment = "PARTITUR_VALIDATE_FAKE_ADAPTER"
@@ -87,15 +88,42 @@ func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
 			stderr,
 		)
 	}
+	journalPath := filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl")
+	journalBeforeStatus, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, statusStdout, statusStderr := runCommandBinary(
+		t,
+		partitur,
+		repository,
+		environment,
+		"status",
+		runID,
+		"--json",
+	)
+	journalAfterStatus, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statusReport statusprojection.Report
+	if code != 0 || statusStderr != "" || json.Unmarshal([]byte(statusStdout), &statusReport) != nil ||
+		statusReport.Schema != "partitur/status+json;v=1" ||
+		statusReport.Run.ID != runID || statusReport.Run.Lifecycle != string(runstate.RunSucceeded) ||
+		string(journalBeforeStatus) != string(journalAfterStatus) {
+		t.Fatalf(
+			"status exit=%d stdout=%q stderr=%q report=%+v journal_before=%q journal_after=%q",
+			code,
+			statusStdout,
+			statusStderr,
+			statusReport,
+			journalBeforeStatus,
+			journalAfterStatus,
+		)
+	}
 	events := journalEventTypes(
 		t,
-		filepath.Join(
-			repository,
-			".partitur",
-			"runs",
-			runID,
-			"journal.jsonl",
-		),
+		journalPath,
 	)
 	want := []string{
 		"run.started",

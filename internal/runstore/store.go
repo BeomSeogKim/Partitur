@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -79,6 +80,30 @@ func (store *Store) Mutate(
 	return store.withLock(lockPoint, func() error {
 		return mutation(&Txn{store: store, runID: runID})
 	})
+}
+
+// RunIDs returns the valid run directory names at this store's fixed root.
+// It does not create the runs directory, so absence is an empty collection.
+func (store *Store) RunIDs() ([]runstate.RunID, error) {
+	entries, err := os.ReadDir(filepath.Join(store.root, ".partitur", "runs"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read runs directory: %w", err)
+	}
+	ids := make([]runstate.RunID, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := runstate.RunID(entry.Name())
+		if validateRunID(id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 func (store *Store) withLock(point faultpoint.PointID, action func() error) error {

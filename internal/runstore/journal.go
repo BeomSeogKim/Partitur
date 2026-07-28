@@ -145,6 +145,76 @@ func (store *Store) Replay(
 	return result, err
 }
 
+// ReadReplay projects a run journal without taking the state lock, creating a
+// directory, repairing a torn tail, or otherwise mutating repository state.
+// It is consequently suitable for status and other observational surfaces.
+func (store *Store) ReadReplay(
+	runID runstate.RunID,
+	seed []runstate.MovementSeed,
+) (ReadReplayResult, error) {
+	if err := validateRunID(runID); err != nil {
+		return ReadReplayResult{}, err
+	}
+
+	state := runstate.NewState(seed)
+	path := filepath.Join(store.root, ".partitur", "runs", string(runID), "journal.jsonl")
+	contents, err := store.fs.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ReadReplayResult{State: state}, nil
+	}
+	if err != nil {
+		return ReadReplayResult{}, fmt.Errorf("read journal: %w", err)
+	}
+
+	lines := journalLines(contents)
+	expectedSeq := uint64(1)
+	for index, line := range lines {
+		event, syntaxErr, err := decodeEvent(line.bytes)
+		if syntaxErr != nil {
+			if index != len(lines)-1 {
+				return ReadReplayResult{}, fmt.Errorf(
+					"%w: unparseable non-final line: %v",
+					ErrJournalCorrupt,
+					syntaxErr,
+				)
+			}
+			return ReadReplayResult{
+				State:          state,
+				TailTruncated:  true,
+				TruncatedSeq:   expectedSeq,
+				DiscardedBytes: len(contents) - line.offset,
+			}, nil
+		}
+		if err != nil {
+			if errors.Is(err, runstate.ErrUnsupportedEventType) {
+				return ReadReplayResult{}, err
+			}
+			return ReadReplayResult{}, fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
+		}
+		if event.Seq != expectedSeq {
+			return ReadReplayResult{}, fmt.Errorf(
+				"%w: seq=%d want=%d",
+				ErrJournalCorrupt,
+				event.Seq,
+				expectedSeq,
+			)
+		}
+		if event.RunID != runID {
+			return ReadReplayResult{}, fmt.Errorf("%w: wrong run id %q", ErrJournalCorrupt, event.RunID)
+		}
+		next, err := runstate.Apply(state, event)
+		if errors.Is(err, runstate.ErrUnsupportedEventType) {
+			return ReadReplayResult{}, err
+		}
+		if err != nil {
+			return ReadReplayResult{}, fmt.Errorf("%w: seq=%d: %v", ErrJournalCorrupt, event.Seq, err)
+		}
+		state = next
+		expectedSeq++
+	}
+	return ReadReplayResult{State: state}, nil
+}
+
 // Append allocates the journal envelope and appends one strictly validated
 // event. EventID, Seq, and Timestamp must be left empty by the caller.
 func (transaction *Txn) Append(event runstate.Event) (DurabilityReceipt, error) {

@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 	validation "github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
@@ -23,6 +26,8 @@ type runDriver func(
 	*validation.Preparation,
 	driver.StartedObserver,
 ) driver.Result
+
+type statusReader func(string) (statusprojection.Report, error)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -69,6 +74,17 @@ func runWithRunners(
 	prepare prepareRunner,
 	drive runDriver,
 ) int {
+	return runWithStatusReader(args, stdout, stderr, validate, prepare, drive, readStatus)
+}
+
+func runWithStatusReader(
+	args []string,
+	stdout, stderr io.Writer,
+	validate validateRunner,
+	prepare prepareRunner,
+	drive runDriver,
+	read statusReader,
+) int {
 	if len(args) == 1 && args[0] == "version" {
 		fmt.Fprintln(stdout, version)
 		return 0
@@ -84,6 +100,22 @@ func runWithRunners(
 		}
 		if result.HasDiagnostics() {
 			return 3
+		}
+		return 0
+	}
+	if requestedID, jsonOutput, ok := parseStatusArgs(args); ok {
+		report, err := read(requestedID)
+		if err != nil {
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
+		}
+		if jsonOutput {
+			if err := json.NewEncoder(stdout).Encode(report); err != nil {
+				fmt.Fprintf(stderr, "status observation failed: detail=%q\n", err.Error())
+				return 5
+			}
+		} else {
+			renderStatus(stdout, report)
 		}
 		return 0
 	}
@@ -145,7 +177,162 @@ func runWithRunners(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate, run")
+	fmt.Fprintln(w, "commands: version, validate, run, status")
+}
+
+func readStatus(requestedID string) (statusprojection.Report, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return statusprojection.Report{}, fmt.Errorf("resolve invocation directory: %w", err)
+	}
+	return statusprojection.Read(root, requestedID)
+}
+
+func parseStatusArgs(args []string) (requestedID string, jsonOutput, ok bool) {
+	if len(args) == 0 || args[0] != "status" || len(args) > 3 {
+		return "", false, false
+	}
+	for _, argument := range args[1:] {
+		switch argument {
+		case "--json":
+			if jsonOutput {
+				return "", false, false
+			}
+			jsonOutput = true
+		case "":
+			return "", false, false
+		default:
+			if strings.HasPrefix(argument, "-") || requestedID != "" {
+				return "", false, false
+			}
+			requestedID = argument
+		}
+	}
+	return requestedID, jsonOutput, true
+}
+
+func statusErrorCode(err error) int {
+	switch {
+	case errors.Is(err, statusprojection.ErrInvalidRunID):
+		return 1
+	case errors.Is(err, statusprojection.ErrNoActiveRun),
+		errors.Is(err, statusprojection.ErrRunNotFound),
+		errors.Is(err, statusprojection.ErrSnapshot),
+		errors.Is(err, statusprojection.ErrRequiredInput):
+		return 2
+	default:
+		return 5
+	}
+}
+
+func renderStatusError(w io.Writer, err error) {
+	switch statusErrorCode(err) {
+	case 1:
+		fmt.Fprintf(w, "usage error: detail=%q\n", err.Error())
+	case 2:
+		fmt.Fprintf(w, "precondition refused: detail=%q\n", err.Error())
+	default:
+		fmt.Fprintf(w, "recovery halted: detail=%q\n", err.Error())
+	}
+}
+
+func renderStatus(w io.Writer, report statusprojection.Report) {
+	fmt.Fprintf(w, "Run: %s (%s)\n", report.Run.ID, report.Run.Lifecycle)
+	fmt.Fprintf(
+		w,
+		"Score: rev %d, semantic %s, file %s\n",
+		report.Run.Score.Revision,
+		report.Run.Score.SemanticHash,
+		report.Run.Score.FileHash,
+	)
+	fmt.Fprintf(w, "Journal: %s\n", report.Journal.Integrity)
+	if report.Journal.Integrity == "TAIL_UNPARSEABLE" {
+		fmt.Fprintf(
+			w,
+			"Journal tail: seq %d, discarded bytes %d\n",
+			report.Journal.TruncatedSeq,
+			report.Journal.DiscardedBytes,
+		)
+	}
+	fmt.Fprintf(w, "Recovery: %s", report.Recovery.State)
+	if report.Recovery.Reason != "" {
+		fmt.Fprintf(w, " (%s)", report.Recovery.Reason)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Application: %s\n", report.Application.State)
+	if report.Application.Candidate != nil {
+		candidate := report.Application.Candidate
+		fmt.Fprintf(
+			w,
+			"Candidate: %s (tree %s, base %s, rev %d)\n",
+			candidate.ID,
+			candidate.ResultTree,
+			candidate.BaseTree,
+			candidate.ScoreRevision,
+		)
+	}
+	fmt.Fprintf(w, "Promotion: %s\n", report.Promotion.State)
+	if len(report.Run.PendingDecisions) == 0 {
+		fmt.Fprintln(w, "Pending decisions: none")
+	} else {
+		for _, decision := range report.Run.PendingDecisions {
+			fmt.Fprintf(w, "Pending decision %s: %s (rev %d)\n", decision.ID, decision.Type, decision.ScoreRevision)
+		}
+	}
+	for _, movement := range report.Run.Movements {
+		fmt.Fprintf(w, "Movement %s: %s\n", movement.ID, movement.State)
+		for _, attempt := range movement.Attempts {
+			fmt.Fprintf(w, "  Attempt %s: %s", attempt.ID, attempt.State)
+			if attempt.Failure != nil {
+				fmt.Fprintf(w, " (%s", attempt.Failure.Kind)
+				if attempt.Failure.Reason != "" {
+					fmt.Fprintf(w, ": %s", attempt.Failure.Reason)
+				}
+				fmt.Fprint(w, ")")
+			}
+			fmt.Fprintln(w)
+		}
+		for _, mark := range movement.Marks {
+			renderMark(w, mark)
+		}
+	}
+	for _, advisory := range report.EnforcementAdvisories {
+		fmt.Fprintf(
+			w,
+			"Enforcement advisory: attempt %s, unmet %s\n",
+			advisory.AttemptID,
+			strings.Join(advisory.Dimensions, ", "),
+		)
+	}
+}
+
+func renderMark(w io.Writer, mark statusprojection.Mark) {
+	criteria := make([]string, len(mark.Criteria))
+	for index, criterion := range mark.Criteria {
+		criteria[index] = criterion.ID + " [" + criterion.SpecHash + "]"
+	}
+	attemptWord := "attempts"
+	if mark.FailedAttempts == 1 {
+		attemptWord = "attempt"
+	}
+	fmt.Fprintf(
+		w,
+		"  Mark: %s (%d criteria: %s; tree %s; rev %d; after %d failed %s",
+		mark.Grade,
+		len(mark.Criteria),
+		strings.Join(criteria, ", "),
+		mark.SubjectTree,
+		mark.ScoreRevision,
+		mark.FailedAttempts,
+		attemptWord,
+	)
+	if mark.FindingsInstanceID != "" {
+		fmt.Fprintf(w, "; findings %s; review outcome %s", mark.FindingsInstanceID, mark.ReviewOutcome)
+	}
+	if mark.GateDecisionID != "" {
+		fmt.Fprintf(w, "; gate decision %s", mark.GateDecisionID)
+	}
+	fmt.Fprintln(w, ")")
 }
 
 func errorText(err error) string {

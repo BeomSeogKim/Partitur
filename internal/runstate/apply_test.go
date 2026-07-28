@@ -77,15 +77,15 @@ func TestUnsupportedRegistryEventFailsDistinctly(t *testing.T) {
 	}
 }
 
-func TestEScopedSupportedEventSetHasThirtyOneTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasThirtyNineTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 31 {
-		t.Fatalf("supported event count = %d, want 31", count)
+	if count != 39 {
+		t.Fatalf("supported event count = %d, want 39", count)
 	}
 	if isSupportedEvent("movement.cancelled") {
 		t.Fatal("derived movement.cancelled must not be accepted as an authoritative event")
@@ -296,6 +296,60 @@ func TestStartIdentityRejectsMixedPlatformFields(t *testing.T) {
 	_, err := Apply(state, event)
 	if !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("error = %v, want ErrInvalidEvent", err)
+	}
+}
+
+func TestShippingRecoveryProjectionUsesJournalTransactions(t *testing.T) {
+	state := NewState(nil)
+	state.Run = RunSucceeded
+	state.ApplicationCandidate = &ApplicationCandidate{ID: "candidate"}
+
+	apply := func(event Event) {
+		t.Helper()
+		var err error
+		state, err = Apply(state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply(fixtureEvent(EventApplyStarted, map[string]any{
+		"txn_id": "apply-1", "candidate_id": "candidate", "before_tree": "base", "result_tree": "result",
+		"touched_paths": []any{}, "recovery": map[string]any{"base_tree": "base", "result_tree": "result"},
+		"identity_versions": testIdentityVersions(),
+	}, nil))
+	apply(fixtureEvent(EventApplyRecoveryRequired, map[string]any{
+		"txn_id": "apply-1", "candidate_id": "candidate", "failure_detail": "tree mismatch",
+		"identity_versions": testIdentityVersions(),
+	}, nil))
+	if state.Application.State != ApplicationRecoveryRequired || state.Application.Reason != "tree mismatch" {
+		t.Fatalf("application = %+v", state.Application)
+	}
+	apply(fixtureEvent(EventApplyCompleted, map[string]any{
+		"txn_id": "apply-1", "candidate_id": "candidate", "result_tree": "result",
+		"identity_versions": testIdentityVersions(),
+	}, nil))
+	if state.Application.State != ApplicationApplied || state.Application.Reason != "" {
+		t.Fatalf("application = %+v", state.Application)
+	}
+
+	apply(fixtureEvent(EventScorePromotionStarted, map[string]any{
+		"txn_id": "promotion-1", "candidate_id": "candidate", "expected_root_file_hash": "sha256:before",
+		"target_snapshot_file_hash": "sha256:after", "target_revision": 1,
+		"identity_versions": testIdentityVersions(),
+	}, nil))
+	apply(fixtureEvent(EventScorePromotionRecoveryRequired, map[string]any{
+		"txn_id": "promotion-1", "candidate_id": "candidate", "failure_detail": "root changed",
+		"identity_versions": testIdentityVersions(),
+	}, nil))
+	if state.Promotion.State != PromotionRecoveryRequired || state.Promotion.Reason != "root changed" {
+		t.Fatalf("promotion = %+v", state.Promotion)
+	}
+	apply(fixtureEvent(EventScorePromoted, map[string]any{
+		"txn_id": "promotion-1", "candidate_id": "candidate", "target_revision": 1,
+		"target_snapshot_file_hash": "sha256:after", "identity_versions": testIdentityVersions(),
+	}, nil))
+	if state.Promotion.State != PromotionPromoted || state.Promotion.Reason != "" {
+		t.Fatalf("promotion = %+v", state.Promotion)
 	}
 }
 

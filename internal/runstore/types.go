@@ -82,3 +82,14 @@ type ReplayResult struct {
 	State         runstate.State
 	RepairReceipt *faultpoint.DurabilityReceipt
 }
+
+// ReadReplayResult is the strictly read-only journal projection used by
+// observational commands. A torn final line is deliberately not repaired:
+// TailTruncated tells the caller that the returned State is only the durable
+// prefix before that line.
+type ReadReplayResult struct {
+	State          runstate.State
+	TailTruncated  bool
+	TruncatedSeq   uint64
+	DiscardedBytes int
+}
