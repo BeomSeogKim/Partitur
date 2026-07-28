@@ -132,6 +132,7 @@ func RunTrampoline(arguments []string, probe faultpoint.Probe) error {
 	); err != nil {
 		return err
 	}
+	probe.Reached(identityPoint(configuration.Kind))
 	if _, err := ready.Write([]byte{1}); err != nil {
 		return fmt.Errorf("publish identity receipt: %w", err)
 	}
@@ -239,4 +240,11 @@ func gatePoint(kind Kind) faultpoint.PointID {
 		return faultpoint.PointLaunchCriterionGateReleased
 	}
 	return faultpoint.PointLaunchAdapterGateReleased
+}
+
+func identityPoint(kind Kind) faultpoint.PointID {
+	if kind == Criterion {
+		return faultpoint.PointLaunchCriterionIdentityPublished
+	}
+	return faultpoint.PointLaunchAdapterIdentityPublished
 }

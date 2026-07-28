@@ -38,16 +38,11 @@ type dependencies struct {
 	workspaceStart    func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error)
 }
 
-// Run drives one prepared score through the durable success slice.
-func Run(
-	ctx context.Context,
-	preparation *validate.Preparation,
-	started StartedObserver,
-) Result {
-	return run(ctx, preparation, started, dependencies{
-		probe:  faultpoint.Nop{},
-		client: adapter.NewClient(),
-		resolveTrampoline: func() (string, error) {
+func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {
+	return ExecutionDependencies{
+		Probe:  probe,
+		Client: adapter.NewClient(),
+		ResolveTrampoline: func() (string, error) {
 			path, err := exec.LookPath("partitur-trampoline")
 			if err != nil {
 				return "", fmt.Errorf("resolve partitur-trampoline: %w", err)
@@ -57,9 +52,41 @@ func Run(
 			}
 			return filepath.Abs(path)
 		},
-		now:            time.Now,
-		newID:          workspace.NewID,
-		workspaceStart: workspace.Start,
+		Now:   time.Now,
+		NewID: workspace.NewID,
+	}
+}
+
+// DefaultExecutionDependencies returns the production dependencies for one
+// attempt execution episode.
+func DefaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {
+	return defaultExecutionDependencies(probe)
+}
+
+func executionDependenciesFrom(dependencies dependencies) ExecutionDependencies {
+	return ExecutionDependencies{
+		Probe:             dependencies.probe,
+		Client:            dependencies.client,
+		ResolveTrampoline: dependencies.resolveTrampoline,
+		Now:               dependencies.now,
+		NewID:             dependencies.newID,
+	}
+}
+
+// Run drives one prepared score through the durable success slice.
+func Run(
+	ctx context.Context,
+	preparation *validate.Preparation,
+	started StartedObserver,
+) Result {
+	execution := defaultExecutionDependencies(faultpoint.ProbeFromEnvironment())
+	return run(ctx, preparation, started, dependencies{
+		probe:             execution.Probe,
+		client:            execution.Client,
+		resolveTrampoline: execution.ResolveTrampoline,
+		now:               execution.Now,
+		newID:             execution.NewID,
+		workspaceStart:    workspace.Start,
 	})
 }
 
@@ -77,7 +104,7 @@ func run(
 		dependencies.workspaceStart == nil {
 		return Result{Err: errors.New("driver: incomplete run")}
 	}
-	movement, part, performer, plan, err := selectSlice(preparation)
+	movement, _, performer, _, err := selectSlice(preparation)
 	if err != nil {
 		return Result{Err: err}
 	}
@@ -123,9 +150,77 @@ func run(
 	if err != nil {
 		return stopped(result, err)
 	}
+	for _, transition := range []runstate.EventType{
+		runstate.EventMovementReady,
+		runstate.EventMovementStarted,
+	} {
+		event := runstate.Event{
+			RunID:         startResult.RunID,
+			ScoreRevision: preparation.Score.Revision(),
+			MovementID:    runstate.MovementID(movement.ID),
+			Type:          transition,
+			Payload:       json.RawMessage(`{}`),
+		}
+		if _, err := authority.Append(
+			event,
+			faultpoint.ReceiptAddress("movement."+string(transition)),
+		); err != nil {
+			return stopped(result, err)
+		}
+	}
+	return ExecuteAttempt(ctx, AttemptExecution{
+		RepositoryRoot:  preparation.RepositoryRoot,
+		Score:           preparation.Score,
+		Cast:            preparation.Cast,
+		RunID:           startResult.RunID,
+		Attempt:         attempt,
+		CandidateTree:   candidate.ResultTree,
+		Authority:       authority,
+		PerformerID:     performer.ID,
+		SelectionReason: "initial",
+		RemainingMS:     remainingMS,
+	}, executionDependenciesFrom(dependencies))
+}
+
+// ExecuteAttempt drives one fresh attempt after its workspace already exists.
+// It is shared by the live wrapper and recovery; neither validation nor
+// workspace.Start belongs to this execution core.
+func ExecuteAttempt(
+	ctx context.Context,
+	execution AttemptExecution,
+	executionDependencies ExecutionDependencies,
+) (result Result) {
+	if execution.RepositoryRoot == "" || execution.Score == nil || execution.Cast == nil ||
+		execution.RunID == "" || execution.Attempt == nil || execution.CandidateTree == "" ||
+		execution.Authority == nil || execution.PerformerID == "" || execution.SelectionReason == "" ||
+		executionDependencies.Probe == nil || executionDependencies.Client == nil ||
+		executionDependencies.ResolveTrampoline == nil || executionDependencies.Now == nil ||
+		executionDependencies.NewID == nil {
+		return Result{RunID: execution.RunID, Err: errors.New("driver: incomplete attempt execution")}
+	}
+	movement, part, performer, plan, err := selectAttempt(
+		execution.Score, execution.Cast, execution.Attempt.MovementID, execution.PerformerID,
+	)
+	if err != nil {
+		return Result{RunID: execution.RunID, Err: err}
+	}
+	startResult := workspace.StartResult{RunID: execution.RunID}
+	attempt := execution.Attempt
+	candidate := workspace.Candidate{ResultTree: execution.CandidateTree}
+	authority := execution.Authority
+	remainingMS := execution.RemainingMS
+	dependencies := dependencies{
+		probe:             executionDependencies.Probe,
+		client:            executionDependencies.Client,
+		resolveTrampoline: executionDependencies.ResolveTrampoline,
+		now:               executionDependencies.Now,
+		newID:             executionDependencies.NewID,
+	}
+	result = Result{RunID: execution.RunID}
+	policy := execution.Score.EffectivePolicy()
 	base := runstate.Event{
 		RunID:         startResult.RunID,
-		ScoreRevision: preparation.Score.Revision(),
+		ScoreRevision: execution.Score.Revision(),
 		MovementID:    runstate.MovementID(movement.ID),
 		PartID:        movement.PartID,
 		AttemptID:     attempt.AttemptID,
@@ -142,30 +237,26 @@ func run(
 		event := base
 		event.Type = eventType
 		event.Payload = encoded
-		return authority.Append(event, faultpoint.ReceiptAddress(address))
-	}
-	for _, transition := range []runstate.EventType{
-		runstate.EventMovementReady,
-		runstate.EventMovementStarted,
-	} {
-		event := base
-		event.AttemptID = ""
-		event.PartID = ""
-		event.Type = transition
-		event.Payload = json.RawMessage(`{}`)
-		if _, err := authority.Append(
-			event,
-			faultpoint.ReceiptAddress("movement."+string(transition)),
-		); err != nil {
-			return stopped(result, err)
+		receipt, err := authority.Append(event, faultpoint.ReceiptAddress(address))
+		if err != nil {
+			return faultpoint.DurabilityReceipt{}, err
 		}
+		switch eventType {
+		case runstate.EventAttemptCompleted:
+			dependencies.probe.Reached(faultpoint.PointLifecycleAttemptCompleted)
+		case runstate.EventMovementSucceeded:
+			dependencies.probe.Reached(faultpoint.PointLifecycleMovementSucceeded)
+		}
+		return receipt, nil
 	}
-	if _, err := appendEvent(runstate.EventPerformerSelected, map[string]any{
-		"reason":       "initial",
-		"performer_id": performer.ID,
-		"adapter_id":   performer.Adapter,
-		"model":        performer.Model,
-	}, "attempt.performer_selected"); err != nil {
+	initialSelection, err := workspace.PerformerSelectedEvent(
+		attempt, execution.Score.Revision(), performer.ID, performer.Adapter, performer.Model,
+		execution.SelectionReason, execution.SelectionCausationID,
+	)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if _, err := authority.Append(initialSelection, faultpoint.ReceiptAddress("attempt.performer_selected")); err != nil {
 		return stopped(result, err)
 	}
 	adapterPath, err := dependencies.client.Resolve(performer.Adapter)
@@ -182,7 +273,7 @@ func run(
 
 	grants := effectiveGrants(movement, policy)
 	brief, globalInvariants, err := executeBrief(
-		preparation.Score.Execution(),
+		execution.Score.Execution(),
 		movement,
 		grants,
 	)
@@ -193,7 +284,7 @@ func run(
 		RunID:         string(startResult.RunID),
 		MovementID:    movement.ID,
 		AttemptID:     string(attempt.AttemptID),
-		ScoreRevision: int(preparation.Score.Revision()),
+		ScoreRevision: int(execution.Score.Revision()),
 		Model:         performer.Model,
 		Brief:         brief,
 		Workdir:       attempt.Worktree,
@@ -253,7 +344,7 @@ func run(
 		}
 		features := recognizedFeatures(probe.Features)
 		executionHash, err = executionDependencyHash(
-			preparation,
+			execution.Score,
 			movement,
 			part,
 			performer,
@@ -405,6 +496,7 @@ func run(
 		IntervalID:     runstate.IntervalID(adapterInterval),
 		IntervalOpened: adapterOpened,
 		MayPropose:     movement.MayPropose,
+		Probe:          dependencies.probe,
 		RecordIdentity: recordIdentity,
 		Recorder:       recorder,
 	})
@@ -446,7 +538,7 @@ func run(
 	}
 	evaluation, err := acceptance.Evaluate(plan, acceptance.Evaluation{
 		RunID:              startResult.RunID,
-		ScoreRevision:      preparation.Score.Revision(),
+		ScoreRevision:      execution.Score.Revision(),
 		MovementID:         base.MovementID,
 		PartID:             base.PartID,
 		AttemptID:          base.AttemptID,
@@ -577,6 +669,44 @@ func selectSlice(
 	return movements[0], part, performer, plan, err
 }
 
+func selectAttempt(
+	compiled *score.Score,
+	resolvedCast *cast.Cast,
+	movementID runstate.MovementID,
+	performerID string,
+) (score.MovementView, score.PartView, cast.PerformerView, *acceptance.Plan, error) {
+	if compiled == nil || resolvedCast == nil || movementID == "" || performerID == "" {
+		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrUnsupportedSlice
+	}
+	var movement score.MovementView
+	foundMovement := false
+	for _, candidate := range compiled.Movements() {
+		if candidate.ID == string(movementID) {
+			movement = candidate
+			foundMovement = true
+			break
+		}
+	}
+	if !foundMovement {
+		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrUnsupportedSlice
+	}
+	var part score.PartView
+	foundPart := false
+	for _, candidate := range compiled.Parts() {
+		if candidate.ID == movement.PartID {
+			part = candidate
+			foundPart = true
+			break
+		}
+	}
+	performer, foundPerformer := resolvedCast.Performer(performerID)
+	if !foundPart || !foundPerformer {
+		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrUnsupportedSlice
+	}
+	plan, err := acceptance.Compile(movement)
+	return movement, part, performer, plan, err
+}
+
 func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 	movements := compiled.Movements()
 	result := make([]runstate.MovementSeed, len(movements))
@@ -679,7 +809,7 @@ func executeBrief(
 }
 
 func executionDependencyHash(
-	preparation *validate.Preparation,
+	compiled *score.Score,
 	movement score.MovementView,
 	part score.PartView,
 	performer cast.PerformerView,
@@ -705,7 +835,7 @@ func executionDependencyHash(
 		"may_propose": movement.MayPropose,
 		"acceptance":  string(acceptanceHash),
 	}
-	execution := preparation.Score.Execution()
+	execution := compiled.Execution()
 	scoreValue := map[string]any{
 		"goal":                            execution.Goal,
 		"global_invariants":               global,
@@ -723,13 +853,11 @@ func executionDependencyHash(
 		},
 		"model": performer.Model,
 		"authority": map[string]any{
-			"paths_rw": stringsToAny(grants.PathsRW),
-			"paths_ro": stringsToAny(grants.PathsRO),
-			"shell":    grants.Shell,
-			"network":  grants.Network,
-			"side_effects": stringsToAny(
-				preparation.Score.EffectivePolicy().SideEffects,
-			),
+			"paths_rw":     stringsToAny(grants.PathsRW),
+			"paths_ro":     stringsToAny(grants.PathsRO),
+			"shell":        grants.Shell,
+			"network":      grants.Network,
+			"side_effects": stringsToAny(compiled.EffectivePolicy().SideEffects),
 		},
 		"score":              scoreValue,
 		"resolved_decisions": []any{},

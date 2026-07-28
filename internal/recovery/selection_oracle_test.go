@@ -82,6 +82,114 @@ func TestAppendixC41SelectsThisPlanner(t *testing.T) {
 	t.Logf("C.4.1 planner oracle: %d resume rows checked, %d explicit out-of-scope rows", checked, outOfScope)
 }
 
+func TestAppendixC2RowsFollowDeclaredPrecedence(t *testing.T) {
+	tests := []struct {
+		name  string
+		input Input
+		want  CaseID
+	}{
+		{"recorded failure", withFailedAttempt(c2Input(runstate.AttemptFailed), false), CaseRealizeDisposition},
+		{"missing question request", withQuestionRequests(c2Input(runstate.AttemptBlocked), false, true), CaseAppendQuestionRequest},
+		{"unresolved blocking decision", withQuestionRequests(c2Input(runstate.AttemptBlocked), true, true), CaseWaitingHuman},
+		{"released blocked attempt", withQuestionRequests(c2Input(runstate.AttemptBlocked), true, false), CaseDecisionResume},
+		{"selected attempt", c2Input(runstate.AttemptStarting), CaseUnstartedAttempt},
+		{"unprobed attempt", c2Input(runstate.AttemptRunning), CaseUnprobedAttempt},
+		{"incomplete attempt", withAdapterProbe(c2Input(runstate.AttemptRunning)), CaseIncompleteAttempt},
+		{"missing change set", withRepoWrite(c2Input(runstate.AttemptVerifying)), CaseCaptureChangeSet},
+		{"missing verification", withChangeSet(c2Input(runstate.AttemptVerifying)), CasePostHocVerification},
+		{"begin acceptance", withVerificationPassed(withChangeSet(c2Input(runstate.AttemptVerifying))), CaseStartAcceptance},
+		{"completed attempt outranks historical acceptance", withAcceptanceStarted(c2Input(runstate.AttemptCompleted)), CaseMovementSucceeded},
+		{"failed movement", withMovementFailed(withFailedAttempt(c2Input(runstate.AttemptFailed), true)), CaseRunFailed},
+		{"rejected final gate", withFinalGateRejected(withFailedAttempt(c2Input(runstate.AttemptFailed), true)), CaseFinalGateRejected},
+	}
+	if len(tests) != 13 {
+		t.Fatalf("C.2 precedence cases = %d, want 13", len(tests))
+	}
+	seen := make(map[CaseID]bool, len(tests))
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			if seen[test.want] {
+				t.Fatalf("duplicate C.2 case %s", test.want)
+			}
+			seen[test.want] = true
+			if got := PlanAttempt(test.input); got.CaseID != test.want {
+				t.Fatalf("C.2 selected %s, want %s", got.CaseID, test.want)
+			}
+		})
+	}
+}
+
+func TestAppendixC4RowsFollowDeclaredPrecedence(t *testing.T) {
+	cases := []struct {
+		name  string
+		input Input
+		want  CaseID
+	}{
+		{
+			name: "budget exhaustion has no in-flight attempt or recovered composition above it",
+			input: func() Input {
+				input := c4Cut(runstate.MovementRunning)
+				input.Projection.Scheduler.RemainingTime = 0
+				return input
+			}(),
+			want: CaseBudgetExhausted,
+		},
+		{
+			name: "recovered composition has available budget and no in-flight attempt above it",
+			input: func() Input {
+				input := c4Cut(runstate.MovementRunning)
+				input.Projection.CompositionRecovery = &CompositionRecovery{Scope: "movement", MovementID: "write", Recovered: true}
+				return input
+			}(),
+			want: CaseRecoveredComposition,
+		},
+		{
+			name:  "scheduler advances only after budget, recovered composition, and pending successor are absent",
+			input: c4Cut(runstate.MovementPending),
+			want:  CaseScheduler,
+		},
+	}
+	if len(cases) != 3 {
+		t.Fatalf("C.4 rows = %d, want 3", len(cases))
+	}
+	seen := map[CaseID]bool{}
+	for _, test := range cases {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			if seen[test.want] {
+				t.Fatalf("duplicate C.4 case %s", test.want)
+			}
+			seen[test.want] = true
+			if got := PlanScheduler(test.input); got.CaseID != test.want {
+				t.Fatalf("C.4 selected %s, want %s", got.CaseID, test.want)
+			}
+		})
+	}
+
+	for _, state := range []runstate.AttemptState{
+		runstate.AttemptCompleted,
+		runstate.AttemptBlocked,
+		runstate.AttemptFailed,
+		runstate.AttemptCancelled,
+		runstate.AttemptSuperseded,
+	} {
+		t.Run("terminal_current_head_"+string(state)+"_does_not_block_pending_successor", func(t *testing.T) {
+			input := c4Cut(runstate.MovementPending)
+			input.Projection.CurrentHeadAttempt = &AttemptRecovery{
+				AttemptID: "prior", MovementID: "write", ScoreRevision: input.Projection.State.ScoreHead.Revision, State: state,
+			}
+			input.Projection.Scheduler.PendingSuccessor = &PendingSuccessor{
+				MovementID: "write", AttemptID: "prior", Performer: "writer", Reason: "quality_retry",
+			}
+			got := PlanScheduler(input)
+			if got.CaseID != CaseScheduler || got.Action == nil || got.Action.Kind != ActionMaterializeSuccessor {
+				t.Fatalf("C.4 terminal current-head selection = %+v, want materialized successor", got)
+			}
+		})
+	}
+}
+
 var appendixC41Steps = map[CaseID][]ActionStep{
 	CaseUnstartedAttempt:    {StepStabilizeHandoff, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
 	CaseUnprobedAttempt:     {StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},

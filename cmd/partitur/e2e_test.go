@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -843,10 +844,18 @@ func runVendorFixture() {
 	if err != nil {
 		os.Exit(91)
 	}
-	if !bytes.Contains(
-		prompt,
-		[]byte("The remaining active wall-clock budget at attempt start is 600000 milliseconds."),
-	) {
+	const budgetPrefix = "The remaining active wall-clock budget at attempt start is "
+	budgetStart := strings.Index(string(prompt), budgetPrefix)
+	if budgetStart < 0 {
+		os.Exit(96)
+	}
+	budgetText := string(prompt)[budgetStart+len(budgetPrefix):]
+	budgetParts := strings.SplitN(budgetText, " milliseconds.", 2)
+	if len(budgetParts) != 2 {
+		os.Exit(96)
+	}
+	remainingMS, err := strconv.ParseInt(budgetParts[0], 10, 64)
+	if err != nil || remainingMS <= 0 || remainingMS > 600000 {
 		os.Exit(96)
 	}
 	outputDir := ""

@@ -9,9 +9,12 @@ import (
 	"path/filepath"
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/score"
+	"github.com/BeomSeogKim/Partitur/internal/successor"
 )
 
 // RecoveryInput is the complete durable input available before recovery
@@ -20,6 +23,8 @@ type RecoveryInput struct {
 	Projection recovery.Projection
 	Score      *score.Score
 	Cast       *cast.Cast
+	BaseCommit string
+	BaseTree   string
 }
 
 // AcquireRecoveryDriver establishes authority from the selected run's pinned
@@ -30,6 +35,79 @@ func (store *Store) AcquireRecoveryDriver(runID runstate.RunID) (*Driver, error)
 		return nil, err
 	}
 	return store.AcquireDriver(runID, movementSeed(input.Score))
+}
+
+// ReclaimDeadRecoveryDriver replaces the exact dead lease observed before
+// recovery planning with a new recovery driver under one state lock.
+func (store *Store) ReclaimDeadRecoveryDriver(runID runstate.RunID, expected LeaseIdentity) (*Driver, error) {
+	input, err := store.LoadRecoveryInput(runID)
+	if err != nil {
+		return nil, err
+	}
+	pid := os.Getpid()
+	start, err := procid.Read(pid)
+	if err != nil {
+		return nil, fmt.Errorf("read driver identity: %w", err)
+	}
+	token, err := newDriverToken()
+	if err != nil {
+		return nil, err
+	}
+	var acquired Lease
+	err = store.Mutate(runID, "", func(transaction *Txn) error {
+		state, err := transaction.project(movementSeed(input.Score))
+		if err != nil {
+			return err
+		}
+		if state.Run == runstate.RunNotStarted || state.Run.Terminal() ||
+			state.Authority.Owner == nil || state.Authority.Epoch != expected.Epoch ||
+			state.Authority.Owner.PID != expected.PID ||
+			!startIdentitiesEqual(state.Authority.Owner.Start, expected.Start) {
+			return ErrLeaseConflict
+		}
+		lease, present, err := transaction.ReadLease()
+		if err != nil {
+			return err
+		}
+		if !present || !leaseMatches(lease, expected) || lease.MatchOwner().Status != procid.GoneOrReused {
+			return ErrLeaseConflict
+		}
+		if _, err := transaction.At("recovery.reclaim_authority.lease").CompareRemoveLease(expected); err != nil {
+			return err
+		}
+		epoch := state.Authority.Epoch + 1
+		payload, err := json.Marshal(map[string]any{
+			"authority_epoch":      epoch,
+			"owner_pid":            pid,
+			"owner_start_identity": encodeDriverStart(start),
+		})
+		if err != nil {
+			return err
+		}
+		event := runstate.Event{
+			RunID:         runID,
+			ScoreRevision: state.ScoreHead.Revision,
+			Type:          runstate.EventAuthorityGranted,
+			Payload:       payload,
+		}
+		if _, err := runstate.Apply(state, event); err != nil {
+			return err
+		}
+		if _, err := transaction.At(receiptAuthorityGranted).Append(event); err != nil {
+			return err
+		}
+		store.probe.Reached(faultpoint.PointAuthorityGranted)
+		acquired = Lease{Epoch: epoch, Token: token, PID: pid, Start: start}
+		if _, err := transaction.At(receiptDriverLease).CreateLease(true, acquired); err != nil {
+			return err
+		}
+		store.probe.Reached(faultpoint.PointAuthorityLeaseCreated)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Driver{store: store, runID: runID, seed: movementSeed(input.Score), lease: acquired}, nil
 }
 
 // LoadRecoveryInput reads only the selected run's journal and authoritative
@@ -74,6 +152,8 @@ func (store *Store) LoadRecoveryInput(runID runstate.RunID) (RecoveryInput, erro
 		Projection: recoveryProjection(replay.State, journal.Events, currentScore, resolvedCast),
 		Score:      currentScore,
 		Cast:       resolvedCast,
+		BaseCommit: stringValue(startPayload, "base_commit"),
+		BaseTree:   stringValue(startPayload, "base_tree"),
 	}, nil
 }
 
@@ -134,11 +214,34 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 		return projection
 	}
 	current.FailureClassification = facts.failureClassification(*current, pinned, resolved, projection.Scheduler)
+	projection.Scheduler.PendingSuccessor = pendingSuccessor(*current)
 	projection.CurrentHeadAttempt = current
 	if acceptance, ok := state.Acceptances[current.AttemptID]; ok && acceptance.Started {
 		projection.Acceptance = facts.acceptance(current.AttemptID, current.MovementID, pinned)
 	}
 	return projection
+}
+
+func pendingSuccessor(attempt recovery.AttemptRecovery) *recovery.PendingSuccessor {
+	if attempt.State != runstate.AttemptFailed || attempt.FailureDispositionRealized || attempt.RecordedDisposition == nil {
+		return nil
+	}
+	facts := attempt.FailureClassification
+	realization, err := successor.Realize(successor.RealizationInput{
+		Disposition:       *attempt.RecordedDisposition,
+		CurrentPerformer:  facts.CurrentPerformer,
+		Binding:           cast.BindingView{Fallbacks: facts.Fallbacks},
+		VisitedPerformers: facts.VisitedPerformers,
+	})
+	if err != nil || realization.Action != successor.ActionPendingSuccessor {
+		return nil
+	}
+	return &recovery.PendingSuccessor{
+		MovementID: attempt.MovementID,
+		AttemptID:  attempt.AttemptID,
+		Performer:  realization.Performer,
+		Reason:     string(realization.Charge),
+	}
 }
 
 func schedulerFromScore(state runstate.State, pinned *score.Score) recovery.Scheduler {

@@ -44,9 +44,10 @@ Exactly Appendix E's: the **control channel** (prepare, quiesce, cancellation, s
 
 ## Selection manifest
 
-All twenty-eight E.2 edges are in scope for v0.2; none is deferred. Each needs a crash injected at a
-cut **on either side of each endpoint**, and a resume that evaluates the assertion E.2 states for
-that edge.
+This gate reaches seven E.2 edges. Each receives a crash injected **on either side of each
+endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
+by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
+They are not claims that those edges are unreachable.
 
 **Blocks on** is how the harness reaches those cuts, and it differs by endpoint kind. An `R`
 endpoint is controlled through its `DurabilityReceipt`: suspend before the operation, and again once
@@ -126,6 +127,43 @@ required; the criterion set is not implied by the adapter set.
 | `lifecycle.movement_failed_to_run_failed` | R → R | driver | `movement.failed` durable, run still nonterminal |
 | `acceptance.criterion_error_to_failed` | R → R | driver | `criterion.completed {outcome: ERROR}` durable, `acceptance.failed` absent |
 | `acceptance.evaluation_completed_to_decision_requested` | R → R | driver | evaluation complete, a required human-gate request absent |
+
+## Gate-cut dispositions
+
+The table is the executable selection contract for this gate. `reachable` means the subprocess
+matrix names both endpoints. `not reached by this gate's cuts` is deliberately narrower than
+unreachable: it records only that this gate has no fixture for the stated Appendix E branch.
+
+| Edge | Disposition | Owning clause | Reason |
+|---|---|---|---|
+| `prepare.snapshot_to_plan` | not reached by this gate's cuts | §6 step 1; §9; E.2 | No prepare/approval subprocess fixture |
+| `prepare.plan_to_prepared` | not reached by this gate's cuts | §6 step 1; B.5; E.2 | No prepare/approval subprocess fixture |
+| `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | No driver/approver delayed-observation fixture |
+| `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No pending-prepare quiesce fixture |
+| `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No pending-prepare commit fixture |
+| `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
+| `cancel.swept_to_terminal` | not reached by this gate's cuts | §6 (a), (e); E.2 | No cancellation oracle fixture |
+| `cancel.swept_to_quarantined` | not reached by this gate's cuts | §6 (a)-(b); E.2 | No cancellation oracle fixture |
+| `cancel.interval_stopped_to_terminal` | not reached by this gate's cuts | §6 (c)-(e); E.2 | No cancellation oracle fixture |
+| `cancel.fence_decided_to_terminal` | not reached by this gate's cuts | §6 (d)-(e); E.2 | No cancellation oracle fixture |
+| `cancel.terminal_to_lease_removed` | not reached by this gate's cuts | §6 (e)-(f); E.2 | No cancellation oracle fixture |
+| `supersede.swept_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
+| `supersede.interval_stopped_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
+| `supersede.fence_decided_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
+| `supersede.approved_to_lease_removed` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
+| `authority.granted_to_lease_created` | reachable | §6 authority acquisition; E.2 | Driver/reclaimer crash fixture |
+| `launch.adapter.marker_held_to_identity_published` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
+| `launch.adapter.identity_published_to_recorded` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
+| `launch.adapter.recorded_to_gate` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
+| `launch.criterion.marker_held_to_identity_published` | not reached by this gate's cuts | §7 criterion launch; E.2 | No external-criterion launch fixture |
+| `launch.criterion.identity_published_to_recorded` | not reached by this gate's cuts | §7 criterion launch; E.2 | No external-criterion launch fixture |
+| `launch.criterion.recorded_to_gate` | not reached by this gate's cuts | §7 criterion launch; E.2 | No external-criterion launch fixture |
+| `execute.adapter_swept_to_interval_stopped` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
+| `execute.interval_stopped_to_outcome` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
+| `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |
+| `lifecycle.movement_failed_to_run_failed` | not reached by this gate's cuts | §7 lifecycle; E.2 | No movement-failure fixture |
+| `acceptance.criterion_error_to_failed` | not reached by this gate's cuts | §7 acceptance; E.2 | No criterion-error fixture |
+| `acceptance.evaluation_completed_to_decision_requested` | not reached by this gate's cuts | §7 acceptance; E.2 | No human-gate fixture |
 
 ## Execution model — deterministic interleaving, not a self-racing process
 

@@ -2,6 +2,14 @@
 // Appendix E.
 package faultpoint
 
+import (
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"sync"
+)
+
 // EdgeID identifies an ordered-step edge in DESIGN Appendix E.2.
 type EdgeID string
 
@@ -40,17 +48,28 @@ const (
 type PointID string
 
 const (
-	PointPrepareObserved             PointID = "prepare.observed"
-	PointQuiesceSessionsSwept        PointID = "quiesce.sessions_swept"
-	PointQuiesceCommitLockHeld       PointID = "quiesce.commit_lock_held"
-	PointCancelSessionsSwept         PointID = "cancel.sessions_swept"
-	PointCancelFenceDecided          PointID = "cancel.fence_decided"
-	PointSupersedeSessionsSwept      PointID = "supersede.sessions_swept"
-	PointSupersedeFenceDecided       PointID = "supersede.fence_decided"
-	PointLaunchAdapterMarkerHeld     PointID = "launch.adapter.marker_held"
-	PointLaunchAdapterGateReleased   PointID = "launch.adapter.gate_released"
-	PointLaunchCriterionMarkerHeld   PointID = "launch.criterion.marker_held"
-	PointLaunchCriterionGateReleased PointID = "launch.criterion.gate_released"
+	PointPrepareObserved                  PointID = "prepare.observed"
+	PointQuiesceSessionsSwept             PointID = "quiesce.sessions_swept"
+	PointQuiesceCommitLockHeld            PointID = "quiesce.commit_lock_held"
+	PointCancelSessionsSwept              PointID = "cancel.sessions_swept"
+	PointCancelFenceDecided               PointID = "cancel.fence_decided"
+	PointSupersedeSessionsSwept           PointID = "supersede.sessions_swept"
+	PointSupersedeFenceDecided            PointID = "supersede.fence_decided"
+	PointLaunchAdapterMarkerHeld          PointID = "launch.adapter.marker_held"
+	PointLaunchAdapterGateReleased        PointID = "launch.adapter.gate_released"
+	PointLaunchCriterionMarkerHeld        PointID = "launch.criterion.marker_held"
+	PointLaunchCriterionGateReleased      PointID = "launch.criterion.gate_released"
+	PointAuthorityGranted                 PointID = "authority.granted"
+	PointAuthorityLeaseCreated            PointID = "authority.lease_created"
+	PointLaunchAdapterIdentityPublished   PointID = "launch.adapter.identity_published"
+	PointLaunchAdapterIdentityRecorded    PointID = "launch.adapter.identity_recorded"
+	PointLaunchCriterionIdentityPublished PointID = "launch.criterion.identity_published"
+	PointLaunchCriterionIdentityRecorded  PointID = "launch.criterion.identity_recorded"
+	PointExecuteAdapterSwept              PointID = "execute.adapter_swept"
+	PointExecuteIntervalStopped           PointID = "execute.interval_stopped"
+	PointExecuteOutcomeRecorded           PointID = "execute.outcome_recorded"
+	PointLifecycleAttemptCompleted        PointID = "lifecycle.attempt_completed"
+	PointLifecycleMovementSucceeded       PointID = "lifecycle.movement_succeeded"
 )
 
 // MutationKind identifies a receipt-producing operation from DESIGN Appendix E.1.
@@ -100,3 +119,52 @@ type Nop struct{}
 
 // Reached implements Probe.
 func (Nop) Reached(PointID) {}
+
+const (
+	probeNotifyFDEnv  = "PARTITUR_FAULTPOINT_NOTIFY_FD"
+	probeReleaseFDEnv = "PARTITUR_FAULTPOINT_RELEASE_FD"
+)
+
+// ProbeFromEnvironment returns the harness probe carried by inherited file
+// descriptors, or Nop when no harness is installed. See DESIGN Appendix E.
+func ProbeFromEnvironment() Probe {
+	notify, notifyOK := probeFileFromEnvironment(probeNotifyFDEnv)
+	release, releaseOK := probeFileFromEnvironment(probeReleaseFDEnv)
+	if !notifyOK || !releaseOK {
+		return Nop{}
+	}
+	return NewPipeProbe(notify, release)
+}
+
+func probeFileFromEnvironment(name string) (*os.File, bool) {
+	value := os.Getenv(name)
+	fd, err := strconv.Atoi(value)
+	if err != nil || fd < 0 {
+		return nil, false
+	}
+	return os.NewFile(uintptr(fd), name), true
+}
+
+// NewPipeProbe reports each reached boundary then waits for the harness.
+func NewPipeProbe(notify io.Writer, release io.Reader) Probe {
+	if notify == nil || release == nil {
+		return Nop{}
+	}
+	return &pipeProbe{notify: notify, release: release}
+}
+
+type pipeProbe struct {
+	notify  io.Writer
+	release io.Reader
+	mu      sync.Mutex
+}
+
+func (probe *pipeProbe) Reached(point PointID) {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	if _, err := fmt.Fprintln(probe.notify, point, os.Getpid()); err != nil {
+		return
+	}
+	var release [1]byte
+	_, _ = io.ReadFull(probe.release, release[:])
+}

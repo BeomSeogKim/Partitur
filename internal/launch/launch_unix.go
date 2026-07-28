@@ -201,6 +201,7 @@ func launch(
 		_ = command.Wait()
 		return nil, err
 	}
+	reach(request.Probe, recordedPoint(request.Kind))
 	if err := ctx.Err(); err != nil {
 		_ = gateWrite.Close()
 		_ = command.Wait()
@@ -220,6 +221,19 @@ func launch(
 		LaunchDir:   launchDir,
 		commandWait: command.Wait,
 	}, nil
+}
+
+func recordedPoint(kind Kind) faultpoint.PointID {
+	if kind == Criterion {
+		return faultpoint.PointLaunchCriterionIdentityRecorded
+	}
+	return faultpoint.PointLaunchAdapterIdentityRecorded
+}
+
+func reach(probe faultpoint.Probe, point faultpoint.PointID) {
+	if probe != nil {
+		probe.Reached(point)
+	}
 }
 
 func validateRequest(request Request) error {

@@ -322,12 +322,21 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 		return recovery.Input{Projection: durable.Projection, Observations: observations}, nil
 	}
 	result, err := executor.Execute(ctx)
-	if executor.Driver != nil && result.Outcome != recoveryexec.OutcomeHalted {
+	if executor.Driver != nil && result.Outcome != recoveryexec.OutcomeHalted && !terminalCleanupRan(result) {
 		if releaseErr := executor.Driver.Release(); err == nil && releaseErr != nil {
 			err = releaseErr
 		}
 	}
 	return result, err
+}
+
+func terminalCleanupRan(result recoveryexec.Result) bool {
+	for _, kind := range result.Kinds {
+		if kind == recovery.ActionTerminalCleanup {
+			return true
+		}
+	}
+	return false
 }
 
 func readStatus(requestedID string) (statusprojection.Report, error) {

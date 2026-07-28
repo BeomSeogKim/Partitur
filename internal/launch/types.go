@@ -47,6 +47,7 @@ type Request struct {
 	Stdout         *os.File
 	Stderr         *os.File
 	RecordIdentity RecordIdentity
+	Probe          faultpoint.Probe
 }
 
 // Process is a released trampoline that has exec'd, or is about to exec, the

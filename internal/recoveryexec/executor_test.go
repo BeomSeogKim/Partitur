@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,11 +17,60 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
+
+func TestExecutorDoesNotCanonicalizeDifferentLiveLease(t *testing.T) {
+	store, driver := handlerStore(t, false)
+	process := exec.Command("sleep", "30")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+	start, err := procid.Read(process.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, present, err := store.ReadLease("run-1")
+	if err != nil || !present {
+		t.Fatalf("owned lease = %+v present=%t error=%v", owned, present, err)
+	}
+	other := runstore.Lease{Epoch: owned.Epoch, Token: "different-live-owner", PID: process.Process.Pid, Start: start}
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		if _, err := transaction.At("test.remove_owner").CompareRemoveLease(owned.Identity()); err != nil {
+			return err
+		}
+		_, err := transaction.At("test.install_other").CreateLease(true, other)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := recovery.Input{
+		Projection: recovery.Projection{State: state},
+		Observations: recovery.Observations{Lease: recovery.LeaseObservation{
+			Exists: true, Readable: true, Epoch: other.Epoch, Owner: recovery.OwnerLive,
+			Identity: &recovery.LeaseIdentity{Epoch: other.Epoch, Token: other.Token, PID: other.PID, Start: other.Start},
+		}},
+	}
+	got := (&Executor{Store: store, RunID: "run-1", Driver: driver}).canonicalizeDriverLease(input)
+	if got.Observations.Lease.Owner != recovery.OwnerLive {
+		t.Fatalf("owner = %s, want live", got.Observations.Lease.Owner)
+	}
+	if decision := recovery.Plan(got); decision.CaseID != recovery.CaseLiveOwner {
+		t.Fatalf("decision = %s, want %s", decision.CaseID, recovery.CaseLiveOwner)
+	}
+}
 
 func TestDefaultHandlersAppendRecoveredAttemptFailureToRealStore(t *testing.T) {
 	store, driver := handlerStore(t, true)
@@ -456,7 +506,7 @@ func TestExecutorMapsEveryReloadSiteToAppendixDHalts(t *testing.T) {
 			},
 		},
 		{
-			name: "post-step refresh maps missing pinned snapshot",
+			name: "post-effect reload maps missing pinned snapshot",
 			err:  runstore.ErrMissingPinnedSnapshot,
 			want: recovery.HaltMissingSnapshotFile,
 			run: func(t *testing.T, loadErr error) (Result, error) {
@@ -464,7 +514,7 @@ func TestExecutorMapsEveryReloadSiteToAppendixDHalts(t *testing.T) {
 					recovery.StepCloseAdapterInterval: func(context.Context, HandlerContext, recovery.Action) error { return nil },
 				})
 				executor.Load = func(context.Context) (recovery.Input, error) { return recovery.Input{}, loadErr }
-				return executor.execute(context.Background(), recovery.Input{}, stepDecision(false, recovery.StepCloseAdapterInterval))
+				return executor.execute(context.Background(), recovery.Input{}, stepDecision(true, recovery.StepCloseAdapterInterval))
 			},
 		},
 		{
@@ -685,8 +735,75 @@ func TestExecutorReplansOnlyWhenPlannerRequestsIt(t *testing.T) {
 		return second, nil
 	}
 	result, err := executor.Execute(context.Background())
-	if err != nil || loads != 3 || handoffCalls != 1 || result.Replans != 1 || result.Decision.Halt != recovery.HaltRootSnapshotDivergence {
+	if err != nil || loads != 4 || handoffCalls != 1 || result.Replans != 1 || result.Decision.Halt != recovery.HaltRootSnapshotDivergence {
 		t.Fatalf("result=%+v loads=%d handoffCalls=%d error=%v", result, loads, handoffCalls, err)
+	}
+}
+
+func TestExecutorContinuationUsesFreshInputAfterEffect(t *testing.T) {
+	first := recovery.Input{Projection: recovery.Projection{
+		State:     runningState(),
+		Scheduler: recovery.Scheduler{RemainingTime: 1, Movements: []recovery.ScheduledMovement{{ID: "move"}}},
+	}}
+	second := first
+	second.Projection.Scheduler.RemainingTime = 0
+
+	stop := errors.New("observed fresh continuation input")
+	loads := 0
+	var observed recovery.Input
+	executor := testExecutor(map[recovery.ActionStep]StepHandler{
+		"initial": func(context.Context, HandlerContext, recovery.Action) error { return nil },
+		recovery.StepAppendMovementBudgetFailure: func(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+			observed = execution.Input
+			return stop
+		},
+	})
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		loads++
+		return second, nil
+	}
+
+	_, err := executor.execute(context.Background(), first, recovery.Decision{
+		CaseID: "RC-test",
+		Action: &recovery.Action{Kind: "test-step-action", Steps: []recovery.ActionStep{"initial"}, Continuation: recovery.ContinuationC4},
+	})
+	if !errors.Is(err, stop) || loads != 1 {
+		t.Fatalf("error=%v loads=%d", err, loads)
+	}
+	if observed.Projection.Scheduler.RemainingTime != 0 {
+		t.Fatalf("handler input remaining time = %d, want 0 from fresh continuation input", observed.Projection.Scheduler.RemainingTime)
+	}
+}
+
+func TestExecutorReplanUsesFreshInputWithoutRefreshStep(t *testing.T) {
+	first := recovery.Input{Projection: recovery.Projection{
+		State:     runningState(),
+		Scheduler: recovery.Scheduler{RemainingTime: 1, Movements: []recovery.ScheduledMovement{{ID: "move"}}},
+	}}
+	second := first
+	second.Projection.Scheduler.RemainingTime = 0
+
+	stop := errors.New("observed fresh replan input")
+	loads := 0
+	var observed recovery.Input
+	executor := testExecutor(map[recovery.ActionStep]StepHandler{
+		"initial": func(context.Context, HandlerContext, recovery.Action) error { return nil },
+		recovery.StepAppendMovementBudgetFailure: func(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+			observed = execution.Input
+			return stop
+		},
+	})
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		loads++
+		return second, nil
+	}
+
+	_, err := executor.execute(context.Background(), first, stepDecision(true, "initial"))
+	if !errors.Is(err, stop) || loads != 1 {
+		t.Fatalf("error=%v loads=%d", err, loads)
+	}
+	if observed.Projection.Scheduler.RemainingTime != 0 {
+		t.Fatalf("handler input remaining time = %d, want 0 from fresh replan input", observed.Projection.Scheduler.RemainingTime)
 	}
 }
 

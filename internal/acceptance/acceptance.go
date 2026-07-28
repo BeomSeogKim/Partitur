@@ -199,6 +199,12 @@ func Evaluate(plan *Plan, evaluation Evaluation) (Result, error) {
 	return evaluate(plan, evaluation, evaluationDependencies{now: time.Now})
 }
 
+// EvaluateStarted runs the live evaluator after acceptance.started is already
+// durable for evaluation's exact pinned plan and subject.
+func EvaluateStarted(plan *Plan, evaluation Evaluation) (Result, error) {
+	return evaluateStarted(plan, evaluation, evaluationDependencies{now: time.Now})
+}
+
 type evaluationDependencies struct {
 	now func() time.Time
 }
@@ -208,12 +214,30 @@ func evaluate(
 	evaluation Evaluation,
 	dependencies evaluationDependencies,
 ) (Result, error) {
+	if !validEvaluation(plan, evaluation) {
+		return Result{}, ErrInvalidEvaluation
+	}
+	base := runstate.Event{
+		RunID: evaluation.RunID, ScoreRevision: evaluation.ScoreRevision,
+		MovementID: evaluation.MovementID, PartID: evaluation.PartID, AttemptID: evaluation.AttemptID,
+	}
+	started, err := plan.StartEvent(base, evaluation.SubjectTree)
+	if err != nil {
+		return Result{}, err
+	}
+	var prefix Result
+	prefix.AcceptanceSpecHash = plan.specHash
+	if err := appendEvent(evaluation.Append, started, &prefix); err != nil {
+		return Result{}, err
+	}
+	result, err := evaluateStarted(plan, evaluation, dependencies)
+	result.Receipts = append(prefix.Receipts, result.Receipts...)
+	return result, err
+}
+
+func evaluateStarted(plan *Plan, evaluation Evaluation, dependencies evaluationDependencies) (Result, error) {
 	result := Result{}
-	if plan == nil || plan.specHash == "" ||
-		evaluation.RunID == "" || evaluation.ScoreRevision == 0 ||
-		evaluation.MovementID == "" || evaluation.PartID == "" ||
-		evaluation.AttemptID == "" || evaluation.SubjectTree == "" ||
-		evaluation.LookupArtifact == nil || evaluation.Append == nil {
+	if !validEvaluation(plan, evaluation) {
 		return result, ErrInvalidEvaluation
 	}
 	result.AcceptanceSpecHash = plan.specHash
@@ -224,23 +248,6 @@ func evaluate(
 		PartID:        evaluation.PartID,
 		AttemptID:     evaluation.AttemptID,
 	}
-	criterionIDs := make([]any, len(plan.criteria))
-	for index, criterion := range plan.criteria {
-		criterionIDs[index] = criterion.id
-	}
-	started, err := eventWithPayload(base, runstate.EventAcceptanceStarted, map[string]any{
-		"subject_tree":          evaluation.SubjectTree,
-		"acceptance_spec_hash":  plan.specHash,
-		"planned_criterion_ids": criterionIDs,
-		"identity_versions":     plan.acceptanceVersions,
-	})
-	if err != nil {
-		return result, err
-	}
-	if err := appendEvent(evaluation.Append, started, &result); err != nil {
-		return result, err
-	}
-
 	outcomes := make([]any, 0, len(plan.criteria))
 	for _, criterion := range plan.criteria {
 		startedAt := dependencies.now()
@@ -329,6 +336,31 @@ func evaluate(
 	result.EvaluationCompleted = true
 	result.Verified = plan.declaredHard > 0
 	return result, nil
+}
+
+func validEvaluation(plan *Plan, evaluation Evaluation) bool {
+	return plan != nil && plan.specHash != "" &&
+		evaluation.RunID != "" && evaluation.ScoreRevision != 0 &&
+		evaluation.MovementID != "" && evaluation.PartID != "" &&
+		evaluation.AttemptID != "" && evaluation.SubjectTree != "" &&
+		evaluation.LookupArtifact != nil && evaluation.Append != nil
+}
+
+// StartEvent builds the durable acceptance boundary from the compiled plan.
+func (plan *Plan) StartEvent(base runstate.Event, subjectTree string) (runstate.Event, error) {
+	if plan == nil || plan.specHash == "" || subjectTree == "" {
+		return runstate.Event{}, ErrInvalidEvaluation
+	}
+	criterionIDs := make([]any, len(plan.criteria))
+	for index, criterion := range plan.criteria {
+		criterionIDs[index] = criterion.id
+	}
+	return eventWithPayload(base, runstate.EventAcceptanceStarted, map[string]any{
+		"subject_tree":          subjectTree,
+		"acceptance_spec_hash":  plan.specHash,
+		"planned_criterion_ids": criterionIDs,
+		"identity_versions":     plan.acceptanceVersions,
+	})
 }
 
 func evaluateCriterion(

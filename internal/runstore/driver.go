@@ -27,6 +27,11 @@ func (driver *Driver) RunID() runstate.RunID {
 	return driver.runID
 }
 
+// MatchesLease reports whether identity is the full lease owned by this driver.
+func (driver *Driver) MatchesLease(identity LeaseIdentity) bool {
+	return driver != nil && leaseMatches(driver.lease, identity)
+}
+
 // AcquireDriver records the next authority epoch before durably creating its
 // lease. The state lock spans both writes; a crash can still land at the
 // Appendix E edge between them.
@@ -78,9 +83,13 @@ func (store *Store) AcquireDriver(
 		if _, err := transaction.At(receiptAuthorityGranted).Append(event); err != nil {
 			return err
 		}
+		store.probe.Reached(faultpoint.PointAuthorityGranted)
 		acquired = Lease{Epoch: epoch, Token: token, PID: pid, Start: start}
-		_, err = transaction.At(receiptDriverLease).CreateLease(true, acquired)
-		return err
+		if _, err := transaction.At(receiptDriverLease).CreateLease(true, acquired); err != nil {
+			return err
+		}
+		store.probe.Reached(faultpoint.PointAuthorityLeaseCreated)
+		return nil
 	})
 	if err != nil {
 		return nil, err

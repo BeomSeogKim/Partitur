@@ -12,14 +12,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
+	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/successor"
+	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
 const recoverySweepGrace = 30 * time.Second
@@ -47,15 +50,324 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRemoveStaleLease:           removeStaleLease,
 		recovery.ActionQuarantineOrphanLease:      quarantineOrphanLease,
 		recovery.ActionAppendMovementSucceeded:    appendMovementSucceeded,
+		recovery.ActionAppendMovementReady:        appendMovementReady,
+		recovery.ActionAppendMovementStarted:      appendMovementStarted,
+		recovery.ActionAppendAcceptanceStarted:    appendAcceptanceStarted,
+		recovery.ActionSelectInitialPerformer:     selectInitialPerformer,
+		recovery.ActionResumeCriterion:            resumeCriterion,
+		recovery.ActionRealizeRecordedDisposition: realizeRecordedDisposition,
+		recovery.ActionMaterializeSuccessor:       materializeSuccessor,
 		recovery.ActionAppendRunFailed:            appendRunFailed,
 		recovery.ActionAppendBudgetFailure:        appendMovementBudgetFailure,
 		recovery.ActionReturnWaitingHuman:         returnWaitingHuman,
 		recovery.ActionRefuseResume:               refuseResume,
 		recovery.ActionStabilizeUnjournaledLaunch: stabilizeUnjournaledLaunch,
 		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
+		recovery.ActionComposeCandidate:           composeZeroWriterCandidate,
+		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
 		recovery.ActionExecuteCancellation:        unreachableActionOwnedBy("2.1"),
 		recovery.ActionCompleteOrAbandonPrepare:   unreachableActionOwnedBy("4.2"),
 	}
+}
+
+func composeZeroWriterCandidate(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store, driver, and run id for zero-writer candidate")
+	}
+	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	_, err = workspace.RecordRecoveredZeroWriterCandidate(execution.Store, execution.Driver, input)
+	return err
+}
+
+func rerunPostHocVerification(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store, driver, and run id for post-hoc verification")
+	}
+	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	err = workspace.VerifyRecoveredPostHoc(execution.Store, execution.Driver, input, action.AttemptID)
+	var verification *workspace.VerificationError
+	if !errors.As(err, &verification) {
+		return err
+	}
+	failure := action
+	failure.FailureKind = successor.KindGrantDenied
+	failure.FailureReason = verification.Reason
+	return appendAttemptFailure(ctx, execution, failure)
+}
+
+func appendMovementReady(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Driver == nil || action.MovementID == "" {
+		return errors.New("recovery movement ready requires driver and movement")
+	}
+	state, err := execution.Driver.State()
+	if err != nil {
+		return err
+	}
+	_, err = execution.Driver.Append(runstate.Event{
+		RunID:         execution.Driver.RunID(),
+		ScoreRevision: state.ScoreHead.Revision,
+		MovementID:    action.MovementID,
+		Type:          runstate.EventMovementReady,
+		Payload:       json.RawMessage(`{}`),
+	}, "recovery.movement.ready")
+	return err
+}
+
+func appendMovementStarted(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Driver == nil || action.MovementID == "" {
+		return errors.New("recovery movement start requires driver and movement")
+	}
+	state, err := execution.Driver.State()
+	if err != nil {
+		return err
+	}
+	_, err = execution.Driver.Append(runstate.Event{
+		RunID:         execution.Driver.RunID(),
+		ScoreRevision: state.ScoreHead.Revision,
+		MovementID:    action.MovementID,
+		Type:          runstate.EventMovementStarted,
+		Payload:       json.RawMessage(`{}`),
+	}, "recovery.movement.started")
+	return err
+}
+
+func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" {
+		return errors.New("recovery acceptance start requires store, driver, and attempt")
+	}
+	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	attempt, ok := input.Projection.State.Attempts[action.AttemptID]
+	if !ok {
+		return fmt.Errorf("recovery acceptance start attempt %q is absent", action.AttemptID)
+	}
+	for _, movement := range input.Score.Movements() {
+		if runstate.MovementID(movement.ID) != attempt.MovementID {
+			continue
+		}
+		plan, err := acceptance.Compile(movement)
+		if err != nil {
+			return err
+		}
+		event, err := plan.StartEvent(runstate.Event{
+			RunID:         execution.Driver.RunID(),
+			ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			MovementID:    attempt.MovementID,
+			PartID:        movement.PartID,
+			AttemptID:     action.AttemptID,
+		}, input.Projection.State.ApplicationCandidate.ResultTree)
+		if err != nil {
+			return err
+		}
+		journal, err := execution.Store.ReadJournal(execution.RunID)
+		if err != nil {
+			return err
+		}
+		event.CausationID, err = latestEventID(journal.Events, func(previous runstate.Event) bool {
+			return previous.AttemptID == action.AttemptID && previous.Type == runstate.EventVerificationPassed
+		})
+		if err != nil {
+			return err
+		}
+		_, err = execution.Driver.Append(event, "recovery.acceptance.started")
+		return err
+	}
+	return fmt.Errorf("recovery acceptance start movement %q is absent from pinned score", attempt.MovementID)
+}
+
+func selectInitialPerformer(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.MovementID == "" {
+		return errors.New("recovery initial performer selection requires store, driver, and movement")
+	}
+	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	var movementID string
+	var partID string
+	for _, movement := range input.Score.Movements() {
+		if runstate.MovementID(movement.ID) == action.MovementID {
+			movementID, partID = movement.ID, movement.PartID
+			break
+		}
+	}
+	if movementID == "" {
+		return fmt.Errorf("recovery initial performer movement %q is absent from pinned score", action.MovementID)
+	}
+	binding, ok := input.Cast.Binding(partID)
+	if !ok {
+		return fmt.Errorf("recovery initial performer binding for %q is absent from resolved cast", partID)
+	}
+	performer, ok := input.Cast.Performer(binding.Performer)
+	if !ok {
+		return fmt.Errorf("recovery initial performer %q is absent from resolved cast", binding.Performer)
+	}
+	return executeRecoveredAttempt(
+		ctx, execution, input, movementID, performer.ID, "initial", "",
+	)
+}
+
+func resumeCriterion(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" || action.CriterionID == "" {
+		return errors.New("recovery criterion resume requires store, driver, attempt, and criterion")
+	}
+	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	attempt, ok := input.Projection.State.Attempts[action.AttemptID]
+	if !ok {
+		return fmt.Errorf("recovery criterion attempt %q is absent", action.AttemptID)
+	}
+	acceptanceState, ok := input.Projection.State.Acceptances[action.AttemptID]
+	if !ok || !acceptanceState.Started {
+		return fmt.Errorf("recovery criterion acceptance for %q is absent", action.AttemptID)
+	}
+	for _, movement := range input.Score.Movements() {
+		if runstate.MovementID(movement.ID) != attempt.MovementID {
+			continue
+		}
+		plan, err := acceptance.Compile(movement)
+		if err != nil {
+			return err
+		}
+		_, err = acceptance.EvaluateStarted(plan, acceptance.Evaluation{
+			RunID: execution.Driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			MovementID: attempt.MovementID, PartID: movement.PartID, AttemptID: action.AttemptID,
+			SubjectTree:        acceptanceState.SubjectTree,
+			FailureDisposition: runstate.Disposition{Charged: "none", MovementTerminal: true},
+			LookupArtifact: func(id runstate.ArtifactInstanceID) (runstate.ArtifactRecord, bool, error) {
+				state, err := execution.Driver.State()
+				if err != nil {
+					return runstate.ArtifactRecord{}, false, err
+				}
+				record, exists := state.Artifacts[id]
+				return record, exists, nil
+			},
+			Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
+				return execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.acceptance."+string(event.Type)))
+			},
+		})
+		return err
+	}
+	return fmt.Errorf("recovery criterion movement %q is absent from pinned score", attempt.MovementID)
+}
+
+func realizeRecordedDisposition(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if action.RecordedDisposition == nil {
+		return errors.New("recovery recorded disposition is absent")
+	}
+	switch action.RecordedDisposition.Charged {
+	case "none":
+		if action.RecordedDisposition.TerminalReason == "" {
+			return errors.New("recovery terminal disposition has no reason")
+		}
+		state, err := execution.Driver.State()
+		if err != nil {
+			return err
+		}
+		failure := action
+		failure.FailureReason = action.RecordedDisposition.TerminalReason
+		return appendEvent(execution, state, failure, runstate.EventMovementFailed, map[string]any{
+			"reason": failure.FailureReason, "run_failed": false,
+		})
+	case "quality_retry", "fallback":
+		if action.PendingSuccessor == nil {
+			return errors.New("recovery recorded successor is absent")
+		}
+		return nil
+	default:
+		return fmt.Errorf("recovery recorded disposition has unknown charge %q", action.RecordedDisposition.Charged)
+	}
+}
+
+func materializeSuccessor(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.PendingSuccessor == nil {
+		return errors.New("recovery successor materialization requires store, driver, and pending successor")
+	}
+	pending := action.PendingSuccessor
+	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	var partID string
+	for _, movement := range input.Score.Movements() {
+		if runstate.MovementID(movement.ID) == pending.MovementID {
+			partID = movement.PartID
+			break
+		}
+	}
+	if partID == "" {
+		return fmt.Errorf("recovery successor movement %q is absent from pinned score", pending.MovementID)
+	}
+	performer, ok := input.Cast.Performer(pending.Performer)
+	if !ok {
+		return fmt.Errorf("recovery successor performer %q is absent from resolved cast", pending.Performer)
+	}
+	journal, err := execution.Store.ReadJournal(execution.RunID)
+	if err != nil {
+		return err
+	}
+	causationID, err := latestEventID(journal.Events, func(previous runstate.Event) bool {
+		return previous.AttemptID == pending.AttemptID &&
+			(previous.Type == runstate.EventAttemptFailed || previous.Type == runstate.EventAcceptanceFailed)
+	})
+	if err != nil {
+		return err
+	}
+	return executeRecoveredAttempt(
+		ctx, execution, input, string(pending.MovementID), performer.ID, pending.Reason, causationID,
+	)
+}
+
+// executeRecoveredAttempt is deliberately only an input assembler. The
+// adapter/probe/acceptance sequence remains in driver.ExecuteAttempt, shared
+// with the live run wrapper.
+func executeRecoveredAttempt(
+	ctx context.Context,
+	execution HandlerContext,
+	input runstore.RecoveryInput,
+	movementID, performerID, reason, causationID string,
+) error {
+	if execution.Store == nil || execution.Driver == nil || input.Score == nil || input.Cast == nil {
+		return errors.New("recovery attempt execution requires durable score, cast, store, and driver")
+	}
+	candidate := input.Projection.State.ApplicationCandidate
+	if candidate == nil || candidate.ResultTree == "" {
+		return errors.New("recovery attempt execution requires a durable application candidate")
+	}
+	attempt, err := workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)
+	if err != nil {
+		return err
+	}
+	result := driver.ExecuteAttempt(ctx, driver.AttemptExecution{
+		RepositoryRoot:       execution.Store.RepositoryRoot(),
+		Score:                input.Score,
+		Cast:                 input.Cast,
+		RunID:                execution.Driver.RunID(),
+		Attempt:              attempt,
+		CandidateTree:        candidate.ResultTree,
+		Authority:            execution.Driver,
+		PerformerID:          performerID,
+		SelectionReason:      reason,
+		SelectionCausationID: causationID,
+		RemainingMS:          input.Projection.Scheduler.RemainingTime,
+	}, driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()))
+	if result.Err != nil {
+		return result.Err
+	}
+	if result.Outcome != driver.OutcomeSucceeded {
+		return fmt.Errorf("recovery attempt execution ended %s", result.Outcome)
+	}
+	return nil
 }
 
 func unreachableActionOwnedBy(unit string) StepHandler {
