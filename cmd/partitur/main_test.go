@@ -12,6 +12,8 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/recoveryexec"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
@@ -137,7 +139,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -278,7 +280,6 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 		{"approve"},
 		{"amend"},
 		{"cancel"},
-		{"resume"},
 		{"promote-score"},
 		{"apply"},
 		{"version", "extra"},
@@ -300,7 +301,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status, logs\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
@@ -451,6 +452,34 @@ func TestRunIDWriteFailureIsOperationalInterruption(t *testing.T) {
 			stdout.calls,
 			stderr.String(),
 		)
+	}
+}
+
+func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     recoveryexec.Result
+		wantCode   int
+		wantStderr string
+	}{
+		{name: "succeeded", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeSucceeded}, wantCode: 0},
+		{name: "quiescent", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeQuiescent}, wantCode: 0},
+		{name: "failed", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}, wantCode: 4},
+		{name: "cancelled", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeCancelled}, wantCode: 4},
+		{name: "live owner refusal", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeRefused}, wantCode: 2, wantStderr: "precondition refused: detail=\"driver authority is already held\"\n"},
+		{name: "halt", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: recovery.HaltRootSnapshotDivergence}}, wantCode: 5, wantStderr: "recovery halted: run_id=\"run-1\" reason=\"root_snapshot_divergence\"\n"},
+		{name: "no outcome is operational interruption", result: recoveryexec.Result{}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced no command outcome\"\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+				return test.result, nil
+			})
+			if code != test.wantCode || stdout.Len() != 0 || stderr.String() != test.wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
 	}
 }
 
