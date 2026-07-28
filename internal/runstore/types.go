@@ -93,3 +93,12 @@ type ReadReplayResult struct {
 	TruncatedSeq   uint64
 	DiscardedBytes int
 }
+
+// ReadJournalResult is the validated, read-only journal prefix. A torn final
+// line is deliberately excluded rather than repaired or exposed as an event.
+type ReadJournalResult struct {
+	Events          []runstate.Event
+	TailUnparseable bool
+	TruncatedSeq    uint64
+	DiscardedBytes  int
+}

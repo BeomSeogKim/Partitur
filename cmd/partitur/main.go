@@ -1,16 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
+	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 	validation "github.com/BeomSeogKim/Partitur/internal/validate"
@@ -18,6 +23,8 @@ import (
 )
 
 var version = "dev"
+
+var errOutputStream = errors.New("output stream is unwritable")
 
 type validateRunner func() validation.Result
 type prepareRunner func() (*validation.Preparation, validation.Result)
@@ -28,6 +35,13 @@ type runDriver func(
 ) driver.Result
 
 type statusReader func(string) (statusprojection.Report, error)
+type logsReader func(string) (logstream.Snapshot, error)
+type logsStreamer func(
+	context.Context,
+	func() (logstream.Snapshot, error),
+	io.Writer,
+	logstream.StreamOptions,
+) error
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -85,6 +99,19 @@ func runWithStatusReader(
 	drive runDriver,
 	read statusReader,
 ) int {
+	return runWithReaders(args, stdout, stderr, validate, prepare, drive, read, readLogs, logstream.Stream)
+}
+
+func runWithReaders(
+	args []string,
+	stdout, stderr io.Writer,
+	validate validateRunner,
+	prepare prepareRunner,
+	drive runDriver,
+	readStatus statusReader,
+	readLogs logsReader,
+	streamLogs logsStreamer,
+) int {
 	if len(args) == 1 && args[0] == "version" {
 		fmt.Fprintln(stdout, version)
 		return 0
@@ -104,18 +131,38 @@ func runWithStatusReader(
 		return 0
 	}
 	if requestedID, jsonOutput, ok := parseStatusArgs(args); ok {
-		report, err := read(requestedID)
+		report, err := readStatus(requestedID)
 		if err != nil {
 			renderStatusError(stderr, err)
 			return statusErrorCode(err)
 		}
 		if jsonOutput {
 			if err := json.NewEncoder(stdout).Encode(report); err != nil {
-				fmt.Fprintf(stderr, "status observation failed: detail=%q\n", err.Error())
-				return 5
+				return observationOutputCode(stderr, err)
 			}
 		} else {
-			renderStatus(stdout, report)
+			if err := renderStatus(stdout, report); err != nil {
+				return observationOutputCode(stderr, err)
+			}
+		}
+		return 0
+	}
+	if requestedID, jsonlOutput, follow, ok := parseLogsArgs(args); ok {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		err := streamLogs(ctx, func() (logstream.Snapshot, error) {
+			return readLogs(requestedID)
+		}, stdout, logstream.StreamOptions{
+			JSONL:        jsonlOutput,
+			Follow:       follow,
+			PollInterval: 100 * time.Millisecond,
+		})
+		if err != nil {
+			if errors.Is(err, logstream.ErrOutput) {
+				return observationOutputCode(stderr, err)
+			}
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
 		}
 		return 0
 	}
@@ -177,7 +224,7 @@ func runWithStatusReader(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate, run, status")
+	fmt.Fprintln(w, "commands: version, validate, run, status, logs")
 }
 
 func readStatus(requestedID string) (statusprojection.Report, error) {
@@ -186,6 +233,14 @@ func readStatus(requestedID string) (statusprojection.Report, error) {
 		return statusprojection.Report{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
 	return statusprojection.Read(root, requestedID)
+}
+
+func readLogs(requestedID string) (logstream.Snapshot, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return logstream.Snapshot{}, fmt.Errorf("resolve invocation directory: %w", err)
+	}
+	return logstream.Read(root, requestedID)
 }
 
 func parseStatusArgs(args []string) (requestedID string, jsonOutput, ok bool) {
@@ -211,6 +266,34 @@ func parseStatusArgs(args []string) (requestedID string, jsonOutput, ok bool) {
 	return requestedID, jsonOutput, true
 }
 
+func parseLogsArgs(args []string) (requestedID string, jsonlOutput, follow, ok bool) {
+	if len(args) == 0 || args[0] != "logs" || len(args) > 4 {
+		return "", false, false, false
+	}
+	for _, argument := range args[1:] {
+		switch argument {
+		case "--jsonl":
+			if jsonlOutput {
+				return "", false, false, false
+			}
+			jsonlOutput = true
+		case "--follow":
+			if follow {
+				return "", false, false, false
+			}
+			follow = true
+		case "":
+			return "", false, false, false
+		default:
+			if strings.HasPrefix(argument, "-") || requestedID != "" {
+				return "", false, false, false
+			}
+			requestedID = argument
+		}
+	}
+	return requestedID, jsonlOutput, follow, true
+}
+
 func statusErrorCode(err error) int {
 	switch {
 	case errors.Is(err, statusprojection.ErrInvalidRunID):
@@ -218,11 +301,21 @@ func statusErrorCode(err error) int {
 	case errors.Is(err, statusprojection.ErrNoActiveRun),
 		errors.Is(err, statusprojection.ErrRunNotFound),
 		errors.Is(err, statusprojection.ErrSnapshot),
-		errors.Is(err, statusprojection.ErrRequiredInput):
+		errors.Is(err, statusprojection.ErrRequiredInput),
+		errors.Is(err, errOutputStream):
 		return 2
 	default:
 		return 5
 	}
+}
+
+func observationOutputCode(stderr io.Writer, err error) int {
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe) {
+		return 0
+	}
+	err = fmt.Errorf("%w: %v", errOutputStream, err)
+	renderStatusError(stderr, err)
+	return statusErrorCode(err)
 }
 
 func renderStatusError(w io.Writer, err error) {
@@ -236,7 +329,14 @@ func renderStatusError(w io.Writer, err error) {
 	}
 }
 
-func renderStatus(w io.Writer, report statusprojection.Report) {
+func renderStatus(w io.Writer, report statusprojection.Report) error {
+	var rendered bytes.Buffer
+	renderStatusProjection(&rendered, report)
+	_, err := w.Write(rendered.Bytes())
+	return err
+}
+
+func renderStatusProjection(w io.Writer, report statusprojection.Report) {
 	fmt.Fprintf(w, "Run: %s (%s)\n", report.Run.ID, report.Run.Lifecycle)
 	fmt.Fprintf(
 		w,
