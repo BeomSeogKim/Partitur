@@ -2793,6 +2793,42 @@ advisories. A mark line is never bare: it renders, for example, `VERIFIED (2 cri
 Thus the human surface retains the same evidence binding as the JSON surface rather than collapsing
 a grade into a reassuring label.
 
+**`partitur logs` observable surface.** `logs` is an observation of the selected run's
+authoritative journal. It takes neither a driver lease nor the repository state lock; it never
+creates a directory, repairs a tail, rebuilds a checkpoint, or writes a journal event. It uses
+`status`'s read-only selection and replay path, including the pinned-score seed used to identify
+the unique active run, rather than constructing a second lifecycle model. Its stream is the
+complete durable sequence of the B.7 `log` and `progress` observations in journal order; it does
+not render state-transition, recovery, or other journal rows as if they were adapter output.
+
+`--jsonl` writes one UTF-8 JSON object followed by `\n` for each such observation, and writes no
+prose to stdout. Each object has the required literal `schema` value
+`partitur/logs+jsonl;v=1`; it is a normalized event envelope, not the verbatim on-disk journal
+line. A compatible producer may add fields but must not change the meaning or type of a v=1 field;
+a consumer must ignore unknown fields. Every v=1 object has `schema`, `run_id`, `seq`, `ts`,
+`type`, and `message`; `type` is `log` or `progress`, and `level` is present only when `type` is
+`log`. `run_id`, `seq`, and `ts` identify the durable source observation, while `message` and
+`level` are its already-sanitized B.7 payload. Thus the journal's storage-only fields and layout
+remain private while clients can order, de-duplicate, and display the observation stream.
+
+Without `--jsonl`, `logs` renders one deterministic line per observation: a `LOG <level>:` line or
+a `PROGRESS:` line, each prefixed by its sequence and timestamp. Those labels describe the
+observation kind only; they do not imply a movement, attempt, or run state transition. v0.2 has no
+logs filtering flag: every durable `log` and `progress` row is included, and the separate `status`
+surface remains the way to inspect authoritative state.
+
+With `--follow`, `logs` first writes the complete current observation history, then waits for
+newly durable observations. It stops successfully as soon as a read-only replay observes the
+selected run in terminal `SUCCEEDED`, `FAILED`, or `CANCELLED`; therefore a run already terminal
+at startup streams its history and exits rather than blocking. Before that point it continues until
+the terminal lifecycle is observed or the caller sends SIGINT, which stops following successfully
+after any observations already written. A torn final journal line is not an observation: `logs`
+emits only the valid prefix, neither repairs nor synthesizes a row for the tail, and returns to
+waiting when following. If that valid prefix is terminal, the terminal rule still ends the command;
+otherwise a later driver or `resume` repair may make a new durable observation visible. An
+unparseable line before the final line remains journal corruption and no current stream can be
+produced.
+
 **Observation outcome.** `status` exits on the success of the observation, never on the health of
 what it observed. It returns 0 whenever it produced and reported a projection, including RUNNING,
 SUCCEEDED, FAILED, CANCELLED, Application or Promotion `RECOVERY_REQUIRED`, and a journal whose
@@ -2813,6 +2849,17 @@ refused selection or required readable input, including no active run, a non-uni
 or an unreadable pinned snapshot; and 5 only when the projection cannot be built, including a
 corrupt journal prefix or an event the core cannot project. `status` never returns 3, 4, or 6: it
 neither validates nor drives a run.
+
+The logs-specific exit mapping is likewise exhaustive: 0 for a produced observation stream,
+including an empty history, a RUNNING or terminal run, a SIGINT-ended follow, and a journal whose
+only defect is an unparseable final line; 1 for usage; 2 for a refused selection, required
+readable input, or unwritable output stream; and 5 when the stream cannot be produced because of a
+corrupt journal prefix or an event the core cannot project. `logs` never returns 3, 4, or 6: it
+neither validates nor drives a run.
+
+For both `status` and `logs`, a closed or broken consumer pipe ends output successfully and emits
+no stderr diagnostic. Any other stdout write failure is an unwritable output stream and is a
+precondition refusal, not a recovery halt.
 
 **`partitur run` observable surface.** Before a run exists, `run` uses §2's score-input and
 score-compilation rules, §3's cast resolution, and the score/cast diagnostic ordering and
@@ -2933,7 +2980,7 @@ cast produce `binding_missing`, which is a validation result about content that 
 |---|---|
 | 0 | success |
 | 1 | usage error: unknown command, missing or malformed operand |
-| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state, dirty checkout, lock held |
+| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state, dirty checkout, lock held, unwritable output stream |
 | 3 | validation failed: `partitur validate`, pre-run validation for `partitur run`, or a rejected amendment |
 | 4 | a run-driving command reached terminal `FAILED` or `CANCELLED` |
 | 5 | recovery halt — the run cannot proceed and needs an operator (Appendix D) |

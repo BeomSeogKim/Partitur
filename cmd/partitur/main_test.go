@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
+	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
@@ -135,8 +137,134 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestLogsClassifiesObservationOutcomes(t *testing.T) {
+	base := logstream.Snapshot{
+		RunID:     "run-1",
+		Lifecycle: string(runstate.RunRunning),
+		Entries: []logstream.Entry{{
+			Schema: "partitur/logs+jsonl;v=1", RunID: "run-1", Seq: 2,
+			TS: "2026-07-28T00:00:00.000Z", Type: "log", Level: "info", Message: "started",
+		}},
+	}
+	for _, test := range []struct {
+		name     string
+		adjust   func(*logstream.Snapshot)
+		err      error
+		wantCode int
+	}{
+		{name: "terminal run is reported data", adjust: func(snapshot *logstream.Snapshot) {
+			snapshot.Lifecycle = string(runstate.RunSucceeded)
+		}, wantCode: 0},
+		{name: "torn tail is reported data", wantCode: 0},
+		{name: "corrupt prefix cannot stream", err: runstore.ErrJournalCorrupt, wantCode: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := base
+			var stdout, stderr bytes.Buffer
+			code := runWithReaders(
+				[]string{"logs", "run-1", "--jsonl"}, &stdout, &stderr,
+				func() validation.Result { t.Fatal("validator called"); return validation.Result{} },
+				func() (*validation.Preparation, validation.Result) {
+					t.Fatal("preparer called")
+					return nil, validation.Result{}
+				},
+				func(context.Context, *validation.Preparation, driver.StartedObserver) driver.Result {
+					t.Fatal("driver called")
+					return driver.Result{}
+				},
+				func(string) (statusprojection.Report, error) {
+					t.Fatal("status reader called")
+					return statusprojection.Report{}, nil
+				},
+				func(requested string) (logstream.Snapshot, error) {
+					if requested != "run-1" {
+						t.Fatalf("requested run = %q", requested)
+					}
+					return snapshot, test.err
+				},
+				logstream.Stream,
+			)
+			if code != test.wantCode {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if test.wantCode == 0 && !strings.Contains(stdout.String(), `"schema":"partitur/logs+jsonl;v=1"`) {
+				t.Fatalf("logs JSONL missing from %q", stdout.String())
+			}
+			if test.wantCode == 5 && (stdout.Len() != 0 || stderr.String() != "recovery halted: detail=\"journal_corrupt\"\n") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestObservationOutputFailuresAreNotRecoveryHalts(t *testing.T) {
+	report := statusprojection.Report{
+		Schema:      "partitur/status+json;v=1",
+		Run:         statusprojection.Run{ID: "run-1", Lifecycle: string(runstate.RunRunning)},
+		Application: statusprojection.Application{State: "NOT_APPLIED"},
+		Promotion:   statusprojection.Promotion{State: "NOT_PROMOTED"},
+		Journal:     statusprojection.Journal{Integrity: "INTACT"},
+		Recovery:    statusprojection.Recovery{State: "NOT_REQUIRED"},
+	}
+	snapshot := logstream.Snapshot{
+		RunID:     "run-1",
+		Lifecycle: string(runstate.RunRunning),
+		Entries: []logstream.Entry{{
+			Schema: "partitur/logs+jsonl;v=1", RunID: "run-1", Seq: 2,
+			TS: "2026-07-28T00:00:00.000Z", Type: "log", Level: "info", Message: "started",
+		}},
+	}
+	for _, test := range []struct {
+		name       string
+		args       []string
+		writeErr   error
+		wantCode   int
+		wantStderr string
+	}{
+		{name: "logs broken pipe is silent success", args: []string{"logs", "run-1", "--jsonl"}, writeErr: syscall.EPIPE, wantCode: 0},
+		{name: "logs other write failure is refused", args: []string{"logs", "run-1", "--jsonl"}, writeErr: errors.New("disk full"), wantCode: 2,
+			wantStderr: "precondition refused: detail=\"output stream is unwritable: logs output failed: disk full\"\n"},
+		{name: "status broken pipe is silent success", args: []string{"status", "run-1", "--json"}, writeErr: syscall.EPIPE, wantCode: 0},
+		{name: "status other write failure is refused", args: []string{"status", "run-1", "--json"}, writeErr: errors.New("disk full"), wantCode: 2,
+			wantStderr: "precondition refused: detail=\"output stream is unwritable: disk full\"\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stdout := &failingWriter{err: test.writeErr}
+			var stderr bytes.Buffer
+			code := runWithReaders(
+				test.args, stdout, &stderr,
+				func() validation.Result { t.Fatal("validator called"); return validation.Result{} },
+				func() (*validation.Preparation, validation.Result) {
+					t.Fatal("preparer called")
+					return nil, validation.Result{}
+				},
+				func(context.Context, *validation.Preparation, driver.StartedObserver) driver.Result {
+					t.Fatal("driver called")
+					return driver.Result{}
+				},
+				func(requested string) (statusprojection.Report, error) {
+					if requested != "run-1" {
+						t.Fatalf("requested status run = %q", requested)
+					}
+					return report, nil
+				},
+				func(requested string) (logstream.Snapshot, error) {
+					if requested != "run-1" {
+						t.Fatalf("requested logs run = %q", requested)
+					}
+					return snapshot, nil
+				},
+				logstream.Stream,
+			)
+			if code != test.wantCode || stderr.String() != test.wantStderr {
+				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+			}
+		})
 	}
 }
 
@@ -146,7 +274,6 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 		nil,
 		{"unknown"},
 		{"init"},
-		{"logs"},
 		{"answer"},
 		{"approve"},
 		{"amend"},
@@ -173,7 +300,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,

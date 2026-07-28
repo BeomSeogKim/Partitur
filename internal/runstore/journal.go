@@ -152,56 +152,12 @@ func (store *Store) ReadReplay(
 	runID runstate.RunID,
 	seed []runstate.MovementSeed,
 ) (ReadReplayResult, error) {
-	if err := validateRunID(runID); err != nil {
+	state := runstate.NewState(seed)
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
 		return ReadReplayResult{}, err
 	}
-
-	state := runstate.NewState(seed)
-	path := filepath.Join(store.root, ".partitur", "runs", string(runID), "journal.jsonl")
-	contents, err := store.fs.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return ReadReplayResult{State: state}, nil
-	}
-	if err != nil {
-		return ReadReplayResult{}, fmt.Errorf("read journal: %w", err)
-	}
-
-	lines := journalLines(contents)
-	expectedSeq := uint64(1)
-	for index, line := range lines {
-		event, syntaxErr, err := decodeEvent(line.bytes)
-		if syntaxErr != nil {
-			if index != len(lines)-1 {
-				return ReadReplayResult{}, fmt.Errorf(
-					"%w: unparseable non-final line: %v",
-					ErrJournalCorrupt,
-					syntaxErr,
-				)
-			}
-			return ReadReplayResult{
-				State:          state,
-				TailTruncated:  true,
-				TruncatedSeq:   expectedSeq,
-				DiscardedBytes: len(contents) - line.offset,
-			}, nil
-		}
-		if err != nil {
-			if errors.Is(err, runstate.ErrUnsupportedEventType) {
-				return ReadReplayResult{}, err
-			}
-			return ReadReplayResult{}, fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
-		}
-		if event.Seq != expectedSeq {
-			return ReadReplayResult{}, fmt.Errorf(
-				"%w: seq=%d want=%d",
-				ErrJournalCorrupt,
-				event.Seq,
-				expectedSeq,
-			)
-		}
-		if event.RunID != runID {
-			return ReadReplayResult{}, fmt.Errorf("%w: wrong run id %q", ErrJournalCorrupt, event.RunID)
-		}
+	for _, event := range journal.Events {
 		next, err := runstate.Apply(state, event)
 		if errors.Is(err, runstate.ErrUnsupportedEventType) {
 			return ReadReplayResult{}, err
@@ -210,9 +166,70 @@ func (store *Store) ReadReplay(
 			return ReadReplayResult{}, fmt.Errorf("%w: seq=%d: %v", ErrJournalCorrupt, event.Seq, err)
 		}
 		state = next
+	}
+	return ReadReplayResult{
+		State:          state,
+		TailTruncated:  journal.TailUnparseable,
+		TruncatedSeq:   journal.TruncatedSeq,
+		DiscardedBytes: journal.DiscardedBytes,
+	}, nil
+}
+
+// ReadJournal reads the journal without taking a state lock, creating a
+// directory, or repairing a torn tail. It validates every complete envelope
+// and returns only the durable prefix before an unparseable final line.
+func (store *Store) ReadJournal(runID runstate.RunID) (ReadJournalResult, error) {
+	if err := validateRunID(runID); err != nil {
+		return ReadJournalResult{}, err
+	}
+	path := filepath.Join(store.root, ".partitur", "runs", string(runID), "journal.jsonl")
+	contents, err := store.fs.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ReadJournalResult{}, nil
+	}
+	if err != nil {
+		return ReadJournalResult{}, fmt.Errorf("read journal: %w", err)
+	}
+
+	lines := journalLines(contents)
+	result := ReadJournalResult{Events: make([]runstate.Event, 0, len(lines))}
+	expectedSeq := uint64(1)
+	for index, line := range lines {
+		event, syntaxErr, err := decodeEvent(line.bytes)
+		if syntaxErr != nil {
+			if index != len(lines)-1 {
+				return ReadJournalResult{}, fmt.Errorf(
+					"%w: unparseable non-final line: %v",
+					ErrJournalCorrupt,
+					syntaxErr,
+				)
+			}
+			result.TailUnparseable = true
+			result.TruncatedSeq = expectedSeq
+			result.DiscardedBytes = len(contents) - line.offset
+			return result, nil
+		}
+		if err != nil {
+			if errors.Is(err, runstate.ErrUnsupportedEventType) {
+				return ReadJournalResult{}, err
+			}
+			return ReadJournalResult{}, fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
+		}
+		if event.Seq != expectedSeq {
+			return ReadJournalResult{}, fmt.Errorf(
+				"%w: seq=%d want=%d",
+				ErrJournalCorrupt,
+				event.Seq,
+				expectedSeq,
+			)
+		}
+		if event.RunID != runID {
+			return ReadJournalResult{}, fmt.Errorf("%w: wrong run id %q", ErrJournalCorrupt, event.RunID)
+		}
+		result.Events = append(result.Events, event)
 		expectedSeq++
 	}
-	return ReadReplayResult{State: state}, nil
+	return result, nil
 }
 
 // Append allocates the journal envelope and appends one strictly validated
