@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
 
@@ -34,6 +35,7 @@ type LoadInput func(context.Context) (recovery.Input, error)
 type HandlerContext struct {
 	Store  *runstore.Store
 	Driver *runstore.Driver
+	RunID  runstate.RunID
 	Input  recovery.Input
 }
 
@@ -51,6 +53,7 @@ type StepHandler func(context.Context, HandlerContext, recovery.Action) error
 type Executor struct {
 	Driver *runstore.Driver
 	Store  *runstore.Store
+	RunID  runstate.RunID
 	Load   LoadInput
 
 	// Steps is a test seam. A nil map selects the package's default handlers;
@@ -62,9 +65,23 @@ type Executor struct {
 	authorize func(*runstore.Driver) error
 }
 
+// Outcome is recovery's command-visible result. The command translates it to
+// an exit code without inspecting planner actions or run state.
+type Outcome string
+
+const (
+	OutcomeSucceeded Outcome = "SUCCEEDED"
+	OutcomeFailed    Outcome = "FAILED"
+	OutcomeCancelled Outcome = "CANCELLED"
+	OutcomeQuiescent Outcome = "QUIESCENT"
+	OutcomeRefused   Outcome = "REFUSED"
+	OutcomeHalted    Outcome = "HALTED"
+)
+
 // Result reports the final selected decision and the effects actually run.
 type Result struct {
 	Decision recovery.Decision
+	Outcome  Outcome
 	Steps    []recovery.ActionStep
 	Kinds    []recovery.ActionKind
 	Replans  int
@@ -80,8 +97,7 @@ func (executor *Executor) Execute(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("load recovery input: %w", err)
 	}
-	decision := recovery.Plan(input)
-	return executor.execute(ctx, input, decision)
+	return executor.execute(ctx, input, recovery.Plan(input))
 }
 
 func (executor *Executor) execute(ctx context.Context, input recovery.Input, decision recovery.Decision) (Result, error) {
@@ -93,16 +109,33 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		result.Decision = decision
 		if decision.Halt != "" {
 			// Appendix B.7: a halt is intentionally not a journal event.
+			result.Outcome = OutcomeHalted
 			return result, nil
 		}
 
 		action := *decision.Action
+		if action.Kind == recovery.ActionReclaimAuthority || (actionRequiresDriver(action) && executor.Driver == nil) {
+			if err := executor.acquireAuthority(); err != nil {
+				return result, err
+			}
+			refreshed, err := executor.Load(ctx)
+			if err != nil {
+				return result, fmt.Errorf("reload recovery input after authority acquisition: %w", err)
+			}
+			input = refreshed
+			input.Observations.Lease.Owner = recovery.OwnerCurrentDriver
+			decision = recovery.Plan(input)
+			result.Replans++
+			continue
+		}
 		if isContinuation(action) {
 			decision = continuePlan(input, action.Continuation)
 			continue
 		}
-		if err := executor.authorizeDriver(); err != nil {
-			return result, err
+		if actionRequiresDriver(action) {
+			if err := executor.authorizeDriver(); err != nil {
+				return result, err
+			}
 		}
 		if len(action.Steps) != 0 {
 			for _, step := range action.Steps {
@@ -110,7 +143,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				if !ok || handler == nil {
 					return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
 				}
-				handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
+				handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
 				if err := handler(ctx, handlerContext, action); err != nil {
 					if halted, ok := haltDecision(decision, err); ok {
 						result.Decision = halted
@@ -128,7 +161,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				}
 			}
 		} else {
-			handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
+			handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
 			handler, ok := executor.kindHandler(action.Kind)
 			if !ok {
 				return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
@@ -143,6 +176,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			result.Kinds = append(result.Kinds, action.Kind)
 		}
 		if !action.Replan {
+			result.Outcome = outcomeFor(action, input)
 			return result, nil
 		}
 		input, err := executor.Load(ctx)
@@ -152,6 +186,53 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		result.Replans++
 		decision = recovery.Plan(input)
 	}
+}
+
+func (executor *Executor) acquireAuthority() error {
+	if executor.Driver != nil {
+		return nil
+	}
+	if executor.Store == nil || executor.RunID == "" {
+		return ErrAuthorityRequired
+	}
+	driver, err := executor.Store.AcquireRecoveryDriver(executor.RunID)
+	if err != nil {
+		return fmt.Errorf("acquire recovery authority: %w", err)
+	}
+	executor.Driver = driver
+	return nil
+}
+
+func actionRequiresDriver(action recovery.Action) bool {
+	switch action.Kind {
+	case recovery.ActionTerminalCleanup,
+		recovery.ActionRemoveStaleLease,
+		recovery.ActionQuarantineOrphanLease,
+		recovery.ActionRefuseResume,
+		recovery.ActionReturnWaitingHuman:
+		return false
+	default:
+		return true
+	}
+}
+
+func outcomeFor(action recovery.Action, input recovery.Input) Outcome {
+	switch action.Kind {
+	case recovery.ActionRefuseResume:
+		return OutcomeRefused
+	case recovery.ActionReturnWaitingHuman:
+		return OutcomeQuiescent
+	case recovery.ActionTerminalCleanup:
+		switch input.Projection.State.Run {
+		case runstate.RunSucceeded:
+			return OutcomeSucceeded
+		case runstate.RunFailed:
+			return OutcomeFailed
+		case runstate.RunCancelled:
+			return OutcomeCancelled
+		}
+	}
+	return ""
 }
 
 // stepRefreshesInput marks a boundary after which the next step must use a

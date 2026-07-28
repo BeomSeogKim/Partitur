@@ -16,6 +16,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/successor"
 )
 
@@ -40,6 +41,9 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 
 func defaultKinds() map[recovery.ActionKind]StepHandler {
 	return map[recovery.ActionKind]StepHandler{
+		recovery.ActionTerminalCleanup:            terminalCleanup,
+		recovery.ActionRemoveStaleLease:           removeStaleLease,
+		recovery.ActionQuarantineOrphanLease:      quarantineOrphanLease,
 		recovery.ActionAppendMovementSucceeded:    appendMovementSucceeded,
 		recovery.ActionAppendRunFailed:            appendRunFailed,
 		recovery.ActionAppendBudgetFailure:        appendMovementBudgetFailure,
@@ -48,6 +52,57 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionStabilizeUnjournaledLaunch: stabilizeUnjournaledLaunch,
 		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
 	}
+}
+
+func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for terminal cleanup")
+	}
+	if err := execution.Store.Mutate(execution.RunID, "", func(transaction *runstore.Txn) error {
+		lease, present, err := transaction.ReadLease()
+		if err != nil || !present {
+			return err
+		}
+		_, err = transaction.At("recovery.terminal_cleanup").CompareRemoveLease(lease.Identity())
+		return err
+	}); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID)))
+}
+
+func removeStaleLease(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for stale lease removal")
+	}
+	return execution.Store.Mutate(execution.RunID, "", func(transaction *runstore.Txn) error {
+		lease, present, err := transaction.ReadLease()
+		if err != nil || !present {
+			return err
+		}
+		if lease.Epoch >= execution.Input.Projection.State.Authority.Epoch {
+			return runstore.ErrLeaseConflict
+		}
+		_, err = transaction.At("recovery.remove_stale_lease").CompareRemoveLease(lease.Identity())
+		return err
+	})
+}
+
+func quarantineOrphanLease(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for orphan lease quarantine")
+	}
+	return execution.Store.Mutate(execution.RunID, "", func(transaction *runstore.Txn) error {
+		lease, present, err := transaction.ReadLease()
+		if err != nil || !present {
+			return err
+		}
+		if lease.Epoch <= execution.Input.Projection.State.Authority.Epoch {
+			return runstore.ErrLeaseConflict
+		}
+		_, err = transaction.At("recovery.quarantine_orphan_lease").QuarantineAs("orphan_lease").Quarantine("driver.lease")
+		return err
+	})
 }
 
 func stabilizeHandoff(ctx context.Context, execution HandlerContext, action recovery.Action) error {

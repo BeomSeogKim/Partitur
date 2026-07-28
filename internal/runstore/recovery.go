@@ -22,6 +22,16 @@ type RecoveryInput struct {
 	Cast       *cast.Cast
 }
 
+// AcquireRecoveryDriver establishes authority from the selected run's pinned
+// score, never from current repository inputs.
+func (store *Store) AcquireRecoveryDriver(runID runstate.RunID) (*Driver, error) {
+	input, err := store.LoadRecoveryInput(runID)
+	if err != nil {
+		return nil, err
+	}
+	return store.AcquireDriver(runID, movementSeed(input.Score))
+}
+
 // LoadRecoveryInput reads only the selected run's journal and authoritative
 // run-owned inputs. It never reads or recompiles the repository root score or
 // current cast layers.

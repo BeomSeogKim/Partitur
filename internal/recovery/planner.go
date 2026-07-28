@@ -77,9 +77,10 @@ const (
 type OwnerState string
 
 const (
-	OwnerDead         OwnerState = "dead"
-	OwnerLive         OwnerState = "live"
-	OwnerUnverifiable OwnerState = "unverifiable"
+	OwnerDead          OwnerState = "dead"
+	OwnerLive          OwnerState = "live"
+	OwnerCurrentDriver OwnerState = "current_driver"
+	OwnerUnverifiable  OwnerState = "unverifiable"
 )
 
 // LeaseObservation is supplied by the caller after inspecting driver.lease.
@@ -461,6 +462,8 @@ func Plan(input Input) Decision {
 		switch lease.Owner {
 		case OwnerLive:
 			return action(CaseLiveOwner, ActionRefuseResume, false)
+		case OwnerCurrentDriver:
+			// This executor established the current recovery lease.
 		case OwnerDead:
 			// RC-RESUME-008 owns the no-live-owner case below.
 		default:
