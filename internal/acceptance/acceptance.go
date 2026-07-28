@@ -87,6 +87,14 @@ func Compile(movement score.MovementView) (*Plan, error) {
 		movement.Acceptance.HasReviewCriteria {
 		return nil, ErrUnsupportedCriteria
 	}
+	if movement.Acceptance.HumanGate == "always" ||
+		movement.Acceptance.HumanGate == "on_contested" {
+		return nil, fmt.Errorf(
+			"%w: human_gate %q requires unit 4.1",
+			ErrUnsupportedCriteria,
+			movement.Acceptance.HumanGate,
+		)
+	}
 
 	outputKinds := make(map[string]string, len(movement.Outputs))
 	for _, output := range movement.Outputs {
