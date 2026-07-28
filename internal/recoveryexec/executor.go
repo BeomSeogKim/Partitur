@@ -147,6 +147,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				if err := handler(ctx, handlerContext, action); err != nil {
 					if halted, ok := haltDecision(decision, err); ok {
 						result.Decision = halted
+						result.Outcome = OutcomeHalted
 						return result, nil
 					}
 					return result, fmt.Errorf("execute recovery step %s: %w", step, err)
@@ -169,6 +170,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			if err := handler(ctx, handlerContext, action); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
 					result.Decision = halted
+					result.Outcome = OutcomeHalted
 					return result, nil
 				}
 				return result, fmt.Errorf("execute recovery action %s: %w", action.Kind, err)
@@ -209,7 +211,9 @@ func actionRequiresDriver(action recovery.Action) bool {
 		recovery.ActionRemoveStaleLease,
 		recovery.ActionQuarantineOrphanLease,
 		recovery.ActionRefuseResume,
-		recovery.ActionReturnWaitingHuman:
+		recovery.ActionReturnWaitingHuman,
+		recovery.ActionExecuteCancellation,
+		recovery.ActionCompleteOrAbandonPrepare:
 		return false
 	default:
 		return true

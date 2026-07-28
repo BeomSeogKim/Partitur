@@ -51,6 +51,14 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRefuseResume:               refuseResume,
 		recovery.ActionStabilizeUnjournaledLaunch: stabilizeUnjournaledLaunch,
 		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
+		recovery.ActionExecuteCancellation:        unreachableActionOwnedBy("2.1"),
+		recovery.ActionCompleteOrAbandonPrepare:   unreachableActionOwnedBy("4.2"),
+	}
+}
+
+func unreachableActionOwnedBy(unit string) StepHandler {
+	return func(_ context.Context, _ HandlerContext, action recovery.Action) error {
+		return fmt.Errorf("%w: %s is owned by unit %s", ErrUnreachableAction, action.Kind, unit)
 	}
 }
 

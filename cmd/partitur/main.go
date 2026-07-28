@@ -41,6 +41,15 @@ type runDriver func(
 
 type statusReader func(string) (statusprojection.Report, error)
 type resumeRunner func(context.Context, string) (recoveryexec.Result, error)
+
+type resumeSelectionError struct {
+	err error
+}
+
+func (err resumeSelectionError) Error() string { return err.err.Error() }
+
+func (err resumeSelectionError) Unwrap() error { return err.err }
+
 type logsReader func(string) (logstream.Snapshot, error)
 type logsStreamer func(
 	context.Context,
@@ -253,7 +262,9 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 	}
 	result, err := resume(context.Background(), requestedID)
 	if err != nil {
-		if code := statusErrorCode(err); code == 1 || code == 2 {
+		var selectionErr resumeSelectionError
+		if errors.As(err, &selectionErr) {
+			code := statusErrorCode(err)
 			renderStatusError(stderr, err)
 			return code
 		}
@@ -284,7 +295,7 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 	}
 	report, err := statusprojection.Read(root, requestedID)
 	if err != nil {
-		return recoveryexec.Result{}, err
+		return recoveryexec.Result{}, resumeSelectionError{err: err}
 	}
 	runID := runstate.RunID(report.Run.ID)
 	store, err := runstore.New(root, faultpoint.Nop{})

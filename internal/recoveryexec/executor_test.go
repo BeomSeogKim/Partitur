@@ -2,18 +2,23 @@ package recoveryexec
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/score"
 )
 
 func TestDefaultHandlersAppendRecoveredAttemptFailureToRealStore(t *testing.T) {
@@ -348,24 +353,36 @@ func incompleteCriterionInput(state runstate.State, subject recovery.SubjectVeri
 }
 
 func TestExecutorMapsSweepFailureToHaltWithoutJournalWrite(t *testing.T) {
-	store, driver := handlerStore(t, true)
-	journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
-	before, err := os.ReadFile(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor := &Executor{Store: store, Driver: driver, Steps: map[recovery.ActionStep]StepHandler{
-		recovery.StepSweepRecordedSession: func(context.Context, HandlerContext, recovery.Action) error { return ErrSweepUnverifiable },
-	}}
-	result, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseUnprobedAttempt, Action: &recovery.Action{
-		Kind: recovery.ActionRecoverUnprobedAttempt, AttemptID: "attempt-1", Steps: []recovery.ActionStep{recovery.StepSweepRecordedSession},
-	}})
-	if err != nil || result.Decision.Halt != recovery.HaltSweepUnverifiable {
-		t.Fatalf("result=%+v error=%v", result, err)
-	}
-	after, err := os.ReadFile(journalPath)
-	if err != nil || string(after) != string(before) {
-		t.Fatalf("journal changed=%t error=%v", string(after) != string(before), err)
+	for _, test := range []struct {
+		name     string
+		step     recovery.ActionStep
+		err      error
+		wantHalt recovery.HaltReason
+	}{
+		{name: "recorded session sweep", step: recovery.StepSweepRecordedSession, err: ErrSweepUnverifiable, wantHalt: recovery.HaltSweepUnverifiable},
+		{name: "spawn handoff", step: recovery.StepStabilizeHandoff, err: ErrHandoffUnverifiable, wantHalt: recovery.HaltSpawnHandoffUnverifiable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, driver := handlerStore(t, true)
+			journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
+			before, err := os.ReadFile(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := &Executor{Store: store, Driver: driver, Steps: map[recovery.ActionStep]StepHandler{
+				test.step: func(context.Context, HandlerContext, recovery.Action) error { return test.err },
+			}}
+			result, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseUnprobedAttempt, Action: &recovery.Action{
+				Kind: recovery.ActionRecoverUnprobedAttempt, AttemptID: "attempt-1", Steps: []recovery.ActionStep{test.step},
+			}})
+			if err != nil || result.Outcome != OutcomeHalted || result.Decision.Halt != test.wantHalt {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+			after, err := os.ReadFile(journalPath)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("journal changed=%t error=%v", string(after) != string(before), err)
+			}
+		})
 	}
 }
 
@@ -590,6 +607,110 @@ func TestExecutorRequiresAuthorityBeforeEffect(t *testing.T) {
 	if !errors.Is(err, ErrAuthorityRequired) || called {
 		t.Fatalf("error=%v called=%v", err, called)
 	}
+}
+
+func TestExecutorRejectsControlActionsBeforeAcquiringAuthority(t *testing.T) {
+	for _, test := range []struct {
+		action recovery.ActionKind
+		unit   string
+	}{
+		{action: recovery.ActionExecuteCancellation, unit: "2.1"},
+		{action: recovery.ActionCompleteOrAbandonPrepare, unit: "4.2"},
+	} {
+		t.Run(string(test.action), func(t *testing.T) {
+			store := acquirableRecoveryStore(t)
+			journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
+			before, err := os.ReadFile(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			input := recovery.Input{Projection: recovery.Projection{State: runstate.State{Run: runstate.RunRunning, CancelRequested: test.action == recovery.ActionExecuteCancellation}}}
+			if test.action == recovery.ActionCompleteOrAbandonPrepare {
+				input.Projection.State.PendingPrepare = &runstate.PendingPrepare{}
+				input.Observations.Prepare = recovery.PrepareObservation{PlanPresent: true, SnapshotPresent: true}
+			}
+			executor := &Executor{Store: store, RunID: "run-1", Load: func(context.Context) (recovery.Input, error) { return input, nil }}
+			_, err = executor.execute(context.Background(), recovery.Input{}, recovery.Decision{
+				CaseID: "RC-test",
+				Action: &recovery.Action{Kind: test.action},
+			})
+			if !errors.Is(err, ErrUnreachableAction) || !strings.Contains(err.Error(), "unit "+test.unit) {
+				t.Fatalf("error=%v", err)
+			}
+			if _, present, leaseErr := store.ReadLease("run-1"); leaseErr != nil || present {
+				t.Fatalf("lease present=%t error=%v", present, leaseErr)
+			}
+			after, err := os.ReadFile(journalPath)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("journal changed=%t error=%v", string(after) != string(before), err)
+			}
+		})
+	}
+}
+
+func TestReclaimAuthorityIsTheOnlyAuthorityBoundary(t *testing.T) {
+	for _, action := range []recovery.ActionKind{
+		recovery.ActionTerminalCleanup,
+		recovery.ActionRemoveStaleLease,
+		recovery.ActionQuarantineOrphanLease,
+		recovery.ActionRefuseResume,
+		recovery.ActionReturnWaitingHuman,
+		recovery.ActionExecuteCancellation,
+		recovery.ActionCompleteOrAbandonPrepare,
+	} {
+		if actionRequiresDriver(recovery.Action{Kind: action}) {
+			t.Fatalf("%s unexpectedly requires authority", action)
+		}
+	}
+	if !actionRequiresDriver(recovery.Action{Kind: recovery.ActionReclaimAuthority}) {
+		t.Fatal("reclaim_authority must establish authority")
+	}
+}
+
+func acquirableRecoveryStore(t *testing.T) *runstore.Store {
+	t.Helper()
+	store, err := runstore.New(t.TempDir(), faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []byte("score: \"0.2\"\nname: executor-fixture\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts: {}\nmovements: []\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n")
+	compiled, diagnostics := score.Compile(snapshot)
+	if len(diagnostics) != 0 {
+		t.Fatalf("score diagnostics=%v", diagnostics)
+	}
+	scoreHash, err := compiled.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedCast := []byte("cast: \"0.1\"\nperformers: {}\nbindings: {}\n")
+	resolved, castDiagnostics := cast.Resolve([]cast.Layer{{Origin: "fixture", Data: resolvedCast}})
+	if len(castDiagnostics) != 0 {
+		t.Fatalf("cast diagnostics=%v", castDiagnostics)
+	}
+	castHash, err := resolved.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		if _, err := tx.At("fixture.score").PublishImmutable("scores/revision-1.yaml", snapshot, runstore.Hash(hashFixture(snapshot))); err != nil {
+			return err
+		}
+		if _, err := tx.At("fixture.cast").PublishImmutable("resolved-cast.yaml", resolvedCast, runstore.Hash(hashFixture(resolvedCast))); err != nil {
+			return err
+		}
+		_, err := tx.At("fixture.start").Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventRunStarted, Payload: handlerPayload(t, map[string]any{
+			"base_commit": "base", "base_tree": "tree", "score_hash": scoreHash, "score_file_hash": hashFixture(snapshot), "resolved_cast_hash": castHash, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
+		})})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func hashFixture(value []byte) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(value))
 }
 
 func testExecutor(steps map[recovery.ActionStep]StepHandler) *Executor {
