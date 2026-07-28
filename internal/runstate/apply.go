@@ -31,12 +31,18 @@ func IdempotencyKey(event Event) (string, error) {
 		return string(event.RunID), nil
 	case EventMovementReady, EventMovementStarted:
 		return string(event.MovementID), nil
+	case EventMovementFailed:
+		return string(event.MovementID), nil
+	case EventMovementCancelled:
+		return event.CausationID + "\x00" + string(event.MovementID), nil
 	case EventMovementSucceeded:
 		return string(event.MovementID) + "\x00" + string(event.AttemptID), nil
 	case EventPerformerSelected, EventAttemptStarted, EventAdapterProbed, EventPerformerCompleted,
-		EventAttemptCompleted, EventAttemptFailed, EventVerificationPassed, EventAcceptanceStarted,
+		EventAttemptCompleted, EventAttemptBlocked, EventAttemptFailed, EventVerificationPassed, EventAcceptanceStarted,
 		EventAcceptanceFailed, EventAcceptanceEvaluationCompleted:
 		return string(event.AttemptID), nil
+	case EventAttemptCancelled, EventAttemptSuperseded:
+		return event.CausationID + "\x00" + string(event.AttemptID), nil
 	case EventArtifactRecorded:
 		return mustString(payload, "logical_output_id") + "\x00" + string(event.AttemptID), nil
 	case EventApplicationCandidateRecorded:
@@ -132,6 +138,35 @@ func Apply(input State, event Event) (State, error) {
 			return state, err
 		}
 		state.Movements[event.MovementID] = MovementRunning
+	case EventMovementFailed:
+		if err := requireMovementOneOf(state, event, MovementRunning, MovementWaitingHuman); err != nil {
+			return state, err
+		}
+		reason := mustString(payload, "reason")
+		if reason == "human_gate_rejected" {
+			attempt, err := requireAttempt(state, event, AttemptVerifying)
+			if err != nil {
+				return state, err
+			}
+			if attempt.MovementID != event.MovementID {
+				return state, invalid(event, "attempt does not belong to movement")
+			}
+			finishesRun := allMovementsFinishedAfter(state, event.MovementID)
+			if mustBool(payload, "run_failed") != finishesRun {
+				return state, invalid(event, "run_failed does not match final movement")
+			}
+			if finishesRun {
+				if state.Run != RunRunning && state.Run != RunWaitingHuman {
+					return state, transition(event, "run is not nonterminal")
+				}
+				state.Run = RunFailed
+			}
+			attempt.State = AttemptFailed
+			state.Attempts[event.AttemptID] = attempt
+		} else if mustBool(payload, "run_failed") {
+			return state, invalid(event, "run_failed is only valid for final human_gate_rejected")
+		}
+		state.Movements[event.MovementID] = MovementFailed
 	case EventMovementSucceeded:
 		if state.Run != RunRunning {
 			return state, transition(event, "run is not RUNNING")
@@ -240,6 +275,16 @@ func Apply(input State, event Event) (State, error) {
 			return state, transition(event, "acceptance evaluation is not completed")
 		}
 		attempt.State = AttemptCompleted
+		state.Attempts[event.AttemptID] = attempt
+	case EventAttemptBlocked:
+		attempt, err := requireAttempt(state, event, AttemptRunning)
+		if err != nil {
+			return state, err
+		}
+		if _, probed := state.AdapterObservations[event.AttemptID]; !probed {
+			return state, transition(event, "adapter is not probed")
+		}
+		attempt.State = AttemptBlocked
 		state.Attempts[event.AttemptID] = attempt
 	case EventAttemptFailed:
 		attempt, err := requireAttemptOneOf(state, event, AttemptStarting, AttemptRunning, AttemptVerifying)
@@ -652,11 +697,15 @@ func invalid(event Event, reason string) error {
 }
 
 func requireMovement(state State, event Event, want MovementState) error {
+	return requireMovementOneOf(state, event, want)
+}
+
+func requireMovementOneOf(state State, event Event, wants ...MovementState) error {
 	if event.MovementID == "" {
 		return invalid(event, "movement_id is required")
 	}
-	if state.Movements[event.MovementID] != want {
-		return transition(event, fmt.Sprintf("movement is not %s", want))
+	if !slices.Contains(wants, state.Movements[event.MovementID]) {
+		return transition(event, "movement is not in a legal source state")
 	}
 	return nil
 }
@@ -679,7 +728,8 @@ func requireAttemptOneOf(state State, event Event, wants ...AttemptState) (Attem
 func cancellableMovementIDs(state State) []string {
 	var ids []string
 	for id, movementState := range state.Movements {
-		if movementState == MovementPending || movementState == MovementReady || movementState == MovementRunning {
+		if movementState == MovementPending || movementState == MovementReady ||
+			movementState == MovementRunning || movementState == MovementWaitingHuman {
 			ids = append(ids, string(id))
 		}
 	}
@@ -914,6 +964,10 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 		return []string{"cancelled_movement_ids", "cancelled_attempt_ids", "obsoleted_decision_ids"}, []string{"fenced_epoch"}, true
 	case EventMovementReady, EventMovementStarted:
 		return nil, nil, true
+	case EventMovementFailed:
+		return []string{"reason", "run_failed"}, []string{"decision_id", "subject_tree"}, true
+	case EventMovementCancelled:
+		return nil, nil, true
 	case EventMovementSucceeded:
 		return []string{"approved_artifact_instance_ids", "identity_versions", "run_succeeded"}, []string{"approved_change_set_id"}, true
 	case EventPerformerSelected:
@@ -924,8 +978,10 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "truncated_resolutions", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, nil, true
 	case EventPerformerCompleted:
 		return []string{"session_hint_stored"}, nil, true
-	case EventAttemptCompleted, EventVerificationPassed:
+	case EventAttemptCompleted, EventVerificationPassed, EventAttemptCancelled, EventAttemptSuperseded:
 		return nil, nil, true
+	case EventAttemptBlocked:
+		return []string{"raised", "pending_decision_ids"}, nil, true
 	case EventAttemptFailed:
 		return []string{"kind", "disposition"}, []string{"reason", "detail"}, true
 	case EventArtifactRecorded:
@@ -1037,6 +1093,10 @@ func validateNestedPayload(eventType EventType, payload map[string]any) error {
 		}
 		if err := namedTypes(enforcement, nil, nil, nil, names, nil); err != nil {
 			return fmt.Errorf("enforcement: %w", err)
+		}
+	case EventAttemptBlocked:
+		if err := validateRaisedDecisions(payload["raised"].([]any)); err != nil {
+			return err
 		}
 	case EventApplicationCandidateRecorded:
 		if err := validateContributors(payload["contributors"].([]any)); err != nil {
@@ -1233,6 +1293,9 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 	case EventRunCancelled:
 		arrays = []string{"cancelled_movement_ids", "cancelled_attempt_ids", "obsoleted_decision_ids"}
 		integers = optionalNames(payload, "fenced_epoch")
+	case EventMovementFailed:
+		strings = append([]string{"reason"}, optionalNames(payload, "decision_id", "subject_tree")...)
+		bools = []string{"run_failed"}
 	case EventMovementSucceeded:
 		strings = optionalNames(payload, "approved_change_set_id")
 		arrays = []string{"approved_artifact_instance_ids"}
@@ -1250,6 +1313,8 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		integers = []string{"attempt_number"}
 	case EventPerformerCompleted:
 		bools = []string{"session_hint_stored"}
+	case EventAttemptBlocked:
+		arrays = []string{"raised", "pending_decision_ids"}
 	case EventAttemptFailed:
 		strings = append([]string{"kind"}, optionalNames(payload, "reason", "detail")...)
 		objects = []string{"disposition"}
@@ -1343,7 +1408,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		return err
 	}
 	for _, name := range arrays {
-		if name == "typed_delta" || name == "contributors" || name == "criterion_outcomes" {
+		if name == "typed_delta" || name == "contributors" || name == "criterion_outcomes" || name == "raised" {
 			continue
 		}
 		if err := stringArray(payload, name); err != nil {
@@ -1423,6 +1488,18 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		return sortedStringFields(payload, "cancelled_movement_ids", "cancelled_attempt_ids", "obsoleted_decision_ids")
 	case EventMovementSucceeded:
 		return sortedStringFields(payload, "approved_artifact_instance_ids")
+	case EventMovementFailed:
+		reason := mustString(payload, "reason")
+		_, decisionID := payload["decision_id"]
+		_, subjectTree := payload["subject_tree"]
+		if (reason == "human_gate_rejected") != (decisionID && subjectTree) {
+			return errors.New("decision_id and subject_tree are required iff reason is human_gate_rejected")
+		}
+		if !validMovementFailureReason(reason) {
+			return errors.New("invalid movement failure reason")
+		}
+	case EventAttemptBlocked:
+		return validatePendingDecisionIDs(payload)
 	case EventPerformerSelected:
 		switch mustString(payload, "reason") {
 		case "initial", "quality_retry", "fallback", "revision_restart", "decision_resume":
@@ -1492,6 +1569,74 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func validateRaisedDecisions(values []any) error {
+	var previous string
+	for index, raw := range values {
+		decision, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("raised[%d] must be an object", index)
+		}
+		kind, ok := decision["kind"].(string)
+		if !ok {
+			return fmt.Errorf("raised[%d].kind must be a string", index)
+		}
+		var required []string
+		switch kind {
+		case "question":
+			required = []string{"decision_id", "emitted_id", "kind", "question", "blocking"}
+		case "proposal":
+			required = []string{"decision_id", "emitted_id", "kind", "proposal_id", "blocking"}
+		default:
+			return fmt.Errorf("raised[%d].kind is invalid", index)
+		}
+		if err := fields(decision, required, nil); err != nil {
+			return fmt.Errorf("raised[%d]: %w", index, err)
+		}
+		strings := []string{"decision_id", "emitted_id"}
+		if kind == "question" {
+			strings = append(strings, "question")
+		} else {
+			strings = append(strings, "proposal_id")
+		}
+		if err := namedTypes(decision, strings, nil, nil, []string{"blocking"}, nil); err != nil {
+			return fmt.Errorf("raised[%d]: %w", index, err)
+		}
+		decisionID := mustString(decision, "decision_id")
+		if index > 0 && decisionID <= previous {
+			return errors.New("raised must be sorted by unique decision_id")
+		}
+		previous = decisionID
+	}
+	return nil
+}
+
+func validatePendingDecisionIDs(payload map[string]any) error {
+	if err := sortedStringFields(payload, "pending_decision_ids"); err != nil {
+		return err
+	}
+	var expected []string
+	for _, raw := range payload["raised"].([]any) {
+		decision := raw.(map[string]any)
+		if mustBool(decision, "blocking") {
+			expected = append(expected, mustString(decision, "decision_id"))
+		}
+	}
+	if !slices.Equal(mustStrings(payload, "pending_decision_ids"), expected) {
+		return errors.New("pending_decision_ids must equal blocking raised decision ids")
+	}
+	return nil
+}
+
+func validMovementFailureReason(reason string) bool {
+	switch reason {
+	case "retries_exhausted", "fallbacks_exhausted", "budget_exhausted", "human_gate_rejected",
+		"grant_denied", "protocol_error", "composition_unresolvable", "composition_failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func fields(value map[string]any, required, optional []string) error {
@@ -1605,6 +1750,9 @@ func isRegistryEvent(eventType EventType) bool {
 }
 
 func isSupportedEvent(eventType EventType) bool {
+	if eventType == EventMovementCancelled || eventType == EventAttemptCancelled || eventType == EventAttemptSuperseded {
+		return false
+	}
 	_, _, known := payloadFields(eventType)
 	return known
 }

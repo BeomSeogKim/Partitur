@@ -2,7 +2,7 @@
 //
 // State is a pure function of the initial movement seed derived from the
 // authenticated pinned score and the journal. This package supports only the
-// thirty-nine event types needed by DESIGN Appendix E, the first run success
+// forty-one event types needed by DESIGN Appendix E, the first run success
 // path, and the shipping status projection. Valid registry events
 // outside that subset fail closed with ErrUnsupportedEventType.
 //
@@ -33,11 +33,12 @@ type MovementSeed struct {
 type RunLifecycle string
 
 const (
-	RunNotStarted RunLifecycle = ""
-	RunRunning    RunLifecycle = "RUNNING"
-	RunSucceeded  RunLifecycle = "SUCCEEDED"
-	RunFailed     RunLifecycle = "FAILED"
-	RunCancelled  RunLifecycle = "CANCELLED"
+	RunNotStarted   RunLifecycle = ""
+	RunRunning      RunLifecycle = "RUNNING"
+	RunWaitingHuman RunLifecycle = "WAITING_HUMAN"
+	RunSucceeded    RunLifecycle = "SUCCEEDED"
+	RunFailed       RunLifecycle = "FAILED"
+	RunCancelled    RunLifecycle = "CANCELLED"
 )
 
 func (state RunLifecycle) Terminal() bool {
@@ -50,7 +51,9 @@ const (
 	MovementPending      MovementState = "PENDING"
 	MovementReady        MovementState = "READY"
 	MovementRunning      MovementState = "RUNNING"
+	MovementWaitingHuman MovementState = "WAITING_HUMAN"
 	MovementSucceeded    MovementState = "SUCCEEDED"
+	MovementFailed       MovementState = "FAILED"
 	MovementCancelled    MovementState = "CANCELLED"
 	MovementInapplicable MovementState = "INAPPLICABLE"
 )
@@ -62,13 +65,14 @@ const (
 	AttemptRunning    AttemptState = "RUNNING"
 	AttemptVerifying  AttemptState = "VERIFYING"
 	AttemptCompleted  AttemptState = "COMPLETED"
+	AttemptBlocked    AttemptState = "BLOCKED"
 	AttemptFailed     AttemptState = "FAILED"
 	AttemptCancelled  AttemptState = "CANCELLED"
 	AttemptSuperseded AttemptState = "SUPERSEDED"
 )
 
 func (state AttemptState) terminal() bool {
-	return state == AttemptCompleted || state == AttemptFailed ||
+	return state == AttemptCompleted || state == AttemptBlocked || state == AttemptFailed ||
 		state == AttemptCancelled || state == AttemptSuperseded
 }
 
@@ -309,12 +313,17 @@ const (
 	EventMovementReady                  EventType = "movement.ready"
 	EventMovementStarted                EventType = "movement.started"
 	EventMovementSucceeded              EventType = "movement.succeeded"
+	EventMovementFailed                 EventType = "movement.failed"
+	EventMovementCancelled              EventType = "movement.cancelled"
 	EventPerformerSelected              EventType = "performer.selected"
 	EventAttemptStarted                 EventType = "attempt.started"
 	EventAdapterProbed                  EventType = "adapter.probed"
 	EventPerformerCompleted             EventType = "performer.completed"
 	EventAttemptCompleted               EventType = "attempt.completed"
+	EventAttemptBlocked                 EventType = "attempt.blocked"
 	EventAttemptFailed                  EventType = "attempt.failed"
+	EventAttemptCancelled               EventType = "attempt.cancelled"
+	EventAttemptSuperseded              EventType = "attempt.superseded"
 	EventArtifactRecorded               EventType = "artifact.recorded"
 	EventVerificationPassed             EventType = "verification.passed"
 	EventApplicationCandidateRecorded   EventType = "application_candidate.recorded"

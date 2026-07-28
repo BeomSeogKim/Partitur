@@ -134,6 +134,37 @@ func TestProjectCarriesVerifiedProvenanceAndShippingRecovery(t *testing.T) {
 	}
 }
 
+func TestProjectRendersFailureCancellationAndSupersessionStates(t *testing.T) {
+	compiled := mustCompile(t, statusScore())
+	for _, test := range []struct {
+		name          string
+		movementState runstate.MovementState
+		attemptState  runstate.AttemptState
+	}{
+		{"failed", runstate.MovementFailed, runstate.AttemptFailed},
+		{"cancelled", runstate.MovementCancelled, runstate.AttemptCancelled},
+		{"superseded", runstate.MovementRunning, runstate.AttemptSuperseded},
+		{"blocked", runstate.MovementRunning, runstate.AttemptBlocked},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := runstate.NewState(movementSeeds(compiled))
+			state.Run = runstate.RunRunning
+			state.Movements["inspect"] = test.movementState
+			state.Attempts["attempt-1"] = runstate.Attempt{
+				MovementID: "inspect",
+				State:      test.attemptState,
+			}
+
+			report := project("run-1", compiled, runstore.ReadReplayResult{State: state})
+			movement := report.Run.Movements[0]
+			if movement.State != string(test.movementState) || len(movement.Attempts) != 1 ||
+				movement.Attempts[0].State != string(test.attemptState) {
+				t.Fatalf("movement = %+v", movement)
+			}
+		})
+	}
+}
+
 func TestReadWithoutExactlyOneActiveRunIsRefused(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".partitur", "runs", "orphan"), 0o700); err != nil {
