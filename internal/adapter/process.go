@@ -44,6 +44,21 @@ func SessionEmpty(identity runstate.ProcessIdentity) (bool, error) {
 	return len(members) == 0, nil
 }
 
+// SweepSession terminates every live member of a recorded launch session and
+// returns only after the session is verified empty. It shares the production
+// adapter cleanup implementation so recovery and normal execution cannot
+// diverge on process ownership or PID-reuse checks.
+func SweepSession(identity runstate.ProcessIdentity, grace time.Duration) error {
+	if identity.SessionID <= 0 || identity.Start == nil {
+		return errors.New("recorded session identity is incomplete")
+	}
+	start, err := processStartIdentity(identity.Start)
+	if err != nil {
+		return err
+	}
+	return sweepSession(identity.SessionID, start, grace)
+}
+
 func (systemSessionController) verifyEmpty(sid int, leaderStart string) (bool, error) {
 	members, err := liveSessionMembers(sid, leaderStart)
 	return len(members) == 0, err

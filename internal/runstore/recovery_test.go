@@ -30,10 +30,14 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 			},
 		},
 		{
-			name: "failed attempt retains recorded disposition", append: appendFailedAttempt, check: func(t *testing.T, input RecoveryInput) {
+			name: "failed attempt retains recorded disposition and classification facts", append: appendFailedAttempt, check: func(t *testing.T, input RecoveryInput) {
 				attempt := input.Projection.CurrentHeadAttempt
 				if attempt == nil || attempt.State != runstate.AttemptFailed || attempt.RecordedDisposition == nil || attempt.RecordedDisposition.Charged != "quality_retry" {
 					t.Fatalf("failed attempt projection = %+v", attempt)
+				}
+				facts := attempt.FailureClassification
+				if facts.CurrentPerformer != "writer" || facts.RetriesConsumed != 1 || facts.RetriesPerMovement != 0 || facts.RemainingTimeMS != 600000 {
+					t.Fatalf("failure classification facts = %+v", facts)
 				}
 			},
 		},
@@ -303,7 +307,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		appendRecoveryEvent(t, store, runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped,
 			Payload: recoveryPayload(t, map[string]any{
-				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 600000, "observed_at": "2026-07-28T00:10:00.000Z",
 			}),
 		})
 
@@ -314,6 +318,9 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		got := input.Projection.CompositionRecovery
 		if got == nil || !got.Recovered || got.Scope != "movement" || got.MovementID != "write" {
 			t.Fatalf("composition recovery = %+v", got)
+		}
+		if input.Projection.Scheduler.RemainingTime != 0 {
+			t.Fatalf("remaining time after clamped close = %d, want 0", input.Projection.Scheduler.RemainingTime)
 		}
 	})
 
