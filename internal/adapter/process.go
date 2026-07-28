@@ -7,6 +7,8 @@ import (
 	"sort"
 	"syscall"
 	"time"
+
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
 type processRecord struct {
@@ -24,6 +26,23 @@ type sessionController interface {
 }
 
 type systemSessionController struct{}
+
+// SessionEmpty observes whether a recorded launch session has no live member.
+// It never signals or otherwise mutates a process.
+func SessionEmpty(identity runstate.ProcessIdentity) (bool, error) {
+	if identity.SessionID <= 0 || identity.Start == nil {
+		return false, errors.New("recorded session identity is incomplete")
+	}
+	start, err := processStartIdentity(identity.Start)
+	if err != nil {
+		return false, err
+	}
+	members, err := liveSessionMembers(identity.SessionID, start)
+	if err != nil {
+		return false, err
+	}
+	return len(members) == 0, nil
+}
 
 func (systemSessionController) verifyEmpty(sid int, leaderStart string) (bool, error) {
 	members, err := liveSessionMembers(sid, leaderStart)
