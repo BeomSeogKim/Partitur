@@ -480,188 +480,188 @@ func TestPlanC2ScopeHaltsAndPrecedence(t *testing.T) {
 	})
 }
 
-func TestPlanTotalOverDeclaredAxes(t *testing.T) {
-	type axis struct {
-		name   string
-		values []func(Input) Input
-	}
-	noChange := func(input Input) Input { return input }
-	axes := []axis{
+func TestPlanC3RowsAndAdjacentStates(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    Input
+		wantCase CaseID
+		wantKind ActionKind
+		wantHalt HaltReason
+		replan   bool
+		adjacent Input
+	}{
 		{
-			name:   "run",
-			values: []func(Input) Input{noChange, withTerminal},
+			name:     "recorded acceptance failure realizes its recorded disposition",
+			input:    withAcceptanceFailure(c3Input("c1")),
+			wantCase: CaseAcceptanceFailed, wantKind: ActionRealizeRecordedDisposition,
+			adjacent: c3Input("c1"),
 		},
 		{
-			name: "lease",
-			values: []func(Input) Input{
-				noChange,
-				func(input Input) Input {
-					return withLease(input, LeaseObservation{Exists: true, Readable: true, Epoch: 1, Owner: OwnerLive}, 2)
-				},
-				func(input Input) Input {
-					return withLease(input, LeaseObservation{Exists: true, Readable: true, Epoch: 2}, 1)
-				},
-				func(input Input) Input {
-					return withLease(input, LeaseObservation{Exists: true, Readable: true, Epoch: 1, Owner: OwnerDead}, 1)
-				},
-				func(input Input) Input {
-					return withLease(input, LeaseObservation{Exists: true, Readable: true, Epoch: 1, Owner: OwnerUnverifiable}, 1)
-				},
-				func(input Input) Input {
-					return withLease(input, LeaseObservation{Exists: true, Readable: true, Epoch: 1, Owner: OwnerLive}, 1)
-				},
-				func(input Input) Input { return withLease(input, LeaseObservation{Exists: true, Epoch: 1}, 1) },
-			},
+			name:     "completed failed criterion closes acceptance",
+			input:    withCriterion(c3Input("c1"), "c1", true, "FAIL"),
+			wantCase: CaseCriterionFailed, wantKind: ActionAppendAcceptanceFailure, replan: true,
+			adjacent: withCriterion(c3Input("c1"), "c1", true, "PASS"),
 		},
 		{
-			name:   "control",
-			values: []func(Input) Input{noChange, withCancel, withPrepare},
+			name:     "in flight criterion is recovered only after a matching subject observation",
+			input:    withSubject(withCriterion(c3Input("c1"), "c1", false, ""), SubjectMatched),
+			wantCase: CaseIncompleteCriterion, wantKind: ActionRecoverIncompleteCriterion, replan: true,
+			adjacent: withSubject(withCriterion(c3Input("c1"), "c1", true, "PASS"), SubjectMatched),
 		},
 		{
-			name:   "root snapshot",
-			values: []func(Input) Input{noChange, withRootDivergence},
+			name:     "all passing criteria append evaluation completion",
+			input:    withSubject(withCriterion(c3Input("c1"), "c1", true, "PASS"), SubjectMatched),
+			wantCase: CaseCriteriaPassed, wantKind: ActionAppendEvaluationCompleted, replan: true,
+			adjacent: withSubject(withEvaluationCompleted(withCriterion(c3Input("c1"), "c1", true, "PASS")), SubjectMatched),
 		},
 		{
-			name:   "event-named reference",
-			values: []func(Input) Input{noChange, func(input Input) Input { return withMissingReference(input, ReferenceArtifact) }},
+			name:     "evaluated acceptance requests its missing required gate",
+			input:    withRequiredGate(withEvaluationCompleted(c3Input("c1")), false, false, false),
+			wantCase: CaseRequestHumanGate, wantKind: ActionAppendHumanGateRequest, replan: true,
+			adjacent: withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, false, false),
 		},
 		{
-			name:   "routed request",
-			values: []func(Input) Input{noChange, withMissingRoutedRequest},
+			name:     "unresolved required gate is already waiting human",
+			input:    withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, false, false),
+			wantCase: CaseHumanGateWaiting, wantKind: ActionReturnWaitingHuman,
+			adjacent: withSubject(withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, true, true), SubjectMatched),
 		},
 		{
-			name:   "revision restart",
-			values: []func(Input) Input{noChange, withRevisionRestart},
+			name:     "approved gate completes attempt before movement",
+			input:    withSubject(withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, true, true), SubjectMatched),
+			wantCase: CaseHumanGateApproved, wantKind: ActionAppendAcceptanceSuccess, replan: true,
+			adjacent: withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, true, false),
 		},
 		{
-			name:   "composition terminal",
-			values: []func(Input) Input{noChange, withCompositionTerminal},
+			name:     "rejected gate appends its movement terminal",
+			input:    withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, true, false),
+			wantCase: CaseHumanGateRejected, wantKind: ActionAppendGateRejectedFailure, replan: true,
+			adjacent: withSubject(withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, true, true), SubjectMatched),
 		},
 		{
-			name:   "current head attempt",
-			values: []func(Input) Input{noChange, withCurrentHeadAttempt},
+			name:     "gate free acceptance completes attempt before movement",
+			input:    withSubject(withEvaluationCompleted(c3Input("c1")), SubjectMatched),
+			wantCase: CaseGateFreeCompletion, wantKind: ActionAppendAcceptanceSuccess, replan: true,
+			adjacent: withSubject(withEvaluationCompleted(c3Input("c1")), SubjectMismatched),
+		},
+		{
+			name:     "safe unjournaled launch is removed before criteria resume",
+			input:    withUnjournaledLaunch(c3Input("c1"), UnjournaledLaunchSessionEmpty),
+			wantCase: CaseUnjournaledLaunch, wantKind: ActionRemoveUnjournaledLaunch, replan: true,
+			adjacent: withSubject(c3Input("c1"), SubjectMatched),
+		},
+		{
+			name:     "empty acceptance resumes its first criterion",
+			input:    withSubject(c3Input("c1"), SubjectMatched),
+			wantCase: CaseFirstCriterion, wantKind: ActionResumeCriterion,
+			adjacent: withSubject(withCriterion(c3Input("c1"), "c1", false, ""), SubjectMatched),
+		},
+		{
+			name:     "passing completed criteria resume the next unstarted criterion",
+			input:    withSubject(withCriterion(c3Input("c1", "c2"), "c1", true, "PASS"), SubjectMatched),
+			wantCase: CaseNextCriterion, wantKind: ActionResumeCriterion,
+			adjacent: withSubject(withCriterion(withCriterion(c3Input("c1", "c2"), "c1", true, "PASS"), "c2", true, "PASS"), SubjectMatched),
 		},
 	}
 
-	count := 0
-	var expand func(int, Input)
-	expand = func(index int, input Input) {
-		if index == len(axes) {
-			count++
-			decision := Plan(input)
-			if !decision.Valid() {
-				t.Fatalf("invalid decision for declared input %d: %+v", count, decision)
+	seen := map[CaseID]bool{}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := PlanAcceptance(test.input)
+			assertDecision(t, got, test.wantCase, test.wantKind, test.wantHalt, test.replan)
+			adjacent := PlanAcceptance(test.adjacent)
+			if adjacent.CaseID == test.wantCase && adjacent.Action != nil && adjacent.Action.Kind == test.wantKind && adjacent.Halt == test.wantHalt {
+				t.Fatalf("adjacent state selected the same result: %+v", adjacent)
 			}
-			return
-		}
-		for _, set := range axes[index].values {
-			expand(index+1, set(input))
-		}
+		})
+		seen[test.wantCase] = true
 	}
-	expand(0, baseInput())
-	if count == 0 {
-		t.Fatal("declared recovery axes produced no inputs")
-	}
-
-	c2Axes := []axis{
-		{
-			name: "attempt phase",
-			values: []func(Input) Input{
-				noChange,
-				func(input Input) Input {
-					input.Projection.CurrentHeadAttempt.State = runstate.AttemptRunning
-					return input
-				},
-				func(input Input) Input {
-					input.Projection.CurrentHeadAttempt.State = runstate.AttemptVerifying
-					return input
-				},
-				func(input Input) Input {
-					input.Projection.CurrentHeadAttempt.State = runstate.AttemptCompleted
-					return input
-				},
-				func(input Input) Input { return withFailedAttempt(input, false) },
-				func(input Input) Input {
-					input.Projection.CurrentHeadAttempt.State = runstate.AttemptBlocked
-					return input
-				},
-			},
-		},
-		{
-			name:   "probe",
-			values: []func(Input) Input{noChange, withAdapterProbe},
-		},
-		{
-			name:   "failure realization",
-			values: []func(Input) Input{noChange, func(input Input) Input { return withFailedAttempt(input, true) }},
-		},
-		{
-			name:   "question request",
-			values: []func(Input) Input{noChange, func(input Input) Input { return withQuestionRequests(input, false, false) }},
-		},
-		{
-			name:   "blocking decision",
-			values: []func(Input) Input{noChange, func(input Input) Input { return withQuestionRequests(input, true, true) }},
-		},
-		{
-			name: "completion boundary",
-			values: []func(Input) Input{
-				noChange,
-				withChangeSet,
-				withVerificationPassed,
-				withAcceptanceStarted,
-				withMovementSucceeded,
-				withMovementFailed,
-				withFinalGateRejected,
-			},
-		},
-		{
-			name: "external observation",
-			values: []func(Input) Input{
-				noChange,
-				func(input Input) Input { input.Observations.Handoff = HandoffUnverifiable; return input },
-				func(input Input) Input { input.Observations.Handoff = HandoffSweepFailed; return input },
-				func(input Input) Input { input.Observations.AdapterSweep = SweepUnverifiable; return input },
-				func(input Input) Input { input.Observations.Worktree = WorktreeMissing; return input },
-			},
-		},
-		{
-			name: "scope",
-			values: []func(Input) Input{
-				noChange,
-				func(input Input) Input {
-					input.Projection.CurrentHeadAttempt.ScoreRevision = input.Projection.State.ScoreHead.Revision + 1
-					return input
-				},
-				func(input Input) Input {
-					input.Projection.CurrentHeadAttempt.State = runstate.AttemptSuperseded
-					return input
-				},
-			},
-		},
-	}
-
-	count = 0
-	var expandC2 func(int, Input)
-	expandC2 = func(index int, input Input) {
-		if index == len(c2Axes) {
-			count++
-			decision := PlanAttempt(input)
-			if !decision.Valid() {
-				t.Fatalf("invalid C.2 decision for declared input %d: %+v", count, decision)
-			}
-			return
+	for _, caseID := range []CaseID{
+		CaseAcceptanceFailed, CaseCriterionFailed, CaseIncompleteCriterion, CaseCriteriaPassed,
+		CaseRequestHumanGate, CaseHumanGateWaiting, CaseHumanGateApproved, CaseHumanGateRejected,
+		CaseGateFreeCompletion, CaseUnjournaledLaunch, CaseFirstCriterion, CaseNextCriterion,
+	} {
+		if !seen[caseID] {
+			t.Fatalf("C.3 case %s has no direct selection test", caseID)
 		}
-		for _, set := range c2Axes[index].values {
-			expandC2(index+1, set(input))
-		}
-	}
-	expandC2(0, c2Input(runstate.AttemptStarting))
-	if count == 0 {
-		t.Fatal("declared C.2 recovery axes produced no inputs")
 	}
 }
 
+func TestPlanC3PrecedenceAndHalts(t *testing.T) {
+	t.Run("recorded acceptance failure precedes criterion evidence", func(t *testing.T) {
+		input := withCriterion(withAcceptanceFailure(c3Input("c1")), "c1", true, "FAIL")
+		assertDecision(t, PlanAcceptance(input), CaseAcceptanceFailed, ActionRealizeRecordedDisposition, "", false)
+	})
+	t.Run("completed failure precedes an in flight criterion", func(t *testing.T) {
+		input := withSubject(withCriterion(withCriterion(c3Input("c1", "c2"), "c1", true, "ERROR"), "c2", false, ""), SubjectMatched)
+		assertDecision(t, PlanAcceptance(input), CaseCriterionFailed, ActionAppendAcceptanceFailure, "", true)
+	})
+	t.Run("criteria completion precedes unjournaled launch cleanup", func(t *testing.T) {
+		input := withUnjournaledLaunch(withSubject(withCriterion(c3Input("c1"), "c1", true, "PASS"), SubjectMatched), UnjournaledLaunchSessionEmpty)
+		assertDecision(t, PlanAcceptance(input), CaseCriteriaPassed, ActionAppendEvaluationCompleted, "", true)
+	})
+	t.Run("criterion sweep halt is an Appendix D halt", func(t *testing.T) {
+		input := withCriterion(c3Input("c1"), "c1", false, "")
+		input.Observations.CriterionSweep = SweepUnverifiable
+		assertDecision(t, PlanAcceptance(input), CaseIncompleteCriterion, "", HaltSweepUnverifiable, false)
+	})
+	t.Run("unjournaled launch handoff halt is an Appendix D halt", func(t *testing.T) {
+		input := withUnjournaledLaunch(c3Input("c1"), UnjournaledLaunchHandoffUnverifiable)
+		assertDecision(t, PlanAcceptance(input), CaseUnjournaledLaunch, "", HaltSpawnHandoffUnverifiable, false)
+	})
+	t.Run("C2 dispatches a started acceptance to C3", func(t *testing.T) {
+		input := c2Input(runstate.AttemptVerifying)
+		input.Projection.CurrentHeadAttempt.AcceptanceStarted = true
+		got := PlanAttempt(input)
+		assertDecision(t, got, CaseContinue, ActionProceedAcceptance, "", false)
+		if got.Action.Continuation != ContinuationC3 {
+			t.Fatalf("continuation = %q, want %q", got.Action.Continuation, ContinuationC3)
+		}
+	})
+}
+
+func TestPlanC3FullInvariantGate(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input Input
+	}{
+		{name: "first criterion", input: c3Input("c1")},
+		{name: "next criterion", input: withCriterion(c3Input("c1", "c2"), "c1", true, "PASS")},
+		{name: "evaluation", input: withCriterion(c3Input("c1"), "c1", true, "PASS")},
+		{name: "approved completion", input: withRequiredGate(withEvaluationCompleted(c3Input("c1")), true, true, true)},
+		{name: "gate free completion", input: withEvaluationCompleted(c3Input("c1"))},
+	} {
+		t.Run(test.name+" is unreachable without matching observation", func(t *testing.T) {
+			for _, observation := range []SubjectVerification{SubjectUnverified, SubjectMismatched} {
+				input := withSubject(test.input, observation)
+				got := PlanAcceptance(input)
+				if got.Action != nil {
+					switch got.Action.Kind {
+					case ActionResumeCriterion, ActionAppendEvaluationCompleted, ActionAppendAcceptanceSuccess:
+						t.Fatalf("success-claiming action %q reachable with %q observation", got.Action.Kind, observation)
+					}
+				}
+				if observation == SubjectMismatched {
+					assertDecision(t, got, got.CaseID, ActionAppendAcceptanceFailure, "", true)
+					if got.Action.FailureReason != "recovery_subject_mismatch" {
+						t.Fatalf("failure reason = %q, want recovery_subject_mismatch", got.Action.FailureReason)
+					}
+				}
+			}
+		})
+	}
+	t.Run("every synthesized acceptance failure invokes Arm 1 classification", func(t *testing.T) {
+		for _, input := range []Input{
+			withCriterion(c3Input("c1"), "c1", true, "FAIL"),
+			withSubject(withCriterion(c3Input("c1"), "c1", false, ""), SubjectMismatched),
+		} {
+			got := PlanAcceptance(input)
+			if got.Action == nil || got.Action.Kind != ActionAppendAcceptanceFailure || !slices.Contains(got.Action.Steps, StepClassifyAcceptanceFailure) {
+				t.Fatalf("failure action = %+v, want Arm 1 classification before append", got.Action)
+			}
+		}
+	})
+}
 func assertDecision(t *testing.T, got Decision, wantCase CaseID, wantKind ActionKind, wantHalt HaltReason, wantReplan bool) {
 	t.Helper()
 	if got.CaseID != wantCase {
@@ -790,6 +790,75 @@ func c2Input(state runstate.AttemptState) Input {
 		ScoreRevision: input.Projection.State.ScoreHead.Revision,
 		State:         state,
 	}
+	return input
+}
+
+func c3Input(criteria ...runstate.CriterionID) Input {
+	input := c2Input(runstate.AttemptVerifying)
+	attempt := input.Projection.CurrentHeadAttempt
+	attempt.AcceptanceStarted = true
+	input.Projection.State.Acceptances = map[runstate.AttemptID]runstate.Acceptance{
+		attempt.AttemptID: {
+			Started:             true,
+			SubjectTree:         "tree",
+			PlannedCriterionIDs: criteria,
+			Criteria:            map[runstate.CriterionID]runstate.CriterionRecord{},
+		},
+	}
+	input.Projection.Acceptance = &AcceptanceRecovery{}
+	return input
+}
+
+func withAcceptanceFailure(input Input) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	attempt.State = runstate.AttemptFailed
+	disposition := runstate.Disposition{Charged: "quality_retry"}
+	attempt.RecordedDisposition = &disposition
+	input.Projection.Acceptance.Failed = true
+	return input
+}
+
+func withCriterion(input Input, criterionID runstate.CriterionID, completed bool, outcome string) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	acceptance := input.Projection.State.Acceptances[attempt.AttemptID]
+	acceptance.Criteria[criterionID] = runstate.CriterionRecord{
+		Started: true, Completed: completed, Outcome: outcome,
+	}
+	input.Projection.State.Acceptances[attempt.AttemptID] = acceptance
+	return input
+}
+
+func withAdditionalCriterion(input Input, criterionID runstate.CriterionID) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	acceptance := input.Projection.State.Acceptances[attempt.AttemptID]
+	acceptance.PlannedCriterionIDs = append(acceptance.PlannedCriterionIDs, criterionID)
+	input.Projection.State.Acceptances[attempt.AttemptID] = acceptance
+	return input
+}
+
+func withEvaluationCompleted(input Input) Input {
+	attempt := input.Projection.CurrentHeadAttempt
+	acceptance := input.Projection.State.Acceptances[attempt.AttemptID]
+	acceptance.EvaluationCompleted = true
+	input.Projection.State.Acceptances[attempt.AttemptID] = acceptance
+	return input
+}
+
+func withRequiredGate(input Input, requested, resolved, approved bool) Input {
+	input.Projection.Acceptance.Gate = GateRecovery{
+		Required: true, Requested: requested, Resolved: resolved, Approved: approved,
+		DecisionID: "gate-decision", GateID: "gate",
+	}
+	return input
+}
+
+func withSubject(input Input, verification SubjectVerification) Input {
+	input.Observations.AcceptanceSubject = verification
+	return input
+}
+
+func withUnjournaledLaunch(input Input, state UnjournaledLaunchState) Input {
+	input.Observations.UnjournaledLaunch = state
 	return input
 }
 
