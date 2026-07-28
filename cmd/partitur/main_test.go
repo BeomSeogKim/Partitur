@@ -783,6 +783,75 @@ func TestResumeMapsRealStoreHaltsToExitFive(t *testing.T) {
 	}
 }
 
+func TestResumeMapsAuthorityAcquisitionInputHaltsToExitFive(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		invalidate func(*testing.T, string)
+		wantStderr string
+	}{
+		{
+			name: "corrupt journal after initial load",
+			invalidate: func(t *testing.T, root string) {
+				t.Helper()
+				journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+				contents, err := os.ReadFile(journal)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(journal, append(contents, []byte("\n{}\n{}\n")...), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"journal_corrupt\"\n",
+		},
+		{
+			name: "remove pinned snapshot after initial load",
+			invalidate: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-1.yaml")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_snapshot_file\"\n",
+		},
+		{
+			name: "remove resolved cast after initial load",
+			invalidate: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(root, ".partitur", "runs", "run-1", "resolved-cast.yaml")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"missing_resolved_cast\"\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, store := resumeFixture(t, "")
+			loaded := false
+			executor := &recoveryexec.Executor{Store: store, RunID: "run-1"}
+			executor.Load = func(context.Context) (recovery.Input, error) {
+				durable, err := store.LoadRecoveryInput("run-1")
+				if err != nil {
+					return recovery.Input{}, err
+				}
+				if !loaded {
+					loaded = true
+					test.invalidate(t, root)
+				}
+				return recovery.Input{Projection: durable.Projection}, nil
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := runResume("run-1", &stdout, &stderr, func(ctx context.Context, _ string) (recoveryexec.Result, error) {
+				return executor.Execute(ctx)
+			})
+			if code != 5 || stdout.Len() != 0 || stderr.String() != test.wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestResumeTerminalCleanupRemovesEveryC1Residue(t *testing.T) {
 	root, store := resumeFixture(t, "")
 	driver, err := store.AcquireRecoveryDriver("run-1")

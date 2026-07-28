@@ -120,6 +120,11 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		action := *decision.Action
 		if action.Kind == recovery.ActionReclaimAuthority || (actionRequiresDriver(action) && executor.Driver == nil) {
 			if err := executor.acquireAuthority(); err != nil {
+				if halted, ok := haltDecision(decision, err); ok {
+					result.Decision = halted
+					result.Outcome = OutcomeHalted
+					return result, nil
+				}
 				return result, err
 			}
 			refreshed, halted, err := executor.loadInput(ctx, decision, "reload recovery input after authority acquisition")
