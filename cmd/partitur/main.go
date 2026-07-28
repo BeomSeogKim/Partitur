@@ -15,8 +15,13 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/recoveryexec"
+	"github.com/BeomSeogKim/Partitur/internal/recoveryobs"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 	validation "github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
@@ -35,6 +40,16 @@ type runDriver func(
 ) driver.Result
 
 type statusReader func(string) (statusprojection.Report, error)
+type resumeRunner func(context.Context, string) (recoveryexec.Result, error)
+
+type resumeSelectionError struct {
+	err error
+}
+
+func (err resumeSelectionError) Error() string { return err.err.Error() }
+
+func (err resumeSelectionError) Unwrap() error { return err.err }
+
 type logsReader func(string) (logstream.Snapshot, error)
 type logsStreamer func(
 	context.Context,
@@ -166,6 +181,9 @@ func runWithReaders(
 		}
 		return 0
 	}
+	if requestedID, ok := parseResumeArgs(args); ok {
+		return runResume(requestedID, stdout, stderr, resume)
+	}
 	if len(args) == 1 && args[0] == "run" {
 		preparation, preparationResult := prepare()
 		if preparationResult.Refusal != nil {
@@ -224,7 +242,92 @@ func runWithReaders(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate, run, status, logs")
+	fmt.Fprintln(w, "commands: version, validate, run, resume, status, logs")
+}
+
+func parseResumeArgs(args []string) (string, bool) {
+	if len(args) == 1 && args[0] == "resume" {
+		return "", true
+	}
+	if len(args) == 2 && args[0] == "resume" && args[1] != "" && !strings.HasPrefix(args[1], "-") {
+		return args[1], true
+	}
+	return "", false
+}
+
+func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner) int {
+	if resume == nil {
+		fmt.Fprintln(stderr, "run interrupted: run_id=\"\" state=\"nonterminal\" resume=\"partitur resume\" detail=\"resume unavailable\"")
+		return 6
+	}
+	result, err := resume(context.Background(), requestedID)
+	if err != nil {
+		var selectionErr resumeSelectionError
+		if errors.As(err, &selectionErr) {
+			code := statusErrorCode(err)
+			renderStatusError(stderr, err)
+			return code
+		}
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, err.Error())
+		return 6
+	}
+	switch result.Outcome {
+	case recoveryexec.OutcomeSucceeded, recoveryexec.OutcomeQuiescent:
+		return 0
+	case recoveryexec.OutcomeFailed, recoveryexec.OutcomeCancelled:
+		return 4
+	case recoveryexec.OutcomeRefused:
+		fmt.Fprintln(stderr, "precondition refused: detail=\"driver authority is already held\"")
+		return 2
+	case recoveryexec.OutcomeHalted:
+		if !recovery.IsHaltReason(result.Decision.Halt) {
+			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced an unknown halt reason")
+			return 6
+		}
+		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", requestedID, result.Decision.Halt)
+		return 5
+	default:
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced no command outcome")
+		return 6
+	}
+}
+
+func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
+	}
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		return recoveryexec.Result{}, err
+	}
+	runID := runstate.RunID(requestedID)
+	if requestedID == "" {
+		report, err := statusprojection.Read(root, requestedID)
+		if err != nil {
+			return recoveryexec.Result{}, resumeSelectionError{err: err}
+		}
+		runID = runstate.RunID(report.Run.ID)
+	}
+	executor := &recoveryexec.Executor{Store: store, RunID: runID}
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		durable, err := store.LoadRecoveryInput(runID)
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		observations, err := recoveryobs.Collect(store, runID, durable.Projection)
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		return recovery.Input{Projection: durable.Projection, Observations: observations}, nil
+	}
+	result, err := executor.Execute(ctx)
+	if executor.Driver != nil && result.Outcome != recoveryexec.OutcomeHalted {
+		if releaseErr := executor.Driver.Release(); err == nil && releaseErr != nil {
+			err = releaseErr
+		}
+	}
+	return result, err
 }
 
 func readStatus(requestedID string) (statusprojection.Report, error) {
@@ -304,8 +407,10 @@ func statusErrorCode(err error) int {
 		errors.Is(err, statusprojection.ErrRequiredInput),
 		errors.Is(err, errOutputStream):
 		return 2
-	default:
+	case errors.Is(err, runstore.ErrJournalCorrupt):
 		return 5
+	default:
+		return 6
 	}
 }
 

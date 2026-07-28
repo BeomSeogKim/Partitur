@@ -22,6 +22,16 @@ type RecoveryInput struct {
 	Cast       *cast.Cast
 }
 
+// AcquireRecoveryDriver establishes authority from the selected run's pinned
+// score, never from current repository inputs.
+func (store *Store) AcquireRecoveryDriver(runID runstate.RunID) (*Driver, error) {
+	input, err := store.LoadRecoveryInput(runID)
+	if err != nil {
+		return nil, err
+	}
+	return store.AcquireDriver(runID, movementSeed(input.Score))
+}
+
 // LoadRecoveryInput reads only the selected run's journal and authoritative
 // run-owned inputs. It never reads or recompiles the repository root score or
 // current cast layers.
@@ -71,21 +81,21 @@ func (store *Store) loadPinnedScore(runID runstate.RunID, revision uint64, paylo
 	path := filepath.Join(store.root, ".partitur", "runs", string(runID), "scores", fmt.Sprintf("revision-%d.yaml", revision))
 	contents, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read pinned score revision %d: %w", revision, err)
+		return nil, fmt.Errorf("%w: read pinned score revision %d: %v", ErrMissingPinnedSnapshot, revision, err)
 	}
 	if rawHash(contents) != stringValue(payload, "score_file_hash") {
-		return nil, errors.New("pinned score file hash does not match journal")
+		return nil, fmt.Errorf("%w: pinned score file hash does not match journal", ErrMissingPinnedSnapshot)
 	}
 	compiled, diagnostics := score.Compile(contents)
 	if len(diagnostics) != 0 {
-		return nil, fmt.Errorf("compile pinned score revision %d: %v", revision, diagnostics)
+		return nil, fmt.Errorf("%w: compile pinned score revision %d: %v", ErrMissingPinnedSnapshot, revision, diagnostics)
 	}
 	semanticHash, err := compiled.Hash()
 	if err != nil {
 		return nil, err
 	}
 	if semanticHash != stringValue(payload, "score_hash") {
-		return nil, errors.New("pinned score semantic hash does not match journal")
+		return nil, fmt.Errorf("%w: pinned score semantic hash does not match journal", ErrMissingPinnedSnapshot)
 	}
 	return compiled, nil
 }
@@ -94,18 +104,18 @@ func (store *Store) loadResolvedCast(runID runstate.RunID, payload map[string]an
 	path := filepath.Join(store.root, ".partitur", "runs", string(runID), "resolved-cast.yaml")
 	contents, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read resolved cast: %w", err)
+		return nil, fmt.Errorf("%w: read resolved cast: %v", ErrMissingResolvedCast, err)
 	}
 	resolved, diagnostics := cast.Resolve([]cast.Layer{{Origin: "run-owned resolved cast", Data: contents}})
 	if len(diagnostics) != 0 {
-		return nil, fmt.Errorf("parse resolved cast: %v", diagnostics)
+		return nil, fmt.Errorf("%w: parse resolved cast: %v", ErrMissingResolvedCast, diagnostics)
 	}
 	hash, err := resolved.Hash()
 	if err != nil {
 		return nil, err
 	}
 	if hash != stringValue(payload, "resolved_cast_hash") {
-		return nil, errors.New("resolved cast hash does not match journal")
+		return nil, fmt.Errorf("%w: resolved cast hash does not match journal", ErrMissingResolvedCast)
 	}
 	return resolved, nil
 }

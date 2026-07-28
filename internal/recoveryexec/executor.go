@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
 
@@ -34,6 +36,7 @@ type LoadInput func(context.Context) (recovery.Input, error)
 type HandlerContext struct {
 	Store  *runstore.Store
 	Driver *runstore.Driver
+	RunID  runstate.RunID
 	Input  recovery.Input
 }
 
@@ -51,6 +54,7 @@ type StepHandler func(context.Context, HandlerContext, recovery.Action) error
 type Executor struct {
 	Driver *runstore.Driver
 	Store  *runstore.Store
+	RunID  runstate.RunID
 	Load   LoadInput
 
 	// Steps is a test seam. A nil map selects the package's default handlers;
@@ -62,9 +66,23 @@ type Executor struct {
 	authorize func(*runstore.Driver) error
 }
 
+// Outcome is recovery's command-visible result. The command translates it to
+// an exit code without inspecting planner actions or run state.
+type Outcome string
+
+const (
+	OutcomeSucceeded Outcome = "SUCCEEDED"
+	OutcomeFailed    Outcome = "FAILED"
+	OutcomeCancelled Outcome = "CANCELLED"
+	OutcomeQuiescent Outcome = "QUIESCENT"
+	OutcomeRefused   Outcome = "REFUSED"
+	OutcomeHalted    Outcome = "HALTED"
+)
+
 // Result reports the final selected decision and the effects actually run.
 type Result struct {
 	Decision recovery.Decision
+	Outcome  Outcome
 	Steps    []recovery.ActionStep
 	Kinds    []recovery.ActionKind
 	Replans  int
@@ -76,12 +94,14 @@ func (executor *Executor) Execute(ctx context.Context) (Result, error) {
 	if executor == nil || executor.Load == nil {
 		return Result{}, ErrIncompleteExecutor
 	}
-	input, err := executor.Load(ctx)
+	input, halted, err := executor.loadInput(ctx, recovery.Decision{}, "load recovery input")
 	if err != nil {
-		return Result{}, fmt.Errorf("load recovery input: %w", err)
+		return Result{}, err
 	}
-	decision := recovery.Plan(input)
-	return executor.execute(ctx, input, decision)
+	if halted.Halt != "" {
+		return Result{Decision: halted, Outcome: OutcomeHalted}, nil
+	}
+	return executor.execute(ctx, input, recovery.Plan(input))
 }
 
 func (executor *Executor) execute(ctx context.Context, input recovery.Input, decision recovery.Decision) (Result, error) {
@@ -93,16 +113,43 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		result.Decision = decision
 		if decision.Halt != "" {
 			// Appendix B.7: a halt is intentionally not a journal event.
+			result.Outcome = OutcomeHalted
 			return result, nil
 		}
 
 		action := *decision.Action
+		if action.Kind == recovery.ActionReclaimAuthority || (actionRequiresDriver(action) && executor.Driver == nil) {
+			if err := executor.acquireAuthority(); err != nil {
+				if halted, ok := haltDecision(decision, err); ok {
+					result.Decision = halted
+					result.Outcome = OutcomeHalted
+					return result, nil
+				}
+				return result, err
+			}
+			refreshed, halted, err := executor.loadInput(ctx, decision, "reload recovery input after authority acquisition")
+			if err != nil {
+				return result, err
+			}
+			if halted.Halt != "" {
+				result.Decision = halted
+				result.Outcome = OutcomeHalted
+				return result, nil
+			}
+			input = refreshed
+			input.Observations.Lease.Owner = recovery.OwnerCurrentDriver
+			decision = recovery.Plan(input)
+			result.Replans++
+			continue
+		}
 		if isContinuation(action) {
 			decision = continuePlan(input, action.Continuation)
 			continue
 		}
-		if err := executor.authorizeDriver(); err != nil {
-			return result, err
+		if actionRequiresDriver(action) {
+			if err := executor.authorizeDriver(); err != nil {
+				return result, err
+			}
 		}
 		if len(action.Steps) != 0 {
 			for _, step := range action.Steps {
@@ -110,25 +157,31 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				if !ok || handler == nil {
 					return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
 				}
-				handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
+				handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
 				if err := handler(ctx, handlerContext, action); err != nil {
 					if halted, ok := haltDecision(decision, err); ok {
 						result.Decision = halted
+						result.Outcome = OutcomeHalted
 						return result, nil
 					}
 					return result, fmt.Errorf("execute recovery step %s: %w", step, err)
 				}
 				result.Steps = append(result.Steps, step)
 				if stepRefreshesInput(step) {
-					refreshed, err := executor.refreshInput(ctx, input)
+					refreshed, halted, err := executor.refreshInput(ctx, input, decision)
 					if err != nil {
 						return result, err
+					}
+					if halted.Halt != "" {
+						result.Decision = halted
+						result.Outcome = OutcomeHalted
+						return result, nil
 					}
 					input = refreshed
 				}
 			}
 		} else {
-			handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
+			handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
 			handler, ok := executor.kindHandler(action.Kind)
 			if !ok {
 				return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
@@ -136,6 +189,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			if err := handler(ctx, handlerContext, action); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
 					result.Decision = halted
+					result.Outcome = OutcomeHalted
 					return result, nil
 				}
 				return result, fmt.Errorf("execute recovery action %s: %w", action.Kind, err)
@@ -143,15 +197,70 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			result.Kinds = append(result.Kinds, action.Kind)
 		}
 		if !action.Replan {
+			result.Outcome = outcomeFor(action, input)
 			return result, nil
 		}
-		input, err := executor.Load(ctx)
+		input, halted, err := executor.loadInput(ctx, decision, "reload recovery input")
 		if err != nil {
-			return result, fmt.Errorf("reload recovery input: %w", err)
+			return result, err
+		}
+		if halted.Halt != "" {
+			result.Decision = halted
+			result.Outcome = OutcomeHalted
+			return result, nil
 		}
 		result.Replans++
 		decision = recovery.Plan(input)
 	}
+}
+
+func (executor *Executor) acquireAuthority() error {
+	if executor.Driver != nil {
+		return nil
+	}
+	if executor.Store == nil || executor.RunID == "" {
+		return ErrAuthorityRequired
+	}
+	driver, err := executor.Store.AcquireRecoveryDriver(executor.RunID)
+	if err != nil {
+		return fmt.Errorf("acquire recovery authority: %w", err)
+	}
+	executor.Driver = driver
+	return nil
+}
+
+func actionRequiresDriver(action recovery.Action) bool {
+	switch action.Kind {
+	case recovery.ActionTerminalCleanup,
+		recovery.ActionRemoveStaleLease,
+		recovery.ActionQuarantineOrphanLease,
+		recovery.ActionRefuseResume,
+		recovery.ActionReturnWaitingHuman,
+		recovery.ActionExecuteCancellation,
+		recovery.ActionCompleteOrAbandonPrepare:
+		return false
+	default:
+		return true
+	}
+}
+
+func outcomeFor(action recovery.Action, input recovery.Input) Outcome {
+	switch action.Kind {
+	case recovery.ActionRefuseResume:
+		return OutcomeRefused
+	case recovery.ActionReturnWaitingHuman:
+		return OutcomeQuiescent
+	case recovery.ActionTerminalCleanup:
+		switch input.Projection.State.Run {
+		case runstate.RunSucceeded:
+			return OutcomeSucceeded
+		case runstate.RunFailed:
+			return OutcomeFailed
+		case runstate.RunCancelled:
+			return OutcomeCancelled
+		}
+	}
+	return ""
 }
 
 // stepRefreshesInput marks a boundary after which the next step must use a
@@ -162,15 +271,22 @@ func stepRefreshesInput(step recovery.ActionStep) bool {
 	return step == recovery.StepCloseAdapterInterval || step == recovery.StepSweepCriterionSession
 }
 
-func (executor *Executor) refreshInput(ctx context.Context, previous recovery.Input) (recovery.Input, error) {
-	if executor.Load == nil {
-		return previous, nil
-	}
+func (executor *Executor) loadInput(ctx context.Context, decision recovery.Decision, description string) (recovery.Input, recovery.Decision, error) {
 	input, err := executor.Load(ctx)
 	if err != nil {
-		return recovery.Input{}, fmt.Errorf("reload recovery input after ordered step: %w", err)
+		if halted, ok := haltDecision(decision, err); ok {
+			return recovery.Input{}, halted, nil
+		}
+		return recovery.Input{}, recovery.Decision{}, fmt.Errorf("%s: %w", description, err)
 	}
-	return input, nil
+	return input, recovery.Decision{}, nil
+}
+
+func (executor *Executor) refreshInput(ctx context.Context, previous recovery.Input, decision recovery.Decision) (recovery.Input, recovery.Decision, error) {
+	if executor.Load == nil {
+		return previous, recovery.Decision{}, nil
+	}
+	return executor.loadInput(ctx, decision, "reload recovery input after ordered step")
 }
 
 func isContinuation(action recovery.Action) bool {
@@ -228,10 +344,20 @@ func (executor *Executor) kindHandler(kind recovery.ActionKind) (StepHandler, bo
 
 func haltDecision(decision recovery.Decision, err error) (recovery.Decision, bool) {
 	switch {
+	case errors.Is(err, runstore.ErrJournalIdempotencyConflict):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltJournalIdempotencyConflict}, true
+	case errors.Is(err, canonical.ErrUnsupportedRunFormat):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltUnsupportedRunFormat}, true
+	case errors.Is(err, runstore.ErrMissingPinnedSnapshot):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingSnapshotFile}, true
+	case errors.Is(err, runstore.ErrMissingResolvedCast):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingResolvedCast}, true
 	case errors.Is(err, ErrSweepUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSweepUnverifiable}, true
 	case errors.Is(err, ErrHandoffUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSpawnHandoffUnverifiable}, true
+	case errors.Is(err, runstore.ErrJournalCorrupt):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltJournalCorrupt}, true
 	default:
 		return recovery.Decision{}, false
 	}

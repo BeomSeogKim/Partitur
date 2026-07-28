@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
@@ -16,6 +18,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/successor"
 )
 
@@ -40,6 +43,9 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 
 func defaultKinds() map[recovery.ActionKind]StepHandler {
 	return map[recovery.ActionKind]StepHandler{
+		recovery.ActionTerminalCleanup:            terminalCleanup,
+		recovery.ActionRemoveStaleLease:           removeStaleLease,
+		recovery.ActionQuarantineOrphanLease:      quarantineOrphanLease,
 		recovery.ActionAppendMovementSucceeded:    appendMovementSucceeded,
 		recovery.ActionAppendRunFailed:            appendRunFailed,
 		recovery.ActionAppendBudgetFailure:        appendMovementBudgetFailure,
@@ -47,7 +53,111 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRefuseResume:               refuseResume,
 		recovery.ActionStabilizeUnjournaledLaunch: stabilizeUnjournaledLaunch,
 		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
+		recovery.ActionExecuteCancellation:        unreachableActionOwnedBy("2.1"),
+		recovery.ActionCompleteOrAbandonPrepare:   unreachableActionOwnedBy("4.2"),
 	}
+}
+
+func unreachableActionOwnedBy(unit string) StepHandler {
+	return func(_ context.Context, _ HandlerContext, action recovery.Action) error {
+		return fmt.Errorf("%w: %s is owned by unit %s", ErrUnreachableAction, action.Kind, unit)
+	}
+}
+
+func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for terminal cleanup")
+	}
+	residues, err := terminalCleanupResidues(execution.Store.RepositoryRoot(), execution.RunID)
+	if err != nil {
+		return err
+	}
+	if err := execution.Store.Mutate(execution.RunID, "", func(transaction *runstore.Txn) error {
+		lease, present, err := transaction.ReadLease()
+		if err != nil {
+			return err
+		}
+		if present {
+			if _, err := transaction.At("recovery.terminal_cleanup/lease").CompareRemoveLease(lease.Identity()); err != nil {
+				return err
+			}
+		}
+		for _, residue := range residues {
+			if _, err := transaction.At("recovery.terminal_cleanup/" + faultpoint.ReceiptAddress(residue)).RemoveDurable(runstore.Path(residue)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID)))
+}
+
+func terminalCleanupResidues(root string, runID runstate.RunID) ([]string, error) {
+	runRoot := filepath.Join(root, ".partitur", "runs", string(runID))
+	entries, err := os.ReadDir(runRoot)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read terminal cleanup run root: %w", err)
+	}
+	residues := make([]string, 0)
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), "driver.quiesced.") && entry.Name() != "driver.quiesced." {
+			residues = append(residues, entry.Name())
+		}
+	}
+	prepares := filepath.Join(runRoot, "prepares")
+	entries, err = os.ReadDir(prepares)
+	if errors.Is(err, fs.ErrNotExist) {
+		return residues, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read terminal cleanup prepares: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".json") {
+			residues = append(residues, filepath.ToSlash(filepath.Join("prepares", entry.Name())))
+		}
+	}
+	slices.Sort(residues)
+	return residues, nil
+}
+
+func removeStaleLease(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for stale lease removal")
+	}
+	return execution.Store.Mutate(execution.RunID, "", func(transaction *runstore.Txn) error {
+		lease, present, err := transaction.ReadLease()
+		if err != nil || !present {
+			return err
+		}
+		if lease.Epoch >= execution.Input.Projection.State.Authority.Epoch {
+			return runstore.ErrLeaseConflict
+		}
+		_, err = transaction.At("recovery.remove_stale_lease").CompareRemoveLease(lease.Identity())
+		return err
+	})
+}
+
+func quarantineOrphanLease(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for orphan lease quarantine")
+	}
+	return execution.Store.Mutate(execution.RunID, "", func(transaction *runstore.Txn) error {
+		lease, present, err := transaction.ReadLease()
+		if err != nil || !present {
+			return err
+		}
+		if lease.Epoch <= execution.Input.Projection.State.Authority.Epoch {
+			return runstore.ErrLeaseConflict
+		}
+		_, err = transaction.At("recovery.quarantine_orphan_lease").QuarantineAs("orphan_lease").Quarantine("driver.lease")
+		return err
+	})
 }
 
 func stabilizeHandoff(ctx context.Context, execution HandlerContext, action recovery.Action) error {
