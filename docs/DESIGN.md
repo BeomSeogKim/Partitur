@@ -2934,8 +2934,11 @@ correlation handle, not a second state or event stream.
 **`partitur resume` observable surface.** After run selection under the generic `[<run-id>]` rule
 above, `resume` takes its historical authority from the selected run's journal and the run-owned
 durable inputs and records that §1, §4, §6, and Appendix C require for its projected state. It does
-not recompile the current root `partitur.yaml`, repeat cast layering from current project,
-user-global, or factory inputs, or infer missing historical decisions from current configuration.
+not recompile the current root `partitur.yaml` as recovery input, repeat cast layering from current
+project, user-global, or factory inputs, or infer missing historical decisions from current
+configuration. §1's `root_snapshot_divergence` observation is the sole exception: `resume` reads and
+hashes the current root only to establish that halt condition, and discards the result rather than
+admitting it as recovery input.
 If Appendix C authorizes new execution, the existing attempt-time adapter resolution and probe rules
 still apply; they do not replace the persisted score revision or resolved cast.
 
