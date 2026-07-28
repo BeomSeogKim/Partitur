@@ -10,16 +10,17 @@ import (
 	"fmt"
 
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
-	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
 
 var (
-	ErrIncompleteExecutor = errors.New("recovery executor is incomplete")
-	ErrAuthorityRequired  = errors.New("recovery executor requires established driver authority")
-	ErrInvalidDecision    = errors.New("recovery executor received invalid decision")
-	ErrUnreachableAction  = errors.New("recovery action is unreachable in this slice")
-	ErrUnreachableStep    = errors.New("recovery action step is unreachable in this slice")
+	ErrIncompleteExecutor  = errors.New("recovery executor is incomplete")
+	ErrAuthorityRequired   = errors.New("recovery executor requires established driver authority")
+	ErrInvalidDecision     = errors.New("recovery executor received invalid decision")
+	ErrUnreachableAction   = errors.New("recovery action is unreachable in this slice")
+	ErrUnreachableStep     = errors.New("recovery action step is unreachable in this slice")
+	ErrSweepUnverifiable   = errors.New("recovery session sweep is unverifiable")
+	ErrHandoffUnverifiable = errors.New("recovery spawn handoff is unverifiable")
 )
 
 // LoadInput returns a fresh, fully observed recovery input. It is called again
@@ -27,10 +28,19 @@ var (
 // iteration policy of its own.
 type LoadInput func(context.Context) (recovery.Input, error)
 
+// HandlerContext gives one effect handler the selected action's run-owned
+// inputs and the authority it must use for durable mutation. It deliberately
+// contains no live judgement callback: classification facts come from Input.
+type HandlerContext struct {
+	Store  *runstore.Store
+	Driver *runstore.Driver
+	Input  recovery.Input
+}
+
 // StepHandler performs one planner-selected, order-sensitive recovery step.
-// A handler that mutates durable state must use Driver for that mutation; its
-// Append and Mutate methods repeat the authority fence under the state lock.
-type StepHandler func(context.Context, *runstore.Driver, recovery.Action) error
+// A handler that mutates durable state must use Context.Driver for that
+// mutation; Append and Mutate recheck authority under the state lock.
+type StepHandler func(context.Context, HandlerContext, recovery.Action) error
 
 // Executor runs the step sequence exactly as supplied by the planner.
 //
@@ -40,11 +50,15 @@ type StepHandler func(context.Context, *runstore.Driver, recovery.Action) error
 // Planning and halts need no driver and never invoke an effect handler.
 type Executor struct {
 	Driver *runstore.Driver
+	Store  *runstore.Store
 	Load   LoadInput
-	Steps  map[recovery.ActionStep]StepHandler
 
-	// authorize exists so tests can prove every effect path is fenced. Production
-	// uses Driver.Mutate, which rechecks the complete lease/epoch identity tuple.
+	// Steps is a test seam. A nil map selects the package's default handlers;
+	// a non-nil map is intentionally exact so tests can expose missing steps.
+	Steps map[recovery.ActionStep]StepHandler
+
+	// authorize exists so tests can prove every effect path is fenced. It is not
+	// an authority preflight: real handlers fence their own Append/Mutate call.
 	authorize func(*runstore.Driver) error
 }
 
@@ -52,6 +66,7 @@ type Executor struct {
 type Result struct {
 	Decision recovery.Decision
 	Steps    []recovery.ActionStep
+	Kinds    []recovery.ActionKind
 	Replans  int
 }
 
@@ -86,21 +101,38 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			decision = continuePlan(input, action.Continuation)
 			continue
 		}
-		if len(action.Steps) == 0 {
-			return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
-		}
 		if err := executor.authorizeDriver(); err != nil {
 			return result, err
 		}
-		for _, step := range action.Steps {
-			handler, ok := executor.Steps[step]
-			if !ok || handler == nil {
-				return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
+		handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, Input: input}
+		if len(action.Steps) != 0 {
+			for _, step := range action.Steps {
+				handler, ok := executor.stepHandler(step)
+				if !ok || handler == nil {
+					return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
+				}
+				if err := handler(ctx, handlerContext, action); err != nil {
+					if halted, ok := haltDecision(decision, err); ok {
+						result.Decision = halted
+						return result, nil
+					}
+					return result, fmt.Errorf("execute recovery step %s: %w", step, err)
+				}
+				result.Steps = append(result.Steps, step)
 			}
-			if err := handler(ctx, executor.Driver, action); err != nil {
-				return result, fmt.Errorf("execute recovery step %s: %w", step, err)
+		} else {
+			handler, ok := executor.kindHandler(action.Kind)
+			if !ok {
+				return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
 			}
-			result.Steps = append(result.Steps, step)
+			if err := handler(ctx, handlerContext, action); err != nil {
+				if halted, ok := haltDecision(decision, err); ok {
+					result.Decision = halted
+					return result, nil
+				}
+				return result, fmt.Errorf("execute recovery action %s: %w", action.Kind, err)
+			}
+			result.Kinds = append(result.Kinds, action.Kind)
 		}
 		if !action.Replan {
 			return result, nil
@@ -150,8 +182,30 @@ func (executor *Executor) authorizeDriver() error {
 		}
 		return nil
 	}
-	if err := executor.Driver.Mutate(func(*runstore.Txn, runstate.State) error { return nil }); err != nil {
-		return fmt.Errorf("authorize recovery effect: %w", err)
-	}
 	return nil
+}
+
+func (executor *Executor) stepHandler(step recovery.ActionStep) (StepHandler, bool) {
+	if executor.Steps != nil {
+		handler, ok := executor.Steps[step]
+		return handler, ok
+	}
+	handler, ok := defaultSteps()[step]
+	return handler, ok
+}
+
+func (executor *Executor) kindHandler(kind recovery.ActionKind) (StepHandler, bool) {
+	handler, ok := defaultKinds()[kind]
+	return handler, ok
+}
+
+func haltDecision(decision recovery.Decision, err error) (recovery.Decision, bool) {
+	switch {
+	case errors.Is(err, ErrSweepUnverifiable):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSweepUnverifiable}, true
+	case errors.Is(err, ErrHandoffUnverifiable):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSpawnHandoffUnverifiable}, true
+	default:
+		return recovery.Decision{}, false
+	}
 }

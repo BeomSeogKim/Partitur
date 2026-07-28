@@ -195,6 +195,24 @@ type AttemptRecovery struct {
 	MovementSucceeded          bool
 	MovementFailed             bool
 	FinalGateRejected          bool
+
+	// FailureClassification is the run-owned Arm 1 input for a new failure on
+	// this attempt. It is assembled during journal replay from the pinned score
+	// and cast; the planner and executor never rediscover it from live state.
+	FailureClassification FailureClassification
+}
+
+// FailureClassification is the complete, durable-input view required by
+// successor.Classify for one current-head attempt. Fallbacks and retry policy
+// come from the run-owned score/cast snapshots; performer history comes from
+// performer.selected journal events.
+type FailureClassification struct {
+	CurrentPerformer   string
+	VisitedPerformers  []string
+	Fallbacks          []string
+	RetriesConsumed    int
+	RetriesPerMovement int
+	RemainingTimeMS    int64
 }
 
 // HandoffState and SweepState are caller-supplied observations. The planner

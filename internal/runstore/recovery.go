@@ -61,7 +61,7 @@ func (store *Store) LoadRecoveryInput(runID runstate.RunID) (RecoveryInput, erro
 	}
 
 	return RecoveryInput{
-		Projection: recoveryProjection(replay.State, journal.Events, currentScore),
+		Projection: recoveryProjection(replay.State, journal.Events, currentScore, resolvedCast),
 		Score:      currentScore,
 		Cast:       resolvedCast,
 	}, nil
@@ -110,7 +110,7 @@ func (store *Store) loadResolvedCast(runID runstate.RunID, payload map[string]an
 	return resolved, nil
 }
 
-func recoveryProjection(state runstate.State, events []runstate.Event, pinned *score.Score) recovery.Projection {
+func recoveryProjection(state runstate.State, events []runstate.Event, pinned *score.Score, resolved *cast.Cast) recovery.Projection {
 	facts := replayFacts(events)
 	projection := recovery.Projection{
 		State:                state,
@@ -123,6 +123,7 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 	if current == nil {
 		return projection
 	}
+	current.FailureClassification = facts.failureClassification(*current, pinned, resolved, projection.Scheduler)
 	projection.CurrentHeadAttempt = current
 	if acceptance, ok := state.Acceptances[current.AttemptID]; ok && acceptance.Started {
 		projection.Acceptance = facts.acceptance(current.AttemptID, current.MovementID, pinned)
@@ -179,6 +180,9 @@ type replayFact struct {
 	approvals         []revisionApproval
 	compositionCloses map[string]bool
 	compositionEvents []recovery.CompositionTerminal
+	performers        map[runstate.AttemptID]string
+	visitedPerformers map[runstate.MovementID][]string
+	retriesConsumed   map[runstate.MovementID]int
 }
 
 type revisionApproval struct {
@@ -194,6 +198,9 @@ func replayFacts(events []runstate.Event) replayFact {
 		sequence:          make(map[runstate.AttemptID]uint64),
 		failed:            make(map[runstate.AttemptID]bool),
 		compositionCloses: make(map[string]bool),
+		performers:        make(map[runstate.AttemptID]string),
+		visitedPerformers: make(map[runstate.MovementID][]string),
+		retriesConsumed:   make(map[runstate.MovementID]int),
 	}
 	type questionRef struct {
 		attemptID runstate.AttemptID
@@ -210,6 +217,9 @@ func replayFacts(events []runstate.Event) replayFact {
 		case runstate.EventPerformerSelected:
 			facts.attempts[event.AttemptID] = &recovery.AttemptRecovery{AttemptID: event.AttemptID, MovementID: event.MovementID, ScoreRevision: event.ScoreRevision}
 			facts.sequence[event.AttemptID] = event.Seq
+			performer := stringValue(payload, "performer_id")
+			facts.performers[event.AttemptID] = performer
+			facts.visitedPerformers[event.MovementID] = append(facts.visitedPerformers[event.MovementID], performer)
 		case runstate.EventAttemptBlocked:
 			attempt := facts.attempts[event.AttemptID]
 			if attempt == nil {
@@ -267,6 +277,9 @@ func replayFacts(events []runstate.Event) replayFact {
 					facts.failed[event.AttemptID] = true
 				}
 			}
+			if stringValue(objectValue(payload, "disposition"), "charged") == "quality_retry" {
+				facts.retriesConsumed[event.MovementID]++
+			}
 		case runstate.EventAmendmentApproved:
 			approval := revisionApproval{
 				Revision:     uintValue(payload, "new_revision"),
@@ -300,6 +313,34 @@ func replayFacts(events []runstate.Event) replayFact {
 		}
 	}
 	return facts
+}
+
+func (facts replayFact) failureClassification(
+	attempt recovery.AttemptRecovery,
+	pinned *score.Score,
+	resolved *cast.Cast,
+	scheduler recovery.Scheduler,
+) recovery.FailureClassification {
+	result := recovery.FailureClassification{
+		CurrentPerformer:  facts.performers[attempt.AttemptID],
+		VisitedPerformers: append([]string(nil), facts.visitedPerformers[attempt.MovementID]...),
+		RetriesConsumed:   facts.retriesConsumed[attempt.MovementID],
+		RemainingTimeMS:   scheduler.RemainingTime,
+	}
+	if pinned == nil || resolved == nil {
+		return result
+	}
+	result.RetriesPerMovement = int(pinned.EffectivePolicy().RetriesPerMovement)
+	for _, movement := range pinned.Movements() {
+		if runstate.MovementID(movement.ID) != attempt.MovementID {
+			continue
+		}
+		if binding, ok := resolved.Binding(movement.PartID); ok {
+			result.Fallbacks = append([]string(nil), binding.Fallbacks...)
+		}
+		break
+	}
+	return result
 }
 
 func (facts replayFact) revisionRestarts(state runstate.State) []recovery.RevisionRestart {
