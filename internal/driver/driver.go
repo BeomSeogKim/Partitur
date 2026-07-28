@@ -19,6 +19,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
+	"github.com/BeomSeogKim/Partitur/internal/successor"
 	"github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
@@ -218,6 +219,10 @@ func ExecuteAttempt(
 	}
 	result = Result{RunID: execution.RunID}
 	policy := execution.Score.EffectivePolicy()
+	binding, ok := execution.Cast.Binding(movement.PartID)
+	if !ok {
+		return interrupted(result, errors.New("driver: selected movement has no binding"))
+	}
 	base := runstate.Event{
 		RunID:         startResult.RunID,
 		ScoreRevision: execution.Score.Revision(),
@@ -377,6 +382,28 @@ func ExecuteAttempt(
 		}, "attempt.started")
 	}
 	var observationErr error
+	adapterChargedMS := int64(0)
+	classifyFailure := func(failure successor.FailureCase, remainingMS int64) (runstate.Disposition, error) {
+		visited := make(map[string]bool, len(execution.VisitedPerformers)+1)
+		for _, performerID := range execution.VisitedPerformers {
+			visited[performerID] = true
+		}
+		visited[performer.ID] = true
+		hasUnvisitedFallback := false
+		for _, fallback := range binding.Fallbacks {
+			if !visited[fallback] {
+				hasUnvisitedFallback = true
+				break
+			}
+		}
+		return successor.Classify(successor.ClassificationInput{
+			Failure:              failure,
+			HasUnvisitedFallback: hasUnvisitedFallback,
+			RetriesConsumed:      execution.RetriesConsumed,
+			RetriesPerMovement:   int(policy.RetriesPerMovement),
+			RemainingTimeMS:      remainingMS,
+		})
+	}
 	logCount := 0
 	progressCount := 0
 	recorder := adapter.ExecuteRecorder{
@@ -409,12 +436,16 @@ func ExecuteAttempt(
 			if observationErr != nil {
 				return faultpoint.DurabilityReceipt{}, observationErr
 			}
-			return appendEvent(runstate.EventExecutionStopped, map[string]any{
+			receipt, err := appendEvent(runstate.EventExecutionStopped, map[string]any{
 				"interval_id":      stop.IntervalID,
 				"reason":           stop.Reason,
 				"charging":         stop.Charging,
 				"charged_duration": stop.ChargedDurationMS,
 			}, "execution.adapter.stopped")
+			if err == nil {
+				adapterChargedMS = stop.ChargedDurationMS
+			}
+			return receipt, err
 		},
 		RecordOutcome: func(
 			observation adapter.OutcomeObservation,
@@ -435,12 +466,16 @@ func ExecuteAttempt(
 					kind = string(failure.Kind)
 					detail = failure.Detail
 				}
+				disposition, err := classifyFailure(
+					successor.FailureCase{AttemptKind: kind},
+					remainingAfter(remainingMS, adapterChargedMS),
+				)
+				if err != nil {
+					return faultpoint.DurabilityReceipt{}, err
+				}
 				payload := map[string]any{
-					"kind": kind,
-					"disposition": map[string]any{
-						"charged":           "none",
-						"movement_terminal": true,
-					},
+					"kind":        kind,
+					"disposition": dispositionPayload(disposition),
 				}
 				if observation.FailureReason != "" {
 					payload["reason"] = observation.FailureReason
@@ -513,27 +548,45 @@ func ExecuteAttempt(
 	}
 
 	if _, err := attempt.VerifyReadOnlyAndRecord(); err != nil {
-		return stopped(result, err)
+		var verification *workspace.VerificationError
+		if !errors.As(err, &verification) {
+			return stopped(result, err)
+		}
+		disposition, classifyErr := classifyFailure(
+			successor.FailureCase{AttemptKind: successor.KindGrantDenied},
+			remainingAfter(remainingMS, adapterChargedMS),
+		)
+		if classifyErr != nil {
+			return stopped(result, classifyErr)
+		}
+		if _, appendErr := appendEvent(runstate.EventAttemptFailed, map[string]any{
+			"kind":        successor.KindGrantDenied,
+			"reason":      verification.Reason,
+			"disposition": dispositionPayload(disposition),
+		}, "attempt.failed"); appendErr != nil {
+			return stopped(result, appendErr)
+		}
+		return interrupted(result, err)
 	}
 	acceptanceInterval, err := dependencies.newID()
 	if err != nil {
 		return interrupted(result, err)
 	}
-	state, err := authority.State()
-	if err != nil {
-		return stopped(result, err)
-	}
 	acceptanceOpened := dependencies.now()
-	remainingMS -= state.ConsumedBudgetMS
-	if remainingMS < 0 {
-		remainingMS = 0
-	}
+	remainingMS = remainingAfter(remainingMS, adapterChargedMS)
 	if _, err := appendEvent(runstate.EventExecutionStarted, map[string]any{
 		"interval_id":        acceptanceInterval,
 		"phase":              "acceptance",
 		"wall_start":         formatTime(acceptanceOpened),
 		"remaining_at_start": remainingMS,
 	}, "execution.acceptance.started"); err != nil {
+		return stopped(result, err)
+	}
+	acceptanceDisposition, err := classifyFailure(
+		successor.FailureCase{AcceptanceReason: "acceptance_failed"},
+		remainingMS,
+	)
+	if err != nil {
 		return stopped(result, err)
 	}
 	evaluation, err := acceptance.Evaluate(plan, acceptance.Evaluation{
@@ -543,7 +596,7 @@ func ExecuteAttempt(
 		PartID:             base.PartID,
 		AttemptID:          base.AttemptID,
 		SubjectTree:        candidate.ResultTree,
-		FailureDisposition: runstate.Disposition{Charged: "none", MovementTerminal: true},
+		FailureDisposition: acceptanceDisposition,
 		LookupArtifact: func(
 			id runstate.ArtifactInstanceID,
 		) (runstate.ArtifactRecord, bool, error) {
@@ -589,7 +642,7 @@ func ExecuteAttempt(
 	); err != nil {
 		return stopped(result, err)
 	}
-	state, err = authority.State()
+	state, err := authority.State()
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -971,6 +1024,24 @@ func initialRemainingMS(activeWallClockMin int64) (int64, error) {
 		return 0, errors.New("active wall-clock budget exceeds remaining_ms wire range")
 	}
 	return activeWallClockMin * millisecondsPerMinute, nil
+}
+
+func remainingAfter(remainingMS, chargedMS int64) int64 {
+	if chargedMS >= remainingMS {
+		return 0
+	}
+	return remainingMS - chargedMS
+}
+
+func dispositionPayload(disposition runstate.Disposition) map[string]any {
+	payload := map[string]any{
+		"charged":           disposition.Charged,
+		"movement_terminal": disposition.MovementTerminal,
+	}
+	if disposition.TerminalReason != "" {
+		payload["terminal_reason"] = disposition.TerminalReason
+	}
+	return payload
 }
 
 func stopped(result Result, err error) Result {

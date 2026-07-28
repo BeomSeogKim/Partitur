@@ -24,6 +24,7 @@ import (
 
 const fakeAdapterEnvironment = "PARTITUR_VALIDATE_FAKE_ADAPTER"
 const runVendorEnvironment = "PARTITUR_RUN_VENDOR_FIXTURE"
+const runVendorOutcomeEnvironment = "PARTITUR_RUN_VENDOR_OUTCOME"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runVendorEnvironment) == "1" {
@@ -868,6 +869,18 @@ func runVendorFixture() {
 	}
 	if outputDir == "" {
 		os.Exit(92)
+	}
+	outcome := os.Getenv(runVendorOutcomeEnvironment)
+	if outcome == "task_failed" {
+		return
+	}
+	if outcome != "" && outcome != "success" && outcome != "read_only_violation" {
+		os.Exit(97)
+	}
+	if outcome == "read_only_violation" {
+		if err := os.WriteFile(filepath.Join(outputDir, "..", "worktree", "fixture-untracked.txt"), []byte("mutation\n"), 0o600); err != nil {
+			os.Exit(98)
+		}
 	}
 	if err := os.WriteFile(
 		filepath.Join(outputDir, "report.txt"),

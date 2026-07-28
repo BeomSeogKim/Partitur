@@ -26,8 +26,10 @@ type killEdge struct {
 }
 
 type expectedFailure struct {
-	kind   string
-	reason string
+	event          runstate.EventType
+	kind           string
+	reason         string
+	terminalReason string
 }
 
 func TestSubprocessKillHarness(t *testing.T) {
@@ -102,6 +104,69 @@ func TestRetryDispositionCanFollowExecuteCut(t *testing.T) {
 		}
 		assertFixedPointReplay(t, partitur, repository, environment, runID, journal)
 		t.Logf("recovery-selected retry at %s reached attempt.started", point)
+	}
+}
+
+func TestFailureOutcomeHarness(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, scenario := range []struct {
+		name      string
+		outcome   string
+		score     map[string]any
+		expected  expectedFailure
+		recovered expectedFailure
+	}{
+		{
+			name:      "adapter_task_failed",
+			outcome:   "task_failed",
+			score:     runScore(),
+			expected:  expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", terminalReason: "retries_exhausted"},
+			recovered: expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", terminalReason: "retries_exhausted"},
+		},
+		{
+			name:      "acceptance_artifact_hash_mismatch",
+			outcome:   "success",
+			score:     hashMismatchScore(),
+			expected:  expectedFailure{event: runstate.EventAcceptanceFailed, reason: "artifact_hash_mismatch", terminalReason: "retries_exhausted"},
+			recovered: expectedFailure{event: runstate.EventAcceptanceFailed, reason: "artifact_hash_mismatch", terminalReason: "retries_exhausted"},
+		},
+		{
+			name:      "read_only_verification_rejected",
+			outcome:   "read_only_violation",
+			score:     runScore(),
+			expected:  expectedFailure{event: runstate.EventAttemptFailed, kind: "grant_denied", reason: "read_only_violation", terminalReason: "grant_denied"},
+			recovered: expectedFailure{event: runstate.EventAttemptFailed, kind: "grant_denied", reason: "candidate_mismatch", terminalReason: "grant_denied"},
+		},
+	} {
+		scenario := scenario
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Run("uncrashed", func(t *testing.T) {
+				repository, environment := killHarnessRepositoryWithInputs(t, bin, vendor, scenario.score, runCast())
+				environment = fixtureOutcomeEnvironment(environment, scenario.outcome)
+				runID := runUncrashed(t, partitur, repository, environment)
+				journal := readHarnessJournal(t, repository, runID)
+				assertExpectedFailure(t, journal, scenario.expected)
+				assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &scenario.expected)
+			})
+			t.Run("crashed_after_outcome", func(t *testing.T) {
+				repository, environment := killHarnessRepositoryWithInputs(t, bin, vendor, scenario.score, runCast())
+				environment = fixtureOutcomeEnvironment(environment, scenario.outcome)
+				runID := killAtPoint(t, partitur, repository, environment, faultpoint.PointExecuteOutcomeRecorded)
+				assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &scenario.recovered)
+			})
+		})
 	}
 }
 
@@ -295,6 +360,36 @@ func killHarnessRepositoryWithInputs(
 	})
 }
 
+func fixtureOutcomeEnvironment(environment []string, outcome string) []string {
+	return replaceEnvironment(environment, map[string]string{runVendorOutcomeEnvironment: outcome})
+}
+
+func runUncrashed(t *testing.T, binary, repository string, environment []string) string {
+	t.Helper()
+	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "run")
+	runID := strings.TrimSpace(stdout)
+	if code != 6 || runID == "" || stdout != runID+"\n" || !strings.Contains(stderr, "run interrupted:") {
+		t.Fatalf("failure run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	return runID
+}
+
+func readHarnessJournal(t *testing.T, repository string, runID string) []byte {
+	t.Helper()
+	journal, err := os.ReadFile(filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return journal
+}
+
+func hashMismatchScore() map[string]any {
+	score := runScore()
+	criterion := score["movements"].([]any)[0].(map[string]any)["acceptance"].(map[string]any)["hard"].([]any)[0].(map[string]any)
+	criterion["expected_hash"] = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	return score
+}
+
 func killAtPoint(
 	t *testing.T,
 	binary, repository string,
@@ -409,11 +504,11 @@ func expectedFailureFor(point faultpoint.PointID) *expectedFailure {
 	case faultpoint.PointAuthorityGranted, faultpoint.PointAuthorityLeaseCreated:
 		return nil
 	case faultpoint.PointLaunchAdapterMarkerHeld, faultpoint.PointLaunchAdapterIdentityPublished:
-		return &expectedFailure{kind: "task_failed", reason: "attempt_never_started"}
+		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", reason: "attempt_never_started", terminalReason: "retries_exhausted"}
 	case faultpoint.PointLaunchAdapterIdentityRecorded, faultpoint.PointLaunchAdapterGateReleased:
-		return &expectedFailure{kind: "adapter_unavailable", reason: "probe_terminated_incomplete"}
+		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "adapter_unavailable", reason: "probe_terminated_incomplete", terminalReason: "fallbacks_exhausted"}
 	case faultpoint.PointExecuteAdapterSwept, faultpoint.PointExecuteIntervalStopped:
-		return &expectedFailure{kind: "task_failed", reason: "attempt_terminated_incomplete"}
+		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", reason: "attempt_terminated_incomplete", terminalReason: "retries_exhausted"}
 	default:
 		return nil
 	}
@@ -517,7 +612,21 @@ func assertExpectedFailure(t *testing.T, journal []byte, expected expectedFailur
 	if err := json.Unmarshal(last.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["kind"] != expected.kind || payload["reason"] != expected.reason {
-		t.Fatalf("recorded failure = kind=%q reason=%q, want %q/%q", payload["kind"], payload["reason"], expected.kind, expected.reason)
+	if expected.event == "" {
+		expected.event = runstate.EventAttemptFailed
+	}
+	kind, _ := payload["kind"].(string)
+	reason, _ := payload["reason"].(string)
+	if last.Type != expected.event || kind != expected.kind || reason != expected.reason {
+		t.Fatalf("recorded failure = type=%q kind=%q reason=%q, want %q/%q/%q", last.Type, kind, reason, expected.event, expected.kind, expected.reason)
+	}
+	assertValidTerminalDisposition(t, payload, expected)
+}
+
+func assertValidTerminalDisposition(t *testing.T, payload map[string]any, expected expectedFailure) {
+	t.Helper()
+	disposition, ok := payload["disposition"].(map[string]any)
+	if !ok || disposition["charged"] != "none" || disposition["movement_terminal"] != true || disposition["terminal_reason"] != expected.terminalReason {
+		t.Fatalf("failure %s/%s has invalid terminal disposition %#v", expected.kind, expected.reason, disposition)
 	}
 }

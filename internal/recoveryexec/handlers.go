@@ -239,11 +239,19 @@ func resumeCriterion(_ context.Context, execution HandlerContext, action recover
 		if err != nil {
 			return err
 		}
+		disposition, err := classify(
+			recovery.Input{Projection: input.Projection},
+			action,
+			successor.FailureCase{AcceptanceReason: "acceptance_failed"},
+		)
+		if err != nil {
+			return err
+		}
 		_, err = acceptance.EvaluateStarted(plan, acceptance.Evaluation{
 			RunID: execution.Driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
 			MovementID: attempt.MovementID, PartID: movement.PartID, AttemptID: action.AttemptID,
 			SubjectTree:        acceptanceState.SubjectTree,
-			FailureDisposition: runstate.Disposition{Charged: "none", MovementTerminal: true},
+			FailureDisposition: disposition,
 			LookupArtifact: func(id runstate.ArtifactInstanceID) (runstate.ArtifactRecord, bool, error) {
 				state, err := execution.Driver.State()
 				if err != nil {
@@ -360,6 +368,8 @@ func executeRecoveredAttempt(
 		SelectionReason:      reason,
 		SelectionCausationID: causationID,
 		RemainingMS:          input.Projection.Scheduler.RemainingTime,
+		RetriesConsumed:      retriesConsumed(input.Projection.State, runstate.MovementID(movementID)),
+		VisitedPerformers:    visitedPerformers(input.Projection, runstate.MovementID(movementID)),
 	}, driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()))
 	if result.Err != nil {
 		return result.Err
@@ -368,6 +378,24 @@ func executeRecoveredAttempt(
 		return fmt.Errorf("recovery attempt execution ended %s", result.Outcome)
 	}
 	return nil
+}
+
+func retriesConsumed(state runstate.State, movementID runstate.MovementID) int {
+	count := 0
+	for _, attempt := range state.Attempts {
+		if attempt.MovementID == movementID && attempt.Failure != nil && attempt.Failure.Disposition.Charged == "quality_retry" {
+			count++
+		}
+	}
+	return count
+}
+
+func visitedPerformers(projection recovery.Projection, movementID runstate.MovementID) []string {
+	attempt := projection.CurrentHeadAttempt
+	if attempt == nil || attempt.MovementID != movementID {
+		return nil
+	}
+	return append([]string(nil), attempt.FailureClassification.VisitedPerformers...)
 }
 
 func unreachableActionOwnedBy(unit string) StepHandler {

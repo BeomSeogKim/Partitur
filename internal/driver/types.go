@@ -49,6 +49,8 @@ type AttemptExecution struct {
 	SelectionReason      string
 	SelectionCausationID string
 	RemainingMS          int64
+	RetriesConsumed      int
+	VisitedPerformers    []string
 }
 
 // ExecutionDependencies are the process-facing dependencies of an attempt.
