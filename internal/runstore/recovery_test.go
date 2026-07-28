@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
@@ -21,6 +22,10 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 			name: "fresh run", check: func(t *testing.T, input RecoveryInput) {
 				if input.Projection.CurrentHeadAttempt != nil || len(input.Projection.Scheduler.Movements) != 2 {
 					t.Fatalf("fresh projection = %+v", input.Projection)
+				}
+				read := input.Projection.Scheduler.Movements[1]
+				if read.ID != "read" || len(read.Needs) != 1 || read.Needs[0] != "write" {
+					t.Fatalf("recovery scheduler dependency = %+v", read)
 				}
 			},
 		},
@@ -84,6 +89,101 @@ func TestLoadRecoveryInputIgnoresCurrentRootScore(t *testing.T) {
 	if input.Score.Revision() != 1 || input.Score.Execution().Goal != "pinned recovery fixture" {
 		t.Fatalf("loaded score = revision %d goal %q, want run-owned revision 1", input.Score.Revision(), input.Score.Execution().Goal)
 	}
+}
+
+func TestLoadRecoveryInputDoesNotFallBackToRootScore(t *testing.T) {
+	store := recoveryStore(t)
+	root := filepath.Join(store.RepositoryRoot(), "partitur.yaml")
+	if err := os.WriteFile(root, recoveryScoreJSON(t, 99, "valid root score"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runScorePath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "scores", "revision-1.yaml")
+	if err := os.WriteFile(runScorePath, recoveryScoreJSON(t, 1, "changed pinned score"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.LoadRecoveryInput("run-1")
+	if err == nil || !strings.Contains(err.Error(), "pinned score file hash does not match journal") {
+		t.Fatalf("LoadRecoveryInput() error = %v, want pinned score file hash mismatch", err)
+	}
+}
+
+func TestLoadRecoveryInputIgnoresCurrentCastLayer(t *testing.T) {
+	store := recoveryStore(t)
+	currentCast := filepath.Join(store.RepositoryRoot(), ".partitur", "cast.yaml")
+	if err := os.MkdirAll(filepath.Dir(currentCast), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(currentCast, []byte("poisoned current cast layer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	input, err := store.LoadRecoveryInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Cast == nil {
+		t.Fatal("run-owned resolved cast was not loaded")
+	}
+}
+
+func TestLoadRecoveryInputUsesOneJournalSnapshot(t *testing.T) {
+	store := recoveryStore(t)
+	appendRecoveryMovementStarted(t, store)
+	journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
+	growth := runstate.Event{
+		EventID:       "event-grown",
+		Seq:           4,
+		Timestamp:     "2026-07-28T00:00:00.000Z",
+		RunID:         "run-1",
+		ScoreRevision: 1,
+		MovementID:    "write",
+		AttemptID:     "attempt-1",
+		Type:          runstate.EventPerformerSelected,
+		Payload: recoveryPayload(t, map[string]any{
+			"reason": "initial", "performer_id": "writer", "adapter_id": "adapter", "model": "model",
+		}),
+	}
+	line, err := json.Marshal(growth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	growing := &growingJournalFS{
+		recordingFS: &recordingFS{delegate: realFS{}},
+		journalPath: journalPath,
+		appendLine:  append(line, '\n'),
+	}
+	store.fs = growing
+
+	input, err := store.LoadRecoveryInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !growing.grew {
+		t.Fatal("test seam did not grow the journal")
+	}
+	if len(input.Projection.State.Attempts) != 0 || input.Projection.CurrentHeadAttempt != nil {
+		t.Fatalf("projection mixed journal snapshots: state=%+v head=%+v", input.Projection.State.Attempts, input.Projection.CurrentHeadAttempt)
+	}
+}
+
+type growingJournalFS struct {
+	*recordingFS
+	journalPath string
+	appendLine  []byte
+	grew        bool
+}
+
+func (filesystem *growingJournalFS) ReadFile(path string) ([]byte, error) {
+	contents, err := filesystem.recordingFS.ReadFile(path)
+	if err != nil || path != filesystem.journalPath || filesystem.grew {
+		return contents, err
+	}
+	filesystem.grew = true
+	if err := filesystem.recordingFS.Append(path, filesystem.appendLine, 0o600); err != nil {
+		return nil, err
+	}
+	return contents, nil
 }
 
 func TestChangeSetRecordedAppendIsIdempotent(t *testing.T) {
@@ -331,7 +431,7 @@ func changeSetPayloadForRecovery() map[string]any {
 	return map[string]any{"change_set_id": "change-set-1", "base_tree": "git-sha1:base", "result_tree": "git-sha1:result", "commit": "git-sha1:commit", "ref": "refs/partitur/runs/run-1/attempts/attempt-1/changeset", "identity_versions": recoveryVersions()}
 }
 func attemptStartedPayloadForRecovery() map[string]any {
-	return map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 10, "session_id": 10, "start_identity": map[string]any{"platform": "linux", "boot_id": "boot", "start_ticks": "12"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": recoveryVersions()}
+	return map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 10, "session_id": 10, "start_identity": map[string]any{"platform": "linux", "boot_id": "boot", "start_ticks": "12"}}, "granted_authority": map[string]any{"paths_rw": []any{"**"}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": recoveryVersions()}
 }
 func adapterProbedPayloadForRecovery() map[string]any {
 	return map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": true, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": false, "shell_grants": false, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": recoveryVersions()}

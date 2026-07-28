@@ -152,11 +152,15 @@ func (store *Store) ReadReplay(
 	runID runstate.RunID,
 	seed []runstate.MovementSeed,
 ) (ReadReplayResult, error) {
-	state := runstate.NewState(seed)
 	journal, err := store.ReadJournal(runID)
 	if err != nil {
 		return ReadReplayResult{}, err
 	}
+	return replayJournal(journal, seed)
+}
+
+func replayJournal(journal ReadJournalResult, seed []runstate.MovementSeed) (ReadReplayResult, error) {
+	state := runstate.NewState(seed)
 	for _, event := range journal.Events {
 		next, err := runstate.Apply(state, event)
 		if errors.Is(err, runstate.ErrUnsupportedEventType) {

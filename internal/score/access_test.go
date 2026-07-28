@@ -28,8 +28,21 @@ func TestExecutionReadSurface(t *testing.T) {
 		VerificationExpectation:        "pass-existing-tests",
 		VerificationExpectationPresent: true,
 		FinalMovementID:                "verify",
+		GateWaived:                     false,
 	}); got != want {
 		t.Fatalf("Execution() = %#v, want %#v", got, want)
+	}
+
+	waived := finalizedFixture()
+	waivedVerification := objectAt(waived["verification"])
+	delete(waivedVerification, "final_movement")
+	waivedExpectation := objectAt(waivedVerification["expectation"])
+	waivedExpectation["apply_gate"] = map[string]any{
+		"waived": true,
+		"reason": "fixture waiver",
+	}
+	if !assertCompiles(t, waived).Execution().GateWaived {
+		t.Fatal("waived apply gate was hidden from the execution view")
 	}
 
 	movements := compiled.Movements()
@@ -57,6 +70,9 @@ func TestExecutionReadSurface(t *testing.T) {
 	}
 	if got, want := movements[1].Inputs, []string{"design-note"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("build inputs = %#v, want %#v", got, want)
+	}
+	if got, want := movements[1].Needs, []string{"plan"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("build needs = %#v, want %#v", got, want)
 	}
 }
 
@@ -115,6 +131,7 @@ func TestExecutionReadSurfaceIsDefensive(t *testing.T) {
 	first[0].Outputs[0].ArtifactID = "mutated-output"
 	first[0].Acceptance.ArtifactCriteria[0].ArtifactID = "mutated-criterion"
 	first[1].Inputs[0] = "mutated-input"
+	first[1].Needs[0] = "mutated-need"
 
 	second := compiled.Movements()
 	if second[0].Grants[0] != "repo_read" {
@@ -131,6 +148,9 @@ func TestExecutionReadSurfaceIsDefensive(t *testing.T) {
 	}
 	if second[1].Inputs[0] != "design-note" {
 		t.Fatalf("inputs aliased compiler state: %#v", second[1].Inputs)
+	}
+	if second[1].Needs[0] != "plan" {
+		t.Fatalf("needs aliased compiler state: %#v", second[1].Needs)
 	}
 	if second[0].Acceptance.ArtifactCriteria[0].ExpectedHash != "" {
 		t.Fatalf(

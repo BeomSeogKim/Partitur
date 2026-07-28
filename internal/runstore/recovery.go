@@ -44,7 +44,7 @@ func (store *Store) LoadRecoveryInput(runID runstate.RunID) (RecoveryInput, erro
 		return RecoveryInput{}, err
 	}
 	seed := movementSeed(initialScore)
-	replay, err := store.ReadReplay(runID, seed)
+	replay, err := replayJournal(journal, seed)
 	if err != nil {
 		return RecoveryInput{}, err
 	}
