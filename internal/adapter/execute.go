@@ -77,6 +77,16 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
 		return state.report, cause
 	}
+	failAfterOutputDrainWithoutOutcome := func(cause error) (ExecuteReport, error) {
+		state.report.Result = nil
+		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+			return state.report, sweepHalt(cleanupErr)
+		}
+		<-running.stderrDone
+		_ = running.process.Wait()
+		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+		return state.report, cause
+	}
 
 	if err := c.write(running.stdin, probeRequest); err != nil {
 		return failWithoutOutcome(fmt.Errorf("write run probe request: %w", err))
@@ -121,7 +131,6 @@ probed:
 	cancelSignal := plan.Cancel
 	cancelRequested := false
 	cancelAcknowledged := false
-	var drainFailure *executeProtocolFailure
 	var cancelTimer *time.Timer
 	var cancelTimeout <-chan time.Time
 	defer func() {
@@ -129,7 +138,21 @@ probed:
 			cancelTimer.Stop()
 		}
 	}()
+	cancelExpired := func() (ExecuteReport, error) {
+		state.report.Result = nil
+		return failWithoutOutcome(errors.New("cancel completion grace expired"))
+	}
+	interrupted := func(cause error) (ExecuteReport, error) {
+		if cleanupErr := c.stopExecute(running); cleanupErr != nil {
+			return state.report, sweepHalt(cleanupErr)
+		}
+		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+		return state.report, cause
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return interrupted(err)
+		}
 		select {
 		case event := <-running.frames:
 			if event.err != nil {
@@ -189,26 +212,13 @@ probed:
 			cancelTimer = time.NewTimer(c.grace)
 			cancelTimeout = cancelTimer.C
 		case <-cancelTimeout:
-			return failWithoutOutcome(errors.New("cancel completion grace expired"))
+			return cancelExpired()
 		case <-ctx.Done():
-			if cleanupErr := c.stopExecute(running); cleanupErr != nil {
-				return state.report, sweepHalt(cleanupErr)
-			}
-			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-			return state.report, ctx.Err()
+			return interrupted(ctx.Err())
 		}
 	}
 
 response:
-	if cancelTimer != nil {
-		if !cancelTimer.Stop() {
-			select {
-			case <-cancelTimer.C:
-			default:
-			}
-		}
-		cancelTimeout = nil
-	}
 	if err := running.stdin.Close(); err != nil {
 		running.stdin = nil
 		return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", err.Error())
@@ -235,8 +245,7 @@ response:
 				if cancelRequested {
 					if !cancelAcknowledged {
 						state.report.Result = nil
-						drainFailure = &executeProtocolFailure{reason: "strict_decode_failed", detail: "cancel acknowledgement absent"}
-						goto outputDrained
+						return failAfterOutputDrainWithoutOutcome(errors.New("cancel acknowledgement absent"))
 					}
 				}
 				goto outputDrained
@@ -248,6 +257,8 @@ response:
 				reason = "frame_too_large"
 			}
 			return c.finishFailure(running, &state, protocol.FailureProtocolError, reason, event.err.Error())
+		case <-cancelTimeout:
+			return cancelExpired()
 		case <-ctx.Done():
 			if cleanupErr := c.stopExecute(running); cleanupErr != nil {
 				return state.report, sweepHalt(cleanupErr)
@@ -260,6 +271,8 @@ response:
 outputDrained:
 	select {
 	case <-running.stderrDone:
+	case <-cancelTimeout:
+		return failAfterOutputDrainWithoutOutcome(errors.New("cancel completion grace expired"))
 	case <-ctx.Done():
 		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
 			return state.report, sweepHalt(cleanupErr)
@@ -277,6 +290,17 @@ outputDrained:
 	var waitErr error
 	select {
 	case waitErr = <-wait:
+	case <-cancelTimeout:
+		// Drain the goroutine above rather than calling Wait again: two concurrent
+		// Cmd.Wait calls on one process are a data race, which is why the context case
+		// below takes the same shape.
+		state.report.Result = nil
+		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+			return state.report, sweepHalt(cleanupErr)
+		}
+		<-wait
+		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+		return state.report, errors.New("cancel completion grace expired")
 	case <-ctx.Done():
 		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
 			return state.report, sweepHalt(cleanupErr)
@@ -296,18 +320,10 @@ outputDrained:
 		return state.report, sweepHalt(cleanupErr)
 	}
 	reach(plan.Probe, faultpoint.PointExecuteAdapterSwept)
-	if err := c.recordStop(&state); err != nil {
-		return state.report, err
-	}
-	if drainFailure != nil {
-		result := protocol.ExecuteResult{
-			Outcome: protocol.OutcomeFailed,
-			Failure: &protocol.Failure{
-				Kind:   protocol.FailureProtocolError,
-				Detail: adapterkit.SanitizeMessage(drainFailure.detail),
-			},
+	if !cancelRequested {
+		if err := c.recordStop(&state); err != nil {
+			return state.report, err
 		}
-		return state.report, state.recordOutcome(string(runstate.EventAttemptFailed), result, drainFailure.reason)
 	}
 	if err := c.recordResult(&state, cancelRequested); err != nil {
 		return state.report, err

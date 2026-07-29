@@ -298,7 +298,7 @@ func TestExecuteCancelAwaitsResponseAndRecordsNoOutcome(t *testing.T) {
 	client := newClient([]string{
 		fakeModeEnv + "=execute_cancelled",
 		fakeMarkerEnv + "=" + marker,
-	}, incidentalTestDeadline, 50*time.Millisecond)
+	}, incidentalTestDeadline, 10*time.Second)
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
@@ -342,8 +342,50 @@ func TestExecuteCancelAwaitsResponseAndRecordsNoOutcome(t *testing.T) {
 		"attempt.started",
 		"adapter.probed",
 		"session.verified_empty",
-		"execution.stopped",
 	}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("journal order = %v, want %v", order, want)
+	}
+}
+
+func TestExecuteContextInterruptionWinsOverReadyCancelSignal(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	var order []string
+	client := newClient([]string{
+		fakeModeEnv + "=execute_cancelled",
+		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
+	}, incidentalTestDeadline, 10*time.Second)
+	ctx, cancelContext := context.WithCancel(context.Background())
+	defer cancelContext()
+	cancel := make(chan struct{})
+	baseWrite := client.write
+	client.write = func(writer io.Writer, data []byte) error {
+		if strings.Contains(string(data), `"method":"execute"`) {
+			close(cancel)
+			cancelContext()
+		}
+		if strings.Contains(string(data), `"method":"cancel"`) {
+			t.Fatal("protocol cancel was written after context interruption")
+		}
+		return baseWrite(writer, data)
+	}
+	plan := executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	plan.Cancel = cancel
+	report, err := client.Execute(ctx, plan)
+	if !errors.Is(err, context.Canceled) || report.Result != nil {
+		t.Fatalf("report = %#v, error = %v", report, err)
+	}
+	want := []string{"attempt.started", "adapter.probed"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("journal order = %v, want %v", order, want)
 	}
@@ -386,12 +428,174 @@ func TestExecuteCancelGraceTimeoutForcesVerifiedEmptySweep(t *testing.T) {
 		&order,
 	)
 	plan.Cancel = cancel
-	report, err := client.Execute(context.Background(), plan)
+	report, err := executeWithin(t, client, plan, 30*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "cancel completion grace expired") {
 		t.Fatalf("report = %#v, error = %v", report, err)
 	}
 	if terminated != 1 {
 		t.Fatalf("forced session sweeps = %d, want 1", terminated)
+	}
+	want := []string{"attempt.started", "adapter.probed"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("journal order = %v, want %v", order, want)
+	}
+}
+
+func TestExecuteCancelResponseWithoutAcknowledgementTimesOutAndSweeps(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	var order []string
+	client := newClient([]string{
+		fakeModeEnv + "=execute_cancelled_without_ack_hang",
+		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
+	}, incidentalTestDeadline, 20*time.Millisecond)
+	cancel := make(chan struct{})
+	baseWrite := client.write
+	client.write = func(writer io.Writer, data []byte) error {
+		if strings.Contains(string(data), `"method":"execute"`) {
+			close(cancel)
+		}
+		return baseWrite(writer, data)
+	}
+	terminated := 0
+	client.sessions = &recordingSessionController{
+		base: systemSessionController{},
+		terminateFn: func() {
+			terminated++
+		},
+	}
+	plan := executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	plan.Cancel = cancel
+	report, err := executeWithin(t, client, plan, 30*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "cancel completion grace expired") {
+		t.Fatalf("report = %#v, error = %v", report, err)
+	}
+	if report.Result != nil || terminated != 1 {
+		t.Fatalf("report = %#v, forced session sweeps = %d", report, terminated)
+	}
+	want := []string{"attempt.started", "adapter.probed"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("journal order = %v, want %v", order, want)
+	}
+}
+
+// executeWithin bounds Execute so that losing the cancellation deadline fails this test
+// by name instead of hanging the package. The guards under test are deadlines: deleting
+// one makes the call wait forever, and a package-level timeout hides which test broke.
+func executeWithin(t *testing.T, client *Client, plan ExecutePlan, limit time.Duration) (ExecuteReport, error) {
+	t.Helper()
+	type outcome struct {
+		report ExecuteReport
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		report, err := client.Execute(context.Background(), plan)
+		done <- outcome{report: report, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.report, result.err
+	case <-time.After(limit):
+		t.Fatalf("Execute did not return within %s: the cancellation deadline is not bounding this window", limit)
+		return ExecuteReport{}, nil
+	}
+}
+
+func TestExecuteCancelGraceSurvivesOutputAndProcessDrain(t *testing.T) {
+	for _, mode := range []string{
+		"execute_cancelled_eof_stderr_hang",
+		"execute_cancelled_eof_process_hang",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			directory := t.TempDir()
+			installFake(t, directory, "fake")
+			var order []string
+			client := newClient([]string{
+				fakeModeEnv + "=" + mode,
+				fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
+			}, incidentalTestDeadline, 20*time.Millisecond)
+			cancel := make(chan struct{})
+			baseWrite := client.write
+			client.write = func(writer io.Writer, data []byte) error {
+				if strings.Contains(string(data), `"method":"execute"`) {
+					close(cancel)
+				}
+				return baseWrite(writer, data)
+			}
+			terminated := 0
+			client.sessions = &recordingSessionController{
+				base: systemSessionController{},
+				terminateFn: func() {
+					terminated++
+				},
+			}
+			plan := executePlan(
+				"fake",
+				filepath.Join(directory, "partitur-adapter-fake"),
+				buildTrampoline(t, directory),
+				t.TempDir(),
+				t.TempDir(),
+				t.TempDir(),
+				successfulRecorder(&order),
+				&order,
+			)
+			plan.Cancel = cancel
+			report, err := executeWithin(t, client, plan, 30*time.Second)
+			if err == nil || !strings.Contains(err.Error(), "cancel completion grace expired") {
+				t.Fatalf("report = %#v, error = %v", report, err)
+			}
+			if report.Result != nil || terminated != 1 {
+				t.Fatalf("report = %#v, forced session sweeps = %d", report, terminated)
+			}
+			want := []string{"attempt.started", "adapter.probed"}
+			if !reflect.DeepEqual(order, want) {
+				t.Fatalf("journal order = %v, want %v", order, want)
+			}
+		})
+	}
+}
+
+func TestExecuteCancelExpirySweepFailureHaltsWithoutTerminalJournalEvent(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	var order []string
+	client := newClient([]string{
+		fakeModeEnv + "=execute_cancelled_after_response_hang",
+		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
+	}, incidentalTestDeadline, 20*time.Millisecond)
+	cancel := make(chan struct{})
+	baseWrite := client.write
+	client.write = func(writer io.Writer, data []byte) error {
+		if strings.Contains(string(data), `"method":"execute"`) {
+			close(cancel)
+		}
+		return baseWrite(writer, data)
+	}
+	client.sessions = sweepingFailureSessionController{}
+	plan := executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	plan.Cancel = cancel
+	report, err := executeWithin(t, client, plan, 30*time.Second)
+	if !errors.Is(err, ErrSweepUnverifiable) || report.Result != nil {
+		t.Fatalf("report = %#v, error = %v", report, err)
 	}
 	want := []string{"attempt.started", "adapter.probed"}
 	if !reflect.DeepEqual(order, want) {
@@ -406,7 +610,7 @@ func TestExecuteRejectsDuplicateCancelAcknowledgement(t *testing.T) {
 	client := newClient([]string{
 		fakeModeEnv + "=execute_cancelled_duplicate_ack",
 		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
-	}, incidentalTestDeadline, 50*time.Millisecond)
+	}, incidentalTestDeadline, 10*time.Second)
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
@@ -516,14 +720,14 @@ func runCancelAckFixture(t *testing.T, mode string, requestCancel bool) (Execute
 	return report, outcome
 }
 
-func TestExecuteRejectsMissingCancelAcknowledgement(t *testing.T) {
+func TestExecuteMissingCancelAcknowledgementLeavesIntervalAndOutcomeAbsent(t *testing.T) {
 	directory := t.TempDir()
 	installFake(t, directory, "fake")
 	var order []string
 	client := newClient([]string{
 		fakeModeEnv + "=execute_cancelled_without_ack",
 		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
-	}, incidentalTestDeadline, 50*time.Millisecond)
+	}, incidentalTestDeadline, 10*time.Second)
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
@@ -532,12 +736,11 @@ func TestExecuteRejectsMissingCancelAcknowledgement(t *testing.T) {
 		}
 		return baseWrite(writer, data)
 	}
-	var outcome OutcomeObservation
-	recorder := successfulRecorder(&order)
-	recorder.RecordOutcome = func(observation OutcomeObservation) (faultpoint.DurabilityReceipt, error) {
-		outcome = observation
-		order = append(order, observation.EventType)
-		return receipt(observation.EventType), nil
+	client.sessions = &observingSessionController{
+		terminateFn: func() error {
+			order = append(order, "session.swept")
+			return nil
+		},
 	}
 	plan := executePlan(
 		"fake",
@@ -546,18 +749,26 @@ func TestExecuteRejectsMissingCancelAcknowledgement(t *testing.T) {
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		recorder,
+		successfulRecorder(&order),
 		&order,
 	)
 	plan.Cancel = cancel
 	report, err := client.Execute(context.Background(), plan)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("missing acknowledgement succeeded")
 	}
-	if report.Result != nil || outcome.EventType != "attempt.failed" ||
-		outcome.Result.Failure == nil || outcome.Result.Failure.Kind != protocol.FailureProtocolError ||
-		outcome.FailureReason != "strict_decode_failed" {
-		t.Fatalf("report = %#v, outcome = %#v", report, outcome)
+	if errors.Is(err, ErrSweepUnverifiable) {
+		t.Fatal("missing acknowledgement became a sweep halt")
+	}
+	if !strings.Contains(err.Error(), "cancel acknowledgement absent") {
+		t.Fatalf("error = %v", err)
+	}
+	if report.Result != nil {
+		t.Fatalf("report retained missing-ack result: %#v", report)
+	}
+	want := []string{"attempt.started", "adapter.probed", "session.swept"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("journal order = %v, want %v", order, want)
 	}
 }
 
@@ -985,6 +1196,8 @@ type recordingSessionController struct {
 	terminateFn func()
 }
 
+type sweepingFailureSessionController struct{}
+
 func (controller *recordingSessionController) verifyEmpty(sid int, leaderStart string) (bool, error) {
 	return controller.base.verifyEmpty(sid, leaderStart)
 }
@@ -992,6 +1205,15 @@ func (controller *recordingSessionController) verifyEmpty(sid int, leaderStart s
 func (controller *recordingSessionController) terminate(sid int, leaderStart string, grace time.Duration) error {
 	controller.terminateFn()
 	return controller.base.terminate(sid, leaderStart, grace)
+}
+
+func (sweepingFailureSessionController) verifyEmpty(sid int, leaderStart string) (bool, error) {
+	return systemSessionController{}.verifyEmpty(sid, leaderStart)
+}
+
+func (sweepingFailureSessionController) terminate(sid int, leaderStart string, grace time.Duration) error {
+	_ = systemSessionController{}.terminate(sid, leaderStart, grace)
+	return errors.New("injected enumeration failure")
 }
 
 func (controller *observingSessionController) verifyEmpty(int, string) (bool, error) {
