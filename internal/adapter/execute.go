@@ -31,13 +31,14 @@ type runningExecute struct {
 }
 
 type executeState struct {
-	plan         ExecutePlan
-	report       ExecuteReport
-	outputs      map[string]string
-	artifactSeen map[string]bool
-	emittedIDs   map[string]bool
-	blockingIDs  map[string]bool
-	eventCount   int
+	plan                 ExecutePlan
+	report               ExecuteReport
+	outputs              map[string]string
+	artifactSeen         map[string]bool
+	emittedIDs           map[string]bool
+	blockingIDs          map[string]bool
+	eventCount           int
+	cancellationInFlight bool
 }
 
 func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, error) {
@@ -213,6 +214,7 @@ probed:
 				state.report.Result = nil
 				return failWithoutOutcome(writeErr)
 			}
+			state.cancellationInFlight = true
 			cancelRequested = true
 			cancelSignal = nil
 			cancelTimer = time.NewTimer(c.grace)
@@ -320,19 +322,25 @@ outputDrained:
 		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
 			return state.report, sweepHalt(cleanupErr)
 		}
-		return c.recordFailure(&state, protocol.FailureAdapterUnavailable, "", waitErr.Error())
+		return c.recordFailure(&state, protocol.FailureAdapterUnavailable, "", waitErr.Error(), waitErr)
 	}
 	if cleanupErr := c.verifyAndSweepExecute(running); cleanupErr != nil {
 		return state.report, sweepHalt(cleanupErr)
 	}
 	reach(plan.Probe, faultpoint.PointExecuteAdapterSwept)
-	if !cancelRequested {
-		if err := c.recordStop(&state); err != nil {
-			return state.report, err
-		}
-	}
-	if err := c.recordResult(&state, cancelRequested); err != nil {
+	if err := c.recordStop(&state); err != nil {
 		return state.report, err
+	}
+	if err := c.recordResult(&state); err != nil {
+		return state.report, err
+	}
+	if state.terminalRecordingSuppressed() {
+		// Every other suppressed exit already clears this, so leaving the one clean exit
+		// populated would make `Result != nil` mean "authoritative" everywhere except
+		// here. Callers read the outcome directly — driver.go treats a `completed` as
+		// licence to run acceptance — so a response the journal deliberately ignored must
+		// not survive in the report either.
+		state.report.Result = nil
 	}
 	return state.report, nil
 }
@@ -599,7 +607,7 @@ func (c *Client) finishFailure(running *runningExecute, state *executeState, kin
 		return state.report, sweepHalt(cleanupErr)
 	}
 	state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-	return c.recordFailure(state, kind, reason, detail)
+	return c.recordFailure(state, kind, reason, detail, errors.New(detail))
 }
 
 func (c *Client) stopExecute(running *runningExecute) error {
@@ -637,6 +645,9 @@ func (c *Client) verifyAndSweepExecute(running *runningExecute) error {
 }
 
 func (c *Client) recordStop(state *executeState) error {
+	if state.terminalRecordingSuppressed() {
+		return nil
+	}
 	observed := c.now()
 	duration := observed.Sub(state.plan.IntervalOpened)
 	if duration < 0 {
@@ -656,7 +667,10 @@ func (c *Client) recordStop(state *executeState) error {
 	return nil
 }
 
-func (c *Client) recordResult(state *executeState, cancelRequested bool) error {
+func (c *Client) recordResult(state *executeState) error {
+	if state.terminalRecordingSuppressed() {
+		return nil
+	}
 	result := *state.report.Result
 	eventType := ""
 	reason := ""
@@ -668,9 +682,6 @@ func (c *Client) recordResult(state *executeState, cancelRequested bool) error {
 	case protocol.OutcomeWaitingHuman:
 		eventType = "attempt.blocked"
 	case protocol.OutcomeCancelled:
-		if cancelRequested {
-			return nil
-		}
 		eventType = string(runstate.EventAttemptFailed)
 		result.Failure = &protocol.Failure{Kind: protocol.FailureTaskFailed}
 		reason = "unsolicited_cancel"
@@ -678,7 +689,10 @@ func (c *Client) recordResult(state *executeState, cancelRequested bool) error {
 	return state.recordOutcome(eventType, result, reason)
 }
 
-func (c *Client) recordFailure(state *executeState, kind protocol.FailureKind, reason, detail string) (ExecuteReport, error) {
+func (c *Client) recordFailure(state *executeState, kind protocol.FailureKind, reason, detail string, cause error) (ExecuteReport, error) {
+	if state.terminalRecordingSuppressed() {
+		return state.report, cause
+	}
 	if err := c.recordStop(state); err != nil {
 		return state.report, err
 	}
@@ -691,6 +705,9 @@ func (c *Client) recordFailure(state *executeState, kind protocol.FailureKind, r
 }
 
 func (state *executeState) recordOutcome(eventType string, result protocol.ExecuteResult, reason string) error {
+	if state.terminalRecordingSuppressed() {
+		return nil
+	}
 	raised := make([]RaisedDecision, 0, len(state.report.Questions)+len(state.report.Proposals))
 	for index := range state.report.Questions {
 		question := state.report.Questions[index]
@@ -712,6 +729,10 @@ func (state *executeState) recordOutcome(eventType string, result protocol.Execu
 	}
 	reach(state.plan.Probe, faultpoint.PointExecuteOutcomeRecorded)
 	return nil
+}
+
+func (state *executeState) terminalRecordingSuppressed() bool {
+	return state.cancellationInFlight
 }
 
 func reach(probe faultpoint.Probe, point faultpoint.PointID) {

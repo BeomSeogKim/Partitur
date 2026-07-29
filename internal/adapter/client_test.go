@@ -607,7 +607,7 @@ func runFakeAdapter(mode string) {
 			_, _ = os.Stderr.WriteString("BEYOND-CAP")
 			os.Exit(7)
 		}
-	case "execute_cancelled", "execute_cancelled_duplicate_ack", "execute_cancel_timeout", "execute_cancelled_without_ack_hang", "execute_cancelled_after_response_hang", "execute_cancelled_eof_stderr_hang", "execute_cancelled_eof_process_hang":
+	case "execute_cancelled", "execute_cancelled_duplicate_ack", "execute_cancelled_extra_after_response", "execute_completed_after_cancel", "execute_cancelled_nonzero", "execute_cancel_timeout", "execute_cancelled_without_ack_hang", "execute_cancelled_after_response_hang", "execute_cancelled_eof_stderr_hang", "execute_cancelled_eof_process_hang":
 		writeValid(adapterID)
 		reader := bufio.NewReader(os.Stdin)
 		_, _ = reader.ReadString('\n')
@@ -617,7 +617,11 @@ func runFakeAdapter(mode string) {
 			ignoreTermAndHang()
 		}
 		_ = os.WriteFile(marker, []byte("response"), 0o600)
-		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"cancelled"}}` + "\n")
+		outcome := "cancelled"
+		if mode == "execute_completed_after_cancel" {
+			outcome = "completed"
+		}
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"` + outcome + `"}}` + "\n")
 		if mode == "execute_cancelled_without_ack_hang" {
 			ignoreTermAndHang()
 		}
@@ -637,7 +641,13 @@ func runFakeAdapter(mode string) {
 		if mode == "execute_cancelled_duplicate_ack" {
 			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
 		}
+		if mode == "execute_cancelled_extra_after_response" {
+			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"progress","message":"late"}}` + "\n")
+		}
 		waitEOF()
+		if mode == "execute_cancelled_nonzero" {
+			os.Exit(7)
+		}
 	case "execute_early_duplicate_cancel_ack":
 		writeValid(adapterID)
 		reader := bufio.NewReader(os.Stdin)
