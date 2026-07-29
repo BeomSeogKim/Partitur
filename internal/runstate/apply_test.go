@@ -314,6 +314,13 @@ func TestDerivedCancellationAndSupersessionContracts(t *testing.T) {
 	if _, err := Apply(stateWithObservedEpoch, invalidFencedEpoch); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("fenced epoch beyond observed plus one error = %v, want ErrInvalidEvent", err)
 	}
+	invalidPriorFencedEpoch := cancelledSource
+	invalidPriorFencedEpoch.Payload = mustPayload(t, map[string]any{
+		"cancelled_movement_ids": []any{"m1"}, "cancelled_attempt_ids": []any{"a1"}, "obsoleted_decision_ids": []any{}, "fenced_epoch": 1,
+	})
+	if _, err := Apply(stateWithObservedEpoch, invalidPriorFencedEpoch); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("fenced epoch before observed successor error = %v, want ErrInvalidEvent", err)
+	}
 
 	for _, test := range []struct {
 		event Event
@@ -885,6 +892,87 @@ func TestAutoApprovalCommitsPreparedHeadAndSupersedesExactAttempts(t *testing.T)
 		state.ScoreHead != (ScoreHead{Revision: 2, SemanticHash: "sha256:score-2", FileHash: "sha256:file-2"}) ||
 		state.Attempts["a1"].State != AttemptSuperseded {
 		t.Fatalf("approved projection = %+v", state)
+	}
+}
+
+func TestAmendmentApprovedFencedEpochMatchesPreparedObservation(t *testing.T) {
+	tests := []struct {
+		name       string
+		stateEpoch uint64
+		observed   uint64
+		fenced     uint64
+		wantErr    bool
+	}{
+		{
+			name:       "observed_successor",
+			stateEpoch: 1,
+			observed:   1,
+			fenced:     2,
+		},
+		{
+			name:       "prior_epoch_plus_two",
+			stateEpoch: 1,
+			observed:   1,
+			fenced:     3,
+			wantErr:    true,
+		},
+		{
+			name:       "fenced_epoch_before_observed_successor",
+			stateEpoch: 1,
+			observed:   1,
+			fenced:     1,
+			wantErr:    true,
+		},
+		{
+			name:       "current_epoch_changed_since_prepare",
+			stateEpoch: 2,
+			observed:   1,
+			fenced:     2,
+			wantErr:    true,
+		},
+		{
+			name:       "current_epoch_behind_prepared_observation",
+			stateEpoch: 0,
+			observed:   1,
+			fenced:     2,
+			wantErr:    true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := runningAttemptState(t)
+			state.Authority.Epoch = test.stateEpoch
+			preparePayload := autoPreparePayload()
+			preparePayload["observed_authority_epoch"] = test.observed
+			var err error
+			state, err = Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, preparePayload, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			approval := autoApprovalEvent()
+			var approvalPayload map[string]any
+			if err := json.Unmarshal(approval.Payload, &approvalPayload); err != nil {
+				t.Fatal(err)
+			}
+			approvalPayload["fenced_epoch"] = test.fenced
+			approval.Payload = mustPayload(t, approvalPayload)
+
+			next, err := Apply(state, approval)
+			if test.wantErr {
+				if !errors.Is(err, ErrInvalidEvent) {
+					t.Fatalf("Apply() error = %v, want ErrInvalidEvent", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next.Authority != (Authority{Epoch: test.fenced}) {
+				t.Fatalf("authority = %+v, want epoch %d with no owner", next.Authority, test.fenced)
+			}
+		})
 	}
 }
 

@@ -712,11 +712,16 @@ func Apply(input State, event Event) (State, error) {
 			attempt.State = AttemptSuperseded
 			state.Attempts[attemptID] = attempt
 		}
+		observedEpoch := state.PendingPrepare.ObservedAuthorityEpoch
+		if state.Authority.Epoch != observedEpoch {
+			return state, invalid(event, "authority epoch does not match pending prepare observation")
+		}
 		if epoch, ok := optionalUint(payload, "fenced_epoch"); ok {
-			if epoch <= state.Authority.Epoch {
-				return state, invalid(event, "fenced_epoch does not advance authority")
+			if epoch == observedEpoch+1 {
+				state.Authority = Authority{Epoch: epoch}
+			} else {
+				return state, invalid(event, "fenced_epoch is not observed authority epoch plus one")
 			}
-			state.Authority = Authority{Epoch: epoch}
 		}
 		state.PendingPrepare = nil
 		closeAllPendingDecisions(&state)
