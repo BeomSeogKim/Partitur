@@ -2,14 +2,17 @@ package runstore
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
@@ -25,6 +28,30 @@ func (store *Store) ReadLease(runID runstate.RunID) (Lease, bool, error) {
 		return Lease{}, false, err
 	}
 	return readLease(store.fs, filepath.Join(store.root, ".partitur", "runs", string(runID)))
+}
+
+// WakeLeaseOwner sends the optional control wake only after re-reading the
+// exact recorded lease owner. Journal polling remains authoritative.
+func (store *Store) WakeLeaseOwner(runID runstate.RunID) {
+	lease, present, err := store.ReadLease(runID)
+	if err != nil || !present || lease.MatchOwner().Status != procid.MatchingAndLive {
+		return
+	}
+	procid.Wake(lease.PID, lease.Start)
+}
+
+// TerminateLeaseOwner applies §6 step 6 to exactly one still-matching lease
+// owner. It takes no state lock, so the driver can release its lock while
+// responding to cancellation.
+func (store *Store) TerminateLeaseOwner(ctx context.Context, runID runstate.RunID, expected LeaseIdentity, grace time.Duration) error {
+	lease, present, err := store.ReadLease(runID)
+	if err != nil {
+		return err
+	}
+	if !present || !leaseMatches(lease, expected) {
+		return ErrLeaseConflict
+	}
+	return procid.Terminate(ctx, lease.PID, lease.Start, grace)
 }
 
 func readLease(fileSystem fsOperations, runRoot string) (Lease, bool, error) {

@@ -106,6 +106,33 @@ func TestWatcherStopWaitsForItsGoroutine(t *testing.T) {
 	}
 }
 
+func TestWatcherWakeQueuesObservationForWatchGoroutine(t *testing.T) {
+	root := t.TempDir()
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watcher, err := Watch(store, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Stop()
+	path := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"event_id":"request","seq":1,"ts":"2026-07-29T00:00:00.000Z","run_id":"run-1","score_revision":1,"type":"cancel.requested","payload":{"requested_by":"cli"}}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	watcher.Wake()
+	select {
+	case <-watcher.Cancelled():
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not observe queued wake")
+	}
+}
+
 func TestExecuteRejectsMissingInputs(t *testing.T) {
 	store, err := runstore.New(t.TempDir(), faultpoint.Nop{})
 	if err != nil {

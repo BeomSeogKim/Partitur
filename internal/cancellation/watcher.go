@@ -20,6 +20,7 @@ type Watcher struct {
 	runID runstate.RunID
 
 	cancelled chan struct{}
+	wake      chan struct{}
 	stop      context.CancelFunc
 	done      chan struct{}
 
@@ -39,6 +40,7 @@ func Watch(store *runstore.Store, runID runstate.RunID) (*Watcher, error) {
 		store:     store,
 		runID:     runID,
 		cancelled: make(chan struct{}),
+		wake:      make(chan struct{}, 1),
 		stop:      stop,
 		done:      make(chan struct{}),
 	}
@@ -76,6 +78,18 @@ func (watcher *Watcher) Execute(ctx context.Context) error {
 	return Execute(ctx, watcher.store, watcher.runID)
 }
 
+// Wake asks the watcher to read the journal now. It is safe to call from the
+// driver's SIGUSR1 relay; polling remains the correctness mechanism.
+func (watcher *Watcher) Wake() {
+	if watcher == nil {
+		return
+	}
+	select {
+	case watcher.wake <- struct{}{}:
+	default:
+	}
+}
+
 // Stop waits for the watcher goroutine, so it cannot outlive its driver.
 func (watcher *Watcher) Stop() {
 	if watcher == nil {
@@ -96,6 +110,7 @@ func (watcher *Watcher) watch(ctx context.Context, ticker *time.Ticker) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-watcher.wake:
 		}
 	}
 }

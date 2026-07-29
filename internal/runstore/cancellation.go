@@ -35,7 +35,9 @@ func (store *Store) RequestCancellation(runID runstate.RunID) error {
 			return ErrCancellationNotAllowed
 		}
 		if state.Run.Terminal() {
-			return ErrCancellationNotAllowed
+			// §7 maps an already-terminal cancel through RC-RESUME-002; it is
+			// idempotent and must not append cancel.requested.
+			return nil
 		}
 		event := runstate.Event{
 			RunID:         runID,
