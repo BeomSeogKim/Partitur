@@ -142,11 +142,11 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No pending-prepare quiesce fixture |
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No pending-prepare commit fixture |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
-| `cancel.swept_to_terminal` | not reached by this gate's cuts | §6 (a), (e); E.2 | No cancellation oracle fixture |
-| `cancel.swept_to_quarantined` | not reached by this gate's cuts | §6 (a)-(b); E.2 | No cancellation oracle fixture |
-| `cancel.interval_stopped_to_terminal` | not reached by this gate's cuts | §6 (c)-(e); E.2 | No cancellation oracle fixture |
-| `cancel.fence_decided_to_terminal` | not reached by this gate's cuts | §6 (d)-(e); E.2 | No cancellation oracle fixture |
-| `cancel.terminal_to_lease_removed` | not reached by this gate's cuts | §6 (e)-(f); E.2 | No cancellation oracle fixture |
+| `cancel.swept_to_terminal` | not reached by this gate's cuts | §6 (a), (e); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
+| `cancel.swept_to_quarantined` | not reached by this gate's cuts | §6 (a)-(b); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
+| `cancel.interval_stopped_to_terminal` | not reached by this gate's cuts | §6 (c)-(e); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
+| `cancel.fence_decided_to_terminal` | not reached by this gate's cuts | §6 (d)-(e); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
+| `cancel.terminal_to_lease_removed` | not reached by this gate's cuts | §6 (e)-(f); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
 | `supersede.swept_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
 | `supersede.interval_stopped_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
 | `supersede.fence_decided_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |

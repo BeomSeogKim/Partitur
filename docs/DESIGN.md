@@ -2289,6 +2289,14 @@ durable path that reaches a driver mid-execution:
    never declared cancelled while the old execution authority could still mutate it, and never
    left fenced without being terminal.**
 
+**Open question — responsive-owner terminalization.** Steps 3–4 say how a live responsive driver
+observes and stops for `cancel.requested`, but §6 does not name in one place which actor appends
+`run.cancelled` on that path. The single-oracle warning above is why this must be resolved as one
+normative sequence rather than inferred from a second one. 2.1a does not reach the case because
+§7 reserves its direct terminalization to the no-valid-lease-owner branch; 2.1b owns the question
+with the watcher and protocol-cancel work. This records an open specification question, not a
+choice between the readings.
+
 **Supersession uses the same branches, including the wedged one.** An approved revision must
 supersede every nonterminal attempt (§9), and the driver holding that attempt can be wedged exactly
 as it can be during cancellation — so the two are not different mechanisms, only different terminal
@@ -5628,6 +5636,17 @@ The paragraph above records current implementation status. The obligations below
 true of the implementation — the whole point of freezing the contract first is that `runstore` is
 written against it rather than retrofitted. [`HARNESS.md`](HARNESS.md) selects from E.2 rather than
 describing boundaries of its own.
+
+**Unit 2.1a allocation.** The first cancellation slice implements the shared §6 cancellation
+oracle, `RC-RESUME-006`, and §7's `cancel` command only where no valid lease owner remains. If a
+valid owner remains, its durable request waits: without steps 3–4's watcher the driver does not
+observe it and finishes its attempt; a later `resume` selects `RC-RESUME-006`. That is this slice's
+control latency, not a different cancellation contract. Step 6 belongs to 2.1b with steps 3–4:
+without an acknowledgement path, a healthy driver is indistinguishable from a wedged owner and the
+deadline would terminate it. That hazard is created by implementation order, not by §6.
+
+The five `cancel.*` E.2 edges remain outside 2.1a; 2.1b owns their subprocess fixture and the
+required `(b, c, d)` matrix.
 
 - The Go types implement E.1's semantics and carry E.2's edge IDs verbatim.
 - They **do not restate the assertions.** An invariant in a doc comment is a second normative text,
