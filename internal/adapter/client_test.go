@@ -671,6 +671,20 @@ func runFakeAdapter(mode string) {
 		_ = os.WriteFile(marker, []byte("response"), 0o600)
 		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}` + "\n")
 		waitEOF()
+	case "execute_post_eof_stderr_hang", "execute_post_eof_process_hang":
+		// Respond, acknowledge nothing (no cancel was requested yet), then close stdout so
+		// the core leaves its frame loop. The marker tells the test the post-EOF window is
+		// open; only then does it cancel.
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}` + "\n")
+		_ = os.Stdout.Close()
+		if mode == "execute_post_eof_process_hang" {
+			_ = os.Stderr.Close()
+		}
+		_ = os.WriteFile(marker+".eof", []byte("eof"), 0o600)
+		ignoreTermAndHang()
 	case "execute_cancelled_without_ack":
 		writeValid(adapterID)
 		reader := bufio.NewReader(os.Stdin)

@@ -487,6 +487,64 @@ func TestExecuteCancelObservedAfterResponseStillSuppressesRecording(t *testing.T
 	}
 }
 
+// Two windows open after stdout EOF — waiting for the stderr drain, then waiting for the
+// process — and neither is inside the loop that watches the signal. A cancellation arriving
+// there must still start §6's outer grace, or a fake that closes its stdio and stays alive
+// holds the call forever.
+func TestExecuteCancelAfterEOFStillArmsTheGrace(t *testing.T) {
+	for _, mode := range []string{"execute_post_eof_stderr_hang", "execute_post_eof_process_hang"} {
+		t.Run(mode, func(t *testing.T) {
+			directory := t.TempDir()
+			installFake(t, directory, "fake")
+			marker := filepath.Join(t.TempDir(), "response")
+			var order []string
+			client := newClient([]string{
+				fakeModeEnv + "=" + mode,
+				fakeMarkerEnv + "=" + marker,
+			}, incidentalTestDeadline, 20*time.Millisecond)
+			cancel := make(chan struct{})
+			terminated := 0
+			client.sessions = &recordingSessionController{
+				base:        systemSessionController{},
+				terminateFn: func() { terminated++ },
+			}
+			// Cancel only once the fake reports its stdout closed, which is what puts the
+			// request inside the post-EOF window rather than the frame loop.
+			go func() {
+				for {
+					if _, err := os.Stat(marker + ".eof"); err == nil {
+						close(cancel)
+						return
+					}
+					time.Sleep(2 * time.Millisecond)
+				}
+			}()
+			plan := executePlan(
+				"fake",
+				filepath.Join(directory, "partitur-adapter-fake"),
+				buildTrampoline(t, directory),
+				t.TempDir(),
+				t.TempDir(),
+				t.TempDir(),
+				successfulRecorder(&order),
+				&order,
+			)
+			plan.Cancel = cancel
+			report, err := executeWithin(t, client, plan, 30*time.Second)
+			if err == nil || !strings.Contains(err.Error(), "cancel completion grace expired") {
+				t.Fatalf("report = %#v, error = %v", report, err)
+			}
+			if report.Result != nil || terminated != 1 {
+				t.Fatalf("report = %#v, forced session sweeps = %d", report, terminated)
+			}
+			want := []string{"attempt.started", "adapter.probed"}
+			if !reflect.DeepEqual(order, want) {
+				t.Fatalf("journal order = %v, want %v", order, want)
+			}
+		})
+	}
+}
+
 func TestExecuteCancelGraceTimeoutForcesVerifiedEmptySweep(t *testing.T) {
 	directory := t.TempDir()
 	installFake(t, directory, "fake")

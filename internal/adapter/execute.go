@@ -145,6 +145,17 @@ probed:
 		state.report.Result = nil
 		return failWithoutOutcome(errors.New("cancel completion grace expired"))
 	}
+	observeCancellation := func() {
+		// §6's outer grace has to start wherever the cancellation is first seen, or a drain
+		// that never finishes has nothing bounding it. No protocol `cancel` is issued from
+		// the post-response points: the call being drained has already answered.
+		state.cancellationInFlight = true
+		cancelSignal = nil
+		if cancelTimer == nil {
+			cancelTimer = time.NewTimer(c.grace)
+			cancelTimeout = cancelTimer.C
+		}
+	}
 	interrupted := func(cause error) (ExecuteReport, error) {
 		if cleanupErr := c.stopExecute(running); cleanupErr != nil {
 			return state.report, sweepHalt(cleanupErr)
@@ -269,16 +280,8 @@ response:
 			return c.finishFailure(running, &state, protocol.FailureProtocolError, reason, event.err.Error())
 		case <-cancelSignal:
 			// Suppression is already handled by the recording entry points, which read the
-			// signal themselves. This case is about liveness: a cancellation arriving after
-			// the response leaves no deadline bounding the drain, so §6's outer grace would
-			// never start against an adapter that stops writing. There is no protocol
-			// `cancel` to issue — the call this drain belongs to has already responded.
-			state.cancellationInFlight = true
-			cancelSignal = nil
-			if cancelTimer == nil {
-				cancelTimer = time.NewTimer(c.grace)
-				cancelTimeout = cancelTimer.C
-			}
+			// signal themselves. Observing it here is about liveness only.
+			observeCancellation()
 		case <-cancelTimeout:
 			return cancelExpired()
 		case <-ctx.Done():
@@ -291,18 +294,23 @@ response:
 	}
 
 outputDrained:
-	select {
-	case <-running.stderrDone:
-	case <-cancelTimeout:
-		return failAfterOutputDrainWithoutOutcome(errors.New("cancel completion grace expired"))
-	case <-ctx.Done():
-		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
-			return state.report, sweepHalt(cleanupErr)
+	for stderrPending := true; stderrPending; {
+		select {
+		case <-running.stderrDone:
+			stderrPending = false
+		case <-cancelSignal:
+			observeCancellation()
+		case <-cancelTimeout:
+			return failAfterOutputDrainWithoutOutcome(errors.New("cancel completion grace expired"))
+		case <-ctx.Done():
+			if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+				return state.report, sweepHalt(cleanupErr)
+			}
+			<-running.stderrDone
+			_ = running.process.Wait()
+			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+			return state.report, ctx.Err()
 		}
-		<-running.stderrDone
-		_ = running.process.Wait()
-		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-		return state.report, ctx.Err()
 	}
 	state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
 	wait := make(chan error, 1)
@@ -310,26 +318,31 @@ outputDrained:
 		wait <- running.process.Wait()
 	}()
 	var waitErr error
-	select {
-	case waitErr = <-wait:
-	case <-cancelTimeout:
-		// Drain the goroutine above rather than calling Wait again: two concurrent
-		// Cmd.Wait calls on one process are a data race, which is why the context case
-		// below takes the same shape.
-		state.report.Result = nil
-		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
-			return state.report, sweepHalt(cleanupErr)
+	for waiting := true; waiting; {
+		select {
+		case waitErr = <-wait:
+			waiting = false
+		case <-cancelSignal:
+			observeCancellation()
+		case <-cancelTimeout:
+			// Drain the goroutine above rather than calling Wait again: two concurrent
+			// Cmd.Wait calls on one process are a data race, which is why the context case
+			// below takes the same shape.
+			state.report.Result = nil
+			if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+				return state.report, sweepHalt(cleanupErr)
+			}
+			<-wait
+			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+			return state.report, errors.New("cancel completion grace expired")
+		case <-ctx.Done():
+			if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+				return state.report, sweepHalt(cleanupErr)
+			}
+			<-wait
+			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+			return state.report, ctx.Err()
 		}
-		<-wait
-		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-		return state.report, errors.New("cancel completion grace expired")
-	case <-ctx.Done():
-		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
-			return state.report, sweepHalt(cleanupErr)
-		}
-		<-wait
-		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-		return state.report, ctx.Err()
 	}
 	if waitErr != nil {
 		state.report.Result = nil
