@@ -22,6 +22,11 @@ var (
 	ErrUnreachableAction   = errors.New("recovery action is unreachable in this slice")
 	ErrUnreachableStep     = errors.New("recovery action step is unreachable in this slice")
 	ErrHandoffUnverifiable = errors.New("recovery spawn handoff is unverifiable")
+	// ErrRunCancelledDuringRecovery reports that a recovery-owned attempt observed a
+	// cancellation and terminalized through the §6 oracle. It is not a failure: the
+	// executor replans so C.1's terminal row supplies the outcome, rather than a second
+	// exit path inventing one.
+	ErrRunCancelledDuringRecovery = errors.New("recovery attempt was cancelled and terminalized")
 )
 
 // LoadInput returns a fresh, fully observed recovery input. It is called again
@@ -149,6 +154,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				return result, err
 			}
 		}
+		cancelledMidStep := false
 		if len(action.Steps) != 0 {
 			for index, step := range action.Steps {
 				handler, ok := executor.stepHandler(step)
@@ -157,6 +163,22 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				}
 				handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
 				if err := handler(ctx, handlerContext, action); err != nil {
+					if errors.Is(err, ErrRunCancelledDuringRecovery) {
+						refreshed, halted, reloadErr := executor.reloadAfterEffect(ctx, input, decision)
+						if reloadErr != nil {
+							return result, reloadErr
+						}
+						if halted.Halt != "" {
+							result.Decision = halted
+							result.Outcome = OutcomeHalted
+							return result, nil
+						}
+						input = refreshed
+						result.Replans++
+						decision = recovery.Plan(input)
+						cancelledMidStep = true
+						break
+					}
 					if halted, ok := haltDecision(decision, err); ok {
 						result.Decision = halted
 						result.Outcome = OutcomeHalted
@@ -178,6 +200,9 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 					input = refreshed
 				}
 			}
+			if cancelledMidStep {
+				continue
+			}
 		} else {
 			handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
 			handler, ok := executor.kindHandler(action.Kind)
@@ -185,6 +210,21 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
 			}
 			if err := handler(ctx, handlerContext, action); err != nil {
+				if errors.Is(err, ErrRunCancelledDuringRecovery) {
+					refreshed, halted, reloadErr := executor.reloadAfterEffect(ctx, input, decision)
+					if reloadErr != nil {
+						return result, reloadErr
+					}
+					if halted.Halt != "" {
+						result.Decision = halted
+						result.Outcome = OutcomeHalted
+						return result, nil
+					}
+					input = refreshed
+					result.Replans++
+					decision = recovery.Plan(input)
+					continue
+				}
 				if halted, ok := haltDecision(decision, err); ok {
 					result.Decision = halted
 					result.Outcome = OutcomeHalted
