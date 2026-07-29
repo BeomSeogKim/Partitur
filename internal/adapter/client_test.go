@@ -607,6 +607,52 @@ func runFakeAdapter(mode string) {
 			_, _ = os.Stderr.WriteString("BEYOND-CAP")
 			os.Exit(7)
 		}
+	case "execute_cancelled", "execute_cancelled_duplicate_ack", "execute_cancel_timeout":
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		_, _ = reader.ReadString('\n')
+		if mode == "execute_cancel_timeout" {
+			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+			ignoreTermAndHang()
+		}
+		_ = os.WriteFile(marker, []byte("response"), 0o600)
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"cancelled"}}` + "\n")
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		if mode == "execute_cancelled_duplicate_ack" {
+			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		}
+		waitEOF()
+	case "execute_early_duplicate_cancel_ack":
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		// Two reads: the execute request, then the cancel request itself. Waiting for the
+		// cancel to arrive is what makes both acknowledgements solicited, so the duplicate
+		// reaches the in-flight guard rather than the unsolicited one.
+		_, _ = reader.ReadString('\n')
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		_ = os.WriteFile(marker, []byte("response"), 0o600)
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"cancelled"}}` + "\n")
+		waitEOF()
+	case "execute_early_unsolicited_cancel_ack":
+		writeValid(adapterID)
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		// No cancel was requested, so this acknowledgement is unsolicited. The execute
+		// response that follows is what makes the guard's absence a named failure
+		// rather than a hang.
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		_ = os.WriteFile(marker, []byte("response"), 0o600)
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}` + "\n")
+		waitEOF()
+	case "execute_cancelled_without_ack":
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"cancelled"}}` + "\n")
+		waitEOF()
 	case "environment":
 		data, _ := json.Marshal(struct {
 			Argv0       string

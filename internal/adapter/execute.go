@@ -118,6 +118,17 @@ probed:
 		return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", err.Error())
 	}
 
+	cancelSignal := plan.Cancel
+	cancelRequested := false
+	cancelAcknowledged := false
+	var drainFailure *executeProtocolFailure
+	var cancelTimer *time.Timer
+	var cancelTimeout <-chan time.Time
+	defer func() {
+		if cancelTimer != nil {
+			cancelTimer.Stop()
+		}
+	}()
 	for {
 		select {
 		case event := <-running.frames:
@@ -150,11 +161,35 @@ probed:
 				}
 				continue
 			}
+			if decoded.kind == executeFrameCancelAck {
+				if !cancelRequested {
+					return c.finishFailure(running, &state, protocol.FailureProtocolError, "strict_decode_failed", "unsolicited cancel acknowledgement")
+				}
+				if cancelAcknowledged {
+					return c.finishFailure(running, &state, protocol.FailureProtocolError, "strict_decode_failed", "duplicate cancel acknowledgement")
+				}
+				cancelAcknowledged = true
+				continue
+			}
 			if failure := state.validateBlocking(decoded.result); failure != nil {
 				return c.finishFailure(running, &state, protocol.FailureProtocolError, failure.reason, failure.detail)
 			}
 			state.report.Result = &decoded.result
 			goto response
+		case <-cancelSignal:
+			cancelRequest, encodeErr := encodeCancelRequest(protocol.CancelRequest{AttemptID: plan.Request.AttemptID})
+			if encodeErr != nil {
+				return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", encodeErr.Error())
+			}
+			if writeErr := c.write(running.stdin, cancelRequest); writeErr != nil {
+				return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", writeErr.Error())
+			}
+			cancelRequested = true
+			cancelSignal = nil
+			cancelTimer = time.NewTimer(c.grace)
+			cancelTimeout = cancelTimer.C
+		case <-cancelTimeout:
+			return failWithoutOutcome(errors.New("cancel completion grace expired"))
 		case <-ctx.Done():
 			if cleanupErr := c.stopExecute(running); cleanupErr != nil {
 				return state.report, sweepHalt(cleanupErr)
@@ -165,6 +200,15 @@ probed:
 	}
 
 response:
+	if cancelTimer != nil {
+		if !cancelTimer.Stop() {
+			select {
+			case <-cancelTimer.C:
+			default:
+			}
+		}
+		cancelTimeout = nil
+	}
 	if err := running.stdin.Close(); err != nil {
 		running.stdin = nil
 		return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", err.Error())
@@ -174,9 +218,27 @@ response:
 		select {
 		case event := <-running.frames:
 			if event.err == nil {
+				decoded, decodeErr := decodeExecuteFrame(event.frame)
+				if decodeErr == nil {
+					if decoded.kind == executeFrameCancelAck {
+						if cancelRequested {
+							if !cancelAcknowledged {
+								cancelAcknowledged = true
+								continue
+							}
+						}
+					}
+				}
 				return c.finishFailure(running, &state, protocol.FailureProtocolError, "strict_decode_failed", "frame followed execute response")
 			}
 			if errors.Is(event.err, io.EOF) {
+				if cancelRequested {
+					if !cancelAcknowledged {
+						state.report.Result = nil
+						drainFailure = &executeProtocolFailure{reason: "strict_decode_failed", detail: "cancel acknowledgement absent"}
+						goto outputDrained
+					}
+				}
 				goto outputDrained
 			}
 			reason := "strict_decode_failed"
@@ -237,7 +299,17 @@ outputDrained:
 	if err := c.recordStop(&state); err != nil {
 		return state.report, err
 	}
-	if err := c.recordResult(&state); err != nil {
+	if drainFailure != nil {
+		result := protocol.ExecuteResult{
+			Outcome: protocol.OutcomeFailed,
+			Failure: &protocol.Failure{
+				Kind:   protocol.FailureProtocolError,
+				Detail: adapterkit.SanitizeMessage(drainFailure.detail),
+			},
+		}
+		return state.report, state.recordOutcome(string(runstate.EventAttemptFailed), result, drainFailure.reason)
+	}
+	if err := c.recordResult(&state, cancelRequested); err != nil {
 		return state.report, err
 	}
 	return state.report, nil
@@ -562,7 +634,7 @@ func (c *Client) recordStop(state *executeState) error {
 	return nil
 }
 
-func (c *Client) recordResult(state *executeState) error {
+func (c *Client) recordResult(state *executeState, cancelRequested bool) error {
 	result := *state.report.Result
 	eventType := ""
 	reason := ""
@@ -574,6 +646,9 @@ func (c *Client) recordResult(state *executeState) error {
 	case protocol.OutcomeWaitingHuman:
 		eventType = "attempt.blocked"
 	case protocol.OutcomeCancelled:
+		if cancelRequested {
+			return nil
+		}
 		eventType = string(runstate.EventAttemptFailed)
 		result.Failure = &protocol.Failure{Kind: protocol.FailureTaskFailed}
 		reason = "unsolicited_cancel"

@@ -10,13 +10,17 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 )
 
-var executeRequestID = json.RawMessage(`"execute"`)
+var (
+	executeRequestID = json.RawMessage(`"execute"`)
+	cancelRequestID  = json.RawMessage(`"cancel"`)
+)
 
 type executeFrameKind int
 
 const (
 	executeFrameResponse executeFrameKind = iota
 	executeFrameEvent
+	executeFrameCancelAck
 )
 
 type executeFrame struct {
@@ -57,6 +61,25 @@ func encodeExecuteRequest(request protocol.ExecuteRequest) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+func encodeCancelRequest(request protocol.CancelRequest) ([]byte, error) {
+	frame := struct {
+		JSONRPC string                 `json:"jsonrpc"`
+		ID      json.RawMessage        `json:"id"`
+		Method  string                 `json:"method"`
+		Params  protocol.CancelRequest `json:"params"`
+	}{
+		JSONRPC: "2.0",
+		ID:      cancelRequestID,
+		Method:  "cancel",
+		Params:  request,
+	}
+	encoded, err := json.Marshal(frame)
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
 func decodeExecuteFrame(frame []byte) (executeFrame, error) {
 	if !utf8.Valid(frame) {
 		return executeFrame{}, protocolFailure("strict_decode_failed", "frame is not valid UTF-8")
@@ -85,18 +108,41 @@ func decodeExecuteFrame(frame []byte) (executeFrame, error) {
 		return executeFrame{kind: executeFrameEvent, event: event}, nil
 	}
 
-	if !bytes.Equal(bytes.TrimSpace(envelope.ID), executeRequestID) ||
-		envelope.Params != nil || envelope.Result == nil || envelope.Error != nil {
-		return executeFrame{}, protocolFailure("strict_decode_failed", "invalid execute response")
+	if envelope.Params != nil || envelope.Result == nil || envelope.Error != nil {
+		return executeFrame{}, protocolFailure("strict_decode_failed", "invalid response shape")
 	}
-	var result protocol.ExecuteResult
-	if err := protocol.DecodeStrict(envelope.Result, &result); err != nil {
-		return executeFrame{}, protocolFailure("strict_decode_failed", err.Error())
+	responseID := bytes.TrimSpace(envelope.ID)
+	if bytes.Equal(responseID, executeRequestID) {
+		var result protocol.ExecuteResult
+		if err := protocol.DecodeStrict(envelope.Result, &result); err != nil {
+			return executeFrame{}, protocolFailure("strict_decode_failed", err.Error())
+		}
+		if err := validateExecuteResult(result); err != nil {
+			return executeFrame{}, err
+		}
+		return executeFrame{kind: executeFrameResponse, result: result}, nil
 	}
-	if err := validateExecuteResult(result); err != nil {
-		return executeFrame{}, err
+	if bytes.Equal(responseID, cancelRequestID) {
+		if err := decodeEmptyObject(envelope.Result); err != nil {
+			return executeFrame{}, protocolFailure("strict_decode_failed", err.Error())
+		}
+		return executeFrame{kind: executeFrameCancelAck}, nil
 	}
-	return executeFrame{kind: executeFrameResponse, result: result}, nil
+	return executeFrame{}, protocolFailure("strict_decode_failed", "unknown response id")
+}
+
+func decodeEmptyObject(value json.RawMessage) error {
+	var object map[string]json.RawMessage
+	if err := protocol.DecodeStrict(value, &object); err != nil {
+		return err
+	}
+	if object == nil {
+		return errors.New("cancel result must be an object")
+	}
+	if len(object) != 0 {
+		return errors.New("cancel result must be empty")
+	}
+	return nil
 }
 
 func decodeExecuteEvent(params json.RawMessage) (any, error) {

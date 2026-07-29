@@ -31,6 +31,7 @@ type ExecutePlan struct {
 	IntervalOpened time.Time
 	MayPropose     bool
 	Draft          bool
+	Cancel         <-chan struct{}
 	Probe          faultpoint.Probe
 	RecordIdentity launch.RecordIdentity
 	Recorder       ExecuteRecorder
@@ -98,9 +99,9 @@ func (e *HaltError) Unwrap() error {
 	return e.Reason
 }
 
-// Execute runs one gated adapter session. Cancellation is owned by the
-// caller's §6 path; Execute sweeps the session and returns ctx.Err without
-// closing the interval or recording a response-derived outcome.
+// Execute runs one gated adapter session. Its cancellation responsibilities
+// are defined by docs/DESIGN.md §6; context cancellation remains the
+// operational-interruption path.
 func (c *Client) Execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, error) {
 	return c.execute(ctx, plan)
 }
