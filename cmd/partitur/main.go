@@ -14,9 +14,12 @@ import (
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
+	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/cancelwait"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryexec"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryobs"
@@ -59,6 +62,9 @@ type logsStreamer func(
 ) error
 
 func main() {
+	// A recovery process has no SIGUSR1 relay. Ignore the optional wake before
+	// command dispatch, which is before any command can make a lease durable.
+	signal.Ignore(syscall.SIGUSR1)
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -322,7 +328,9 @@ func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner
 		fmt.Fprintln(stderr, "run interrupted: run_id=\"\" state=\"nonterminal\" resume=\"partitur resume\" detail=\"cancel unavailable\"")
 		return 6
 	}
-	result, err := cancel(context.Background(), requestedID)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	result, err := cancel(ctx, requestedID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrCancellationNotAllowed) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
@@ -343,7 +351,7 @@ func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner
 	case recoveryexec.OutcomeFailed, recoveryexec.OutcomeCancelled:
 		return 4
 	case recoveryexec.OutcomeRefused:
-		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "cancellation request is durable; a live owner still holds the lease; resume will terminalize the run")
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "cancellation acknowledgement wait ended without a terminal outcome")
 		return 6
 	case recoveryexec.OutcomeHalted:
 		if !recovery.IsHaltReason(result.Decision.Halt) {
@@ -403,7 +411,48 @@ func cancel(ctx context.Context, requestedID string) (recoveryexec.Result, error
 	if err := store.RequestCancellation(runID); err != nil {
 		return recoveryexec.Result{}, err
 	}
-	return executeRecovery(ctx, store, runID)
+	store.WakeLeaseOwner(runID)
+	return waitForCancellation(ctx, store, runID)
+}
+
+func waitForCancellation(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {
+	return newCancellationWaiter(store, runID).Run(ctx)
+}
+
+func newCancellationWaiter(store *runstore.Store, runID runstate.RunID) cancelwait.Waiter {
+	return cancelwait.Waiter{
+		Execute: func(ctx context.Context) (recoveryexec.Result, error) {
+			return executeRecovery(ctx, store, runID)
+		},
+		Observe: func(context.Context) (cancelwait.Owner, error) {
+			durable, err := store.LoadRecoveryInput(runID)
+			if err != nil {
+				return cancelwait.Owner{}, err
+			}
+			observations, err := recoveryobs.Collect(store, runID, durable.Projection)
+			if err != nil {
+				return cancelwait.Owner{}, err
+			}
+			lease := observations.Lease
+			owner := cancelwait.Owner{State: lease.Owner}
+			if lease.Exists && lease.Readable && lease.Identity != nil && lease.Epoch == durable.Projection.State.Authority.Epoch {
+				owner.Current = true
+				owner.Identity = *lease.Identity
+			}
+			return owner, nil
+		},
+		Terminate: func(ctx context.Context, identity recovery.LeaseIdentity) error {
+			err := store.TerminateLeaseOwner(ctx, runID, runstore.LeaseIdentity{
+				Epoch: identity.Epoch, Token: identity.Token, PID: identity.PID, Start: identity.Start,
+			}, adapter.OuterTerminationGrace)
+			if errors.Is(err, runstore.ErrLeaseConflict) || errors.Is(err, procid.ErrUnverifiable) {
+				// The final recovery pass classifies this changed observation at
+				// its one normative halt/oracle site.
+				return nil
+			}
+			return err
+		},
+	}
 }
 
 func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {

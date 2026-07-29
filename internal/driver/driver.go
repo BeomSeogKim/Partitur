@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
@@ -129,6 +132,12 @@ func run(
 	if err != nil {
 		return stopped(result, err)
 	}
+	// The lease is a canceller's signal target, so install the harmless wake
+	// relay before the lease can become durable. A buffered signal received in
+	// the acquisition-to-watcher window is delivered after Watch starts.
+	wake := make(chan os.Signal, 1)
+	signal.Notify(wake, syscall.SIGUSR1)
+	defer signal.Stop(wake)
 	authority, err := store.AcquireDriver(startResult.RunID, seeds)
 	if err != nil {
 		return stopped(result, err)
@@ -146,6 +155,18 @@ func run(
 		return stopped(result, err)
 	}
 	defer control.Stop()
+	wakeDone := make(chan struct{})
+	defer close(wakeDone)
+	go func() {
+		for {
+			select {
+			case <-wake:
+				control.Wake()
+			case <-wakeDone:
+				return
+			}
+		}
+	}()
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
