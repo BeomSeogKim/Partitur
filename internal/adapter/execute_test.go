@@ -550,6 +550,79 @@ func TestExecuteCancelAfterEOFStillArmsTheGrace(t *testing.T) {
 
 // The execute and cancel writes are cancellation windows. The fake consumes only the run
 // probe, so the injected oversized request blocks in the real stdin pipe until the sweep closes it.
+// §6's watch runs for the driver's whole tenure, and §4 puts the run-probe request write
+// inside the completion deadline. The adapter process is already running by then, so a
+// cancellation arriving before `adapter.probed` has to sweep it — with no protocol `cancel`,
+// since no `execute` has been authorized.
+func TestExecuteCancellationIsObservedBeforeTheProbeCompletes(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		blockWrite bool
+		wantError  string
+	}{
+		{name: "probe request write", blockWrite: true, wantError: "cancel observed while writing run probe request"},
+		{name: "probe response wait", blockWrite: false, wantError: "cancel observed while awaiting run probe response"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			installFake(t, directory, "fake")
+			var order []string
+			// The fake never reads stdin and never responds, so neither window can close
+			// on its own — only the cancellation can end this call.
+			client := newClient([]string{fakeModeEnv + "=hang_no_response"}, incidentalTestDeadline, 20*time.Millisecond)
+			cancel := make(chan struct{})
+			if test.blockWrite {
+				baseWrite := client.write
+				client.write = func(writer io.Writer, data []byte) error {
+					if !strings.Contains(string(data), `"method":"probe"`) {
+						return baseWrite(writer, data)
+					}
+					// Oversized so the pipe fills against a fake that never reads.
+					go close(cancel)
+					return baseWrite(writer, bytes.Repeat(data, 1<<16))
+				}
+			} else {
+				// Entry to the response window is the happens-before edge; closing from the
+				// write hook would leave the two selects racing for the same signal.
+				client.observeExecuteWindow = func(window executeWindow) {
+					if window == executeWindowProbeResponse {
+						close(cancel)
+					}
+				}
+			}
+			terminated := 0
+			client.sessions = &recordingSessionController{
+				base:        systemSessionController{},
+				terminateFn: func() { terminated++ },
+			}
+			plan := executePlan(
+				"fake",
+				filepath.Join(directory, "partitur-adapter-fake"),
+				buildTrampoline(t, directory),
+				t.TempDir(),
+				t.TempDir(),
+				t.TempDir(),
+				successfulRecorder(&order),
+				&order,
+			)
+			plan.Cancel = cancel
+			report, err := executeWithin(t, client, plan, 30*time.Second)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("report = %#v, error = %v", report, err)
+			}
+			if report.Result != nil || terminated != 1 {
+				t.Fatalf("report = %#v, forced session sweeps = %d", report, terminated)
+			}
+			// Nothing durable is owed: the probe never completed, so not even
+			// adapter.probed was recorded.
+			want := []string{"attempt.started"}
+			if !reflect.DeepEqual(order, want) {
+				t.Fatalf("journal order = %v, want %v", order, want)
+			}
+		})
+	}
+}
+
 func TestExecuteCancellationBoundsBlockedRequestWrites(t *testing.T) {
 	for _, test := range []struct {
 		name      string

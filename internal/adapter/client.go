@@ -28,8 +28,9 @@ type gatedLauncher func(context.Context, launch.Request) (*launch.Process, error
 type executeWindow string
 
 const (
-	executeWindowStderrDrain executeWindow = "stderr drain"
-	executeWindowProcessWait executeWindow = "process wait"
+	executeWindowProbeResponse executeWindow = "probe response"
+	executeWindowStderrDrain   executeWindow = "stderr drain"
+	executeWindowProcessWait   executeWindow = "process wait"
 )
 
 // Client owns an immutable environment snapshot and the probe lifecycle.

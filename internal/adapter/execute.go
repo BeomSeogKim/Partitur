@@ -121,8 +121,11 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		writeCancelled
 		writeExpired
 		writeInterrupted
+		writeDeadlineExpired
 	)
-	writeBounded := func(request []byte) (error, writeOutcome) {
+	// deadline is the run-probe completion deadline, which §4 says covers the request write;
+	// the execute and cancel writes pass nil because their bound is the cancellation grace.
+	writeBounded := func(request []byte, deadline <-chan time.Time) (error, writeOutcome) {
 		// Capture the handle before the goroutine starts. Every non-completion exit below
 		// leaves the write still blocked, and the sweep that follows sets running.stdin to
 		// nil — reading the field from inside the goroutine would race that assignment.
@@ -132,6 +135,15 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		go func() {
 			completed <- c.write(stdin, request)
 		}()
+		// A write that has already finished is taken over a cancellation that is also
+		// ready: discarding a completed write would lose work for nothing, and the very
+		// next select observes the cancellation anyway. Without this the two are peers and
+		// Go picks between them at random.
+		select {
+		case writeErr := <-completed:
+			return writeErr, writeCompleted
+		default:
+		}
 		select {
 		case writeErr := <-completed:
 			return writeErr, writeCompleted
@@ -143,6 +155,8 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 			return nil, writeCancelled
 		case <-cancelTimeout:
 			return nil, writeExpired
+		case <-deadline:
+			return nil, writeDeadlineExpired
 		case <-ctx.Done():
 			return nil, writeInterrupted
 		}
@@ -155,9 +169,22 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		return state.report, cause
 	}
 
-	if err := c.write(running.stdin, probeRequest); err != nil {
-		return failWithoutOutcome(fmt.Errorf("write run probe request: %w", err))
+	// §4 puts the run-probe request write inside the completion deadline, and §6's watch
+	// runs for the driver's whole tenure — so a cancellation arriving here has to be seen
+	// even though no `execute` has been authorized and there is nothing to protocol-cancel.
+	probeWriteErr, probeWriteResult := writeBounded(probeRequest, timer.C)
+	switch probeWriteResult {
+	case writeCancelled:
+		return failWithoutOutcome(errors.New("cancel observed while writing run probe request"))
+	case writeDeadlineExpired:
+		return failWithoutOutcome(errors.New("run probe completion deadline expired"))
+	case writeInterrupted:
+		return failWithoutOutcome(ctx.Err())
 	}
+	if probeWriteErr != nil {
+		return failWithoutOutcome(fmt.Errorf("write run probe request: %w", probeWriteErr))
+	}
+	c.observeWindow(executeWindowProbeResponse)
 	for {
 		select {
 		case event := <-running.frames:
@@ -177,6 +204,9 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 				return failWithoutOutcome(err)
 			}
 			goto probed
+		case <-cancelSignal:
+			observeCancellation()
+			return failWithoutOutcome(errors.New("cancel observed while awaiting run probe response"))
 		case <-timer.C:
 			return failWithoutOutcome(errors.New("run probe completion deadline expired"))
 		case <-ctx.Done():
@@ -191,7 +221,7 @@ probed:
 		default:
 		}
 	}
-	writeErr, writeResult := writeBounded(executeRequest)
+	writeErr, writeResult := writeBounded(executeRequest, nil)
 	switch writeResult {
 	case writeCancelled:
 		state.report.Result = nil
@@ -266,7 +296,7 @@ probed:
 				state.report.Result = nil
 				return failWithoutOutcome(encodeErr)
 			}
-			writeErr, writeResult := writeBounded(cancelRequest)
+			writeErr, writeResult := writeBounded(cancelRequest, nil)
 			switch writeResult {
 			case writeExpired:
 				return cancelExpired()
