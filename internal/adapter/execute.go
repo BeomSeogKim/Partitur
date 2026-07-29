@@ -149,10 +149,13 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		}()
 		// An expiry that has already happened wins over everything: §4's completion deadline
 		// covers the request write, so admitting a write that finished after it would spend
-		// the deadline and then ignore it. Not reached by these tests, and stated rather than
-		// claimed: each timer is armed immediately before its own write, so neither can have
-		// fired by the time this runs. The ordering is here because the alternative is only
-		// safe by accident.
+		// the deadline and then ignore it. The completion timer starts before the launch, so
+		// it can fire during the handoff and already be expired here.
+		//
+		// Measured, so the coverage claim is not stronger than the evidence: this branch and
+		// the deadline case in the select below are redundant for that input — deleting
+		// either alone leaves every test green, and deleting both fails the probe-deadline
+		// test by name. The tests pin the obligation, not which of the two discharges it.
 		select {
 		case <-deadline:
 			return nil, writeDeadlineExpired

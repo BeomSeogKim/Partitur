@@ -555,6 +555,53 @@ func TestExecuteCancelAfterEOFStillArmsTheGrace(t *testing.T) {
 // inside the completion deadline. The adapter process is already running by then, so a
 // cancellation arriving before `adapter.probed` has to sweep it — with no protocol `cancel`,
 // since no `execute` has been authorized.
+// The completion deadline starts before the launch, so it can fire during the handoff and
+// already be expired when the probe write is checked. §4 puts that write inside the
+// deadline, so a write that finished after it must not be admitted — the probe response
+// window must never be entered.
+func TestExecuteProbeWriteRefusedWhenTheDeadlineExpiredDuringLaunch(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	var order []string
+	client := newClient([]string{fakeModeEnv + "=hang_no_response"}, 50*time.Millisecond, 20*time.Millisecond)
+	baseLaunch := client.launch
+	client.launch = func(_ context.Context, request launch.Request) (*launch.Process, error) {
+		// Outlast the completion deadline, then hand back a real process. The launch's own
+		// context carries that deadline, so it is deliberately not the one passed on.
+		time.Sleep(150 * time.Millisecond)
+		return baseLaunch(context.Background(), request)
+	}
+	windows := []executeWindow{}
+	client.observeExecuteWindow = func(window executeWindow) { windows = append(windows, window) }
+	terminated := 0
+	client.sessions = &recordingSessionController{
+		base:        systemSessionController{},
+		terminateFn: func() { terminated++ },
+	}
+	plan := executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	report, err := executeWithin(t, client, plan, 30*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "run probe completion deadline expired") {
+		t.Fatalf("report = %#v, error = %v", report, err)
+	}
+	// Both the pre-check and the response wait report the same expiry, so the error alone
+	// cannot say which refused it. Never entering the response window is what does.
+	if len(windows) != 0 {
+		t.Fatalf("windows entered = %v, want none", windows)
+	}
+	if terminated != 1 {
+		t.Fatalf("forced session sweeps = %d", terminated)
+	}
+}
+
 // The gated handoff is the first window of the call and precedes every other observation
 // point, so a cancellation arriving there has to end it rather than wait for a process that
 // is still starting.
