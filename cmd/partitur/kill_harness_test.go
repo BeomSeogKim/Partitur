@@ -48,7 +48,7 @@ func TestSubprocessKillHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, edge := range killHarnessEdges() {
+	for _, edge := range nonCancellationKillHarnessEdges() {
 		edge := edge
 		t.Run(string(edge.id), func(t *testing.T) {
 			for _, side := range []struct {
@@ -195,6 +195,17 @@ func TestAcceptanceFailureWindowHarness(t *testing.T) {
 }
 
 func killHarnessEdges() []killEdge {
+	edges := nonCancellationKillHarnessEdges()
+	return append(edges,
+		killEdge{faultpoint.EdgeCancelSweptToTerminal, faultpoint.PointCancelSessionsSwept, faultpoint.PointCancelRunCancelled},
+		killEdge{faultpoint.EdgeCancelSweptToQuarantined, faultpoint.PointCancelSessionsSwept, faultpoint.PointCancelSnapshotQuarantined},
+		killEdge{faultpoint.EdgeCancelIntervalStoppedToTerminal, faultpoint.PointCancelExecutionStopped, faultpoint.PointCancelRunCancelled},
+		killEdge{faultpoint.EdgeCancelFenceDecidedToTerminal, faultpoint.PointCancelFenceDecided, faultpoint.PointCancelRunCancelled},
+		killEdge{faultpoint.EdgeCancelTerminalToLeaseRemoved, faultpoint.PointCancelRunCancelled, faultpoint.PointCancelLeaseRemoved},
+	)
+}
+
+func nonCancellationKillHarnessEdges() []killEdge {
 	return []killEdge{
 		{faultpoint.EdgeAuthorityGrantedToLeaseCreated, faultpoint.PointAuthorityGranted, faultpoint.PointAuthorityLeaseCreated},
 		{faultpoint.EdgeLaunchAdapterMarkerHeldToIdentity, faultpoint.PointLaunchAdapterMarkerHeld, faultpoint.PointLaunchAdapterIdentityPublished},
@@ -231,8 +242,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 		}
 		reachable[id] = true
 	}
-	if len(reachable) != 7 {
-		t.Fatalf("reachable edge count=%d, want seven", len(reachable))
+	if len(reachable) != 12 {
+		t.Fatalf("reachable edge count=%d, want twelve", len(reachable))
 	}
 	if len(retryCoveragePoints()) != 2 || retryCoveragePoints()[0] == retryCoveragePoints()[1] {
 		t.Fatalf("retry coverage must name two distinct cut sides: %v", retryCoveragePoints())

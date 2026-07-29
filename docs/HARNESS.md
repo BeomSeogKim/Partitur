@@ -44,7 +44,7 @@ Exactly Appendix E's: the **control channel** (prepare, quiesce, cancellation, s
 
 ## Selection manifest
 
-This gate reaches seven E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches twelve E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -72,9 +72,13 @@ a `B` is therefore one the harness cannot hang off an fsync at all.
 several assertions to hold at one cut — so an edge whose obligation is unconditional is exercised
 across every combination, not only the one where the other predicates are false.
 
-The following table is the cancellation-combination selection contract for this gate. It declares
-the required cuts without changing the gate-cut dispositions below: those remain an explicit record
-that this gate has not yet made any cancellation edge reachable.
+The following table is the cancellation-combination selection contract for this gate. Its five edges
+are reachable through the real `cancel` subprocess matrix below; shared cuts discharge overlapping
+endpoint obligations without reducing the required combination set.
+
+For `(d)` false, the fixture supplies a stale-epoch lease, so `RC-RESUME-003` removes it and
+re-evaluates before the cancellation row. The no-lease `(d)`-false shape is **not reached by these
+tests**; these edges do not require it as a separate predicate branch.
 
 | Edge | Blocks on | Driven by | Combinations required |
 |---|---|---|---|
@@ -146,11 +150,11 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No pending-prepare quiesce fixture |
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No pending-prepare commit fixture |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
-| `cancel.swept_to_terminal` | not reached by this gate's cuts | §6 (a), (e); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
-| `cancel.swept_to_quarantined` | not reached by this gate's cuts | §6 (a)-(b); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
-| `cancel.interval_stopped_to_terminal` | not reached by this gate's cuts | §6 (c)-(e); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
-| `cancel.fence_decided_to_terminal` | not reached by this gate's cuts | §6 (d)-(e); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
-| `cancel.terminal_to_lease_removed` | not reached by this gate's cuts | §6 (e)-(f); E.2 | No cancellation subprocess fixture or `(b, c, d)` combination matrix; 2.1b owns the matrix |
+| `cancel.swept_to_terminal` | reachable | §6 (a), (e); E.2 | Real `cancel` subprocess matrix covers all eight `(b, c, d)` combinations at both endpoints |
+| `cancel.swept_to_quarantined` | reachable | §6 (a)-(b); E.2 | Real `cancel` subprocess matrix covers the four `(b)`-true combinations at both endpoints |
+| `cancel.interval_stopped_to_terminal` | reachable | §6 (c)-(e); E.2 | Real `cancel` subprocess matrix covers the four `(c)`-true combinations at both endpoints |
+| `cancel.fence_decided_to_terminal` | reachable | §6 (d)-(e); E.2; E.3 | Real `cancel` subprocess matrix covers the four `(d)`-true combinations at both endpoints and checks E.3 at `(d)` |
+| `cancel.terminal_to_lease_removed` | reachable | §6 (e)-(f); C.1 terminal row; E.2 | Real `cancel` subprocess matrix covers the four `(d)`-true combinations at both endpoints |
 | `supersede.swept_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
 | `supersede.interval_stopped_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
 | `supersede.fence_decided_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
@@ -186,8 +190,12 @@ Four actors, each advanced one step at a time:
 
 `canceller` in the edge tables above is §6's **role**, not this actor: the obligations there hold
 whichever actor completes the durable request, so a `Driven by: canceller` cell is satisfied by a
-terminalizing driver as much as by the cancelling command. The matrix requires both, since the two
-reach the same seams from different live states.
+terminalizing driver as much as by the cancelling command. The cancellation matrix discharges them
+through the cancelling command, against a fixture whose lease owner is verifiably gone. **The
+responsive-driver cut is not reached by these tests** — that actor is exercised end to end without a
+cut elsewhere. Because one oracle step has one event shape, the assertions do not branch on the
+actor (E.2 `cancel.interval_stopped_to_terminal`), so this leaves no endpoint obligation
+undischarged; what it leaves unreached is the second live state, not a second assertion.
 
 Enumerate the interleavings of their step sequences to a bounded depth and evaluate the oracles below
 at each. This is a model-checking shape, not a stress test: the value is exhaustiveness over a small
