@@ -4981,6 +4981,13 @@ resuming work:
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
 | `RC-RESUME-012` | Otherwise | Proceed to C.2 for the movement's current-head, non-superseded in-flight attempt, if any; when there is none, proceed to the between-unit scheduler in C.4 |
 
+**Open question — C.1 live-owner outcome across commands.** `RC-RESUME-046` names a refused
+`resume` invocation, but `cancel` deliberately drives the same C.1 sequence after durably
+appending `cancel.requested`; unit 1.3 removed a second command-private recovery sequence. Does one
+recovery row map to the outcome of the command that reached it, or must every command reaching that
+row expose the same command-visible outcome? The current mappings differ: `resume` exits 2 and
+`cancel` exits 6. This records the open specification question, not a choice between the readings.
+
 ## C.2 Attempt lifecycle recovery
 
 The window between `performer.selected` and `acceptance.started` was previously undefined, which

@@ -20,6 +20,41 @@ const cancellationSweepGrace = 30 * time.Second
 
 var ErrCancellationSweepRequired = errors.New("cancellation requires a completed session sweep")
 
+// RequestCancellation appends the run-scoped B.7 cancellation request while
+// holding the state lock. The request is idempotent by run ID.
+func (store *Store) RequestCancellation(runID runstate.RunID) error {
+	input, err := store.LoadRecoveryInput(runID)
+	if err != nil {
+		return err
+	}
+	seed := movementSeed(input.Score)
+	return store.Mutate(runID, "", func(transaction *Txn) error {
+		state, err := transaction.project(seed)
+		if err != nil {
+			return err
+		}
+		if state.Run == runstate.RunNotStarted {
+			return ErrCancellationNotAllowed
+		}
+		if state.Run.Terminal() {
+			return ErrCancellationNotAllowed
+		}
+		event := runstate.Event{
+			RunID:         runID,
+			ScoreRevision: state.ScoreHead.Revision,
+			Type:          runstate.EventCancelRequested,
+			Payload:       cancellationPayload(map[string]any{"requested_by": "cli"}),
+		}
+		if !state.CancelRequested {
+			if _, err := runstate.Apply(state, event); err != nil {
+				return err
+			}
+		}
+		_, err = transaction.At("cancellation.cancel.requested").Append(event)
+		return err
+	})
+}
+
 // CancellationSweep is proof that this store has swept the run's recorded
 // sessions. Its fields are private so callers cannot forge a completed sweep.
 type CancellationSweep struct {

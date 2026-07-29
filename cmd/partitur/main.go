@@ -184,6 +184,9 @@ func runWithReaders(
 	if requestedID, ok := parseResumeArgs(args); ok {
 		return runResume(requestedID, stdout, stderr, resume)
 	}
+	if requestedID, ok := parseCancelArgs(args); ok {
+		return runCancel(requestedID, stdout, stderr, cancel)
+	}
 	if len(args) == 1 && args[0] == "run" {
 		preparation, preparationResult := prepare()
 		if preparationResult.Refusal != nil {
@@ -242,7 +245,29 @@ func runWithReaders(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate, run, resume, status, logs")
+	fmt.Fprintln(w, "commands: version, validate, run, resume, cancel, status, logs")
+}
+
+func parseCancelArgs(args []string) (string, bool) {
+	if len(args) == 1 {
+		if args[0] == "cancel" {
+			return "", true
+		}
+		return "", false
+	}
+	if len(args) != 2 {
+		return "", false
+	}
+	if args[0] != "cancel" {
+		return "", false
+	}
+	if args[1] == "" {
+		return "", false
+	}
+	if strings.HasPrefix(args[1], "-") {
+		return "", false
+	}
+	return args[1], true
 }
 
 func parseResumeArgs(args []string) (string, bool) {
@@ -292,6 +317,47 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 	}
 }
 
+func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner) int {
+	if cancel == nil {
+		fmt.Fprintln(stderr, "run interrupted: run_id=\"\" state=\"nonterminal\" resume=\"partitur resume\" detail=\"cancel unavailable\"")
+		return 6
+	}
+	result, err := cancel(context.Background(), requestedID)
+	if err != nil {
+		if errors.Is(err, runstore.ErrCancellationNotAllowed) {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+		var selectionErr cancelSelectionError
+		if errors.As(err, &selectionErr) {
+			code := statusErrorCode(err)
+			renderStatusError(stderr, err)
+			return code
+		}
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, err.Error())
+		return 6
+	}
+	switch result.Outcome {
+	case recoveryexec.OutcomeSucceeded, recoveryexec.OutcomeQuiescent:
+		return 0
+	case recoveryexec.OutcomeFailed, recoveryexec.OutcomeCancelled:
+		return 4
+	case recoveryexec.OutcomeRefused:
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "cancellation request is durable; a live owner still holds the lease; resume will terminalize the run")
+		return 6
+	case recoveryexec.OutcomeHalted:
+		if !recovery.IsHaltReason(result.Decision.Halt) {
+			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced an unknown halt reason")
+			return 6
+		}
+		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", requestedID, result.Decision.Halt)
+		return 5
+	default:
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced no command outcome")
+		return 6
+	}
+}
+
 func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error) {
 	root, err := os.Getwd()
 	if err != nil {
@@ -309,6 +375,38 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 		}
 		runID = runstate.RunID(report.Run.ID)
 	}
+	return executeRecovery(ctx, store, runID)
+}
+
+type cancelSelectionError struct {
+	err error
+}
+
+func (err cancelSelectionError) Error() string { return err.err.Error() }
+
+func (err cancelSelectionError) Unwrap() error { return err.err }
+
+func cancel(ctx context.Context, requestedID string) (recoveryexec.Result, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
+	}
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		return recoveryexec.Result{}, err
+	}
+	report, err := statusprojection.Read(root, requestedID)
+	if err != nil {
+		return recoveryexec.Result{}, cancelSelectionError{err: err}
+	}
+	runID := runstate.RunID(report.Run.ID)
+	if err := store.RequestCancellation(runID); err != nil {
+		return recoveryexec.Result{}, err
+	}
+	return executeRecovery(ctx, store, runID)
+}
+
+func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {
 	executor := &recoveryexec.Executor{Store: store, RunID: runID}
 	executor.Load = func(context.Context) (recovery.Input, error) {
 		durable, err := store.LoadRecoveryInput(runID)
