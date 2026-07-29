@@ -12,6 +12,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -140,16 +141,33 @@ func run(
 			result.Err = err
 		}
 	}()
+	control, err := cancellation.Watch(store, startResult.RunID)
+	if err != nil {
+		return stopped(result, err)
+	}
+	defer control.Stop()
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
+	}
 	if err := startResult.Run.BindDriver(authority); err != nil {
 		return stopped(result, err)
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
 	}
 	candidate, err := startResult.Run.RecordZeroWriterCandidate()
 	if err != nil {
 		return stopped(result, err)
 	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
+	}
 	attempt, err := startResult.Run.CreateAttempt(movement.ID)
 	if err != nil {
 		return stopped(result, err)
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
 	}
 	for _, transition := range []runstate.EventType{
 		runstate.EventMovementReady,
@@ -168,6 +186,9 @@ func run(
 		); err != nil {
 			return stopped(result, err)
 		}
+		if cancelled, handled := cancellationResult(ctx, result, control); handled {
+			return cancelled
+		}
 	}
 	return ExecuteAttempt(ctx, AttemptExecution{
 		RepositoryRoot:  preparation.RepositoryRoot,
@@ -180,6 +201,7 @@ func run(
 		PerformerID:     performer.ID,
 		SelectionReason: "initial",
 		RemainingMS:     remainingMS,
+		Control:         control,
 	}, executionDependenciesFrom(dependencies))
 }
 
@@ -218,6 +240,21 @@ func ExecuteAttempt(
 		newID:             executionDependencies.NewID,
 	}
 	result = Result{RunID: execution.RunID}
+	control := execution.Control
+	if control == nil {
+		store, err := runstore.New(execution.RepositoryRoot, executionDependencies.Probe)
+		if err != nil {
+			return stopped(result, err)
+		}
+		control, err = cancellation.Watch(store, execution.RunID)
+		if err != nil {
+			return stopped(result, err)
+		}
+		defer control.Stop()
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
+	}
 	policy := execution.Score.EffectivePolicy()
 	binding, ok := execution.Cast.Binding(movement.PartID)
 	if !ok {
@@ -263,6 +300,9 @@ func ExecuteAttempt(
 	}
 	if _, err := authority.Append(initialSelection, faultpoint.ReceiptAddress("attempt.performer_selected")); err != nil {
 		return stopped(result, err)
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
 	}
 	adapterPath, err := dependencies.client.Resolve(performer.Adapter)
 	if err != nil {
@@ -531,11 +571,15 @@ func ExecuteAttempt(
 		IntervalID:     runstate.IntervalID(adapterInterval),
 		IntervalOpened: adapterOpened,
 		MayPropose:     movement.MayPropose,
+		Cancel:         control.Cancelled(),
 		Probe:          dependencies.probe,
 		RecordIdentity: recordIdentity,
 		Recorder:       recorder,
 	})
 	cancel()
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
+	}
 	if err != nil {
 		var halt *adapter.HaltError
 		if errors.As(err, &halt) {
@@ -568,6 +612,9 @@ func ExecuteAttempt(
 		}
 		return interrupted(result, err)
 	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
+	}
 	acceptanceInterval, err := dependencies.newID()
 	if err != nil {
 		return interrupted(result, err)
@@ -581,6 +628,9 @@ func ExecuteAttempt(
 		"remaining_at_start": remainingMS,
 	}, "execution.acceptance.started"); err != nil {
 		return stopped(result, err)
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
 	}
 	acceptanceDisposition, err := classifyFailure(
 		successor.FailureCase{AcceptanceReason: "acceptance_failed"},
@@ -619,6 +669,9 @@ func ExecuteAttempt(
 	if err != nil {
 		return stopped(result, err)
 	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
+	}
 	if !evaluation.EvaluationCompleted {
 		dependencies.probe.Reached(faultpoint.PointAcceptanceFailureRecorded)
 	}
@@ -635,6 +688,9 @@ func ExecuteAttempt(
 	}, "execution.acceptance.stopped"); err != nil {
 		return stopped(result, err)
 	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
+	}
 	if !evaluation.EvaluationCompleted || !evaluation.Verified {
 		return interrupted(result, errors.New("attempt did not earn VERIFIED"))
 	}
@@ -644,6 +700,9 @@ func ExecuteAttempt(
 		"attempt.completed",
 	); err != nil {
 		return stopped(result, err)
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
 	}
 	state, err := authority.State()
 	if err != nil {
@@ -660,6 +719,9 @@ func ExecuteAttempt(
 		"run_succeeded":                  true,
 	}, "movement.succeeded"); err != nil {
 		return stopped(result, err)
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
 	}
 	result.Outcome = OutcomeSucceeded
 	return result
@@ -1068,7 +1130,28 @@ func interrupted(result Result, err error) Result {
 }
 
 func releasesDriverLease(outcome Outcome) bool {
-	return outcome != OutcomeHalted
+	return outcome != OutcomeHalted && outcome != OutcomeCancelled
+}
+
+func cancellationResult(ctx context.Context, result Result, control *cancellation.Watcher) (Result, bool) {
+	if err := control.Err(); err != nil {
+		return stopped(result, err), true
+	}
+	select {
+	case <-control.Cancelled():
+		if err := control.Execute(ctx); err != nil {
+			if errors.Is(err, runstate.ErrSweepUnverifiable) {
+				return halted(result, "sweep_unverifiable", err), true
+			}
+			return stopped(result, err), true
+		}
+		result.Outcome = OutcomeCancelled
+		result.Reason = ""
+		result.Err = nil
+		return result, true
+	default:
+		return Result{}, false
+	}
 }
 
 func halted(result Result, reason string, err error) Result {
