@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 )
 
 // EdgeID identifies an ordered-step edge in DESIGN Appendix E.2.
@@ -52,7 +53,11 @@ const (
 	PointQuiesceSessionsSwept             PointID = "quiesce.sessions_swept"
 	PointQuiesceCommitLockHeld            PointID = "quiesce.commit_lock_held"
 	PointCancelSessionsSwept              PointID = "cancel.sessions_swept"
+	PointCancelSnapshotQuarantined        PointID = "cancel.snapshot_quarantined"
+	PointCancelExecutionStopped           PointID = "cancel.execution_stopped"
 	PointCancelFenceDecided               PointID = "cancel.fence_decided"
+	PointCancelRunCancelled               PointID = "cancel.run_cancelled"
+	PointCancelLeaseRemoved               PointID = "cancel.lease_removed"
 	PointSupersedeSessionsSwept           PointID = "supersede.sessions_swept"
 	PointSupersedeFenceDecided            PointID = "supersede.fence_decided"
 	PointLaunchAdapterMarkerHeld          PointID = "launch.adapter.marker_held"
@@ -129,21 +134,28 @@ const (
 // ProbeFromEnvironment returns the harness probe carried by inherited file
 // descriptors, or Nop when no harness is installed. See DESIGN Appendix E.
 func ProbeFromEnvironment() Probe {
-	notify, notifyOK := probeFileFromEnvironment(probeNotifyFDEnv)
-	release, releaseOK := probeFileFromEnvironment(probeReleaseFDEnv)
+	notifyFD, notifyOK := probeFDFromEnvironment(probeNotifyFDEnv)
+	releaseFD, releaseOK := probeFDFromEnvironment(probeReleaseFDEnv)
 	if !notifyOK || !releaseOK {
 		return Nop{}
 	}
-	return NewPipeProbe(notify, release)
+	return NewPipeProbe(
+		os.NewFile(uintptr(notifyFD), probeNotifyFDEnv),
+		os.NewFile(uintptr(releaseFD), probeReleaseFDEnv),
+	)
 }
 
-func probeFileFromEnvironment(name string) (*os.File, bool) {
+func probeFDFromEnvironment(name string) (int, bool) {
 	value := os.Getenv(name)
 	fd, err := strconv.Atoi(value)
-	if err != nil || fd < 0 {
-		return nil, false
+	if err != nil || fd < 3 {
+		return 0, false
 	}
-	return os.NewFile(uintptr(fd), name), true
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil || stat.Mode&syscall.S_IFMT != syscall.S_IFIFO {
+		return 0, false
+	}
+	return fd, true
 }
 
 // NewPipeProbe reports each reached boundary then waits for the harness.

@@ -1,17 +1,270 @@
 package faultpoint
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+const (
+	probeEnvironmentHelper        = "PARTITUR_FAULTPOINT_PROBE_HELPER"
+	probeEnvironmentHelperTimeout = 30 * time.Second
+)
+
+func TestProbeFromEnvironmentGuardsDescriptors(t *testing.T) {
+	switch os.Getenv(probeEnvironmentHelper) {
+	case "standard":
+		probe := ProbeFromEnvironment()
+		if _, ok := probe.(Nop); !ok {
+			fmt.Fprintf(os.Stderr, "probe type = %T, want Nop\n", probe)
+			os.Exit(2)
+		}
+		probe.Reached("test.standard")
+		os.Exit(0)
+	case "pipe":
+		probe := ProbeFromEnvironment()
+		if _, ok := probe.(*pipeProbe); !ok {
+			fmt.Fprintf(os.Stderr, "probe type = %T, want *pipeProbe\n", probe)
+			os.Exit(2)
+		}
+		probe.Reached("test.pipe")
+		os.Exit(0)
+	}
+
+	t.Run("rejects standard descriptors without stdout or block", testProbeRejectsStandardDescriptors)
+	t.Run("rejects non-pipe descriptor", testProbeRejectsNonPipeDescriptor)
+	t.Run("accepts pipe at fd 3", testProbeAcceptsPipeAtFirstInheritedFD)
+}
+
+func TestProbeFromEnvironmentRejectsDescriptorsWithoutTakingOwnership(t *testing.T) {
+	t.Run("non-pipe", testProbeRejectsNonPipeDescriptorWithoutTakingOwnership)
+	t.Run("mixed pair", testProbeRejectsMixedPairWithoutTakingOwnership)
+}
+
+func testProbeRejectsStandardDescriptors(t *testing.T) {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRead.Close()
+	defer releaseWrite.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeEnvironmentHelperTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestProbeFromEnvironmentGuardsDescriptors$")
+	command.Env = append(os.Environ(),
+		probeEnvironmentHelper+"=standard",
+		probeNotifyFDEnv+"=1",
+		probeReleaseFDEnv+"=0",
+	)
+	command.Stdin = releaseRead
+	command.Stdout = notifyWrite
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseRead.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := notifyWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = command.Wait()
+	output, readErr := io.ReadAll(notifyRead)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("rejects standard descriptors helper blocked for %s", probeEnvironmentHelperTimeout)
+	}
+	if err != nil {
+		t.Fatalf("helper failed: %v; stdout=%q stderr=%q", err, output, stderr.String())
+	}
+	if string(output) != "" {
+		t.Fatalf("stdout=%q, want empty", output)
+	}
+}
+
+func testProbeRejectsNonPipeDescriptor(t *testing.T) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "not-a-pipe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	t.Setenv(probeNotifyFDEnv, strconv.Itoa(int(file.Fd())))
+	t.Setenv(probeReleaseFDEnv, strconv.Itoa(int(file.Fd())))
+	probe := ProbeFromEnvironment()
+	if _, ok := probe.(Nop); !ok {
+		t.Fatalf("probe type = %T, want Nop", probe)
+	}
+}
+
+func testProbeRejectsNonPipeDescriptorWithoutTakingOwnership(t *testing.T) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "not-a-pipe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	fd := int(file.Fd())
+	t.Setenv(probeNotifyFDEnv, strconv.Itoa(fd))
+	t.Setenv(probeReleaseFDEnv, "not-a-descriptor")
+	if _, ok := ProbeFromEnvironment().(Nop); !ok {
+		t.Fatal("probe must reject non-pipe descriptors")
+	}
+	forceGC()
+	assertFDOpenAndUsable(t, fd)
+	runtime.KeepAlive(file)
+}
+
+func testProbeRejectsMixedPairWithoutTakingOwnership(t *testing.T) {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	release, err := os.CreateTemp(t.TempDir(), "not-a-pipe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release.Close()
+	notifyFD := int(notifyWrite.Fd())
+	t.Setenv(probeNotifyFDEnv, strconv.Itoa(notifyFD))
+	t.Setenv(probeReleaseFDEnv, strconv.Itoa(int(release.Fd())))
+	if _, ok := ProbeFromEnvironment().(Nop); !ok {
+		t.Fatal("probe must reject a mixed descriptor pair")
+	}
+	forceGC()
+	assertFDOpen(t, notifyFD)
+	if _, err := notifyWrite.Write([]byte{1}); err != nil {
+		t.Fatalf("notify pipe write after rejected mixed pair: %v", err)
+	}
+	var received [1]byte
+	if _, err := notifyRead.Read(received[:]); err != nil {
+		t.Fatalf("notify pipe read after rejected mixed pair: %v", err)
+	}
+	runtime.KeepAlive(notifyWrite)
+	runtime.KeepAlive(release)
+}
+
+func forceGC() {
+	runtime.GC()
+	runtime.GC()
+}
+
+func assertFDOpenAndUsable(t *testing.T, fd int) {
+	t.Helper()
+	assertFDOpen(t, fd)
+	if written, err := syscall.Write(fd, []byte{1}); err != nil || written != 1 {
+		t.Fatalf("descriptor write after rejection = %d, %v; want one byte without error", written, err)
+	}
+}
+
+func assertFDOpen(t *testing.T, fd int) {
+	t.Helper()
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		t.Fatalf("descriptor fd %d after rejection: %v", fd, err)
+	}
+}
+
+func testProbeAcceptsPipeAtFirstInheritedFD(t *testing.T) {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRead.Close()
+	defer releaseWrite.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeEnvironmentHelperTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestProbeFromEnvironmentGuardsDescriptors$")
+	command.Env = append(os.Environ(),
+		probeEnvironmentHelper+"=pipe",
+		probeNotifyFDEnv+"=3",
+		probeReleaseFDEnv+"=4",
+	)
+	command.ExtraFiles = []*os.File{notifyWrite, releaseRead}
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := notifyWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseRead.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	line := make(chan string, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		value, err := bufio.NewReader(notifyRead).ReadString('\n')
+		if err != nil {
+			readErr <- err
+			return
+		}
+		line <- value
+	}()
+	select {
+	case got := <-line:
+		if !strings.HasPrefix(got, "test.pipe ") {
+			t.Fatalf("notification=%q, want test.pipe", got)
+		}
+	case err := <-readErr:
+		t.Fatalf("read notification: %v", err)
+	case <-ctx.Done():
+		t.Fatalf("accepts pipe at fd 3 helper blocked for %s", probeEnvironmentHelperTimeout)
+	}
+	if _, err := releaseWrite.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			t.Fatalf("accepts pipe at fd 3 helper blocked for %s", probeEnvironmentHelperTimeout)
+		}
+		t.Fatalf("helper failed: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("helper stdout=%q stderr=%q, want empty", stdout.String(), stderr.String())
+	}
+}
 
 func TestAppendixEEdgeIDsAreCompleteAndUnique(t *testing.T) {
 	designEdges := edgeIDsFromDesign(t)
@@ -228,7 +481,11 @@ func TestBoundaryPointIDsAreSemanticAndUnique(t *testing.T) {
 		PointQuiesceSessionsSwept,
 		PointQuiesceCommitLockHeld,
 		PointCancelSessionsSwept,
+		PointCancelSnapshotQuarantined,
+		PointCancelExecutionStopped,
 		PointCancelFenceDecided,
+		PointCancelRunCancelled,
+		PointCancelLeaseRemoved,
 		PointSupersedeSessionsSwept,
 		PointSupersedeFenceDecided,
 		PointLaunchAdapterMarkerHeld,
