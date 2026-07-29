@@ -13,7 +13,7 @@ import (
 
 var (
 	ErrInvalidExecutePlan = errors.New("invalid execute plan")
-	ErrSweepUnverifiable  = errors.New("adapter session sweep is unverifiable")
+	ErrSweepUnverifiable  = runstate.ErrSweepUnverifiable
 )
 
 // ExecutePlan contains the already-selected attempt and its open adapter

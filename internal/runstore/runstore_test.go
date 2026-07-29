@@ -479,28 +479,43 @@ func TestReplayReturnsUnsupportedEventDistinctFromCorruption(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	event := runstate.Event{
-		EventID:       "event-unsupported",
-		Seq:           2,
-		Timestamp:     "2026-07-26T00:00:00.000Z",
-		RunID:         "run-1",
-		ScoreRevision: 1,
-		// A registry event outside the forty-nine this projector supports (runstate
-		// package doc), so it is unsupported rather than corrupt.
-		Type:    "movement.cancelled",
-		Payload: json.RawMessage(`{}`),
-	}
-	line, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
+	events := []runstate.Event{
+		{
+			EventID:       "event-cancelled-source",
+			Seq:           2,
+			Timestamp:     "2026-07-26T00:00:00.000Z",
+			RunID:         "run-1",
+			ScoreRevision: 1,
+			Type:          runstate.EventRunCancelled,
+			Payload:       json.RawMessage(`{"cancelled_movement_ids":["m1"],"cancelled_attempt_ids":[],"obsoleted_decision_ids":[]}`),
+		},
+		{
+			EventID:       "event-unsupported",
+			Seq:           3,
+			Timestamp:     "2026-07-26T00:00:00.000Z",
+			RunID:         "run-1",
+			ScoreRevision: 1,
+			MovementID:    "m1",
+			CausationID:   "event-cancelled-source",
+			// A registry event outside the forty-nine this projector supports (runstate
+			// package doc), with its Appendix B source authority resolved first.
+			Type:    runstate.EventMovementCancelled,
+			Payload: json.RawMessage(`{}`),
+		},
 	}
 	journal := filepath.Join(store.root, ".partitur", "runs", "run-1", "journal.jsonl")
 	file, err := os.OpenFile(journal, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
-		t.Fatal(err)
+	for _, event := range events {
+		line, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(append(line, '\n')); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)

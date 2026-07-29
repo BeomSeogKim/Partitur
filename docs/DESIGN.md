@@ -2289,6 +2289,14 @@ durable path that reaches a driver mid-execution:
    never declared cancelled while the old execution authority could still mutate it, and never
    left fenced without being terminal.**
 
+**Open question — responsive-owner terminalization.** Steps 3–4 say how a live responsive driver
+observes and stops for `cancel.requested`, but §6 does not name in one place which actor appends
+`run.cancelled` on that path. The single-oracle warning above is why this must be resolved as one
+normative sequence rather than inferred from a second one. 2.1a does not reach the case because
+§7 reserves its direct terminalization to the no-valid-lease-owner branch; 2.1b owns the question
+with the watcher and protocol-cancel work. This records an open specification question, not a
+choice between the readings.
+
 **Supersession uses the same branches, including the wedged one.** An approved revision must
 supersede every nonterminal attempt (§9), and the driver holding that attempt can be wedged exactly
 as it can be during cancellation — so the two are not different mechanisms, only different terminal
@@ -4973,6 +4981,13 @@ resuming work:
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
 | `RC-RESUME-012` | Otherwise | Proceed to C.2 for the movement's current-head, non-superseded in-flight attempt, if any; when there is none, proceed to the between-unit scheduler in C.4 |
 
+**Open question — C.1 live-owner outcome across commands.** `RC-RESUME-046` names a refused
+`resume` invocation, but `cancel` deliberately drives the same C.1 sequence after durably
+appending `cancel.requested`; unit 1.3 removed a second command-private recovery sequence. Does one
+recovery row map to the outcome of the command that reached it, or must every command reaching that
+row expose the same command-visible outcome? The current mappings differ: `resume` exits 2 and
+`cancel` exits 6. This records the open specification question, not a choice between the readings.
+
 ## C.2 Attempt lifecycle recovery
 
 The window between `performer.selected` and `acceptance.started` was previously undefined, which
@@ -5619,15 +5634,26 @@ it is **forbidden evidence, not a skeleton to copy**.
 
 **Implementation status.** Appendix E is partially implemented. `DurabilityReceipt` is threaded
 through production journal appends and carries a `ReceiptAddress`. In production, `PointID` boundary
-points are emitted only by the launch trampoline, at the marker-held and gate-released seams for
-adapter and criterion launches; no prepare, quiesce, cancellation, or supersession boundary point
-is emitted. Production installs only the no-op probe. The E.2 `EdgeID` values are declared in Go and
+points are emitted by the launch trampoline, at the marker-held and gate-released seams for adapter
+and criterion launches, and by the cancellation oracle at the sessions-swept and fence-decided seams;
+no prepare, quiesce, or supersession boundary point is emitted. Production installs only the no-op probe. The E.2 `EdgeID` values are declared in Go and
 mechanically cross-checked against the catalog, but no production path carries one yet.
 
 The paragraph above records current implementation status. The obligations below state what must be
 true of the implementation — the whole point of freezing the contract first is that `runstore` is
 written against it rather than retrofitted. [`HARNESS.md`](HARNESS.md) selects from E.2 rather than
 describing boundaries of its own.
+
+**Unit 2.1a allocation.** The first cancellation slice implements the shared §6 cancellation
+oracle, `RC-RESUME-006`, and §7's `cancel` command only where no valid lease owner remains. If a
+valid owner remains, its durable request waits: without steps 3–4's watcher the driver does not
+observe it and finishes its attempt; a later `resume` selects `RC-RESUME-006`. That is this slice's
+control latency, not a different cancellation contract. Step 6 belongs to 2.1b with steps 3–4:
+without an acknowledgement path, a healthy driver is indistinguishable from a wedged owner and the
+deadline would terminate it. That hazard is created by implementation order, not by §6.
+
+The five `cancel.*` E.2 edges remain outside 2.1a; 2.1b owns their subprocess fixture and the
+required `(b, c, d)` matrix.
 
 - The Go types implement E.1's semantics and carry E.2's edge IDs verbatim.
 - They **do not restate the assertions.** An invariant in a doc comment is a second normative text,

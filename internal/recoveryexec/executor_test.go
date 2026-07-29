@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -410,7 +411,7 @@ func TestExecutorMapsSweepFailureToHaltWithoutJournalWrite(t *testing.T) {
 		err      error
 		wantHalt recovery.HaltReason
 	}{
-		{name: "recorded session sweep", step: recovery.StepSweepRecordedSession, err: ErrSweepUnverifiable, wantHalt: recovery.HaltSweepUnverifiable},
+		{name: "recorded session sweep", step: recovery.StepSweepRecordedSession, err: runstate.ErrSweepUnverifiable, wantHalt: recovery.HaltSweepUnverifiable},
 		{name: "spawn handoff", step: recovery.StepStabilizeHandoff, err: ErrHandoffUnverifiable, wantHalt: recovery.HaltSpawnHandoffUnverifiable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -541,6 +542,10 @@ func TestExecutorMapsEveryReloadSiteToAppendixDHalts(t *testing.T) {
 }
 
 func advanceHandlerAcceptance(t *testing.T, driver *runstore.Driver, criterion bool) {
+	advanceHandlerAcceptanceWithProcesses(t, driver, criterion, nil, nil)
+}
+
+func advanceHandlerAcceptanceWithProcesses(t *testing.T, driver *runstore.Driver, criterion bool, adapterProcess, criterionProcess map[string]any) {
 	t.Helper()
 	appendDriverEvent := func(eventType runstate.EventType, payload any) {
 		t.Helper()
@@ -549,7 +554,10 @@ func advanceHandlerAcceptance(t *testing.T, driver *runstore.Driver, criterion b
 		}
 	}
 	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
-	appendDriverEvent(runstate.EventAttemptStarted, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "boot", "start_ticks": "1"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": versions})
+	if adapterProcess == nil {
+		adapterProcess = map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "boot", "start_ticks": "1"}}
+	}
+	appendDriverEvent(runstate.EventAttemptStarted, map[string]any{"attempt_number": 1, "adapter_process": adapterProcess, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": versions})
 	appendDriverEvent(runstate.EventAdapterProbed, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})
 	appendDriverEvent(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false})
 	appendDriverEvent(runstate.EventVerificationPassed, map[string]any{})
@@ -559,10 +567,76 @@ func advanceHandlerAcceptance(t *testing.T, driver *runstore.Driver, criterion b
 	}
 	appendDriverEvent(runstate.EventAcceptanceStarted, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": planned, "identity_versions": versions})
 	if criterion {
-		appendDriverEvent(runstate.EventCriterionStarted, map[string]any{"criterion_id": "criterion-1", "criterion_spec_hash": "sha256:criterion", "subject_tree": "git-sha1:subject", "identity_versions": versions})
+		payload := map[string]any{"criterion_id": "criterion-1", "criterion_spec_hash": "sha256:criterion", "subject_tree": "git-sha1:subject", "identity_versions": versions}
+		if criterionProcess != nil {
+			payload["criterion_process"] = criterionProcess
+		}
+		appendDriverEvent(runstate.EventCriterionStarted, payload)
 		return
 	}
 	appendDriverEvent(runstate.EventAcceptanceEvaluationCompleted, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{}, "identity_versions": versions})
+}
+
+func appendCancellationRequest(t *testing.T, driver *runstore.Driver) {
+	t.Helper()
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCancelRequested, Payload: handlerPayload(t, map[string]any{"requested_by": "cli"})}, "test.cancel.requested"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sweptEmptyCancellationProcess(t *testing.T) map[string]any {
+	t.Helper()
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cancellationProcessPayload(t, 999999, start)
+}
+
+func unverifiableCancellationProcess(t *testing.T) map[string]any {
+	t.Helper()
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cancellationProcessPayload(t, os.Getpid(), distinctCancellationStart(t, start))
+}
+
+func cancellationProcessPayload(t *testing.T, sessionID int, start runstate.StartIdentity) map[string]any {
+	t.Helper()
+	identity := map[string]any{}
+	switch value := start.(type) {
+	case runstate.LinuxStartIdentity:
+		identity = map[string]any{"platform": "linux", "boot_id": value.BootID, "start_ticks": value.StartTicks}
+	case runstate.DarwinStartIdentity:
+		identity = map[string]any{"platform": "darwin", "start_tvsec": value.StartTVSec, "start_tvusec": value.StartTVUsec}
+	default:
+		t.Fatalf("unsupported start identity %T", start)
+	}
+	return map[string]any{"pid": sessionID, "session_id": sessionID, "start_identity": identity}
+}
+
+func distinctCancellationStart(t *testing.T, start runstate.StartIdentity) runstate.StartIdentity {
+	t.Helper()
+	switch value := start.(type) {
+	case runstate.LinuxStartIdentity:
+		value.BootID += "-previous"
+		return value
+	case runstate.DarwinStartIdentity:
+		value.StartTVSec++
+		return value
+	default:
+		t.Fatalf("unsupported start identity %T", start)
+		return nil
+	}
+}
+
+func assertCancellationRemainsNonterminal(t *testing.T, store *runstore.Store) {
+	t.Helper()
+	input, err := store.LoadRecoveryInput("run-1")
+	if err != nil || input.Projection.State.Run.Terminal() {
+		t.Fatalf("state=%+v error=%v", input.Projection.State.Run, err)
+	}
 }
 
 func handlerAttempt(state runstate.State) *recovery.AttemptRecovery {
@@ -830,12 +904,11 @@ func TestExecutorRequiresAuthorityBeforeEffect(t *testing.T) {
 	}
 }
 
-func TestExecutorRejectsControlActionsBeforeAcquiringAuthority(t *testing.T) {
+func TestExecutorRejectsUnimplementedControlActionsBeforeAcquiringAuthority(t *testing.T) {
 	for _, test := range []struct {
 		action recovery.ActionKind
 		unit   string
 	}{
-		{action: recovery.ActionExecuteCancellation, unit: "2.1"},
 		{action: recovery.ActionCompleteOrAbandonPrepare, unit: "4.2"},
 	} {
 		t.Run(string(test.action), func(t *testing.T) {
@@ -846,7 +919,7 @@ func TestExecutorRejectsControlActionsBeforeAcquiringAuthority(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			input := recovery.Input{Projection: recovery.Projection{State: runstate.State{Run: runstate.RunRunning, CancelRequested: test.action == recovery.ActionExecuteCancellation}}}
+			input := recovery.Input{Projection: recovery.Projection{State: runstate.State{Run: runstate.RunRunning}}}
 			if test.action == recovery.ActionCompleteOrAbandonPrepare {
 				input.Projection.State.PendingPrepare = &runstate.PendingPrepare{}
 				input.Observations.Prepare = recovery.PrepareObservation{PlanPresent: true, SnapshotPresent: true}
@@ -868,6 +941,401 @@ func TestExecutorRejectsControlActionsBeforeAcquiringAuthority(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExecutorExecutesCancellationOracle(t *testing.T) {
+	t.Run("closes an open interval without a surviving lease", func(t *testing.T) {
+		store := acquirableRecoveryStore(t)
+		driver, err := store.AcquireRecoveryDriver("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCancelRequested, Payload: handlerPayload(t, map[string]any{"requested_by": "cli"})}, "test.cancel.requested"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{
+			"interval_id": "unfenced-interval", "phase": "composition", "wall_start": time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), "remaining_at_start": 1000,
+		})}, "test.cancel.execution.started"); err != nil {
+			t.Fatal(err)
+		}
+		lease, present, err := store.ReadLease("run-1")
+		if err != nil || !present {
+			t.Fatalf("lease=%+v present=%t error=%v", lease, present, err)
+		}
+		if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+			_, err := transaction.At("test.remove_lease").CompareRemoveLease(lease.Identity())
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (&Executor{Store: store, RunID: "run-1"}).execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseCancellation, Action: &recovery.Action{Kind: recovery.ActionExecuteCancellation}}); err != nil {
+			t.Fatal(err)
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cancelled map[string]any
+		if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &cancelled); err != nil {
+			t.Fatal(err)
+		}
+		if journal.Events[len(journal.Events)-2].Type != runstate.EventExecutionStopped || cancelled["fenced_epoch"] != nil {
+			t.Fatalf("events=%s,%s payload=%v", journal.Events[len(journal.Events)-2].Type, journal.Events[len(journal.Events)-1].Type, cancelled)
+		}
+	})
+
+	t.Run("fences a surviving lease even when its owner is verifiably gone", func(t *testing.T) {
+		store := acquirableRecoveryStore(t)
+		driver, err := store.AcquireRecoveryDriver("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCancelRequested, Payload: handlerPayload(t, map[string]any{"requested_by": "cli"})}, "test.cancel.requested"); err != nil {
+			t.Fatal(err)
+		}
+		lease, present, err := store.ReadLease("run-1")
+		if err != nil || !present {
+			t.Fatalf("lease=%+v present=%t error=%v", lease, present, err)
+		}
+		gone := lease
+		gone.Token = "gone-owner"
+		gone.PID = 999999
+		if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+			if _, err := transaction.At("test.remove_live_lease").CompareRemoveLease(lease.Identity()); err != nil {
+				return err
+			}
+			_, err := transaction.At("test.install_gone_lease").CreateLease(true, gone)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (&Executor{Store: store, RunID: "run-1"}).execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseCancellation, Action: &recovery.Action{Kind: recovery.ActionExecuteCancellation}}); err != nil {
+			t.Fatal(err)
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cancelled map[string]any
+		if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &cancelled); err != nil {
+			t.Fatal(err)
+		}
+		if cancelled["fenced_epoch"] != float64(2) {
+			t.Fatalf("cancelled payload=%v", cancelled)
+		}
+	})
+
+	t.Run("closes then fences then terminalizes then removes matching lease", func(t *testing.T) {
+		store := acquirableRecoveryStore(t)
+		driver, err := store.AcquireRecoveryDriver("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCancelRequested, Payload: handlerPayload(t, map[string]any{"requested_by": "cli"})}, "test.cancel.requested"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{
+			"interval_id": "cancel-interval", "phase": "composition", "wall_start": time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), "remaining_at_start": 1000,
+		})}, "test.cancel.execution.started"); err != nil {
+			t.Fatal(err)
+		}
+
+		executor := &Executor{Store: store, RunID: "run-1"}
+		result, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseCancellation, Action: &recovery.Action{Kind: recovery.ActionExecuteCancellation}})
+		if err != nil || !slices.Equal(result.Kinds, []recovery.ActionKind{recovery.ActionExecuteCancellation}) || result.Outcome != OutcomeCancelled {
+			t.Fatalf("result=%+v error=%v", result, err)
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := []runstate.EventType{journal.Events[len(journal.Events)-2].Type, journal.Events[len(journal.Events)-1].Type}; !slices.Equal(got, []runstate.EventType{runstate.EventExecutionStopped, runstate.EventRunCancelled}) {
+			t.Fatalf("terminal event order=%v", got)
+		}
+		var stopped, cancelled map[string]any
+		if err := json.Unmarshal(journal.Events[len(journal.Events)-2].Payload, &stopped); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &cancelled); err != nil {
+			t.Fatal(err)
+		}
+		if stopped["reason"] != "cancelled" || stopped["charging"] != "clamped" || cancelled["fenced_epoch"] != float64(2) {
+			t.Fatalf("stopped=%v cancelled=%v", stopped, cancelled)
+		}
+		if _, present, err := store.ReadLease("run-1"); err != nil || present {
+			t.Fatalf("lease present=%t error=%v", present, err)
+		}
+		state, err := store.LoadRecoveryInput("run-1")
+		if err != nil || state.Projection.State.Run != runstate.RunCancelled || state.Projection.State.OpenExecution != nil || state.Projection.State.Authority.Epoch != 2 {
+			t.Fatalf("state=%+v error=%v", state.Projection.State, err)
+		}
+	})
+
+	t.Run("abandons a pending prepare before terminalization", func(t *testing.T) {
+		store, driver := preparedCancellationStore(t)
+		executor := &Executor{Store: store, RunID: "run-1"}
+		if _, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseCancellation, Action: &recovery.Action{Kind: recovery.ActionExecuteCancellation}}); err != nil {
+			t.Fatal(err)
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := []runstate.EventType{journal.Events[len(journal.Events)-2].Type, journal.Events[len(journal.Events)-1].Type}
+		if !slices.Equal(got, []runstate.EventType{runstate.EventAmendmentApprovalAbandoned, runstate.EventRunCancelled}) {
+			t.Fatalf("terminal event order=%v", got)
+		}
+		var abandoned map[string]any
+		if err := json.Unmarshal(journal.Events[len(journal.Events)-2].Payload, &abandoned); err != nil {
+			t.Fatal(err)
+		}
+		if abandoned["reason"] != "cancelled" {
+			t.Fatalf("abandoned payload=%v", abandoned)
+		}
+		runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+		for _, path := range []string{"scores/revision-2.yaml", "prepares/prepare-1.json"} {
+			if _, err := os.Stat(filepath.Join(runRoot, path)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s still present or unreadable: %v", path, err)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(runRoot, "quarantine", "cancelled_prepare", strings.TrimPrefix(preparedSnapshotHash(t), "sha256:"), "revision-2.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		state, err := store.LoadRecoveryInput("run-1")
+		if err != nil || state.Projection.State.PendingPrepare != nil || state.Projection.State.Run != runstate.RunCancelled {
+			t.Fatalf("state=%+v error=%v", state.Projection.State, err)
+		}
+		_ = driver
+	})
+}
+
+func TestCancellationAdapterSweepFailureHaltsBeforeDurableOracle(t *testing.T) {
+	store, driver := cancellationHandlerStore(t)
+	advanceHandlerAcceptanceWithProcesses(t, driver, false, unverifiableCancellationProcess(t), nil)
+	appendCancellationRequest(t, driver)
+
+	result, err := (&Executor{Store: store, RunID: "run-1"}).execute(context.Background(), recovery.Input{}, recovery.Decision{
+		CaseID: recovery.CaseCancellation,
+		Action: &recovery.Action{Kind: recovery.ActionExecuteCancellation},
+	})
+	if err != nil || result.Outcome != OutcomeHalted || result.Decision.Halt != recovery.HaltSweepUnverifiable {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	assertCancellationRemainsNonterminal(t, store)
+}
+
+func TestCancellationCriterionSweepFailureHaltsBeforeDurableOracle(t *testing.T) {
+	store, driver := cancellationHandlerStore(t)
+	advanceHandlerAcceptanceWithProcesses(t, driver, true, sweptEmptyCancellationProcess(t), unverifiableCancellationProcess(t))
+	appendCancellationRequest(t, driver)
+
+	result, err := (&Executor{Store: store, RunID: "run-1"}).execute(context.Background(), recovery.Input{}, recovery.Decision{
+		CaseID: recovery.CaseCancellation,
+		Action: &recovery.Action{Kind: recovery.ActionExecuteCancellation},
+	})
+	if err != nil || result.Outcome != OutcomeHalted || result.Decision.Halt != recovery.HaltSweepUnverifiable {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	assertCancellationRemainsNonterminal(t, store)
+}
+
+func TestCancellationSweepFailureRoutesToAppendixDHalt(t *testing.T) {
+	store, driver := cancellationHandlerStore(t)
+	advanceHandlerAcceptanceWithProcesses(t, driver, false, unverifiableCancellationProcess(t), nil)
+	appendCancellationRequest(t, driver)
+
+	result, err := (&Executor{Store: store, RunID: "run-1"}).execute(context.Background(), recovery.Input{}, recovery.Decision{
+		CaseID: recovery.CaseCancellation,
+		Action: &recovery.Action{Kind: recovery.ActionExecuteCancellation},
+	})
+	if err != nil || result.Outcome != OutcomeHalted || result.Decision.Halt != recovery.HaltSweepUnverifiable {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+}
+
+func TestCancellationOracleRequiresRequestBeforeSweep(t *testing.T) {
+	store, driver := cancellationHandlerStore(t)
+	advanceHandlerAcceptanceWithProcesses(t, driver, false, unverifiableCancellationProcess(t), nil)
+
+	err := cancellation.Execute(context.Background(), store, "run-1")
+	if !errors.Is(err, runstore.ErrLeaseConflict) {
+		t.Fatalf("error=%v, want cancellation request required before sweep", err)
+	}
+	assertCancellationRemainsNonterminal(t, store)
+}
+
+func TestCancellationDoesNotFenceWithoutLease(t *testing.T) {
+	store := acquirableRecoveryStore(t)
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("test.cancel.requested").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCancelRequested,
+			Payload: handlerPayload(t, map[string]any{"requested_by": "cli"}),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cancellation.Execute(context.Background(), store, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cancelled map[string]any
+	if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled["fenced_epoch"] != nil {
+		t.Fatalf("cancelled payload=%v, want no fence without a lease", cancelled)
+	}
+}
+
+func TestCancellationDoesNotFenceStaleLease(t *testing.T) {
+	store := acquirableRecoveryStore(t)
+	driver, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCancellationRequest(t, driver)
+	lease, present, err := store.ReadLease("run-1")
+	if err != nil || !present {
+		t.Fatalf("lease=%+v present=%t error=%v", lease, present, err)
+	}
+	stale := lease
+	stale.Epoch++
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		if _, err := transaction.At("test.remove_current_lease").CompareRemoveLease(lease.Identity()); err != nil {
+			return err
+		}
+		_, err := transaction.At("test.install_stale_lease").CreateLease(true, stale)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cancellation.Execute(context.Background(), store, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cancelled map[string]any
+	if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled["fenced_epoch"] != nil {
+		t.Fatalf("cancelled payload=%v, want no fence for stale lease", cancelled)
+	}
+	if remaining, present, err := store.ReadLease("run-1"); err != nil || !present || remaining.Epoch != stale.Epoch {
+		t.Fatalf("lease=%+v present=%t error=%v, want stale lease retained", remaining, present, err)
+	}
+}
+
+func TestExecuteCancellationRejectsIncompleteHandlerContext(t *testing.T) {
+	action := recovery.Action{Kind: recovery.ActionExecuteCancellation}
+	for _, test := range []struct {
+		name    string
+		context HandlerContext
+	}{
+		{name: "missing store", context: HandlerContext{RunID: "run-1"}},
+		{name: "missing run id", context: HandlerContext{Store: acquirableRecoveryStore(t)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := executeCancellation(context.Background(), test.context, action)
+			if err == nil || err.Error() != "recovery executor requires store and run id for cancellation" {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func cancellationHandlerStore(t *testing.T) (*runstore.Store, *runstore.Driver) {
+	t.Helper()
+	store := acquirableRecoveryStore(t)
+	for _, event := range []runstate.Event{
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementReady, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementStarted, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: handlerPayload(t, map[string]any{"reason": "initial", "performer_id": "writer", "adapter_id": "adapter", "model": "model"})},
+	} {
+		appendHandlerEvent(t, store, event)
+	}
+	driver, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = driver.Release() })
+	return store, driver
+}
+
+func preparedCancellationStore(t *testing.T) (*runstore.Store, *runstore.Driver) {
+	t.Helper()
+	store := acquirableRecoveryStore(t)
+	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+	firstSnapshot, err := os.ReadFile(filepath.Join(runRoot, "scores", "revision-1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSnapshot := []byte(strings.Replace(string(firstSnapshot), "revision: 1", "revision: 2", 1))
+	secondScore, diagnostics := score.Compile(secondSnapshot)
+	if len(diagnostics) != 0 {
+		t.Fatalf("score diagnostics=%v", diagnostics)
+	}
+	secondHash, err := secondScore.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.LoadRecoveryInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseHash := current.Projection.State.ScoreHead.SemanticHash
+	plan := handlerPayload(t, map[string]any{
+		"proposal_id": "proposal-1", "base_revision": 1, "base_hash": baseHash,
+		"new_revision": 2, "new_snapshot_hash": secondHash, "new_snapshot_file_hash": hashFixture(secondSnapshot),
+		"superseded_attempt_ids": []any{}, "mode": "auto", "envelope_class": "NARROW_PATHS",
+	})
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		if _, err := transaction.At("test.prepare.snapshot").PublishImmutable("scores/revision-2.yaml", secondSnapshot, runstore.Hash(hashFixture(secondSnapshot))); err != nil {
+			return err
+		}
+		_, err := transaction.At("test.prepare.plan").PublishImmutable("prepares/prepare-1.json", plan, runstore.Hash(hashFixture(plan)))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	driver, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventAmendmentApprovalPrepared, Payload: handlerPayload(t, map[string]any{
+		"prepare_id": "prepare-1", "proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
+		"base_revision": 1, "base_hash": baseHash, "new_revision": 2, "new_snapshot_hash": secondHash,
+		"new_snapshot_file_hash": hashFixture(secondSnapshot), "plan_record_hash": hashFixture(plan), "target_attempt_ids": []any{},
+		"observed_authority_epoch": 1, "quiesce_deadline": "2026-07-30T00:00:00.000Z", "classifier_version": 1,
+		"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
+	})}
+	if _, err := driver.Append(prepared, "test.prepare"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCancelRequested, Payload: handlerPayload(t, map[string]any{"requested_by": "cli"})}, "test.cancel.requested"); err != nil {
+		t.Fatal(err)
+	}
+	return store, driver
+}
+
+func preparedSnapshotHash(t *testing.T) string {
+	t.Helper()
+	// The fixture's revision-2 snapshot differs from revision 1 only by revision.
+	store := acquirableRecoveryStore(t)
+	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+	first, err := os.ReadFile(filepath.Join(runRoot, "scores", "revision-1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hashFixture([]byte(strings.Replace(string(first), "revision: 1", "revision: 2", 1)))
 }
 
 func TestReclaimAuthorityIsTheOnlyAuthorityBoundary(t *testing.T) {
@@ -895,7 +1363,7 @@ func acquirableRecoveryStore(t *testing.T) *runstore.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := []byte("score: \"0.2\"\nname: executor-fixture\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts: {}\nmovements: []\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n")
+	snapshot := []byte("score: \"0.2\"\nname: executor-fixture\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts:\n  writer:\n    capabilities: [repo_read]\n    read_only: true\nmovements:\n  - id: write\n    part: writer\n    grants: [repo_read]\n    instruction: inspect\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n")
 	compiled, diagnostics := score.Compile(snapshot)
 	if len(diagnostics) != 0 {
 		t.Fatalf("score diagnostics=%v", diagnostics)

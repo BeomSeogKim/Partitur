@@ -145,7 +145,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, cancel, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -285,7 +285,6 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 		{"answer"},
 		{"approve"},
 		{"amend"},
-		{"cancel"},
 		{"promote-score"},
 		{"apply"},
 		{"version", "extra"},
@@ -307,7 +306,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, status, logs\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, cancel, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
@@ -482,10 +481,258 @@ func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
 				return test.result, nil
 			})
-			if code != test.wantCode || stdout.Len() != 0 || stderr.String() != test.wantStderr {
+			if code != test.wantCode {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if stderr.String() != test.wantStderr {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
+	}
+}
+
+// This is deliberately an injected executor-result test: the CLI exit mapping
+// is the seam under test, while durable effects are covered below with a real store.
+func TestCancelMapsInjectedExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     recoveryexec.Result
+		wantCode   int
+		wantStderr string
+	}{
+		{name: "live owner leaves cancellation resumable", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeRefused}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"cancellation request is durable; a live owner still holds the lease; resume will terminalize the run\"\n"},
+		{name: "terminal cancellation", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeCancelled}, wantCode: 4},
+		{name: "terminal failure", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}, wantCode: 4},
+		{name: "halt", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: recovery.HaltOwnerUnverifiable}}, wantCode: 5, wantStderr: "recovery halted: run_id=\"run-1\" reason=\"owner_unverifiable\"\n"},
+		{name: "no outcome is operational interruption", result: recoveryexec.Result{}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced no command outcome\"\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+				return test.result, nil
+			})
+			if code != test.wantCode {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if stderr.String() != test.wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestCancelArgumentParsing(t *testing.T) {
+	for _, test := range []struct {
+		args   []string
+		wantID string
+		wantOK bool
+	}{
+		{args: []string{"cancel"}, wantOK: true},
+		{args: []string{"cancel", "run-1"}, wantID: "run-1", wantOK: true},
+		{args: []string{"cancel", ""}},
+		{args: []string{"cancel", "--bad"}},
+		{args: []string{"cancel", "run-1", "extra"}},
+		{args: []string{"resume", "run-1"}},
+	} {
+		gotID, gotOK := parseCancelArgs(test.args)
+		if gotID != test.wantID {
+			t.Fatalf("args=%v id=%q ok=%t, want id=%q ok=%t", test.args, gotID, gotOK, test.wantID, test.wantOK)
+		}
+		if gotOK != test.wantOK {
+			t.Fatalf("args=%v id=%q ok=%t, want id=%q ok=%t", test.args, gotID, gotOK, test.wantID, test.wantOK)
+		}
+	}
+}
+
+func TestCancelSelectsActiveRunAndAppendsThenTerminalizes(t *testing.T) {
+	root, store := resumeFixture(t, "")
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"cancel"}, &stdout, &stderr)
+	if code != 4 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	assertCancellationJournal(t, store, []runstate.EventType{
+		runstate.EventRunStarted,
+		runstate.EventCancelRequested,
+		runstate.EventRunCancelled,
+	})
+}
+
+func TestCancelLiveOwnerLeavesDurableRequestAndLeaseUntouched(t *testing.T) {
+	root, store := resumeFixture(t, "")
+	driver, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Release()
+	leasePath := filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease")
+	beforeLease, err := os.ReadFile(leasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	for attempt := 0; attempt < 2; attempt++ {
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"cancel", "run-1"}, &stdout, &stderr)
+		if code != 6 {
+			t.Fatalf("attempt=%d exit=%d stdout=%q stderr=%q", attempt, code, stdout.String(), stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("attempt=%d stdout=%q stderr=%q", attempt, stdout.String(), stderr.String())
+		}
+		wantStderr := "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"cancellation request is durable; a live owner still holds the lease; resume will terminalize the run\"\n"
+		if stderr.String() != wantStderr {
+			t.Fatalf("attempt=%d exit=%d stdout=%q stderr=%q", attempt, code, stdout.String(), stderr.String())
+		}
+	}
+	assertCancellationJournal(t, store, []runstate.EventType{
+		runstate.EventRunStarted,
+		runstate.EventAuthorityGranted,
+		runstate.EventCancelRequested,
+	})
+	_, present, err := store.ReadLease("run-1")
+	if err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	if !present {
+		t.Fatalf("lease present=%t error=%v, want live owner lease retained", present, err)
+	}
+	afterLease, err := os.ReadFile(leasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeLease, afterLease) {
+		t.Fatal("live-owner cancellation changed driver lease")
+	}
+}
+
+func TestCancelAppendsRequestBeforeOwnerUnverifiableHalt(t *testing.T) {
+	root, store := resumeFixture(t, "")
+	driver, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Release()
+	leasePath := filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease")
+	if err := os.WriteFile(leasePath, []byte("malformed lease"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"cancel", "run-1"}, &stdout, &stderr)
+	if code != 5 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if stderr.String() != "recovery halted: run_id=\"run-1\" reason=\"owner_unverifiable\"\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	assertCancellationJournal(t, store, []runstate.EventType{
+		runstate.EventRunStarted,
+		runstate.EventAuthorityGranted,
+		runstate.EventCancelRequested,
+	})
+}
+
+func TestCancelRefusesNoActiveOrTerminalRun(t *testing.T) {
+	t.Run("no active run", func(t *testing.T) {
+		root := t.TempDir()
+		t.Chdir(root)
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"cancel"}, &stdout, &stderr)
+		if code != 2 {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "no active run") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+	})
+	t.Run("terminal run", func(t *testing.T) {
+		root, _ := resumeFixture(t, "CANCELLED")
+		t.Chdir(root)
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"cancel", "run-1"}, &stdout, &stderr)
+		if code != 2 {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "cancellation requires a nonterminal run") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+	})
+}
+
+func assertCancellationJournal(t *testing.T, store *runstore.Store, want []runstate.EventType) {
+	t.Helper()
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) != len(want) {
+		t.Fatalf("event count=%d want=%d events=%+v", len(journal.Events), len(want), journal.Events)
+	}
+	for index, event := range journal.Events {
+		if event.Type != want[index] {
+			t.Fatalf("event[%d]=%q want=%q", index, event.Type, want[index])
+		}
+	}
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventCancelRequested {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload) != 1 {
+			t.Fatalf("cancel.requested payload=%v", payload)
+		}
+		if payload["requested_by"] != "cli" {
+			t.Fatalf("cancel.requested payload=%v", payload)
+		}
+		continue
+	}
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventRunCancelled {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload) != 3 {
+			t.Fatalf("run.cancelled payload=%v", payload)
+		}
+		for _, key := range []string{"cancelled_movement_ids", "cancelled_attempt_ids", "obsoleted_decision_ids"} {
+			values, ok := payload[key].([]any)
+			if !ok {
+				t.Fatalf("run.cancelled payload=%v missing array %q", payload, key)
+			}
+			if len(values) != 0 {
+				t.Fatalf("run.cancelled payload=%v %q must be empty", payload, key)
+			}
+		}
 	}
 }
 

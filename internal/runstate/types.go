@@ -339,6 +339,15 @@ type State struct {
 	PendingDecisions     map[string]PendingDecision
 	RoutedAmendments     map[ProposalID]RoutedAmendment
 	CancelRequested      bool
+	appliedEvents        map[string]appliedEvent
+}
+
+// appliedEvent retains the envelope authority needed to validate a later
+// derived event during journal projection.
+type appliedEvent struct {
+	Type            EventType
+	Sequence        uint64
+	TerminalizesRun bool
 }
 
 type EventType string

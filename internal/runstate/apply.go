@@ -11,19 +11,25 @@ var (
 	ErrUnsupportedEventType = errors.New("unsupported event type")
 	ErrInvalidEvent         = errors.New("invalid event")
 	ErrIllegalTransition    = errors.New("illegal transition")
+	ErrSweepUnverifiable    = errors.New("recovery session sweep is unverifiable")
 )
 
 // ValidateEvent validates the supported event's exact payload without applying
 // its transition.
 func ValidateEvent(event Event) error {
-	_, err := validatePayload(event)
-	return err
+	if _, err := validatePayload(event); err != nil {
+		return err
+	}
+	return validateDerivedCausationID(event)
 }
 
 // IdempotencyKey returns the Appendix B key for a supported event.
 func IdempotencyKey(event Event) (string, error) {
 	payload, err := validatePayload(event)
 	if err != nil {
+		return "", err
+	}
+	if err := validateDerivedCausationID(event); err != nil {
 		return "", err
 	}
 	switch event.Type {
@@ -82,6 +88,10 @@ func Apply(input State, event Event) (State, error) {
 	if err != nil {
 		return state, err
 	}
+	if err := validateDerivedCausation(state, event); err != nil {
+		return state, err
+	}
+	wasTerminal := state.Run.Terminal()
 
 	switch event.Type {
 	case EventRunStarted:
@@ -137,10 +147,11 @@ func Apply(input State, event Event) (State, error) {
 		state.Run = RunCancelled
 		closeAllPendingDecisions(&state)
 		if epoch, ok := optionalUint(payload, "fenced_epoch"); ok {
-			if epoch <= state.Authority.Epoch {
-				return state, invalid(event, "fenced_epoch does not advance authority")
+			if epoch == state.Authority.Epoch+1 {
+				state.Authority = Authority{Epoch: epoch}
+			} else {
+				return state, invalid(event, "fenced_epoch is not observed authority epoch plus one")
 			}
-			state.Authority = Authority{Epoch: epoch}
 		}
 	case EventMovementReady:
 		if err := requireMovement(state, event, MovementPending); err != nil {
@@ -809,7 +820,65 @@ func Apply(input State, event Event) (State, error) {
 		}
 		return state, invalid(event, "event type is not in the registry")
 	}
+	if event.EventID != "" && !isObservationalEvent(event.Type) {
+		if state.appliedEvents == nil {
+			state.appliedEvents = make(map[string]appliedEvent)
+		}
+		state.appliedEvents[event.EventID] = appliedEvent{
+			Type:            event.Type,
+			Sequence:        event.Seq,
+			TerminalizesRun: !wasTerminal && state.Run.Terminal(),
+		}
+	}
 	return state, nil
+}
+
+func validateDerivedCausationID(event Event) error {
+	if isDerivedEvent(event.Type) && event.CausationID == "" {
+		return invalid(event, "causation_id is required for derived events")
+	}
+	return nil
+}
+
+func validateDerivedCausation(state State, event Event) error {
+	if err := validateDerivedCausationID(event); err != nil || !isDerivedEvent(event.Type) {
+		return err
+	}
+	source, exists := state.appliedEvents[event.CausationID]
+	if !exists {
+		return invalid(event, "causation_id does not reference an already applied event")
+	}
+	if event.Seq != 0 && source.Sequence >= event.Seq {
+		return invalid(event, "causation_id must reference an earlier event")
+	}
+	switch event.Type {
+	case EventMovementCancelled, EventAttemptCancelled:
+		if source.Type != EventRunCancelled {
+			return invalid(event, "causation_id must reference run.cancelled")
+		}
+	case EventAttemptSuperseded:
+		if source.Type != EventAmendmentApproved {
+			return invalid(event, "causation_id must reference amendment.approved")
+		}
+	case EventDecisionObsoleted:
+		if source.Type != EventAmendmentApproved && !source.TerminalizesRun {
+			return invalid(event, "causation_id must reference amendment.approved or a terminalizing event")
+		}
+	}
+	return nil
+}
+
+func isDerivedEvent(eventType EventType) bool {
+	switch eventType {
+	case EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded, EventDecisionObsoleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func isObservationalEvent(eventType EventType) bool {
+	return eventType == EventLog || eventType == EventProgress
 }
 
 func matchesApplicationTransaction(state State, payload map[string]any) bool {
@@ -941,7 +1010,7 @@ func refreshWaitingHuman(state *State) {
 }
 
 func cancellableMovementIDs(state State) []string {
-	var ids []string
+	ids := make([]string, 0)
 	for id, movementState := range state.Movements {
 		if movementState == MovementPending || movementState == MovementReady ||
 			movementState == MovementRunning || movementState == MovementWaitingHuman {
@@ -953,7 +1022,7 @@ func cancellableMovementIDs(state State) []string {
 }
 
 func cancellableAttemptIDs(state State) []string {
-	var ids []string
+	ids := make([]string, 0)
 	for id, attempt := range state.Attempts {
 		if !attempt.State.terminal() {
 			ids = append(ids, string(id))
@@ -961,6 +1030,21 @@ func cancellableAttemptIDs(state State) []string {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// CancellationPayload returns the exact run.cancelled payload derived from
+// the pre-event projection. The terminal transition validates these lists
+// again when it is applied.
+func CancellationPayload(state State, fencedEpoch *uint64) map[string]any {
+	payload := map[string]any{
+		"cancelled_movement_ids": cancellableMovementIDs(state),
+		"cancelled_attempt_ids":  cancellableAttemptIDs(state),
+		"obsoleted_decision_ids": pendingDecisionIDs(state),
+	}
+	if fencedEpoch != nil {
+		payload["fenced_epoch"] = *fencedEpoch
+	}
+	return payload
 }
 
 func toAttemptIDs(ids []string) []AttemptID {
