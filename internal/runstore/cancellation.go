@@ -87,7 +87,7 @@ func (store *Store) executeCancellation(runID runstate.RunID) error {
 			return ErrLeaseConflict
 		}
 		if state.PendingPrepare != nil {
-			if err := abandonCancellationPrepare(transaction, *state.PendingPrepare); err != nil {
+			if err := abandonCancellationPrepare(transaction, *state.PendingPrepare, store.probe); err != nil {
 				return err
 			}
 			state, err = appendCancellationEvent(transaction, state, runstate.Event{
@@ -111,6 +111,7 @@ func (store *Store) executeCancellation(runID runstate.RunID) error {
 			if err != nil {
 				return err
 			}
+			store.probe.Reached(faultpoint.PointCancelExecutionStopped)
 		}
 
 		lease, present, err := transaction.ReadLease()
@@ -131,6 +132,7 @@ func (store *Store) executeCancellation(runID runstate.RunID) error {
 		if err != nil {
 			return err
 		}
+		store.probe.Reached(faultpoint.PointCancelRunCancelled)
 		if fencedEpoch != nil {
 			if !state.Run.Terminal() {
 				return errors.New("cancellation lease cleanup requires terminal run")
@@ -138,6 +140,7 @@ func (store *Store) executeCancellation(runID runstate.RunID) error {
 			if _, err := transaction.At("cancellation.driver.lease").CompareRemoveLease(lease.Identity()); err != nil {
 				return err
 			}
+			store.probe.Reached(faultpoint.PointCancelLeaseRemoved)
 		}
 		return nil
 	})
@@ -183,11 +186,12 @@ func sweepCancellationSessions(ctx context.Context, state runstate.State) error 
 	return nil
 }
 
-func abandonCancellationPrepare(transaction *Txn, prepare runstate.PendingPrepare) error {
+func abandonCancellationPrepare(transaction *Txn, prepare runstate.PendingPrepare, probe faultpoint.Probe) error {
 	snapshot := Path(fmt.Sprintf("scores/revision-%d.yaml", prepare.NewHead.Revision))
 	if err := quarantineCancellationSnapshot(transaction, snapshot, prepare.NewHead.FileHash); err != nil {
 		return err
 	}
+	probe.Reached(faultpoint.PointCancelSnapshotQuarantined)
 	if _, err := transaction.At("cancellation.prepare.plan").RemoveDurable(Path(filepath.ToSlash(filepath.Join("prepares", string(prepare.ID)+".json")))); err != nil {
 		return err
 	}

@@ -419,8 +419,12 @@ func killAtPoint(
 	binary, repository string,
 	environment []string,
 	target faultpoint.PointID,
+	arguments ...string,
 ) string {
 	t.Helper()
+	if len(arguments) == 0 {
+		arguments = []string{"run"}
+	}
 	notifyRead, notifyWrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +450,7 @@ func killAtPoint(
 	files = append(files, notifyWrite, releaseRead)
 
 	var stdout, stderr bytes.Buffer
-	command := exec.Command(binary, "run")
+	command := exec.Command(binary, arguments...)
 	command.Dir = repository
 	command.Env = replaceEnvironment(environment, map[string]string{
 		"PARTITUR_FAULTPOINT_NOTIFY_FD":  "9",
@@ -471,18 +475,21 @@ func killAtPoint(
 			continue
 		}
 		if err := command.Process.Kill(); err != nil {
-			t.Fatalf("kill run process at %q: %v", target, err)
+			t.Fatalf("kill %q at %q: %v", arguments[0], target, err)
 		}
 		if pid != command.Process.Pid {
 			_ = syscall.Kill(-pid, syscall.SIGKILL)
 		}
 		_ = releaseWrite.Close()
 		if err := command.Wait(); err == nil {
-			t.Fatalf("run at %q exited successfully\nstdout:\n%s\nstderr:\n%s", target, &stdout, &stderr)
+			t.Fatalf("%q at %q exited successfully\nstdout:\n%s\nstderr:\n%s", arguments[0], target, &stdout, &stderr)
 		}
 		break
 	}
 
+	if len(arguments) != 1 || arguments[0] != "run" {
+		return ""
+	}
 	runID := strings.TrimSpace(stdout.String())
 	if runID == "" {
 		t.Fatalf("run at %q did not publish a run id\nstderr:\n%s", target, &stderr)
