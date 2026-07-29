@@ -25,6 +25,13 @@ type frameReader func(io.Reader, chan<- frameEvent)
 type commandWaiter func(*exec.Cmd) error
 type stderrCopier func(io.Writer, io.Reader) (int64, error)
 type gatedLauncher func(context.Context, launch.Request) (*launch.Process, error)
+type executeWindow string
+
+const (
+	executeWindowProbeResponse executeWindow = "probe response"
+	executeWindowStderrDrain   executeWindow = "stderr drain"
+	executeWindowProcessWait   executeWindow = "process wait"
+)
 
 // Client owns an immutable environment snapshot and the probe lifecycle.
 type Client struct {
@@ -38,6 +45,14 @@ type Client struct {
 	copyStderr  stderrCopier
 	launch      gatedLauncher
 	now         func() time.Time
+	// observeExecuteWindow is test-only. Production clients leave it nil.
+	observeExecuteWindow func(executeWindow)
+}
+
+func (c *Client) observeWindow(window executeWindow) {
+	if c.observeExecuteWindow != nil {
+		c.observeExecuteWindow(window)
+	}
 }
 
 // NewClient snapshots the operator environment for discovery and child launch.

@@ -607,6 +607,102 @@ func runFakeAdapter(mode string) {
 			_, _ = os.Stderr.WriteString("BEYOND-CAP")
 			os.Exit(7)
 		}
+	case "execute_cancelled", "execute_cancelled_duplicate_ack", "execute_cancelled_extra_after_response", "execute_completed_after_cancel", "execute_cancelled_nonzero", "execute_cancel_timeout", "execute_cancelled_without_ack_hang", "execute_cancelled_after_response_hang", "execute_cancelled_eof_stderr_hang", "execute_cancelled_eof_process_hang":
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
+		_, _ = reader.ReadString('\n')
+		if mode == "execute_cancel_timeout" {
+			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+			ignoreTermAndHang()
+		}
+		_ = os.WriteFile(marker, []byte("response"), 0o600)
+		outcome := "cancelled"
+		if mode == "execute_completed_after_cancel" {
+			outcome = "completed"
+		}
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"` + outcome + `"}}` + "\n")
+		if mode == "execute_cancelled_without_ack_hang" {
+			ignoreTermAndHang()
+		}
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		if mode == "execute_cancelled_after_response_hang" {
+			ignoreTermAndHang()
+		}
+		if mode == "execute_cancelled_eof_stderr_hang" {
+			_ = os.Stdout.Close()
+			ignoreTermAndHang()
+		}
+		if mode == "execute_cancelled_eof_process_hang" {
+			_ = os.Stdout.Close()
+			_ = os.Stderr.Close()
+			ignoreTermAndHang()
+		}
+		if mode == "execute_cancelled_duplicate_ack" {
+			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		}
+		if mode == "execute_cancelled_extra_after_response" {
+			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"progress","message":"late"}}` + "\n")
+		}
+		waitEOF()
+		if mode == "execute_cancelled_nonzero" {
+			os.Exit(7)
+		}
+	case "execute_early_duplicate_cancel_ack":
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		// Two reads: the execute request, then the cancel request itself. Waiting for the
+		// cancel to arrive is what makes both acknowledgements solicited, so the duplicate
+		// reaches the in-flight guard rather than the unsolicited one.
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		_ = os.WriteFile(marker, []byte("response"), 0o600)
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"cancelled"}}` + "\n")
+		waitEOF()
+	case "execute_early_unsolicited_cancel_ack":
+		writeValid(adapterID)
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		// No cancel was requested, so this acknowledgement is unsolicited. The execute
+		// response that follows is what makes the guard's absence a named failure
+		// rather than a hang.
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
+		_ = os.WriteFile(marker, []byte("response"), 0o600)
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}` + "\n")
+		waitEOF()
+	case "execute_post_eof_stderr_hang", "execute_post_eof_process_hang":
+		// Respond, acknowledge nothing (no cancel was requested yet), then close stdout so
+		// the core leaves its frame loop. The marker tells the test the post-EOF window is
+		// open; only then does it cancel.
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}` + "\n")
+		_ = os.Stdout.Close()
+		if mode == "execute_post_eof_process_hang" {
+			_ = os.Stderr.Close()
+		}
+		_ = os.WriteFile(marker+".eof", []byte("eof"), 0o600)
+		ignoreTermAndHang()
+	case "execute_never_reads_stdin":
+		writeValid(adapterID)
+		ignoreTermAndHang()
+	case "execute_event_then_never_reads_stdin":
+		writeValid(adapterID)
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
+		ignoreTermAndHang()
+	case "execute_cancelled_without_ack":
+		writeValid(adapterID)
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
+		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"cancelled"}}` + "\n")
+		waitEOF()
 	case "environment":
 		data, _ := json.Marshal(struct {
 			Argv0       string

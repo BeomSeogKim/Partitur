@@ -31,13 +31,15 @@ type runningExecute struct {
 }
 
 type executeState struct {
-	plan         ExecutePlan
-	report       ExecuteReport
-	outputs      map[string]string
-	artifactSeen map[string]bool
-	emittedIDs   map[string]bool
-	blockingIDs  map[string]bool
-	eventCount   int
+	plan                 ExecutePlan
+	report               ExecuteReport
+	outputs              map[string]string
+	artifactSeen         map[string]bool
+	emittedIDs           map[string]bool
+	blockingIDs          map[string]bool
+	eventCount           int
+	cancellationInFlight bool
+	cancelSignal         <-chan struct{}
 }
 
 func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, error) {
@@ -58,7 +60,19 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 	defer timer.Stop()
 
 	launchContext, cancelLaunch := context.WithDeadline(ctx, deadline)
+	// The launch is the first window of the call, and it precedes every other observation
+	// point. §6's watch covers the driver's whole tenure, so a cancellation arriving during
+	// the gated handoff has to end it rather than wait for a process that is still starting.
+	launchDone := make(chan struct{})
+	go func() {
+		select {
+		case <-plan.Cancel:
+			cancelLaunch()
+		case <-launchDone:
+		}
+	}()
 	running, err := c.startExecute(launchContext, plan)
+	close(launchDone)
 	cancelLaunch()
 	if err != nil {
 		return ExecuteReport{}, err
@@ -70,6 +84,17 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		emittedIDs:   make(map[string]bool),
 		blockingIDs:  make(map[string]bool),
 	}
+	cancelSignal := plan.Cancel
+	state.cancelSignal = plan.Cancel
+	cancelRequested := false
+	cancelAcknowledged := false
+	var cancelTimer *time.Timer
+	var cancelTimeout <-chan time.Time
+	defer func() {
+		if cancelTimer != nil {
+			cancelTimer.Stop()
+		}
+	}()
 	failWithoutOutcome := func(cause error) (ExecuteReport, error) {
 		if cleanupErr := c.stopExecute(running); cleanupErr != nil {
 			return state.report, sweepHalt(cleanupErr)
@@ -77,10 +102,119 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
 		return state.report, cause
 	}
-
-	if err := c.write(running.stdin, probeRequest); err != nil {
-		return failWithoutOutcome(fmt.Errorf("write run probe request: %w", err))
+	failAfterOutputDrainWithoutOutcome := func(cause error) (ExecuteReport, error) {
+		state.report.Result = nil
+		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+			return state.report, sweepHalt(cleanupErr)
+		}
+		<-running.stderrDone
+		_ = running.process.Wait()
+		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+		return state.report, cause
 	}
+	cancelExpired := func() (ExecuteReport, error) {
+		state.report.Result = nil
+		return failWithoutOutcome(errors.New("cancel completion grace expired"))
+	}
+	observeCancellation := func() {
+		// §6's outer grace has to start wherever the cancellation is first seen, or a drain
+		// that never finishes has nothing bounding it. No protocol `cancel` is issued from
+		// the post-response points: the call being drained has already answered.
+		state.cancellationInFlight = true
+		cancelSignal = nil
+		if cancelTimer == nil {
+			cancelTimer = time.NewTimer(c.grace)
+			cancelTimeout = cancelTimer.C
+		}
+	}
+	type writeOutcome uint8
+	const (
+		writeCompleted writeOutcome = iota
+		writeCancelled
+		writeExpired
+		writeInterrupted
+		writeDeadlineExpired
+	)
+	// deadline is the run-probe completion deadline, which §4 says covers the request write;
+	// the execute and cancel writes pass nil because their bound is the cancellation grace.
+	writeBounded := func(request []byte, deadline <-chan time.Time) (error, writeOutcome) {
+		// Capture the handle before the goroutine starts. Every non-completion exit below
+		// leaves the write still blocked, and the sweep that follows sets running.stdin to
+		// nil — reading the field from inside the goroutine would race that assignment.
+		// Closing the file under a blocked Write is safe and is what unblocks it.
+		stdin := running.stdin
+		completed := make(chan error, 1)
+		go func() {
+			completed <- c.write(stdin, request)
+		}()
+		// An expiry that has already happened wins over everything: §4's completion deadline
+		// covers the request write, so admitting a write that finished after it would spend
+		// the deadline and then ignore it. The completion timer starts before the launch, so
+		// it can fire during the handoff and already be expired here.
+		//
+		// Measured, so the coverage claim is not stronger than the evidence: this branch and
+		// the deadline case in the select below are redundant for that input — deleting
+		// either alone leaves every test green, and deleting both fails the probe-deadline
+		// test by name. The tests pin the obligation, not which of the two discharges it.
+		select {
+		case <-deadline:
+			return nil, writeDeadlineExpired
+		case <-cancelTimeout:
+			return nil, writeExpired
+		case <-ctx.Done():
+			return nil, writeInterrupted
+		default:
+		}
+		// Below that, a finished write is taken over a cancellation that is also ready:
+		// discarding a completed write would lose work for nothing, and the very next
+		// select observes the cancellation anyway. Without this the two are peers and Go
+		// picks between them at random.
+		select {
+		case writeErr := <-completed:
+			return writeErr, writeCompleted
+		default:
+		}
+		select {
+		case writeErr := <-completed:
+			return writeErr, writeCompleted
+		case <-cancelSignal:
+			if ctx.Err() != nil {
+				return nil, writeInterrupted
+			}
+			observeCancellation()
+			return nil, writeCancelled
+		case <-cancelTimeout:
+			return nil, writeExpired
+		case <-deadline:
+			return nil, writeDeadlineExpired
+		case <-ctx.Done():
+			return nil, writeInterrupted
+		}
+	}
+	interrupted := func(cause error) (ExecuteReport, error) {
+		if cleanupErr := c.stopExecute(running); cleanupErr != nil {
+			return state.report, sweepHalt(cleanupErr)
+		}
+		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+		return state.report, cause
+	}
+
+	// §4 puts the run-probe request write inside the completion deadline, and §6's watch
+	// runs for the driver's whole tenure — so a cancellation arriving here has to be seen
+	// even though no `execute` has been authorized and there is nothing to protocol-cancel.
+	probeWriteErr, probeWriteResult := writeBounded(probeRequest, timer.C)
+	switch probeWriteResult {
+	case writeCancelled:
+		return failWithoutOutcome(errors.New("cancel observed while writing run probe request"))
+	case writeDeadlineExpired:
+		return failWithoutOutcome(errors.New("run probe completion deadline expired"))
+	case writeInterrupted:
+		return failWithoutOutcome(ctx.Err())
+	}
+	if probeWriteErr != nil {
+		return failWithoutOutcome(fmt.Errorf("write run probe request: %w", probeWriteErr))
+	}
+	c.observeWindow(executeWindowProbeResponse)
 	for {
 		select {
 		case event := <-running.frames:
@@ -100,6 +234,9 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 				return failWithoutOutcome(err)
 			}
 			goto probed
+		case <-cancelSignal:
+			observeCancellation()
+			return failWithoutOutcome(errors.New("cancel observed while awaiting run probe response"))
 		case <-timer.C:
 			return failWithoutOutcome(errors.New("run probe completion deadline expired"))
 		case <-ctx.Done():
@@ -114,11 +251,24 @@ probed:
 		default:
 		}
 	}
-	if err := c.write(running.stdin, executeRequest); err != nil {
-		return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", err.Error())
+	writeErr, writeResult := writeBounded(executeRequest, nil)
+	switch writeResult {
+	case writeCancelled:
+		state.report.Result = nil
+		return failWithoutOutcome(errors.New("cancel observed while writing execute request"))
+	case writeExpired:
+		return cancelExpired()
+	case writeInterrupted:
+		return interrupted(ctx.Err())
+	case writeCompleted:
+		if writeErr != nil {
+			return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", writeErr.Error())
+		}
 	}
-
 	for {
+		if err := ctx.Err(); err != nil {
+			return interrupted(err)
+		}
 		select {
 		case event := <-running.frames:
 			if event.err != nil {
@@ -150,17 +300,49 @@ probed:
 				}
 				continue
 			}
+			if decoded.kind == executeFrameCancelAck {
+				if !cancelRequested {
+					return c.finishFailure(running, &state, protocol.FailureProtocolError, "strict_decode_failed", "unsolicited cancel acknowledgement")
+				}
+				if cancelAcknowledged {
+					return c.finishFailure(running, &state, protocol.FailureProtocolError, "strict_decode_failed", "duplicate cancel acknowledgement")
+				}
+				cancelAcknowledged = true
+				continue
+			}
 			if failure := state.validateBlocking(decoded.result); failure != nil {
 				return c.finishFailure(running, &state, protocol.FailureProtocolError, failure.reason, failure.detail)
 			}
 			state.report.Result = &decoded.result
 			goto response
-		case <-ctx.Done():
-			if cleanupErr := c.stopExecute(running); cleanupErr != nil {
-				return state.report, sweepHalt(cleanupErr)
+		case <-cancelSignal:
+			// Suppression starts at the observation, not at the frame: §6 anchors it to the
+			// durable request, which governs "even if the core had not yet signalled".
+			// Setting it after a successful write would leave the encode and write failures
+			// below relying on their own returns instead of the shared rule.
+			observeCancellation()
+			cancelRequest, encodeErr := encodeCancelRequest(protocol.CancelRequest{AttemptID: plan.Request.AttemptID})
+			if encodeErr != nil {
+				state.report.Result = nil
+				return failWithoutOutcome(encodeErr)
 			}
-			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-			return state.report, ctx.Err()
+			writeErr, writeResult := writeBounded(cancelRequest, nil)
+			switch writeResult {
+			case writeExpired:
+				return cancelExpired()
+			case writeInterrupted:
+				return interrupted(ctx.Err())
+			case writeCompleted:
+				if writeErr != nil {
+					state.report.Result = nil
+					return failWithoutOutcome(writeErr)
+				}
+			}
+			cancelRequested = true
+		case <-cancelTimeout:
+			return cancelExpired()
+		case <-ctx.Done():
+			return interrupted(ctx.Err())
 		}
 	}
 
@@ -174,9 +356,26 @@ response:
 		select {
 		case event := <-running.frames:
 			if event.err == nil {
+				decoded, decodeErr := decodeExecuteFrame(event.frame)
+				if decodeErr == nil {
+					if decoded.kind == executeFrameCancelAck {
+						if cancelRequested {
+							if !cancelAcknowledged {
+								cancelAcknowledged = true
+								continue
+							}
+						}
+					}
+				}
 				return c.finishFailure(running, &state, protocol.FailureProtocolError, "strict_decode_failed", "frame followed execute response")
 			}
 			if errors.Is(event.err, io.EOF) {
+				if cancelRequested {
+					if !cancelAcknowledged {
+						state.report.Result = nil
+						return failAfterOutputDrainWithoutOutcome(errors.New("cancel acknowledgement absent"))
+					}
+				}
 				goto outputDrained
 			}
 			reason := "strict_decode_failed"
@@ -186,6 +385,12 @@ response:
 				reason = "frame_too_large"
 			}
 			return c.finishFailure(running, &state, protocol.FailureProtocolError, reason, event.err.Error())
+		case <-cancelSignal:
+			// Suppression is already handled by the recording entry points, which read the
+			// signal themselves. Observing it here is about liveness only.
+			observeCancellation()
+		case <-cancelTimeout:
+			return cancelExpired()
 		case <-ctx.Done():
 			if cleanupErr := c.stopExecute(running); cleanupErr != nil {
 				return state.report, sweepHalt(cleanupErr)
@@ -196,39 +401,64 @@ response:
 	}
 
 outputDrained:
-	select {
-	case <-running.stderrDone:
-	case <-ctx.Done():
-		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
-			return state.report, sweepHalt(cleanupErr)
+	c.observeWindow(executeWindowStderrDrain)
+	for stderrPending := true; stderrPending; {
+		select {
+		case <-running.stderrDone:
+			stderrPending = false
+		case <-cancelSignal:
+			observeCancellation()
+		case <-cancelTimeout:
+			return failAfterOutputDrainWithoutOutcome(errors.New("cancel completion grace expired"))
+		case <-ctx.Done():
+			if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+				return state.report, sweepHalt(cleanupErr)
+			}
+			<-running.stderrDone
+			_ = running.process.Wait()
+			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+			return state.report, ctx.Err()
 		}
-		<-running.stderrDone
-		_ = running.process.Wait()
-		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-		return state.report, ctx.Err()
 	}
 	state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+	c.observeWindow(executeWindowProcessWait)
 	wait := make(chan error, 1)
 	go func() {
 		wait <- running.process.Wait()
 	}()
 	var waitErr error
-	select {
-	case waitErr = <-wait:
-	case <-ctx.Done():
-		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
-			return state.report, sweepHalt(cleanupErr)
+	for waiting := true; waiting; {
+		select {
+		case waitErr = <-wait:
+			waiting = false
+		case <-cancelSignal:
+			observeCancellation()
+		case <-cancelTimeout:
+			// Drain the goroutine above rather than calling Wait again: two concurrent
+			// Cmd.Wait calls on one process are a data race, which is why the context case
+			// below takes the same shape.
+			state.report.Result = nil
+			if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+				return state.report, sweepHalt(cleanupErr)
+			}
+			<-wait
+			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+			return state.report, errors.New("cancel completion grace expired")
+		case <-ctx.Done():
+			if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
+				return state.report, sweepHalt(cleanupErr)
+			}
+			<-wait
+			state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+			return state.report, ctx.Err()
 		}
-		<-wait
-		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-		return state.report, ctx.Err()
 	}
 	if waitErr != nil {
 		state.report.Result = nil
 		if cleanupErr := c.sweepExecute(running); cleanupErr != nil {
 			return state.report, sweepHalt(cleanupErr)
 		}
-		return c.recordFailure(&state, protocol.FailureAdapterUnavailable, "", waitErr.Error())
+		return c.recordFailure(&state, protocol.FailureAdapterUnavailable, "", waitErr.Error(), waitErr)
 	}
 	if cleanupErr := c.verifyAndSweepExecute(running); cleanupErr != nil {
 		return state.report, sweepHalt(cleanupErr)
@@ -239,6 +469,14 @@ outputDrained:
 	}
 	if err := c.recordResult(&state); err != nil {
 		return state.report, err
+	}
+	if state.terminalRecordingSuppressed() {
+		// Every other suppressed exit already clears this, so leaving the one clean exit
+		// populated would make `Result != nil` mean "authoritative" everywhere except
+		// here. Callers read the outcome directly — driver.go treats a `completed` as
+		// licence to run acceptance — so a response the journal deliberately ignored must
+		// not survive in the report either.
+		state.report.Result = nil
 	}
 	return state.report, nil
 }
@@ -505,7 +743,7 @@ func (c *Client) finishFailure(running *runningExecute, state *executeState, kin
 		return state.report, sweepHalt(cleanupErr)
 	}
 	state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-	return c.recordFailure(state, kind, reason, detail)
+	return c.recordFailure(state, kind, reason, detail, errors.New(detail))
 }
 
 func (c *Client) stopExecute(running *runningExecute) error {
@@ -543,6 +781,9 @@ func (c *Client) verifyAndSweepExecute(running *runningExecute) error {
 }
 
 func (c *Client) recordStop(state *executeState) error {
+	if state.terminalRecordingSuppressed() {
+		return nil
+	}
 	observed := c.now()
 	duration := observed.Sub(state.plan.IntervalOpened)
 	if duration < 0 {
@@ -563,6 +804,9 @@ func (c *Client) recordStop(state *executeState) error {
 }
 
 func (c *Client) recordResult(state *executeState) error {
+	if state.terminalRecordingSuppressed() {
+		return nil
+	}
 	result := *state.report.Result
 	eventType := ""
 	reason := ""
@@ -581,7 +825,10 @@ func (c *Client) recordResult(state *executeState) error {
 	return state.recordOutcome(eventType, result, reason)
 }
 
-func (c *Client) recordFailure(state *executeState, kind protocol.FailureKind, reason, detail string) (ExecuteReport, error) {
+func (c *Client) recordFailure(state *executeState, kind protocol.FailureKind, reason, detail string, cause error) (ExecuteReport, error) {
+	if state.terminalRecordingSuppressed() {
+		return state.report, cause
+	}
 	if err := c.recordStop(state); err != nil {
 		return state.report, err
 	}
@@ -594,6 +841,9 @@ func (c *Client) recordFailure(state *executeState, kind protocol.FailureKind, r
 }
 
 func (state *executeState) recordOutcome(eventType string, result protocol.ExecuteResult, reason string) error {
+	if state.terminalRecordingSuppressed() {
+		return nil
+	}
 	raised := make([]RaisedDecision, 0, len(state.report.Questions)+len(state.report.Proposals))
 	for index := range state.report.Questions {
 		question := state.report.Questions[index]
@@ -615,6 +865,24 @@ func (state *executeState) recordOutcome(eventType string, result protocol.Execu
 	}
 	reach(state.plan.Probe, faultpoint.PointExecuteOutcomeRecorded)
 	return nil
+}
+
+// terminalRecordingSuppressed reads the signal itself rather than trusting a flag some
+// earlier select happened to set. Round 3 moved the rule off the twenty call sites and into
+// these four entry points, which closed the *where*; a cancellation arriving after the
+// execute response still escaped, because no select past that point watched the channel.
+// Observing it here closes the *when* the same way: no caller and no select has to know.
+func (state *executeState) terminalRecordingSuppressed() bool {
+	if state.cancellationInFlight {
+		return true
+	}
+	select {
+	case <-state.cancelSignal:
+		state.cancellationInFlight = true
+		return true
+	default:
+		return false
+	}
 }
 
 func reach(probe faultpoint.Probe, point faultpoint.PointID) {
