@@ -2291,7 +2291,36 @@ durable path that reaches a live driver at any point in its work:
    then applies the outer termination grace and process-tree sweep (§4) to every session it
    recorded. It then acts as
    the canceller and executes the cancellation oracle itself, authorized by run lifecycle rather
-   than by its lease. The drain makes no oracle step unnecessary and skips none: it does not close
+   than by its lease.
+
+   **The response is awaited, not obeyed.** From the moment the driver observes the durable
+   `cancel.requested` — not from the moment it writes the protocol frame — it
+   records **no response-derived attempt outcome** — whatever the `outcome` field says, including
+   `completed`. The boundary is the observation rather than the signal because this document
+   already fixes it there: a durable control request governs "even if the core had not yet
+   signalled". A driver that observed the request and had not yet written the frame would otherwise
+   have a window in which a response it is about to discard could still be journaled.
+   §4 makes the response a completeness marker, which is why step 4 waits for it; it
+   does not make its verdict authoritative here. `run.cancelled` is the single producer of that
+   attempt's terminal projection, so journaling the response as well would be a second producer of
+   one projection, which is the defect this section spends its length avoiding. §4's blessed race —
+   the core "may legitimately race a cancel against completion" — grants the *adapter* the freedom
+   to finish; it does not oblige the core to record that as the attempt's outcome. And the rule has
+   to cover every outcome rather than only `cancelled`: `waiting_human` would otherwise open a
+   `decision.requested` on a run that is terminating. Evidence is unaffected, because artifacts and
+   the other observations are appended as they arrive rather than derived from the response.
+
+   This **extends** a principle §4 states for one case; it does not merely restate it, and calling
+   it a restatement would be the more comfortable claim rather than the true one. §4's run execute
+   completion says that where an adapter *hangs after responding*, the interval stays open until
+   "the existing budget-exhaustion, cancellation, or supersession path terminates and sweeps it;
+   none of those paths appends the provisional response's transition" — expressly scoped to the
+   hung adapter. The extension is nonetheless required rather than optional: the reason §4 gives
+   there is that another authority has taken the outcome over, and that reason does not depend on
+   whether the adapter went on to hang. Leaving the responsive case out would make the same
+   response authoritative or not according to what the adapter did *after* sending it.
+
+   The drain makes no oracle step unnecessary and skips none: it does not close
    the execution interval, so `(c)` is evaluated on its own predicate exactly as anywhere else, and
    it leaves `(a)`'s verified-empty sweep an idempotent no-op. That is the oracle's conditionals
    being evaluated, not a second cancellation sequence. The driver's matching lease makes `(d)`
