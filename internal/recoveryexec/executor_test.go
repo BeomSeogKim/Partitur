@@ -201,7 +201,7 @@ func TestCancellationDuringRecoveryReplansToTheTerminalRow(t *testing.T) {
 		Action: &recovery.Action{
 			Kind:      recovery.ActionRecoverUnstartedAttempt,
 			AttemptID: "attempt-1",
-			Steps:     []recovery.ActionStep{recovery.StepCloseAdapterInterval},
+			Steps:     []recovery.ActionStep{recovery.StepCloseAdapterInterval, recovery.StepClassifyAndAppendFailure},
 		},
 	})
 	if err != nil {
@@ -213,8 +213,13 @@ func TestCancellationDuringRecoveryReplansToTheTerminalRow(t *testing.T) {
 	if result.Outcome != OutcomeCancelled {
 		t.Fatalf("outcome = %q, want %q", result.Outcome, OutcomeCancelled)
 	}
-	if result.Replans == 0 {
-		t.Fatal("the executor did not replan after the cancellation")
+	// Result records effects that actually happened: the step ran and terminalized the run
+	// before it reported the cancellation, and the steps after it did not.
+	if !slices.Equal(result.Steps, []recovery.ActionStep{recovery.StepCloseAdapterInterval}) {
+		t.Fatalf("recorded steps = %v, want only the one that ran", result.Steps)
+	}
+	if result.Replans != 1 {
+		t.Fatalf("replans = %d, want exactly one to C.1's terminal row", result.Replans)
 	}
 }
 

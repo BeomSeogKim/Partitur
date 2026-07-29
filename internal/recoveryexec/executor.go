@@ -164,6 +164,10 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
 				if err := handler(ctx, handlerContext, action); err != nil {
 					if errors.Is(err, ErrRunCancelledDuringRecovery) {
+						// The step ran and terminalized the run; Result records effects that
+						// actually happened, so it is recorded before the replan even though
+						// the remaining steps are skipped.
+						result.Steps = append(result.Steps, step)
 						refreshed, halted, reloadErr := executor.reloadAfterEffect(ctx, input, decision)
 						if reloadErr != nil {
 							return result, reloadErr
@@ -211,6 +215,8 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			}
 			if err := handler(ctx, handlerContext, action); err != nil {
 				if errors.Is(err, ErrRunCancelledDuringRecovery) {
+					// As above: the action ran before it reported the cancellation.
+					result.Kinds = append(result.Kinds, action.Kind)
 					refreshed, halted, reloadErr := executor.reloadAfterEffect(ctx, input, decision)
 					if reloadErr != nil {
 						return result, reloadErr
