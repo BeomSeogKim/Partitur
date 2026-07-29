@@ -314,6 +314,13 @@ func TestDerivedCancellationAndSupersessionContracts(t *testing.T) {
 	if _, err := Apply(stateWithObservedEpoch, invalidFencedEpoch); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("fenced epoch beyond observed plus one error = %v, want ErrInvalidEvent", err)
 	}
+	invalidPriorFencedEpoch := cancelledSource
+	invalidPriorFencedEpoch.Payload = mustPayload(t, map[string]any{
+		"cancelled_movement_ids": []any{"m1"}, "cancelled_attempt_ids": []any{"a1"}, "obsoleted_decision_ids": []any{}, "fenced_epoch": 1,
+	})
+	if _, err := Apply(stateWithObservedEpoch, invalidPriorFencedEpoch); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("fenced epoch before observed successor error = %v, want ErrInvalidEvent", err)
+	}
 
 	for _, test := range []struct {
 		event Event
@@ -910,8 +917,22 @@ func TestAmendmentApprovedFencedEpochMatchesPreparedObservation(t *testing.T) {
 			wantErr:    true,
 		},
 		{
+			name:       "fenced_epoch_before_observed_successor",
+			stateEpoch: 1,
+			observed:   1,
+			fenced:     1,
+			wantErr:    true,
+		},
+		{
 			name:       "current_epoch_changed_since_prepare",
 			stateEpoch: 2,
+			observed:   1,
+			fenced:     2,
+			wantErr:    true,
+		},
+		{
+			name:       "current_epoch_behind_prepared_observation",
+			stateEpoch: 0,
 			observed:   1,
 			fenced:     2,
 			wantErr:    true,
