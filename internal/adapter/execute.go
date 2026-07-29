@@ -39,6 +39,7 @@ type executeState struct {
 	blockingIDs          map[string]bool
 	eventCount           int
 	cancellationInFlight bool
+	cancelSignal         <-chan struct{}
 }
 
 func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, error) {
@@ -130,6 +131,7 @@ probed:
 	}
 
 	cancelSignal := plan.Cancel
+	state.cancelSignal = plan.Cancel
 	cancelRequested := false
 	cancelAcknowledged := false
 	var cancelTimer *time.Timer
@@ -265,6 +267,18 @@ response:
 				reason = "frame_too_large"
 			}
 			return c.finishFailure(running, &state, protocol.FailureProtocolError, reason, event.err.Error())
+		case <-cancelSignal:
+			// Suppression is already handled by the recording entry points, which read the
+			// signal themselves. This case is about liveness: a cancellation arriving after
+			// the response leaves no deadline bounding the drain, so §6's outer grace would
+			// never start against an adapter that stops writing. There is no protocol
+			// `cancel` to issue — the call this drain belongs to has already responded.
+			state.cancellationInFlight = true
+			cancelSignal = nil
+			if cancelTimer == nil {
+				cancelTimer = time.NewTimer(c.grace)
+				cancelTimeout = cancelTimer.C
+			}
 		case <-cancelTimeout:
 			return cancelExpired()
 		case <-ctx.Done():
@@ -731,8 +745,22 @@ func (state *executeState) recordOutcome(eventType string, result protocol.Execu
 	return nil
 }
 
+// terminalRecordingSuppressed reads the signal itself rather than trusting a flag some
+// earlier select happened to set. Round 3 moved the rule off the twenty call sites and into
+// these four entry points, which closed the *where*; a cancellation arriving after the
+// execute response still escaped, because no select past that point watched the channel.
+// Observing it here closes the *when* the same way: no caller and no select has to know.
 func (state *executeState) terminalRecordingSuppressed() bool {
-	return state.cancellationInFlight
+	if state.cancellationInFlight {
+		return true
+	}
+	select {
+	case <-state.cancelSignal:
+		state.cancellationInFlight = true
+		return true
+	default:
+		return false
+	}
 }
 
 func reach(probe faultpoint.Probe, point faultpoint.PointID) {

@@ -440,6 +440,53 @@ func TestExecuteCancelWriteFailureRecordsNoIntervalOrOutcome(t *testing.T) {
 	}
 }
 
+// The cancellation can land after the execute response has been consumed and before the
+// ordinary recording runs. Nothing in the drain path selects on the signal, so the guard has
+// to be the recording entry points reading it themselves — a flag set by some earlier select
+// would still be false here.
+func TestExecuteCancelObservedAfterResponseStillSuppressesRecording(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	marker := filepath.Join(t.TempDir(), "response")
+	var order []string
+	client := newClient([]string{
+		fakeModeEnv + "=execute_completed",
+		fakeMarkerEnv + "=" + marker,
+	}, incidentalTestDeadline, 10*time.Second)
+	cancel := make(chan struct{})
+	client.sessions = &observingSessionController{
+		verify: func() (bool, error) {
+			// The verified-empty sweep is the last thing before recordStop, so closing here
+			// puts the cancellation exactly in the window the drain never watches.
+			close(cancel)
+			order = append(order, "session.verified_empty")
+			return true, nil
+		},
+	}
+	plan := executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	plan.Cancel = cancel
+	report, err := executeWithin(t, client, plan, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Result != nil {
+		t.Fatalf("a suppressed response survived in the report: %#v", report.Result)
+	}
+	want := []string{"attempt.started", "adapter.probed", "session.verified_empty"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("journal order = %v, want %v", order, want)
+	}
+}
+
 func TestExecuteCancelGraceTimeoutForcesVerifiedEmptySweep(t *testing.T) {
 	directory := t.TempDir()
 	installFake(t, directory, "fake")
