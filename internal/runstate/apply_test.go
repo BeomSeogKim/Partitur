@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -326,9 +327,6 @@ func TestDerivedCancellationAndSupersessionContracts(t *testing.T) {
 		if err != nil || key != test.key {
 			t.Fatalf("%s key = %q, error = %v, want %q", test.event.Type, key, err, test.key)
 		}
-		if _, err := Apply(runningAttemptState(t), test.event); !errors.Is(err, ErrUnsupportedEventType) {
-			t.Fatalf("%s direct apply error = %v, want ErrUnsupportedEventType", test.event.Type, err)
-		}
 	}
 
 	supersededState := runningAttemptState(t)
@@ -563,8 +561,8 @@ func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
 	if key, err := IdempotencyKey(derived); err != nil || key != "terminal-1\x00decision-1" {
 		t.Fatalf("derived key = %q, error = %v", key, err)
 	}
-	if _, err := Apply(state, derived); !errors.Is(err, ErrUnsupportedEventType) {
-		t.Fatalf("direct derived apply error = %v, want ErrUnsupportedEventType", err)
+	if _, err := Apply(state, derived); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("unresolved derived apply error = %v, want ErrInvalidEvent", err)
 	}
 	cancelled := fixtureEvent(EventRunCancelled, map[string]any{
 		"cancelled_movement_ids": []any{"m1"}, "cancelled_attempt_ids": []any{"a1"}, "obsoleted_decision_ids": []any{"decision-1"},
@@ -601,6 +599,201 @@ func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
 	if len(next.PendingDecisions) != 0 || next.Attempts["a1"].State != AttemptSuperseded {
 		t.Fatalf("approval obsoletion projection = %+v", next)
 	}
+}
+
+func TestDerivedCausationEnforcesEnvelopeAuthority(t *testing.T) {
+	derivedTypes := []EventType{
+		EventMovementCancelled,
+		EventAttemptCancelled,
+		EventAttemptSuperseded,
+		EventDecisionObsoleted,
+	}
+
+	t.Run("requires a non-empty causation id before key construction", func(t *testing.T) {
+		for _, eventType := range derivedTypes {
+			t.Run(string(eventType), func(t *testing.T) {
+				event := derivedCausationEvent(eventType, "", 2)
+				if err := ValidateEvent(event); !errors.Is(err, ErrInvalidEvent) {
+					t.Fatalf("ValidateEvent error = %v, want ErrInvalidEvent", err)
+				}
+				if key, err := IdempotencyKey(event); !errors.Is(err, ErrInvalidEvent) || key != "" {
+					t.Fatalf("IdempotencyKey = %q, %v; want empty key and ErrInvalidEvent", key, err)
+				}
+				if _, err := Apply(NewState(nil), event); !errors.Is(err, ErrInvalidEvent) {
+					t.Fatalf("Apply error = %v, want ErrInvalidEvent", err)
+				}
+			})
+		}
+	})
+
+	t.Run("requires an already applied source event", func(t *testing.T) {
+		for _, eventType := range derivedTypes {
+			t.Run(string(eventType), func(t *testing.T) {
+				event := derivedCausationEvent(eventType, "missing-source", 2)
+				if _, err := Apply(runningAttemptState(t), event); !errors.Is(err, ErrInvalidEvent) ||
+					!strings.Contains(err.Error(), "already applied") {
+					t.Fatalf("Apply error = %v, want unresolved causation ErrInvalidEvent", err)
+				}
+			})
+		}
+	})
+
+	t.Run("requires a source earlier than the derived event", func(t *testing.T) {
+		state := cancelledSourceState(t, "cancel-source", 12)
+		event := derivedCausationEvent(EventMovementCancelled, "cancel-source", 11)
+		if _, err := Apply(state, event); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("Apply error = %v, want ErrInvalidEvent", err)
+		}
+	})
+
+	t.Run("rejects source types outside the Appendix B rule", func(t *testing.T) {
+		for _, eventType := range derivedTypes {
+			t.Run(string(eventType), func(t *testing.T) {
+				state := runningAttemptState(t)
+				source := fixtureEvent(EventCancelRequested, map[string]any{"requested_by": "cli"}, func(event *Event) {
+					event.EventID, event.Seq = "wrong-source", 10
+				})
+				var err error
+				state, err = Apply(state, source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				event := derivedCausationEvent(eventType, "wrong-source", 11)
+				if _, err := Apply(state, event); !errors.Is(err, ErrInvalidEvent) {
+					t.Fatalf("Apply error = %v, want ErrInvalidEvent", err)
+				}
+			})
+		}
+	})
+
+	t.Run("accepts each exact source rule", func(t *testing.T) {
+		for _, test := range []struct {
+			name  string
+			state func(*testing.T) State
+			event Event
+		}{
+			{
+				name:  "movement cancelled from run cancelled",
+				state: func(t *testing.T) State { return cancelledSourceState(t, "cancel-source", 10) },
+				event: derivedCausationEvent(EventMovementCancelled, "cancel-source", 11),
+			},
+			{
+				name:  "attempt cancelled from run cancelled",
+				state: func(t *testing.T) State { return cancelledSourceState(t, "cancel-source", 10) },
+				event: derivedCausationEvent(EventAttemptCancelled, "cancel-source", 11),
+			},
+			{
+				name:  "attempt superseded from amendment approved",
+				state: func(t *testing.T) State { return supersessionSourceState(t, "approval-source", 10) },
+				event: derivedCausationEvent(EventAttemptSuperseded, "approval-source", 11),
+			},
+			{
+				name:  "decision obsoleted from amendment approved",
+				state: func(t *testing.T) State { return supersessionSourceState(t, "approval-source", 10) },
+				event: derivedCausationEvent(EventDecisionObsoleted, "approval-source", 11),
+			},
+			{
+				name:  "decision obsoleted from final movement failed",
+				state: func(t *testing.T) State { return terminalMovementFailureSourceState(t, "terminal-source", 10) },
+				event: derivedCausationEvent(EventDecisionObsoleted, "terminal-source", 11),
+			},
+			{
+				name:  "decision obsoleted from final movement succeeded",
+				state: func(t *testing.T) State { return terminalMovementSuccessSourceState(t, "terminal-source", 10) },
+				event: derivedCausationEvent(EventDecisionObsoleted, "terminal-source", 11),
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				if _, err := Apply(test.state(t), test.event); !errors.Is(err, ErrUnsupportedEventType) {
+					t.Fatalf("Apply error = %v, want ErrUnsupportedEventType after causation validation", err)
+				}
+			})
+		}
+	})
+}
+
+func derivedCausationEvent(eventType EventType, causationID string, sequence uint64) Event {
+	payload := map[string]any{}
+	edit := func(event *Event) {
+		event.CausationID, event.Seq = causationID, sequence
+	}
+	switch eventType {
+	case EventMovementCancelled:
+		edit = func(event *Event) {
+			event.MovementID, event.CausationID, event.Seq = "m1", causationID, sequence
+		}
+	case EventAttemptCancelled, EventAttemptSuperseded:
+		edit = func(event *Event) {
+			event.AttemptID, event.CausationID, event.Seq = "a1", causationID, sequence
+		}
+	case EventDecisionObsoleted:
+		payload = map[string]any{"decision_id": "decision-1"}
+	}
+	return fixtureEvent(eventType, payload, edit)
+}
+
+func cancelledSourceState(t *testing.T, eventID string, sequence uint64) State {
+	t.Helper()
+	source := fixtureEvent(EventRunCancelled, map[string]any{
+		"cancelled_movement_ids": []any{"m1"},
+		"cancelled_attempt_ids":  []any{"a1"},
+		"obsoleted_decision_ids": []any{},
+	}, func(event *Event) {
+		event.EventID, event.Seq = eventID, sequence
+	})
+	state, err := Apply(runningAttemptState(t), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func supersessionSourceState(t *testing.T, eventID string, sequence uint64) State {
+	t.Helper()
+	state := runningAttemptState(t)
+	prepared := fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), func(event *Event) {
+		event.EventID, event.Seq = "prepare-source", sequence-1
+	})
+	var err error
+	state, err = Apply(state, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := autoApprovalEvent()
+	approval.EventID, approval.Seq = eventID, sequence
+	state, err = Apply(state, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func terminalMovementFailureSourceState(t *testing.T, eventID string, sequence uint64) State {
+	t.Helper()
+	source := fixtureEvent(EventMovementFailed, map[string]any{
+		"reason": "human_gate_rejected", "decision_id": "decision-1", "subject_tree": "git-sha1:tree", "run_failed": true,
+	}, func(event *Event) {
+		event.EventID, event.Seq = eventID, sequence
+		event.MovementID, event.AttemptID = "m1", "a1"
+	})
+	state, err := Apply(verifyingAttemptState(t), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func terminalMovementSuccessSourceState(t *testing.T, eventID string, sequence uint64) State {
+	t.Helper()
+	source := fixtureEvent(EventMovementSucceeded, movementSucceededPayload(true), func(event *Event) {
+		event.EventID, event.Seq = eventID, sequence
+		event.MovementID, event.AttemptID = "m1", "a1"
+	})
+	state, err := Apply(completedAttemptState(t), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 func TestAutoPrepareCancellationCombination(t *testing.T) {

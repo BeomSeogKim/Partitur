@@ -16,14 +16,19 @@ var (
 // ValidateEvent validates the supported event's exact payload without applying
 // its transition.
 func ValidateEvent(event Event) error {
-	_, err := validatePayload(event)
-	return err
+	if _, err := validatePayload(event); err != nil {
+		return err
+	}
+	return validateDerivedCausationID(event)
 }
 
 // IdempotencyKey returns the Appendix B key for a supported event.
 func IdempotencyKey(event Event) (string, error) {
 	payload, err := validatePayload(event)
 	if err != nil {
+		return "", err
+	}
+	if err := validateDerivedCausationID(event); err != nil {
 		return "", err
 	}
 	switch event.Type {
@@ -82,6 +87,10 @@ func Apply(input State, event Event) (State, error) {
 	if err != nil {
 		return state, err
 	}
+	if err := validateDerivedCausation(state, event); err != nil {
+		return state, err
+	}
+	wasTerminal := state.Run.Terminal()
 
 	switch event.Type {
 	case EventRunStarted:
@@ -809,7 +818,65 @@ func Apply(input State, event Event) (State, error) {
 		}
 		return state, invalid(event, "event type is not in the registry")
 	}
+	if event.EventID != "" && !isObservationalEvent(event.Type) {
+		if state.appliedEvents == nil {
+			state.appliedEvents = make(map[string]appliedEvent)
+		}
+		state.appliedEvents[event.EventID] = appliedEvent{
+			Type:            event.Type,
+			Sequence:        event.Seq,
+			TerminalizesRun: !wasTerminal && state.Run.Terminal(),
+		}
+	}
 	return state, nil
+}
+
+func validateDerivedCausationID(event Event) error {
+	if isDerivedEvent(event.Type) && event.CausationID == "" {
+		return invalid(event, "causation_id is required for derived events")
+	}
+	return nil
+}
+
+func validateDerivedCausation(state State, event Event) error {
+	if err := validateDerivedCausationID(event); err != nil || !isDerivedEvent(event.Type) {
+		return err
+	}
+	source, exists := state.appliedEvents[event.CausationID]
+	if !exists {
+		return invalid(event, "causation_id does not reference an already applied event")
+	}
+	if event.Seq != 0 && source.Sequence >= event.Seq {
+		return invalid(event, "causation_id must reference an earlier event")
+	}
+	switch event.Type {
+	case EventMovementCancelled, EventAttemptCancelled:
+		if source.Type != EventRunCancelled {
+			return invalid(event, "causation_id must reference run.cancelled")
+		}
+	case EventAttemptSuperseded:
+		if source.Type != EventAmendmentApproved {
+			return invalid(event, "causation_id must reference amendment.approved")
+		}
+	case EventDecisionObsoleted:
+		if source.Type != EventAmendmentApproved && !source.TerminalizesRun {
+			return invalid(event, "causation_id must reference amendment.approved or a terminalizing event")
+		}
+	}
+	return nil
+}
+
+func isDerivedEvent(eventType EventType) bool {
+	switch eventType {
+	case EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded, EventDecisionObsoleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func isObservationalEvent(eventType EventType) bool {
+	return eventType == EventLog || eventType == EventProgress
 }
 
 func matchesApplicationTransaction(state State, payload map[string]any) bool {
