@@ -201,10 +201,11 @@ probed:
 			state.report.Result = &decoded.result
 			goto response
 		case <-cancelSignal:
-			// Failing to deliver the request does not turn a cancellation into an attempt
-			// failure: §6 leaves the close to the oracle's (c), and B's classification
-			// priority puts cancelled ahead of adapter_unavailable. Sweep and record
-			// nothing, exactly as every other route out of this branch does.
+			// Suppression starts at the observation, not at the frame: §6 anchors it to the
+			// durable request, which governs "even if the core had not yet signalled".
+			// Setting it after a successful write would leave the encode and write failures
+			// below relying on their own returns instead of the shared rule.
+			state.cancellationInFlight = true
 			cancelRequest, encodeErr := encodeCancelRequest(protocol.CancelRequest{AttemptID: plan.Request.AttemptID})
 			if encodeErr != nil {
 				state.report.Result = nil
@@ -214,7 +215,6 @@ probed:
 				state.report.Result = nil
 				return failWithoutOutcome(writeErr)
 			}
-			state.cancellationInFlight = true
 			cancelRequested = true
 			cancelSignal = nil
 			cancelTimer = time.NewTimer(c.grace)
