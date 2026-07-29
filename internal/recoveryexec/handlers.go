@@ -14,6 +14,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -66,9 +67,16 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
 		recovery.ActionComposeCandidate:           composeZeroWriterCandidate,
 		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
-		recovery.ActionExecuteCancellation:        unreachableActionOwnedBy("2.1"),
+		recovery.ActionExecuteCancellation:        executeCancellation,
 		recovery.ActionCompleteOrAbandonPrepare:   unreachableActionOwnedBy("4.2"),
 	}
+}
+
+func executeCancellation(ctx context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for cancellation")
+	}
+	return cancellation.Execute(ctx, execution.Store, execution.RunID)
 }
 
 func composeZeroWriterCandidate(_ context.Context, execution HandlerContext, _ recovery.Action) error {
@@ -520,7 +528,7 @@ func stabilizeHandoff(ctx context.Context, execution HandlerContext, action reco
 		}
 		if observation.HasIdentity {
 			if err := adapter.SweepSession(observation.Identity, recoverySweepGrace); err != nil {
-				return fmt.Errorf("%w: %v", ErrSweepUnverifiable, err)
+				return fmt.Errorf("%w: %v", runstate.ErrSweepUnverifiable, err)
 			}
 			return nil
 		}
@@ -548,7 +556,7 @@ func sweepRecordedSession(_ context.Context, execution HandlerContext, action re
 		return fmt.Errorf("recorded adapter session for %q is absent", action.AttemptID)
 	}
 	if err := adapter.SweepSession(launch.Process, recoverySweepGrace); err != nil {
-		return fmt.Errorf("%w: %v", ErrSweepUnverifiable, err)
+		return fmt.Errorf("%w: %v", runstate.ErrSweepUnverifiable, err)
 	}
 	return nil
 }
@@ -614,7 +622,7 @@ func sweepCriterionSession(_ context.Context, execution HandlerContext, action r
 		return nil
 	}
 	if err := adapter.SweepSession(spawned.Process, recoverySweepGrace); err != nil {
-		return fmt.Errorf("%w: %v", ErrSweepUnverifiable, err)
+		return fmt.Errorf("%w: %v", runstate.ErrSweepUnverifiable, err)
 	}
 	return nil
 }
@@ -1031,7 +1039,7 @@ func stabilizeLaunchDirectory(ctx context.Context, directory string) error {
 		}
 		if observation.HasIdentity {
 			if err := adapter.SweepSession(observation.Identity, recoverySweepGrace); err != nil {
-				return fmt.Errorf("%w: %v", ErrSweepUnverifiable, err)
+				return fmt.Errorf("%w: %v", runstate.ErrSweepUnverifiable, err)
 			}
 			return nil
 		}

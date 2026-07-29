@@ -11,6 +11,7 @@ var (
 	ErrUnsupportedEventType = errors.New("unsupported event type")
 	ErrInvalidEvent         = errors.New("invalid event")
 	ErrIllegalTransition    = errors.New("illegal transition")
+	ErrSweepUnverifiable    = errors.New("recovery session sweep is unverifiable")
 )
 
 // ValidateEvent validates the supported event's exact payload without applying
@@ -1008,7 +1009,7 @@ func refreshWaitingHuman(state *State) {
 }
 
 func cancellableMovementIDs(state State) []string {
-	var ids []string
+	ids := make([]string, 0)
 	for id, movementState := range state.Movements {
 		if movementState == MovementPending || movementState == MovementReady ||
 			movementState == MovementRunning || movementState == MovementWaitingHuman {
@@ -1020,7 +1021,7 @@ func cancellableMovementIDs(state State) []string {
 }
 
 func cancellableAttemptIDs(state State) []string {
-	var ids []string
+	ids := make([]string, 0)
 	for id, attempt := range state.Attempts {
 		if !attempt.State.terminal() {
 			ids = append(ids, string(id))
@@ -1028,6 +1029,21 @@ func cancellableAttemptIDs(state State) []string {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// CancellationPayload returns the exact run.cancelled payload derived from
+// the pre-event projection. The terminal transition validates these lists
+// again when it is applied.
+func CancellationPayload(state State, fencedEpoch *uint64) map[string]any {
+	payload := map[string]any{
+		"cancelled_movement_ids": cancellableMovementIDs(state),
+		"cancelled_attempt_ids":  cancellableAttemptIDs(state),
+		"obsoleted_decision_ids": pendingDecisionIDs(state),
+	}
+	if fencedEpoch != nil {
+		payload["fenced_epoch"] = *fencedEpoch
+	}
+	return payload
 }
 
 func toAttemptIDs(ids []string) []AttemptID {

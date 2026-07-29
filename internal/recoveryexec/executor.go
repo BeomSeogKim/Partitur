@@ -21,7 +21,6 @@ var (
 	ErrInvalidDecision     = errors.New("recovery executor received invalid decision")
 	ErrUnreachableAction   = errors.New("recovery action is unreachable in this slice")
 	ErrUnreachableStep     = errors.New("recovery action step is unreachable in this slice")
-	ErrSweepUnverifiable   = errors.New("recovery session sweep is unverifiable")
 	ErrHandoffUnverifiable = errors.New("recovery spawn handoff is unverifiable")
 )
 
@@ -268,6 +267,8 @@ func actionRequiresDriver(action recovery.Action) bool {
 
 func outcomeFor(action recovery.Action, input recovery.Input) Outcome {
 	switch action.Kind {
+	case recovery.ActionExecuteCancellation:
+		return OutcomeCancelled
 	case recovery.ActionRefuseResume:
 		return OutcomeRefused
 	case recovery.ActionReturnWaitingHuman:
@@ -388,7 +389,7 @@ func haltDecision(decision recovery.Decision, err error) (recovery.Decision, boo
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingSnapshotFile}, true
 	case errors.Is(err, runstore.ErrMissingResolvedCast):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingResolvedCast}, true
-	case errors.Is(err, ErrSweepUnverifiable):
+	case errors.Is(err, runstate.ErrSweepUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSweepUnverifiable}, true
 	case errors.Is(err, ErrHandoffUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSpawnHandoffUnverifiable}, true

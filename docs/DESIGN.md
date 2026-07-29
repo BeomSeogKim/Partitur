@@ -5627,9 +5627,9 @@ it is **forbidden evidence, not a skeleton to copy**.
 
 **Implementation status.** Appendix E is partially implemented. `DurabilityReceipt` is threaded
 through production journal appends and carries a `ReceiptAddress`. In production, `PointID` boundary
-points are emitted only by the launch trampoline, at the marker-held and gate-released seams for
-adapter and criterion launches; no prepare, quiesce, cancellation, or supersession boundary point
-is emitted. Production installs only the no-op probe. The E.2 `EdgeID` values are declared in Go and
+points are emitted by the launch trampoline, at the marker-held and gate-released seams for adapter
+and criterion launches, and by the cancellation oracle at the sessions-swept and fence-decided seams;
+no prepare, quiesce, or supersession boundary point is emitted. Production installs only the no-op probe. The E.2 `EdgeID` values are declared in Go and
 mechanically cross-checked against the catalog, but no production path carries one yet.
 
 The paragraph above records current implementation status. The obligations below state what must be
