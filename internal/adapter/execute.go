@@ -72,6 +72,17 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		emittedIDs:   make(map[string]bool),
 		blockingIDs:  make(map[string]bool),
 	}
+	cancelSignal := plan.Cancel
+	state.cancelSignal = plan.Cancel
+	cancelRequested := false
+	cancelAcknowledged := false
+	var cancelTimer *time.Timer
+	var cancelTimeout <-chan time.Time
+	defer func() {
+		if cancelTimer != nil {
+			cancelTimer.Stop()
+		}
+	}()
 	failWithoutOutcome := func(cause error) (ExecuteReport, error) {
 		if cleanupErr := c.stopExecute(running); cleanupErr != nil {
 			return state.report, sweepHalt(cleanupErr)
@@ -86,6 +97,60 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		}
 		<-running.stderrDone
 		_ = running.process.Wait()
+		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+		return state.report, cause
+	}
+	cancelExpired := func() (ExecuteReport, error) {
+		state.report.Result = nil
+		return failWithoutOutcome(errors.New("cancel completion grace expired"))
+	}
+	observeCancellation := func() {
+		// §6's outer grace has to start wherever the cancellation is first seen, or a drain
+		// that never finishes has nothing bounding it. No protocol `cancel` is issued from
+		// the post-response points: the call being drained has already answered.
+		state.cancellationInFlight = true
+		cancelSignal = nil
+		if cancelTimer == nil {
+			cancelTimer = time.NewTimer(c.grace)
+			cancelTimeout = cancelTimer.C
+		}
+	}
+	type writeOutcome uint8
+	const (
+		writeCompleted writeOutcome = iota
+		writeCancelled
+		writeExpired
+		writeInterrupted
+	)
+	writeBounded := func(request []byte) (error, writeOutcome) {
+		// Capture the handle before the goroutine starts. Every non-completion exit below
+		// leaves the write still blocked, and the sweep that follows sets running.stdin to
+		// nil — reading the field from inside the goroutine would race that assignment.
+		// Closing the file under a blocked Write is safe and is what unblocks it.
+		stdin := running.stdin
+		completed := make(chan error, 1)
+		go func() {
+			completed <- c.write(stdin, request)
+		}()
+		select {
+		case writeErr := <-completed:
+			return writeErr, writeCompleted
+		case <-cancelSignal:
+			if ctx.Err() != nil {
+				return nil, writeInterrupted
+			}
+			observeCancellation()
+			return nil, writeCancelled
+		case <-cancelTimeout:
+			return nil, writeExpired
+		case <-ctx.Done():
+			return nil, writeInterrupted
+		}
+	}
+	interrupted := func(cause error) (ExecuteReport, error) {
+		if cleanupErr := c.stopExecute(running); cleanupErr != nil {
+			return state.report, sweepHalt(cleanupErr)
+		}
 		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
 		return state.report, cause
 	}
@@ -126,42 +191,19 @@ probed:
 		default:
 		}
 	}
-	if err := c.write(running.stdin, executeRequest); err != nil {
-		return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", err.Error())
-	}
-
-	cancelSignal := plan.Cancel
-	state.cancelSignal = plan.Cancel
-	cancelRequested := false
-	cancelAcknowledged := false
-	var cancelTimer *time.Timer
-	var cancelTimeout <-chan time.Time
-	defer func() {
-		if cancelTimer != nil {
-			cancelTimer.Stop()
-		}
-	}()
-	cancelExpired := func() (ExecuteReport, error) {
+	writeErr, writeResult := writeBounded(executeRequest)
+	switch writeResult {
+	case writeCancelled:
 		state.report.Result = nil
-		return failWithoutOutcome(errors.New("cancel completion grace expired"))
-	}
-	observeCancellation := func() {
-		// §6's outer grace has to start wherever the cancellation is first seen, or a drain
-		// that never finishes has nothing bounding it. No protocol `cancel` is issued from
-		// the post-response points: the call being drained has already answered.
-		state.cancellationInFlight = true
-		cancelSignal = nil
-		if cancelTimer == nil {
-			cancelTimer = time.NewTimer(c.grace)
-			cancelTimeout = cancelTimer.C
+		return failWithoutOutcome(errors.New("cancel observed while writing execute request"))
+	case writeExpired:
+		return cancelExpired()
+	case writeInterrupted:
+		return interrupted(ctx.Err())
+	case writeCompleted:
+		if writeErr != nil {
+			return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", writeErr.Error())
 		}
-	}
-	interrupted := func(cause error) (ExecuteReport, error) {
-		if cleanupErr := c.stopExecute(running); cleanupErr != nil {
-			return state.report, sweepHalt(cleanupErr)
-		}
-		state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
-		return state.report, cause
 	}
 	for {
 		if err := ctx.Err(); err != nil {
@@ -218,20 +260,25 @@ probed:
 			// durable request, which governs "even if the core had not yet signalled".
 			// Setting it after a successful write would leave the encode and write failures
 			// below relying on their own returns instead of the shared rule.
-			state.cancellationInFlight = true
+			observeCancellation()
 			cancelRequest, encodeErr := encodeCancelRequest(protocol.CancelRequest{AttemptID: plan.Request.AttemptID})
 			if encodeErr != nil {
 				state.report.Result = nil
 				return failWithoutOutcome(encodeErr)
 			}
-			if writeErr := c.write(running.stdin, cancelRequest); writeErr != nil {
-				state.report.Result = nil
-				return failWithoutOutcome(writeErr)
+			writeErr, writeResult := writeBounded(cancelRequest)
+			switch writeResult {
+			case writeExpired:
+				return cancelExpired()
+			case writeInterrupted:
+				return interrupted(ctx.Err())
+			case writeCompleted:
+				if writeErr != nil {
+					state.report.Result = nil
+					return failWithoutOutcome(writeErr)
+				}
 			}
 			cancelRequested = true
-			cancelSignal = nil
-			cancelTimer = time.NewTimer(c.grace)
-			cancelTimeout = cancelTimer.C
 		case <-cancelTimeout:
 			return cancelExpired()
 		case <-ctx.Done():
@@ -294,6 +341,7 @@ response:
 	}
 
 outputDrained:
+	c.observeWindow(executeWindowStderrDrain)
 	for stderrPending := true; stderrPending; {
 		select {
 		case <-running.stderrDone:
@@ -313,6 +361,7 @@ outputDrained:
 		}
 	}
 	state.report.Stderr = adapterkit.SanitizeDiagnostic(running.stderr.String())
+	c.observeWindow(executeWindowProcessWait)
 	wait := make(chan error, 1)
 	go func() {
 		wait <- running.process.Wait()

@@ -302,9 +302,6 @@ func TestExecuteCancelAwaitsResponseAndRecordsNoOutcome(t *testing.T) {
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
-		}
 		if strings.Contains(string(data), `"method":"cancel"`) {
 			assertCancelRequest(t, data)
 		}
@@ -327,7 +324,7 @@ func TestExecuteCancelAwaitsResponseAndRecordsNoOutcome(t *testing.T) {
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		cancellingRecorder(&order, cancel),
 		&order,
 	)
 	plan.Cancel = cancel
@@ -364,15 +361,13 @@ func TestExecuteContextInterruptionWinsOverReadyCancelSignal(t *testing.T) {
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
-			cancelContext()
-		}
 		if strings.Contains(string(data), `"method":"cancel"`) {
 			t.Fatal("protocol cancel was written after context interruption")
 		}
 		return baseWrite(writer, data)
 	}
+	recorder := cancellingRecorder(&order, cancel)
+	recorder.ObserveLog = func(protocol.LogEvent) { cancelContext() }
 	plan := executePlan(
 		"fake",
 		filepath.Join(directory, "partitur-adapter-fake"),
@@ -380,7 +375,7 @@ func TestExecuteContextInterruptionWinsOverReadyCancelSignal(t *testing.T) {
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		recorder,
 		&order,
 	)
 	plan.Cancel = cancel
@@ -404,15 +399,12 @@ func TestExecuteCancelWriteFailureRecordsNoIntervalOrOutcome(t *testing.T) {
 	client := newClient([]string{
 		fakeModeEnv + "=execute_cancelled",
 		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
-	}, incidentalTestDeadline, 10*time.Second)
+	}, incidentalTestDeadline, 20*time.Millisecond)
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
 		if strings.Contains(string(data), `"method":"cancel"`) {
 			return errors.New("injected cancel write failure")
-		}
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
 		}
 		return baseWrite(writer, data)
 	}
@@ -423,7 +415,7 @@ func TestExecuteCancelWriteFailureRecordsNoIntervalOrOutcome(t *testing.T) {
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		cancellingRecorder(&order, cancel),
 		&order,
 	)
 	plan.Cancel = cancel
@@ -488,37 +480,45 @@ func TestExecuteCancelObservedAfterResponseStillSuppressesRecording(t *testing.T
 }
 
 // Two windows open after stdout EOF — waiting for the stderr drain, then waiting for the
-// process — and neither is inside the loop that watches the signal. A cancellation arriving
-// there must still start §6's outer grace, or a fake that closes its stdio and stays alive
-// holds the call forever.
+// process — and neither is inside the loop that watches the signal. The test-only hook closes
+// cancellation at each window entry, establishing the happens-before edge the old marker did not.
 func TestExecuteCancelAfterEOFStillArmsTheGrace(t *testing.T) {
-	for _, mode := range []string{"execute_post_eof_stderr_hang", "execute_post_eof_process_hang"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mode   string
+		window executeWindow
+	}{
+		{
+			name:   "stderr drain",
+			mode:   "execute_post_eof_stderr_hang",
+			window: executeWindowStderrDrain,
+		},
+		{
+			name:   "process wait",
+			mode:   "execute_post_eof_process_hang",
+			window: executeWindowProcessWait,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
 			installFake(t, directory, "fake")
-			marker := filepath.Join(t.TempDir(), "response")
 			var order []string
 			client := newClient([]string{
-				fakeModeEnv + "=" + mode,
-				fakeMarkerEnv + "=" + marker,
+				fakeModeEnv + "=" + test.mode,
 			}, incidentalTestDeadline, 20*time.Millisecond)
 			cancel := make(chan struct{})
+			var observedWindow executeWindow
+			client.observeExecuteWindow = func(window executeWindow) {
+				if window == test.window {
+					observedWindow = window
+					close(cancel)
+				}
+			}
 			terminated := 0
 			client.sessions = &recordingSessionController{
 				base:        systemSessionController{},
 				terminateFn: func() { terminated++ },
 			}
-			// Cancel only once the fake reports its stdout closed, which is what puts the
-			// request inside the post-EOF window rather than the frame loop.
-			go func() {
-				for {
-					if _, err := os.Stat(marker + ".eof"); err == nil {
-						close(cancel)
-						return
-					}
-					time.Sleep(2 * time.Millisecond)
-				}
-			}()
 			plan := executePlan(
 				"fake",
 				filepath.Join(directory, "partitur-adapter-fake"),
@@ -530,8 +530,83 @@ func TestExecuteCancelAfterEOFStillArmsTheGrace(t *testing.T) {
 				&order,
 			)
 			plan.Cancel = cancel
-			report, err := executeWithin(t, client, plan, 30*time.Second)
+			report, err := executeWithin(t, client, plan, 2*time.Second)
 			if err == nil || !strings.Contains(err.Error(), "cancel completion grace expired") {
+				t.Fatalf("report = %#v, error = %v", report, err)
+			}
+			if report.Result != nil || terminated != 1 {
+				t.Fatalf("report = %#v, forced session sweeps = %d", report, terminated)
+			}
+			if observedWindow != test.window {
+				t.Fatalf("observed window = %s, want %s", observedWindow, test.window)
+			}
+			want := []string{"attempt.started", "adapter.probed"}
+			if !reflect.DeepEqual(order, want) {
+				t.Fatalf("journal order = %v, want %v", order, want)
+			}
+		})
+	}
+}
+
+// The execute and cancel writes are cancellation windows. The fake consumes only the run
+// probe, so the injected oversized request blocks in the real stdin pipe until the sweep closes it.
+func TestExecuteCancellationBoundsBlockedRequestWrites(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mode      string
+		blockedID string
+		wantError string
+	}{
+		{name: "execute request", mode: "execute_never_reads_stdin", blockedID: "execute", wantError: "cancel observed while writing execute request"},
+		{name: "cancel request", mode: "execute_event_then_never_reads_stdin", blockedID: "cancel", wantError: "cancel completion grace expired"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			installFake(t, directory, "fake")
+			var order []string
+			client := newClient([]string{fakeModeEnv + "=" + test.mode}, incidentalTestDeadline, 20*time.Millisecond)
+			cancel := make(chan struct{})
+			writeStarted := make(chan struct{}, 1)
+			baseWrite := client.write
+			client.write = func(writer io.Writer, data []byte) error {
+				request := string(data)
+				if strings.Contains(request, `"method":"execute"`) {
+					if test.blockedID == "execute" {
+						writeStarted <- struct{}{}
+						return baseWrite(writer, bytes.Repeat(data, 1<<16))
+					}
+					return baseWrite(writer, data)
+				}
+				if strings.Contains(request, `"method":"cancel"`) && test.blockedID == "cancel" {
+					writeStarted <- struct{}{}
+					return baseWrite(writer, bytes.Repeat(data, 1<<16))
+				}
+				return baseWrite(writer, data)
+			}
+			if test.blockedID == "execute" {
+				go func() {
+					<-writeStarted
+					close(cancel)
+				}()
+			}
+			terminated := 0
+			client.sessions = &recordingSessionController{
+				base:        systemSessionController{},
+				terminateFn: func() { terminated++ },
+			}
+			plan := executePlan(
+				"fake",
+				filepath.Join(directory, "partitur-adapter-fake"),
+				buildTrampoline(t, directory),
+				t.TempDir(),
+				t.TempDir(),
+				t.TempDir(),
+				cancellingRecorder(&order, cancel),
+				&order,
+			)
+			plan.Cancel = cancel
+			report, err := executeWithin(t, client, plan, 2*time.Second)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("report = %#v, error = %v", report, err)
 			}
 			if report.Result != nil || terminated != 1 {
@@ -556,9 +631,6 @@ func TestExecuteCancelGraceTimeoutForcesVerifiedEmptySweep(t *testing.T) {
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
-		}
 		if strings.Contains(string(data), `"method":"cancel"`) {
 			assertCancelRequest(t, data)
 		}
@@ -578,7 +650,7 @@ func TestExecuteCancelGraceTimeoutForcesVerifiedEmptySweep(t *testing.T) {
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		cancellingRecorder(&order, cancel),
 		&order,
 	)
 	plan.Cancel = cancel
@@ -604,13 +676,6 @@ func TestExecuteCancelResponseWithoutAcknowledgementTimesOutAndSweeps(t *testing
 		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
 	}, incidentalTestDeadline, 20*time.Millisecond)
 	cancel := make(chan struct{})
-	baseWrite := client.write
-	client.write = func(writer io.Writer, data []byte) error {
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
-		}
-		return baseWrite(writer, data)
-	}
 	terminated := 0
 	client.sessions = &recordingSessionController{
 		base: systemSessionController{},
@@ -625,7 +690,7 @@ func TestExecuteCancelResponseWithoutAcknowledgementTimesOutAndSweeps(t *testing
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		cancellingRecorder(&order, cancel),
 		&order,
 	)
 	plan.Cancel = cancel
@@ -679,13 +744,6 @@ func TestExecuteCancelGraceSurvivesOutputAndProcessDrain(t *testing.T) {
 				fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
 			}, incidentalTestDeadline, 20*time.Millisecond)
 			cancel := make(chan struct{})
-			baseWrite := client.write
-			client.write = func(writer io.Writer, data []byte) error {
-				if strings.Contains(string(data), `"method":"execute"`) {
-					close(cancel)
-				}
-				return baseWrite(writer, data)
-			}
 			terminated := 0
 			client.sessions = &recordingSessionController{
 				base: systemSessionController{},
@@ -700,7 +758,7 @@ func TestExecuteCancelGraceSurvivesOutputAndProcessDrain(t *testing.T) {
 				t.TempDir(),
 				t.TempDir(),
 				t.TempDir(),
-				successfulRecorder(&order),
+				cancellingRecorder(&order, cancel),
 				&order,
 			)
 			plan.Cancel = cancel
@@ -728,13 +786,6 @@ func TestExecuteCancelExpirySweepFailureHaltsWithoutTerminalJournalEvent(t *test
 		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
 	}, incidentalTestDeadline, 20*time.Millisecond)
 	cancel := make(chan struct{})
-	baseWrite := client.write
-	client.write = func(writer io.Writer, data []byte) error {
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
-		}
-		return baseWrite(writer, data)
-	}
 	client.sessions = sweepingFailureSessionController{}
 	plan := executePlan(
 		"fake",
@@ -743,7 +794,7 @@ func TestExecuteCancelExpirySweepFailureHaltsWithoutTerminalJournalEvent(t *test
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		cancellingRecorder(&order, cancel),
 		&order,
 	)
 	plan.Cancel = cancel
@@ -881,9 +932,6 @@ func runSolicitedCancelFixture(t *testing.T, mode string) (ExecuteReport, []stri
 	cancel := make(chan struct{})
 	baseWrite := client.write
 	client.write = func(writer io.Writer, data []byte) error {
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
-		}
 		if strings.Contains(string(data), `"method":"cancel"`) {
 			assertCancelRequest(t, data)
 		}
@@ -896,7 +944,7 @@ func runSolicitedCancelFixture(t *testing.T, mode string) (ExecuteReport, []stri
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		cancellingRecorder(&order, cancel),
 		&order,
 	)
 	plan.Cancel = cancel
@@ -921,13 +969,6 @@ func TestExecuteMissingCancelAcknowledgementLeavesIntervalAndOutcomeAbsent(t *te
 		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
 	}, incidentalTestDeadline, 10*time.Second)
 	cancel := make(chan struct{})
-	baseWrite := client.write
-	client.write = func(writer io.Writer, data []byte) error {
-		if strings.Contains(string(data), `"method":"execute"`) {
-			close(cancel)
-		}
-		return baseWrite(writer, data)
-	}
 	client.sessions = &observingSessionController{
 		terminateFn: func() error {
 			order = append(order, "session.swept")
@@ -941,7 +982,7 @@ func TestExecuteMissingCancelAcknowledgementLeavesIntervalAndOutcomeAbsent(t *te
 		t.TempDir(),
 		t.TempDir(),
 		t.TempDir(),
-		successfulRecorder(&order),
+		cancellingRecorder(&order, cancel),
 		&order,
 	)
 	plan.Cancel = cancel
@@ -1530,6 +1571,12 @@ func successfulRecorder(order *[]string) ExecuteRecorder {
 		ObserveLog:      func(protocol.LogEvent) {},
 		ObserveProgress: func(protocol.ProgressEvent) {},
 	}
+}
+
+func cancellingRecorder(order *[]string, cancel chan struct{}) ExecuteRecorder {
+	recorder := successfulRecorder(order)
+	recorder.ObserveLog = func(protocol.LogEvent) { close(cancel) }
+	return recorder
 }
 
 func receipt(eventType string) faultpoint.DurabilityReceipt {

@@ -611,6 +611,7 @@ func runFakeAdapter(mode string) {
 		writeValid(adapterID)
 		reader := bufio.NewReader(os.Stdin)
 		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
 		_, _ = reader.ReadString('\n')
 		if mode == "execute_cancel_timeout" {
 			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
@@ -655,6 +656,7 @@ func runFakeAdapter(mode string) {
 		// cancel to arrive is what makes both acknowledgements solicited, so the duplicate
 		// reaches the in-flight guard rather than the unsolicited one.
 		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
 		_, _ = reader.ReadString('\n')
 		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
 		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"cancel","result":{}}` + "\n")
@@ -685,10 +687,19 @@ func runFakeAdapter(mode string) {
 		}
 		_ = os.WriteFile(marker+".eof", []byte("eof"), 0o600)
 		ignoreTermAndHang()
+	case "execute_never_reads_stdin":
+		writeValid(adapterID)
+		ignoreTermAndHang()
+	case "execute_event_then_never_reads_stdin":
+		writeValid(adapterID)
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
+		ignoreTermAndHang()
 	case "execute_cancelled_without_ack":
 		writeValid(adapterID)
 		reader := bufio.NewReader(os.Stdin)
 		_, _ = reader.ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","method":"event","params":{"type":"log","level":"info","message":"ready to cancel"}}` + "\n")
 		_, _ = reader.ReadString('\n')
 		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"cancelled"}}` + "\n")
 		waitEOF()
