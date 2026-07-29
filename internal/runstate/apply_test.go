@@ -305,6 +305,15 @@ func TestDerivedCancellationAndSupersessionContracts(t *testing.T) {
 	if _, err := Apply(runningAttemptState(t), invalidCancellation); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("invalid cancellation payload error = %v, want ErrInvalidEvent", err)
 	}
+	invalidFencedEpoch := cancelledSource
+	invalidFencedEpoch.Payload = mustPayload(t, map[string]any{
+		"cancelled_movement_ids": []any{"m1"}, "cancelled_attempt_ids": []any{"a1"}, "obsoleted_decision_ids": []any{}, "fenced_epoch": 3,
+	})
+	stateWithObservedEpoch := runningAttemptState(t)
+	stateWithObservedEpoch.Authority.Epoch = 1
+	if _, err := Apply(stateWithObservedEpoch, invalidFencedEpoch); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("fenced epoch beyond observed plus one error = %v, want ErrInvalidEvent", err)
+	}
 
 	for _, test := range []struct {
 		event Event

@@ -18,8 +18,6 @@ import (
 
 const cancellationSweepGrace = 30 * time.Second
 
-var ErrCancellationSweepRequired = errors.New("cancellation requires a completed session sweep")
-
 // RequestCancellation appends the run-scoped B.7 cancellation request while
 // holding the state lock. The request is idempotent by run ID.
 func (store *Store) RequestCancellation(runID runstate.RunID) error {
@@ -55,32 +53,24 @@ func (store *Store) RequestCancellation(runID runstate.RunID) error {
 	})
 }
 
-// CancellationSweep is proof that this store has swept the run's recorded
-// sessions. Its fields are private so callers cannot forge a completed sweep.
-type CancellationSweep struct {
-	store *Store
-	runID runstate.RunID
-}
-
-// SweepCancellationSessions performs cancellation oracle step (a) and returns
-// the proof required to enter its durable steps (b)-(f).
-func (store *Store) SweepCancellationSessions(ctx context.Context, runID runstate.RunID) (CancellationSweep, error) {
+// ExecuteCancellation runs the §6 cancellation oracle as one ordered operation.
+func (store *Store) ExecuteCancellation(ctx context.Context, runID runstate.RunID) error {
 	input, err := store.LoadRecoveryInput(runID)
 	if err != nil {
-		return CancellationSweep{}, err
+		return err
 	}
-	if err := sweepCancellationSessions(ctx, input.Projection.State); err != nil {
-		return CancellationSweep{}, err
+	state := input.Projection.State
+	if state.Run == runstate.RunNotStarted || state.Run.Terminal() || !state.CancelRequested {
+		return ErrLeaseConflict
 	}
-	return CancellationSweep{store: store, runID: runID}, nil
+	if err := sweepCancellationSessions(ctx, state); err != nil {
+		return err
+	}
+	store.probe.Reached(faultpoint.PointCancelSessionsSwept)
+	return store.executeCancellation(runID)
 }
 
-// ExecuteCancellation performs the durable portion of the §6 cancellation
-// oracle only after SweepCancellationSessions has reached verified empty.
-func (store *Store) ExecuteCancellation(runID runstate.RunID, sweep CancellationSweep) error {
-	if sweep.store != store || sweep.runID != runID {
-		return ErrCancellationSweepRequired
-	}
+func (store *Store) executeCancellation(runID runstate.RunID) error {
 	input, err := store.LoadRecoveryInput(runID)
 	if err != nil {
 		return err

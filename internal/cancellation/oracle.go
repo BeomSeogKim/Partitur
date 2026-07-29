@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
@@ -18,10 +17,5 @@ func Execute(ctx context.Context, store *runstore.Store, runID runstate.RunID) e
 	if store == nil || runID == "" {
 		return errors.New("cancellation requires store and run id")
 	}
-	sweep, err := store.SweepCancellationSessions(ctx, runID)
-	if err != nil {
-		return err
-	}
-	store.Reached(faultpoint.PointCancelSessionsSwept)
-	return store.ExecuteCancellation(runID, sweep)
+	return store.ExecuteCancellation(ctx, runID)
 }

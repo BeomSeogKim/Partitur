@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -1152,65 +1153,13 @@ func TestCancellationSweepFailureRoutesToAppendixDHalt(t *testing.T) {
 	}
 }
 
-func TestCancellationDurableStepsRequireSweepProof(t *testing.T) {
-	store := acquirableRecoveryStore(t)
-	driver, err := store.AcquireRecoveryDriver("run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	appendCancellationRequest(t, driver)
+func TestCancellationOracleRequiresRequestBeforeSweep(t *testing.T) {
+	store, driver := cancellationHandlerStore(t)
+	advanceHandlerAcceptanceWithProcesses(t, driver, false, unverifiableCancellationProcess(t), nil)
 
-	err = store.ExecuteCancellation("run-1", runstore.CancellationSweep{})
-	if !errors.Is(err, runstore.ErrCancellationSweepRequired) {
-		t.Fatalf("error=%v, want sweep proof required", err)
-	}
-	assertCancellationRemainsNonterminal(t, store)
-}
-
-func TestCancellationDurableStepsRejectSweepProofForDifferentStore(t *testing.T) {
-	source := acquirableRecoveryStore(t)
-	proof, err := source.SweepCancellationSessions(context.Background(), "run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	target := acquirableRecoveryStore(t)
-	driver, err := target.AcquireRecoveryDriver("run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	appendCancellationRequest(t, driver)
-
-	err = target.ExecuteCancellation("run-1", proof)
-	if !errors.Is(err, runstore.ErrCancellationSweepRequired) {
-		t.Fatalf("error=%v, want proof bound to this store", err)
-	}
-	assertCancellationRemainsNonterminal(t, target)
-}
-
-func TestCancellationDurableStepsRejectSweepProofForDifferentRun(t *testing.T) {
-	store := acquirableRecoveryStore(t)
-	proof, err := store.SweepCancellationSessions(context.Background(), "run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.ExecuteCancellation("run-2", proof)
-	if !errors.Is(err, runstore.ErrCancellationSweepRequired) {
-		t.Fatalf("error=%v, want proof bound to run-1 refused for run-2", err)
-	}
-}
-
-func TestCancellationDurableStepsRequireCancelRequest(t *testing.T) {
-	store := acquirableRecoveryStore(t)
-	proof, err := store.SweepCancellationSessions(context.Background(), "run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.ExecuteCancellation("run-1", proof)
+	err := cancellation.Execute(context.Background(), store, "run-1")
 	if !errors.Is(err, runstore.ErrLeaseConflict) {
-		t.Fatalf("error=%v, want cancellation request required", err)
+		t.Fatalf("error=%v, want cancellation request required before sweep", err)
 	}
 	assertCancellationRemainsNonterminal(t, store)
 }
@@ -1226,11 +1175,7 @@ func TestCancellationDoesNotFenceWithoutLease(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := store.SweepCancellationSessions(context.Background(), "run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ExecuteCancellation("run-1", proof); err != nil {
+	if err := cancellation.Execute(context.Background(), store, "run-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1269,11 +1214,7 @@ func TestCancellationDoesNotFenceStaleLease(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := store.SweepCancellationSessions(context.Background(), "run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ExecuteCancellation("run-1", proof); err != nil {
+	if err := cancellation.Execute(context.Background(), store, "run-1"); err != nil {
 		t.Fatal(err)
 	}
 

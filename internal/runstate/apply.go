@@ -147,10 +147,11 @@ func Apply(input State, event Event) (State, error) {
 		state.Run = RunCancelled
 		closeAllPendingDecisions(&state)
 		if epoch, ok := optionalUint(payload, "fenced_epoch"); ok {
-			if epoch <= state.Authority.Epoch {
-				return state, invalid(event, "fenced_epoch does not advance authority")
+			if epoch == state.Authority.Epoch+1 {
+				state.Authority = Authority{Epoch: epoch}
+			} else {
+				return state, invalid(event, "fenced_epoch is not observed authority epoch plus one")
 			}
-			state.Authority = Authority{Epoch: epoch}
 		}
 	case EventMovementReady:
 		if err := requireMovement(state, event, MovementPending); err != nil {
