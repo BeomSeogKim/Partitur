@@ -1809,11 +1809,11 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   and C.1 ever disagree, C.1 is right and this is the defect:
 
   1. **A core-controlled interruption inherits its own authority.** Cancellation and supersession
-     terminating the driver's process tree, and an exhausted budget stopping the composition, are
-     owned by §6's oracle, §6's commit table and §6's budget path. Where a **durable** control request
-     already governs, its precedence decides even if the core had not yet signalled: a spontaneous Git
-     failure under a durable `cancel.requested` does not outrank the cancellation. C.1 places control
-     above the integrity halts below it, so this test does too.
+     terminating a driver owner under §6's owner-termination rule, and an exhausted budget stopping
+     the composition, are owned by §6's oracle, §6's commit table and §6's budget path. Where a
+     **durable** control request already governs, its precedence decides even if the core had not yet
+     signalled: a spontaneous Git failure under a durable `cancel.requested` does not outrank the
+     cancellation. C.1 places control above the integrity halts below it, so this test does too.
   2. **An integrity condition halts and classifies nothing.** A change-set ref named by an event but
      missing or hash-mismatched is `missing_changeset_ref` (§1), and a halt never appends to a journal
      whose integrity is in question (B.7). That the same condition also prevents populating the
@@ -2333,11 +2333,25 @@ durable path that reaches a live driver at any point in its work:
    later `resume` observes an already-terminal run and launches nothing.
 6. **A live but wedged owner** — lease verified, yet the driver never acknowledges the journal —
    is the case a responsive/dead dichotomy misses. After a bounded acknowledgement deadline the
-   canceller re-verifies the lease owner and terminates it and its process tree (§4) — **halting
-   `owner_unverifiable` if that re-verification fails**, since a process that cannot be named cannot
-   be terminated, and a successful *session* sweep says nothing about the *owner*'s identity — and
-   then **executes the cancellation oracle** with its conditional phase (d) taken, authorized by run
-   lifecycle rather than by the lease.
+   canceller re-verifies the lease owner. Its termination target is **only the recorded lease-owner
+   PID with its recorded process-start identity**: §4 contributes its discipline here, not its
+   adapter-session enumeration. The canceller re-checks that identity immediately before each
+   signal, sends `SIGTERM`, waits §4's outer termination grace, then repeatedly sends `SIGKILL` and
+   re-observes until that owner is verifiably gone — **halting `owner_unverifiable` if a required
+   re-verification fails**, since a process that cannot be named cannot be terminated.
+
+   The driver's own session is never a sweep target: the core did not create it, so it is not an
+   ownership set the core established, and it routinely contains processes the core has no claim
+   over. Its supervisable descendants are the recorded adapter and criterion sessions. Step 6 does
+   not sweep those sessions itself; the cancellation oracle's `(a)`, which follows the owner
+   termination immediately, applies §4's session mechanism to them. Thus a successful session
+   sweep still says nothing about the owner's identity, and is not a substitute for the owner
+   re-verification. A launch whose identity is not yet recorded is outside this target set. That is
+   the residual §4 already admits: an unrecorded trampoline may briefly survive, but it has no
+   adapter or criterion code and no worktree-mutation path before its gate is released.
+
+   The canceller then **executes the cancellation oracle** with its conditional phase (d) taken,
+   authorized by run lifecycle rather than by the lease.
 
    The acknowledgement deadline is a latency and ownership parameter, not a correctness one: a
    legitimate `(a)` sweep has no fixed deadline. Its expiry merely moves responsibility to the
@@ -2457,8 +2471,8 @@ The procedure:
    | `cancel.requested` present | **Do not approve.** Hand off to the cancellation oracle **from step (a)** with (b) taken — not from (c). Restating (b) here and skipping (a) would let a cancellation arriving after the quiesce deadline terminalize the run without ever sweeping its sessions, which is the one thing (a) exists to prevent |
    | Snapshot missing, or either hash mismatched, or not bound to the plan | Halt `missing_snapshot_file` — the approval names bytes that no longer exist |
    | Quiesced sidecar present and matching | append `amendment.approved` **once** from the persisted plan, `fenced_epoch` omitted |
-   | Deadline passed, lease still present and matching, owner **unverifiable** | Halt `owner_unverifiable`. The row below terminates the owner and its process tree before fencing, and that cannot be done to a process recovery cannot name. A successful **session** sweep does not make the **owner** verifiable — the adapter and criterion sessions and the driver's own identity are separate things, and sweeping the first says nothing about the second. C.1's halt does not cover this case, because a live approver never passes through C.1 |
-   | Deadline passed, lease still present and matching | Sweep every recorded adapter and criterion session to verified empty. Then **re-verify the owner immediately before terminating it** — the row above was evaluated before the sweep, and the sweep takes time, so the verification that selected this row may be stale by now (§4 requires the same recheck before each signal). Halt `owner_unverifiable` if that inspection fails; if the owner has become **verifiably gone**, skip termination and take the next row's action instead, the sweep already being done. Only an owner still verified as the matching live one is terminated with its process tree (§4). Then close its open interval with `execution.stopped {reason: superseded, charging: clamped}`, advance the epoch and revoke the token, append `amendment.approved` with that `fenced_epoch` — **and only then** remove the now-stale lease, since the journaled epoch advance is what makes it stale |
+   | Deadline passed, lease still present and matching, owner **unverifiable** | Halt `owner_unverifiable`. The row below applies step 6's owner-termination rule before fencing, and that cannot be done to a process recovery cannot name. A successful **session** sweep does not make the **owner** verifiable — the adapter and criterion sessions and the driver's own identity are separate things, and sweeping the first says nothing about the second. C.1's halt does not cover this case, because a live approver never passes through C.1 |
+   | Deadline passed, lease still present and matching | Sweep every recorded adapter and criterion session to verified empty. Then **re-verify the owner immediately before terminating it** — the row above was evaluated before the sweep, and the sweep takes time, so the verification that selected this row may be stale by now (§4 requires the same recheck before each signal). Halt `owner_unverifiable` if that inspection fails; if the owner has become **verifiably gone**, skip termination and take the next row's action instead, the sweep already being done. Only an owner still verified as the matching live one is terminated under step 6's owner-termination rule. Then close its open interval with `execution.stopped {reason: superseded, charging: clamped}`, advance the epoch and revoke the token, append `amendment.approved` with that `fenced_epoch` — **and only then** remove the now-stale lease, since the journaled epoch advance is what makes it stale |
    | No sidecar, lease present, owner **verifiably gone** | the driver died mid-drain. Sweep as above, then treat exactly as the fenced case: advance the epoch, append with `fenced_epoch`, clean the lease. No deadline wait is needed — a dead owner will not acknowledge |
    | No sidecar, lease present and matching, owner **not verifiably gone**, deadline not yet passed | **Wait.** This is the table's only non-terminal row: release the state lock and observe until a sidecar appears, `cancel.requested` lands, the owner becomes verifiably gone, or the deadline expires — then re-enter this table from the top. The driver is mid-drain and entitled to finish, and holding the lock while waiting is the deadlock step 2 exists to avoid. The predicate is *not verifiably gone* rather than *verified live* so an **unverifiable** owner also waits: waiting mutates nothing. If it is still unverifiable when the deadline expires, the halt row above catches it — not the fence row, which would terminate a process it cannot name. Recovery reaching this state takes the same posture instead of inventing a verdict, though C.1's scoped `owner_unverifiable` halt usually resolves it first. Without this row the state selects no action at all, which E.4 forbids |
    | No lease and no sidecar at all | nothing to quiesce: append `amendment.approved`, `fenced_epoch` omitted, no deadline wait |
