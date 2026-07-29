@@ -72,6 +72,10 @@ a `B` is therefore one the harness cannot hang off an fsync at all.
 several assertions to hold at one cut — so an edge whose obligation is unconditional is exercised
 across every combination, not only the one where the other predicates are false.
 
+The following table is the cancellation-combination selection contract for this gate. It declares
+the required cuts without changing the gate-cut dispositions below: those remain an explicit record
+that this gate has not yet made any cancellation edge reachable.
+
 | Edge | Blocks on | Driven by | Combinations required |
 |---|---|---|---|
 | `cancel.swept_to_terminal` | **B** → R | canceller | **all eight.** Terminalization follows a verified sweep whatever `(b)`, `(c)` and `(d)` do, so restricting this to the all-false case would test the weakest instance of an unconditional obligation |
@@ -173,10 +177,17 @@ hoping for them.
 
 Four actors, each advanced one step at a time:
 
-- **driver** — holds the lease, observes prepares, sweeps, renames
+- **driver** — holds the lease, observes prepares and cancel requests, sweeps, renames, and
+  terminalizes a cancellation in the canceller role (§6 step 4)
 - **approver** — prepares, waits, commits
-- **canceller** — appends `cancel.requested`, runs the oracle
+- **canceller** — appends `cancel.requested`; runs the oracle where no live driver does, and after
+  terminating a wedged owner (§6 step 6)
 - **reclaimer** — a second driver attempting to acquire authority
+
+`canceller` in the edge tables above is §6's **role**, not this actor: the obligations there hold
+whichever actor completes the durable request, so a `Driven by: canceller` cell is satisfied by a
+terminalizing driver as much as by the cancelling command. The matrix requires both, since the two
+reach the same seams from different live states.
 
 Enumerate the interleavings of their step sequences to a bounded depth and evaluate the oracles below
 at each. This is a model-checking shape, not a stress test: the value is exhaustiveness over a small

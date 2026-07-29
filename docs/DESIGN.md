@@ -2022,16 +2022,25 @@ the recovery rule below.
 - **Whenever an interval is closed by a process other than the one that opened it**, the monotonic
   reference is unavailable — that process's clock is meaningless here, or it is gone entirely — and
   wall-clock cannot substitute for it, because clocks jump: NTP steps, suspend/resume, and manual
-  changes all make a wall gap an unreliable upper bound. Two situations qualify, and both use the
-  same rule rather than inventing one each:
+  changes all make a wall gap an unreliable upper bound. The situations below qualify, and all use
+  the same rule rather than inventing one each:
 
   | Situation | `reason` | Closed by |
   |---|---|---|
   | Recovery finds an `execution.started` with no matching stop | `recovered` | the recovering process |
   | A wedged driver is fenced and cancelled (control channel, below) | `cancelled` | the canceller |
   | A wedged driver is fenced and **superseded** by an approved revision (§9) | `superseded` | the approving command |
+  | A **responsive driver cancels itself** through the oracle's `(c)` (control channel, below) | `cancelled` | the driver, in the canceller role |
 
-  In both cases `charging: clamped` and
+  The last row is the one case where the closer *is* the opener and the charge is still clamped, so
+  it is listed here rather than left to the ordinary rule below. It is not the missing-reference
+  situation the paragraph above describes — the driver has its monotonic reading — but the oracle's
+  `(c)` must produce one event shape whichever canceller runs it. Otherwise a single E.2 edge
+  acquires two payloads and `execution.stopped {reason: cancelled}` cannot be read without first
+  establishing who wrote it. Uniformity of the oracle's output is worth more here than the accuracy
+  of one close, and the clamp below bounds what is given up.
+
+  In each case `charging: clamped` and
 
   ```text
   charged_duration = min( max(0, observed_at − wall_start), remaining_at_start )
@@ -2046,8 +2055,8 @@ the recovery rule below.
   that was actually available when it opened.
 
   A `charging: measured` close is the ordinary case and requires the closer to *be* the opener; any
-  other closer uses `clamped`. That is what makes the charge a deterministic function of recorded
-  state in every case.
+  other closer uses `clamped`, as does the one opener the table above names. That is what makes the
+  charge a deterministic function of recorded state in every case.
 - An `adapter` interval that reaches `execute` closes ordinarily at §4's run execute-completion
   boundary, not when the response or adapter leader first exits. The opening driver keeps it open
   through the verified-empty session sweep, then appends one measured
@@ -2171,10 +2180,13 @@ share a mechanism:
   **token** comes from `driver.lease` and nowhere else. `authority.json` is never consulted for the
   token, and never authoritative for the epoch.
 
-  **Fencing and terminalization are one transition, under the canceller's authority.** Fencing and
-  then appending `run.cancelled` as a *separately authorized* step is impossible: the canceller does
-  not hold the driver authority the CAS demands, and the fenced driver no longer does either, so the
-  append could never pass. Instead the canceller holds the state lock across the whole sequence and is
+  **Fencing and terminalization are one transition, under the canceller's authority.** A *canceller*
+  is a role, not a fixed process: it is whichever actor completes the already-durable
+  `cancel.requested` — the responsive driver, the cancelling command when no driver remains or after
+  it terminates a wedged owner, or recovery. Fencing and then appending `run.cancelled` as a
+  *separately authorized* step is impossible: the canceller does not hold the driver authority the
+  CAS demands, and the fenced driver no longer does either, so the append could never pass. Instead
+  `(a)` runs before the lock-held transition, and the canceller holds the state lock across `(b)`–`(f)`,
   authorized by **run lifecycle** rather than by the lease. There is never an intermediate state in
   which the run is fenced but not terminal.
 
@@ -2194,14 +2206,15 @@ An attempt-scoped cancel would leave the movement `RUNNING` with no selection re
 comes next — not a retry, not a fallback, not a restart — so v0.2 does not offer one. The
 protocol-level `cancel` (§4) still targets the current attempt, because that is the process
 that must stop; the *authority* is the run-scoped request. `run.cancelled` atomically projects
-every nonterminal movement and attempt to `CANCELLED` (Appendix B), and if no driver holds the
-lease, `partitur cancel` completes `run.cancelled` itself rather than leaving a cancelled run
+every nonterminal movement and attempt to `CANCELLED` (Appendix B), and it is appended by whichever
+canceller the control channel below selects — the live driver that observed the request, or
+`partitur cancel` itself where no valid lease owner remains. No branch leaves a cancelled run
 active until someone happens to `resume`. Recovery is therefore only needed for a crash
 between the request and its terminalization.
 
 **The control channel.** With no daemon, nothing waits in memory, so out-of-band
 control — cancellation, and revision approval that supersedes a nonterminal attempt — needs a
-durable path that reaches a driver mid-execution:
+durable path that reaches a live driver at any point in its work:
 
 1. The requesting command appends the authoritative control event under the state lock —
    `cancel.requested` for a cancellation, or **`amendment.approval_prepared`** for a supersede.
@@ -2255,14 +2268,38 @@ durable path that reaches a driver mid-execution:
    handshake ends with, so it cannot also be what starts it (§6 quiesce).
 2. It then wakes the verified current lease holder as a **best-effort latency
    optimization** — never as the mechanism of record.
-3. The driver watches control state continuously while an adapter execution is pending —
+3. The driver watches control state continuously **for as long as it holds the lease** —
    a separate goroutine tailing the authoritative journal while the stdout reader stays blocked.
    Polling only between criteria cannot interrupt a long `execute`, so this is a continuous
-   watch, not a checkpoint. Measured append-to-detection latency at a 20 ms poll interval was
+   watch, not a checkpoint.
+
+   The watch spans the driver's whole tenure rather than only a pending adapter `execute`, and the
+   reason is step 6 rather than the adapter. A driver blocked on a long external criterion or on
+   composition is as unable to poll as one blocked on `execute`, so a watch scoped to adapter
+   execution would leave those phases with no acknowledgement path — and step 6 would then read a
+   perfectly healthy driver as a wedged owner and terminate it once the deadline passed. Appendix
+   E.4 records that hazard as one created by implementation *order*; scoping the watch more narrowly
+   than the canceller role is assigned would make it a defect in this section instead.
+
+   Measured append-to-detection latency at a 20 ms poll interval was
    22 ms on macOS and 24 ms on Linux, bounded by poll interval plus scheduling. A signal can
    prompt an immediate read; correctness never depends on it.
-4. On observing the request the driver issues protocol `cancel`, awaits the `execute`
-   response, then applies the outer termination grace and process-tree sweep (§4).
+4. On observing the request the driver stops what it launched. Where an adapter `execute` is in
+   flight it issues protocol `cancel` and awaits that call's response, since §4 makes the response
+   the completeness marker; where none is — a pending criterion, a composition, or an idle
+   moment between them — there is no protocol `cancel` to issue and nothing to await. Either way it
+   then applies the outer termination grace and process-tree sweep (§4) to every session it
+   recorded. It then acts as
+   the canceller and executes the cancellation oracle itself, authorized by run lifecycle rather
+   than by its lease. The drain makes no oracle step unnecessary and skips none: it does not close
+   the execution interval, so `(c)` is evaluated on its own predicate exactly as anywhere else, and
+   it leaves `(a)`'s verified-empty sweep an idempotent no-op. That is the oracle's conditionals
+   being evaluated, not a second cancellation sequence. The driver's matching lease makes `(d)`
+   true, and because `(f)` follows `(e)`, the resulting `run.cancelled` carries `fenced_epoch`.
+   Thus the live journal is the same one produced when recovery re-enters the oracle after the
+   driver dies immediately before `(e)`. No new recovery case or artifact follows: in that crash
+   `RC-RESUME-006` re-enters from `(a)` and reproduces the same fenced epoch; after `(e)` and before
+   `(f)`, `RC-RESUME-002` wins and retries the residual cleanup.
 5. If no driver is alive, the cancelling command itself completes the terminalization; a
    later `resume` observes an already-terminal run and launches nothing.
 6. **A live but wedged owner** — lease verified, yet the driver never acknowledges the journal —
@@ -2272,6 +2309,16 @@ durable path that reaches a driver mid-execution:
    be terminated, and a successful *session* sweep says nothing about the *owner*'s identity — and
    then **executes the cancellation oracle** with its conditional phase (d) taken, authorized by run
    lifecycle rather than by the lease.
+
+   The acknowledgement deadline is a latency and ownership parameter, not a correctness one: a
+   legitimate `(a)` sweep has no fixed deadline. Its expiry merely moves responsibility to the
+   same oracle, so terminating a slow driver yields the same journal rather than a competing
+   terminalization. C.1 selects its terminal row before this escalation when the driver completed
+   during the wait, so a successfully cancelled run cannot acquire a spurious `owner_unverifiable`
+   halt from the escalation. The state lock is `flock`, which the kernel releases when a terminated
+   driver exits, so the escalation strands no lock. The acknowledgement deadline **SHOULD exceed**
+   §4's 30000 ms outer termination grace, allowing a conforming drain normally to win that race;
+   §6 fixes no more specific duration.
 
    This step deliberately does not restate the order. An earlier draft did, and inverted it — advancing
    the epoch before closing the interval — which is precisely the kind of second normative sequence that
@@ -2288,14 +2335,6 @@ durable path that reaches a driver mid-execution:
    so a subsequent append would fail its own check. The invariant this preserves: **the run is
    never declared cancelled while the old execution authority could still mutate it, and never
    left fenced without being terminal.**
-
-**Open question — responsive-owner terminalization.** Steps 3–4 say how a live responsive driver
-observes and stops for `cancel.requested`, but §6 does not name in one place which actor appends
-`run.cancelled` on that path. The single-oracle warning above is why this must be resolved as one
-normative sequence rather than inferred from a second one. 2.1a does not reach the case because
-§7 reserves its direct terminalization to the no-valid-lease-owner branch; 2.1b owns the question
-with the watcher and protocol-cancel work. This records an open specification question, not a
-choice between the readings.
 
 **Supersession uses the same branches, including the wedged one.** An approved revision must
 supersede every nonterminal attempt (§9), and the driver holding that attempt can be wedged exactly
@@ -2647,7 +2686,7 @@ state, but only two ever start an adapter:
 | `answer` | records `decision.resolved` only | no |
 | `approve` (gate) | records the gate `decision.resolved`; the resulting completion or failure follows the Appendix C event sequence (`attempt.completed` then `movement.succeeded`, or `movement.failed`) — approval does not manufacture one atomic completion event | no |
 | `approve` / `amend` (amendment) | may atomically write a snapshot and supersede attempts (§9) | no |
-| `cancel` | appends the durable run-scoped cancel request, and — after verifying no valid lease owner remains — may append `run.cancelled` itself (§6) | no |
+| `cancel` | appends the durable run-scoped cancel request, and acts as canceller to complete terminalization once no valid lease owner remains — because none did, or because it terminated a wedged one (§6) | no |
 | `apply`, `promote-score` | own transactions (§8) | no |
 | `run`, `resume` | full | **yes** — acquires the driver lease |
 
@@ -2976,6 +3015,40 @@ An already-terminal run is therefore not a wrong-projection-state refusal. Treat
 outcome idempotently closes the normal race in which a caller repeats `resume` after exit 6 but
 another invocation completed the run first; `SUCCEEDED` returns 0, while `FAILED` or `CANCELLED`
 returns 4.
+
+Where C.1 yields to a verified live owner (`RC-RESUME-046`), `resume` has nothing left to do: the
+owner already holds continuation authority, and this invocation may neither reclaim it nor run
+beside it. That is a refused command precondition and returns 2. The row states the yield and this
+paragraph states the mapping, because the same yield leads `cancel` somewhere else entirely.
+
+**`partitur cancel` observable surface.** `cancel` first records its durable run-scoped request as
+§6 requires, then waits, bounded by §6's acknowledgement deadline, for the terminal event that is
+also its acknowledgement. A recovery row selects the action from the durable state; §7 maps the
+outcome of the invoking command after that action. In particular, a verified live owner is yielded
+to rather than refused: the request is already durable, and the responsive driver is the canceller
+that will terminalize it. Only an operational interruption of this `cancel` invocation while the
+run remains nonterminal returns 6.
+
+An already-terminal run is not a wrong-projection-state refusal for `cancel` either, and for the
+same reason it is not one for `resume`: the caller who repeats `cancel` after an interrupted
+invocation is racing whichever canceller finished first, and reporting the run's durable outcome
+closes that race idempotently. 2.1b makes the race ordinary rather than rare, because `cancel` now
+waits on a live driver and can be interrupted while waiting. The mapping is therefore `resume`'s:
+`SUCCEEDED` returns 0, `FAILED` or `CANCELLED` returns 4. A `SUCCEEDED` run reports 0 even though
+nothing was cancelled — the code reports the run's durable outcome, not whether this invocation
+caused it, and `status --json` remains the surface that says which outcome it was.
+
+The following table is exhaustive for `cancel`:
+
+| Code | `partitur cancel` outcome |
+|---|---|
+| 0 | The selected run was already at `SUCCEEDED` |
+| 1 | Usage error |
+| 2 | Run selection or another command precondition was refused under the global exit-code table below |
+| 3 | Not used: `cancel` performs neither validation nor amendment rejection |
+| 4 | The run reached, or was already at, terminal `FAILED` or `CANCELLED`; where this invocation made the request, the `run.cancelled` it waited for is also its acknowledgement |
+| 5 | Recovery halted for the Appendix D reason reported on stderr; the run remains at its last durable projection |
+| 6 | This `cancel` invocation was operationally interrupted while the run remains nonterminal |
 
 `validate` acquires inputs before interpreting their contents. A missing or unreadable required
 `partitur.yaml`, or a discovered cast file that cannot be read, is a refused precondition and exits
@@ -4167,7 +4240,7 @@ movement.cancelled {}             # derived from run.cancelled
 | `attempt.cancelled` *derived* | — | source event_id + attempt_id | — | Attempt → `CANCELLED`; projected idempotently from `run.cancelled`, for the same reason |
 | `attempt.superseded` *derived* | — | source event_id + attempt_id | — | Attempt → `SUPERSEDED`; projected from `amendment.approved` (§9) |
 | `execution.started` | ✓ | `interval_id` | no interval open | Opens the (single) budget interval; carries `interval_id`, `phase`, `wall_start`, `remaining_at_start` (§6). Keyed on `interval_id` because one attempt legitimately opens several intervals |
-| `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration`. `charging: measured` requires the closer to **be** the process that opened it; every other closer uses `charging: clamped` and the deterministic formula of §6 — which covers recovery (`reason: recovered`), a fenced cancellation (`reason: cancelled`), and a fenced supersession (`reason: superseded`) alike. For an ordinary `adapter` close, §4 additionally requires the recorded session to be verified empty first |
+| `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration`. `charging: measured` requires the closer to **be** the process that opened it; every other closer uses `charging: clamped` and the deterministic formula of §6 — which covers recovery (`reason: recovered`) and a fenced supersession (`reason: superseded`) alike. **`reason: cancelled` is always `clamped`**, whether or not `(d)` fenced and whether or not the canceller running the oracle's `(c)` is the opener: §6 fixes one shape for that step across every canceller, so this is a property of the reason rather than of the closer. For an ordinary `adapter` close, §4 additionally requires the recorded session to be verified empty first |
 
 **Payloads.**
 
@@ -4751,7 +4824,7 @@ score.promotion_recovery_required {
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
 | `authority.granted` | ✓ | `authority_epoch` | Run nonterminal | Records that a driver acquired or reclaimed execution authority at a new monotonic epoch, with the owner's PID and process-start identity. Makes the current epoch a journal projection (§6) so it survives lease removal. The incarnation **token is never journaled** — journaling it would let any reader forge authority |
-| `cancel.requested` | ✓ | run_id | Run nonterminal | The durable, **run-scoped** cancellation authority (§6) — never keyed by attempt, because there is no attempt-scoped cancel. Observed by a live driver mid-execution; otherwise the canceller itself terminalizes |
+| `cancel.requested` | ✓ | run_id | Run nonterminal | The durable, **run-scoped** cancellation authority (§6) — never keyed by attempt, because there is no attempt-scoped cancel. Observed by a live driver at any point while it holds the lease, which then terminalizes in the canceller role; where no valid lease owner remains, the cancelling command does |
 | `journal.tail_truncated` | ✓ | truncated seq | recovery | Records that an unparseable final line was discarded (§1) |
 | `log` | | — | — | Mirrored adapter diagnostics; sanitized (§4) |
 | `progress` | | — | — | Mirrored adapter progress |
@@ -4962,7 +5035,16 @@ Two further rules govern everything below, and every row obeys them rather than 
 ## C.1 Run-level precedence
 
 Evaluated before any attempt- or acceptance-level table, because a pending control request outranks
-resuming work:
+resuming work.
+
+**A row selects a recovery action, never a command-visible outcome.** Several commands drive the
+same table, so a row that fixed an exit code would fix it for all of them: `cancel` reaches C.1
+having *already* durably appended `cancel.requested`, and reporting a precondition refusal for an
+invocation that has mutated authoritative state is not a refusal at all. §7 maps each command's
+outcome from what that command did after the selected action. This is why no row below names a
+command, and why the same row can leave `resume` with nothing to do and send `cancel` on to §6.
+
+The rows:
 
 | Recovery case | Last durable state | Recovery action |
 |---|---|---|
@@ -4970,7 +5052,7 @@ resuming work:
 | `RC-RESUME-003` | A readable `driver.lease` is at an epoch **older** than the journal-projected one | It is stale, not dangerous: the mutation CAS requires a lease at the current epoch (§6), so its owner cannot mutate whatever its liveness. Remove it and re-evaluate this table from the top. This is what clears a lease stranded by a crash between a fencing terminal event and its cleanup (Appendix E) |
 | `RC-RESUME-004` | A `driver.lease` exists with no `authority.granted` at its epoch | An orphan from a crashed acquisition (§6): quarantine it and **re-evaluate this table from the top**. Reclamation is deliberately not performed here — this row sits above the cancellation and pending-prepare rows, and reclaiming authority while a prepare is pending is exactly what that row forbids. Once the orphan is gone, whichever row genuinely applies wins, including the no-live-owner reclaim below |
 | `RC-RESUME-005` | A `driver.lease` exists **at the current journal-projected epoch** and its owner is **unverifiable** | Halt `owner_unverifiable`. This outranks even a pending cancellation: cancellation outranks *resumption*, never the safety check that terminalizing requires. Declaring a run cancelled while a possibly-live owner could still mutate it is the one thing §6 forbids outright. The check is scoped to a **current** lease deliberately — the CAS needs one, so an owner without one is already unable to act, and an unscoped check halts on states that are provably safe: after `authority.granted` but before the lease exists, after the lease has moved to a quiesced sidecar, and after a fence has advanced the epoch past it |
-| `RC-RESUME-046` | A `driver.lease` exists at the current journal-projected epoch and its matching owner is verifiably live | Refuse this `resume` invocation under §7's existing command-precondition outcome. The current owner already holds continuation authority; recovery neither reclaims its lease nor enters C.2 beside it. This is not a halt and records no event |
+| `RC-RESUME-046` | A `driver.lease` exists at the current journal-projected epoch and its matching owner is verifiably live | Yield to the live owner. The current owner already holds continuation authority; recovery neither reclaims its lease nor enters C.2 beside it, and appends no event. §7 maps the outcome of the invoking command after this action |
 | `RC-RESUME-006` | `cancel.requested` present, run nonterminal | **Cancellation takes precedence over resumption and over a pending prepare.** Execute **steps (a)–(f) of the §6 cancellation oracle exactly** — the whole list, including `(e)`'s `run.cancelled` and `(f)`'s lease cleanup; an earlier draft stopped at `(d)`, which left recovery unable to terminalize a cancelling run at all — including the conditional `(c)` and `(d)` — this row deliberately does not restate them, because two copies of a sequence are two chances to disagree. Three notes specific to recovery: `sweep_unverifiable` in (a) halts, since C.1 runs before C.2/C.3 and would otherwise terminalize without consulting the process identities those tables rely on; (c)'s interval close — which has its own predicate, independent of whether (d) fences — is why the generic pre-table close skips a cancelled run; and **no replacement driver is launched** |
 | `RC-RESUME-007` | `amendment.approval_prepared` pending, no matching `amendment.approved` or `amendment.approval_abandoned`, no cancellation | **Complete or abandon the prepare — never step past it**, and the **mutation barrier stays in force** while doing so. Verify **both** referenced files, because first-match ordering means the generic missing-file checks below are never reached: `prepares/<prepare-id>.json` against its recorded hash (`missing_prepare_plan`), and the prewritten snapshot against its recorded raw *and* semantic hashes and its binding to that plan (`missing_snapshot_file`). Sweep every recorded adapter and criterion launch to verified empty (`sweep_unverifiable` halts). Then run §6's commit table exactly as the original approver would have, appending `amendment.approved` **from the persisted plan** — or `amendment.approval_abandoned` if the head changed or the plan no longer validates. Reclaiming authority or entering C.2 while a prepare is pending would let a new driver run against a revision that was about to change |
 | `RC-RESUME-008` | An `authority.granted` epoch exists with no live owner | Reclaim per §6 |
@@ -4980,13 +5062,6 @@ resuming work:
 | `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). Do not enter C.2 or C.3 for an attempt from the superseded revision |
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
 | `RC-RESUME-012` | Otherwise | Proceed to C.2 for the movement's current-head, non-superseded in-flight attempt, if any; when there is none, proceed to the between-unit scheduler in C.4 |
-
-**Open question — C.1 live-owner outcome across commands.** `RC-RESUME-046` names a refused
-`resume` invocation, but `cancel` deliberately drives the same C.1 sequence after durably
-appending `cancel.requested`; unit 1.3 removed a second command-private recovery sequence. Does one
-recovery row map to the outcome of the command that reached it, or must every command reaching that
-row expose the same command-visible outcome? The current mappings differ: `resume` exits 2 and
-`cancel` exits 6. This records the open specification question, not a choice between the readings.
 
 ## C.2 Attempt lifecycle recovery
 
@@ -5163,7 +5238,7 @@ win at least one cut.
 | `RA-008` | 40 | `RC-RESUME-003` | resume | active | valid | stale | * | * | * | * | * | * | safe | Remove stale lease, then re-evaluate |
 | `RA-009` | 40 | `RC-RESUME-004` | resume | active | valid | orphan | * | * | * | * | * | * | safe | Quarantine orphan lease, then re-evaluate |
 | `RA-010` | 40 | `RC-RESUME-005` | resume | active | valid | unverifiable | * | * | * | * | * | * | owner_unverifiable | Halt `owner_unverifiable` |
-| `RA-011` | 40 | `RC-RESUME-046` | resume | active | valid | live | * | * | * | * | * | * | safe | Refuse this invocation |
+| `RA-011` | 40 | `RC-RESUME-046` | resume | active | valid | live | * | * | * | * | * | * | safe | Yield to the live owner |
 | `RA-012` | 50 | `RC-RESUME-006` | resume | active | valid,halt | clear,unowned | cancel | * | * | * | * | * | safe | Execute the §6 cancellation oracle |
 | `RA-013` | 50 | `RC-RESUME-007` | resume | active | valid,halt | clear,unowned | prepare | none | none | idle,root_divergence,missing_reference | none | available | safe | Complete or abandon the prepare |
 | `RA-014` | 60 | `RC-RESUME-008` | resume | active | valid | unowned | none | none | none | idle | none | available | safe | Reclaim authority |
@@ -5543,7 +5618,7 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 |---|---|---|---|---|
 | `cancel.swept_to_terminal` | `(a)` sessions verified empty `B` | `(e)` `run.cancelled` appended `R` | §6 `(a)`, `(e)` | **Terminalization always follows a verified sweep**, whatever `(b)`, `(c)` and `(d)` do. The edges below cover those conditionals; this one covers the case where all three skip, which is the ordinary shape when there is no pending prepare, no open interval, and no matching lease — and which would otherwise be the one cancellation path with no edge asserting the invariant the whole oracle exists for. `sweep_unverifiable` halts, and C.1's cancellation row re-enters at `(a)` rather than resuming mid-sequence |
 | `cancel.swept_to_quarantined` | `(a)` sessions verified empty `B` | `(b)` snapshot quarantined `R` | §6 `(a)`–`(b)` | The `(b)`-true refinement of the row above: a pending prepare is quarantined before anything else proceeds |
-| `cancel.interval_stopped_to_terminal` | `(c)` `execution.stopped {reason: cancelled}` appended `R` | `(e)` `run.cancelled` appended `R` | §6 `(c)`–`(e)` | `run.cancelled` never lands with an execution interval still open, **independently of whether `(d)` fences** — the two predicates are separate, and gating the close on fencing would let the budget projection read a run that never stopped consuming. This is the only edge covering the `(d)`-false path, which E.3 excludes |
+| `cancel.interval_stopped_to_terminal` | `(c)` `execution.stopped {reason: cancelled, charging: clamped}` appended `R` | `(e)` `run.cancelled` appended `R` | §6 `(c)`–`(e)` | `run.cancelled` never lands with an execution interval still open, **independently of whether `(d)` fences** — the two predicates are separate, and gating the close on fencing would let the budget projection read a run that never stopped consuming. The close carries `charging: clamped` **whichever canceller appended it**, including a responsive driver closing the interval it opened itself; one oracle step has one event shape, so the assertion does not branch on the actor. This is the only edge covering the `(d)`-false path, which E.3 excludes |
 | `cancel.fence_decided_to_terminal` | `(d)` taken with its lease predicate **true** — no durable output `B` | `(e)` `run.cancelled` appended `R` | §6 `(d)`–`(e)` | See E.3 |
 | `cancel.terminal_to_lease_removed` | `(e)` durable `R` | `(f)` lease removed `R` | §6 `(f)`; C.1 terminal row | `(f)` must still run. The cancellation row can no longer match once the run is terminal, so C.1's terminal row is what retries the cleanup |
 
@@ -5644,13 +5719,13 @@ true of the implementation — the whole point of freezing the contract first is
 written against it rather than retrofitted. [`HARNESS.md`](HARNESS.md) selects from E.2 rather than
 describing boundaries of its own.
 
-**Unit 2.1a allocation.** The first cancellation slice implements the shared §6 cancellation
-oracle, `RC-RESUME-006`, and §7's `cancel` command only where no valid lease owner remains. If a
-valid owner remains, its durable request waits: without steps 3–4's watcher the driver does not
-observe it and finishes its attempt; a later `resume` selects `RC-RESUME-006`. That is this slice's
-control latency, not a different cancellation contract. Step 6 belongs to 2.1b with steps 3–4:
-without an acknowledgement path, a healthy driver is indistinguishable from a wedged owner and the
-deadline would terminate it. That hazard is created by implementation order, not by §6.
+**Unit 2.1 allocation.** The first cancellation slice implements the shared §6 cancellation
+oracle, `RC-RESUME-006`, and §7's `cancel` command where no valid lease owner remains. Unit 2.1b
+adds steps 3–4's watcher and responsive-driver terminalization: the driver observes the durable
+request, becomes the canceller role, and completes the same oracle. It also adds step 6's bounded
+acknowledgement and wedged-owner escalation. Without that acknowledgement path, a healthy driver
+is indistinguishable from a wedged owner and the deadline would terminate it; that hazard is created
+by implementation order, not by §6.
 
 The five `cancel.*` E.2 edges remain outside 2.1a; 2.1b owns their subprocess fixture and the
 required `(b, c, d)` matrix.
