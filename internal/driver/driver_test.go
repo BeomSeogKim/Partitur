@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -252,6 +253,62 @@ func TestPostCreationOperationalFailureLeavesResumableRun(t *testing.T) {
 	assertNoDriverLease(t, preparation.RepositoryRoot, result.RunID)
 }
 
+func TestRunTerminalizesDurableCancellationBeforeAttemptSetup(t *testing.T) {
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	result := run(
+		context.Background(),
+		preparation,
+		func(runID runstate.RunID) error {
+			store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+			if err != nil {
+				return err
+			}
+			return store.RequestCancellation(runID)
+		},
+		testDependencies(),
+	)
+	if result.Outcome != OutcomeCancelled || result.Err != nil {
+		t.Fatalf("result=%+v", result)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(result.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []runstate.EventType
+	var cancelled runstate.Event
+	for _, event := range journal.Events {
+		kinds = append(kinds, event.Type)
+		if event.Type == runstate.EventRunCancelled {
+			cancelled = event
+		}
+	}
+	want := []runstate.EventType{
+		runstate.EventRunStarted,
+		runstate.EventCancelRequested,
+		runstate.EventAuthorityGranted,
+		runstate.EventRunCancelled,
+	}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("journal event order=%v want=%v", kinds, want)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(cancelled.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if fenced, ok := payload["fenced_epoch"].(float64); !ok || fenced != 2 {
+		t.Fatalf("run.cancelled payload=%s", cancelled.Payload)
+	}
+	state := replayDriverState(t, preparation, result.RunID)
+	if state.Run != runstate.RunCancelled {
+		t.Fatalf("run state=%s", state.Run)
+	}
+	assertNoDriverLease(t, preparation.RepositoryRoot, result.RunID)
+}
+
 func TestStoppedClassifiesOnlyAppendixDHalts(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -302,12 +359,14 @@ func TestRecoveryHaltRetainsDriverLease(t *testing.T) {
 	for _, outcome := range []Outcome{
 		OutcomeSucceeded,
 		OutcomeFailed,
-		OutcomeCancelled,
 		OutcomeInterrupted,
 	} {
 		if !releasesDriverLease(outcome) {
 			t.Fatalf("outcome %s would strand a live driver's lease", outcome)
 		}
+	}
+	if releasesDriverLease(OutcomeCancelled) {
+		t.Fatal("cancellation oracle already removes the driver lease")
 	}
 }
 

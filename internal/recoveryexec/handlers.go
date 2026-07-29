@@ -383,10 +383,24 @@ func executeRecoveredAttempt(
 	if result.Err != nil {
 		return result.Err
 	}
-	if result.Outcome != driver.OutcomeSucceeded {
-		return fmt.Errorf("recovery attempt execution ended %s", result.Outcome)
+	return recoveredAttemptOutcome(result.Outcome)
+}
+
+// recoveredAttemptOutcome maps what a recovery-owned attempt ended as onto what the executor
+// should see. Cancellation is not a failure: the driver observed the request mid-attempt and
+// ran the §6 oracle, so the run is already terminal, and reporting an error here would make
+// `resume` call a cancelled run an operational interruption where §7 gives it exit 4. The
+// sentinel makes the executor replan so C.1's terminal row supplies the outcome, rather than
+// this handler inventing a second way out.
+func recoveredAttemptOutcome(outcome driver.Outcome) error {
+	switch outcome {
+	case driver.OutcomeSucceeded:
+		return nil
+	case driver.OutcomeCancelled:
+		return ErrRunCancelledDuringRecovery
+	default:
+		return fmt.Errorf("recovery attempt execution ended %s", outcome)
 	}
-	return nil
 }
 
 func retriesConsumed(state runstate.State, movementID runstate.MovementID) int {

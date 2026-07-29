@@ -17,6 +17,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
+	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
@@ -147,6 +148,106 @@ func TestClampedCloseRefreshesBudgetBeforeFailureClassification(t *testing.T) {
 	disposition, _ := payload["disposition"].(map[string]any)
 	if disposition["charged"] != "none" || disposition["terminal_reason"] != "budget_exhausted" {
 		t.Fatalf("post-close failure disposition = %s, want exhausted budget", last.Payload)
+	}
+}
+
+// A recovery-owned attempt that observes a cancellation terminalizes through the §6 oracle,
+// so the run is already terminal when the handler returns. Reporting that as an execution
+// error made `resume` call a cancelled run an operational interruption; §7 gives it exit 4.
+// The executor replans instead, so C.1's terminal row supplies the outcome and there is no
+// second way out.
+func TestCancellationDuringRecoveryReplansToTheTerminalRow(t *testing.T) {
+	store, driver := handlerStore(t, true)
+	load := func(context.Context) (recovery.Input, error) {
+		state, err := driver.State()
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		return recovery.Input{Projection: recovery.Projection{State: state, CurrentHeadAttempt: handlerAttempt(state)}}, nil
+	}
+	cancelled := false
+	executor := &Executor{
+		Store:  store,
+		RunID:  "run-1",
+		Driver: driver,
+		Load:   load,
+		Steps: map[recovery.ActionStep]StepHandler{
+			recovery.StepCloseAdapterInterval: func(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+				// Stand in for the driver observing the request mid-attempt and running the
+				// oracle: the run is terminal by the time the handler returns. The oracle's
+				// own ordering is pinned in internal/runstore; what is under test here is
+				// that the executor replans instead of calling this an execution failure.
+				current, err := driver.State()
+				if err != nil {
+					return err
+				}
+				if _, err := driver.Append(runstate.Event{
+					RunID: "run-1", ScoreRevision: 1, Type: runstate.EventRunCancelled,
+					Payload: handlerPayload(t, runstate.CancellationPayload(current, nil)),
+				}, "test.run.cancelled"); err != nil {
+					return err
+				}
+				cancelled = true
+				return ErrRunCancelledDuringRecovery
+			},
+		},
+	}
+	input, err := load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.execute(context.Background(), input, recovery.Decision{
+		CaseID: recovery.CaseUnstartedAttempt,
+		Action: &recovery.Action{
+			Kind:      recovery.ActionRecoverUnstartedAttempt,
+			AttemptID: "attempt-1",
+			Steps:     []recovery.ActionStep{recovery.StepCloseAdapterInterval, recovery.StepClassifyAndAppendFailure},
+		},
+	})
+	if err != nil {
+		t.Fatalf("cancellation was reported as an execution failure: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("the injected step never ran")
+	}
+	if result.Outcome != OutcomeCancelled {
+		t.Fatalf("outcome = %q, want %q", result.Outcome, OutcomeCancelled)
+	}
+	// Result records effects that actually happened: the step ran and terminalized the run
+	// before it reported the cancellation, and the steps after it did not.
+	if !slices.Equal(result.Steps, []recovery.ActionStep{recovery.StepCloseAdapterInterval}) {
+		t.Fatalf("recorded steps = %v, want only the one that ran", result.Steps)
+	}
+	if result.Replans != 1 {
+		t.Fatalf("replans = %d, want exactly one to C.1's terminal row", result.Replans)
+	}
+}
+
+// The test above injects the sentinel, so it cannot see whether the attempt handler still
+// produces it. This pins that mapping directly: it is the line a review round found
+// reporting a cancelled run as an execution failure.
+func TestRecoveredAttemptOutcomeMapsCancellationToTheSentinel(t *testing.T) {
+	for _, test := range []struct {
+		outcome driver.Outcome
+		want    error
+	}{
+		{outcome: driver.OutcomeSucceeded, want: nil},
+		{outcome: driver.OutcomeCancelled, want: ErrRunCancelledDuringRecovery},
+	} {
+		t.Run(string(test.outcome), func(t *testing.T) {
+			if err := recoveredAttemptOutcome(test.outcome); !errors.Is(err, test.want) {
+				t.Fatalf("outcome %s mapped to %v, want %v", test.outcome, err, test.want)
+			}
+		})
+	}
+	// Everything else stays an execution failure rather than silently succeeding.
+	for _, outcome := range []driver.Outcome{
+		driver.OutcomeFailed, driver.OutcomeHalted, driver.OutcomeInterrupted,
+	} {
+		err := recoveredAttemptOutcome(outcome)
+		if err == nil || errors.Is(err, ErrRunCancelledDuringRecovery) {
+			t.Fatalf("outcome %s mapped to %v", outcome, err)
+		}
 	}
 }
 

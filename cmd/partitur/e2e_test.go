@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -25,6 +26,7 @@ import (
 const fakeAdapterEnvironment = "PARTITUR_VALIDATE_FAKE_ADAPTER"
 const runVendorEnvironment = "PARTITUR_RUN_VENDOR_FIXTURE"
 const runVendorOutcomeEnvironment = "PARTITUR_RUN_VENDOR_OUTCOME"
+const runVendorMarkerEnvironment = "PARTITUR_RUN_VENDOR_MARKER"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runVendorEnvironment) == "1" {
@@ -44,6 +46,149 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+// The whole chain, end to end: a cancellation that lands while the adapter is genuinely
+// mid-execute. §6 step 4 has the driver observe it, stop what it launched, and terminalize
+// through the one oracle — so the payoff to assert is the journal, not the exit code.
+//
+// The request is appended directly rather than through `partitur cancel`, because that
+// command's own live-owner exit mapping is PR D's; this test is about what the driver does.
+func TestRunTerminalizesACancellationObservedMidExecute(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, runScore(), runCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+
+	marker := filepath.Join(t.TempDir(), "executing")
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":                      t.TempDir(),
+		"PATH":                      bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN":        vendor,
+		runVendorEnvironment:        "1",
+		runVendorOutcomeEnvironment: "block_until_killed",
+		runVendorMarkerEnvironment:  marker,
+	})
+
+	// Append the request only once the vendor says it is executing. Polling a marker the
+	// vendor writes is the edge that puts the cancellation inside the execute window.
+	requested := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(marker); err != nil {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
+			store, err := runstore.New(repository, faultpoint.Nop{})
+			if err != nil {
+				requested <- err
+				return
+			}
+			runID, err := soleRunID(repository)
+			if err != nil {
+				requested <- err
+				return
+			}
+			requested <- store.RequestCancellation(runID)
+			return
+		}
+		requested <- errors.New("vendor never reported that it was executing")
+	}()
+
+	// Bounded: without the cancellation wiring the vendor blocks forever and this test
+	// would hang the package instead of naming the guard that went missing.
+	code, stdout, runStderr := runCommandBinaryWithin(t, 60*time.Second, partitur, repository, environment, "run")
+	if err := <-requested; err != nil {
+		t.Fatal(err)
+	}
+	runID := strings.TrimSpace(stdout)
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 4 || runID == "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q journal=%v", code, stdout, runStderr, eventKinds(journal.Events))
+	}
+	var stopped, cancelled *runstate.Event
+	for index := range journal.Events {
+		event := &journal.Events[index]
+		switch event.Type {
+		case runstate.EventPerformerCompleted, runstate.EventAttemptCompleted,
+			runstate.EventMovementSucceeded:
+			t.Fatalf("a cancelled run recorded %q", event.Type)
+		case runstate.EventExecutionStopped:
+			stopped = event
+		case runstate.EventRunCancelled:
+			cancelled = event
+		}
+	}
+	if stopped == nil || cancelled == nil {
+		t.Fatalf("journal = %v", eventKinds(journal.Events))
+	}
+	if stopped.Seq > cancelled.Seq {
+		t.Fatalf("(c) must precede (e): stopped seq %d, cancelled seq %d", stopped.Seq, cancelled.Seq)
+	}
+	// §6 (c): the interval is closed by the oracle, clamped whichever canceller runs it.
+	var stop map[string]any
+	if err := json.Unmarshal(stopped.Payload, &stop); err != nil {
+		t.Fatal(err)
+	}
+	if stop["reason"] != "cancelled" || stop["charging"] != "clamped" {
+		t.Fatalf("execution.stopped payload = %v", stop)
+	}
+	// §6 (d): the driver's own lease still matched, so it self-fenced.
+	var terminal map[string]any
+	if err := json.Unmarshal(cancelled.Payload, &terminal); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := terminal["fenced_epoch"]; !ok {
+		t.Fatalf("run.cancelled payload = %v, want a fenced_epoch", terminal)
+	}
+	// §6 (f): the lease is gone.
+	if _, err := os.Stat(filepath.Join(repository, ".partitur", "runs", runID, "driver.lease")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("driver.lease stat = %v, want absent", err)
+	}
+}
+
+func eventKinds(events []runstate.Event) []runstate.EventType {
+	kinds := make([]runstate.EventType, 0, len(events))
+	for _, event := range events {
+		kinds = append(kinds, event.Type)
+	}
+	return kinds
+}
+
+func soleRunID(repository string) (runstate.RunID, error) {
+	entries, err := os.ReadDir(filepath.Join(repository, ".partitur", "runs"))
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return runstate.RunID(entry.Name()), nil
+		}
+	}
+	return "", errors.New("no run directory yet")
 }
 
 func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
@@ -874,6 +1019,19 @@ func runVendorFixture() {
 	if outcome == "task_failed" {
 		return
 	}
+	if outcome == "block_until_killed" {
+		// Announce that the attempt is genuinely mid-execute, then wait to be swept.
+		// The marker is what lets the test place a cancellation inside the adapter
+		// execute rather than before or after it.
+		if err := os.WriteFile(os.Getenv(runVendorMarkerEnvironment), []byte("executing"), 0o600); err != nil {
+			os.Exit(94)
+		}
+		// A bare `select {}` is a deadlock panic once this is the only goroutine, which
+		// would fail the attempt before the cancellation could land.
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
 	if outcome != "" && outcome != "success" && outcome != "read_only_violation" {
 		os.Exit(97)
 	}
@@ -995,6 +1153,34 @@ func runGit(t *testing.T, directory string, arguments ...string) {
 	command.Dir = directory
 	if data, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", arguments, err, data)
+	}
+}
+
+// runCommandBinaryWithin bounds a subprocess so that a lost guard fails this test by name
+// rather than hanging until the package timeout, which hides which test broke.
+func runCommandBinaryWithin(
+	t *testing.T,
+	limit time.Duration,
+	binary, repository string,
+	environment []string,
+	arguments ...string,
+) (int, string, string) {
+	t.Helper()
+	type outcome struct {
+		code           int
+		stdout, stderr string
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		code, stdout, stderr := runCommandBinary(t, binary, repository, environment, arguments...)
+		done <- outcome{code: code, stdout: stdout, stderr: stderr}
+	}()
+	select {
+	case result := <-done:
+		return result.code, result.stdout, result.stderr
+	case <-time.After(limit):
+		t.Fatalf("%s did not return within %s: the cancellation never reached it", filepath.Base(binary), limit)
+		return 0, "", ""
 	}
 }
 

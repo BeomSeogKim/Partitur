@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -51,6 +52,7 @@ type AttemptExecution struct {
 	RemainingMS          int64
 	RetriesConsumed      int
 	VisitedPerformers    []string
+	Control              *cancellation.Watcher
 }
 
 // ExecutionDependencies are the process-facing dependencies of an attempt.
