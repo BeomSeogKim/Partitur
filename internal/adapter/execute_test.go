@@ -391,6 +391,52 @@ func TestExecuteContextInterruptionWinsOverReadyCancelSignal(t *testing.T) {
 	}
 }
 
+// A cancel the core cannot deliver is still a cancellation. §6 leaves the interval to the
+// oracle's (c) and B orders `cancelled` ahead of `adapter_unavailable`, so this route must
+// record neither `execution.stopped` nor `attempt.failed`.
+func TestExecuteCancelWriteFailureRecordsNoIntervalOrOutcome(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	var order []string
+	client := newClient([]string{
+		fakeModeEnv + "=execute_cancelled",
+		fakeMarkerEnv + "=" + filepath.Join(t.TempDir(), "response"),
+	}, incidentalTestDeadline, 10*time.Second)
+	cancel := make(chan struct{})
+	baseWrite := client.write
+	client.write = func(writer io.Writer, data []byte) error {
+		if strings.Contains(string(data), `"method":"cancel"`) {
+			return errors.New("injected cancel write failure")
+		}
+		if strings.Contains(string(data), `"method":"execute"`) {
+			close(cancel)
+		}
+		return baseWrite(writer, data)
+	}
+	plan := executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	plan.Cancel = cancel
+	report, err := executeWithin(t, client, plan, 30*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "injected cancel write failure") {
+		t.Fatalf("report = %#v, error = %v", report, err)
+	}
+	if report.Result != nil {
+		t.Fatalf("report retained a result: %#v", report.Result)
+	}
+	want := []string{"attempt.started", "adapter.probed"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("journal order = %v, want %v", order, want)
+	}
+}
+
 func TestExecuteCancelGraceTimeoutForcesVerifiedEmptySweep(t *testing.T) {
 	directory := t.TempDir()
 	installFake(t, directory, "fake")

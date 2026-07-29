@@ -200,12 +200,18 @@ probed:
 			state.report.Result = &decoded.result
 			goto response
 		case <-cancelSignal:
+			// Failing to deliver the request does not turn a cancellation into an attempt
+			// failure: §6 leaves the close to the oracle's (c), and B's classification
+			// priority puts cancelled ahead of adapter_unavailable. Sweep and record
+			// nothing, exactly as every other route out of this branch does.
 			cancelRequest, encodeErr := encodeCancelRequest(protocol.CancelRequest{AttemptID: plan.Request.AttemptID})
 			if encodeErr != nil {
-				return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", encodeErr.Error())
+				state.report.Result = nil
+				return failWithoutOutcome(encodeErr)
 			}
 			if writeErr := c.write(running.stdin, cancelRequest); writeErr != nil {
-				return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", writeErr.Error())
+				state.report.Result = nil
+				return failWithoutOutcome(writeErr)
 			}
 			cancelRequested = true
 			cancelSignal = nil
