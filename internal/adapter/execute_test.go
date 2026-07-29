@@ -16,6 +16,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
@@ -554,6 +555,43 @@ func TestExecuteCancelAfterEOFStillArmsTheGrace(t *testing.T) {
 // inside the completion deadline. The adapter process is already running by then, so a
 // cancellation arriving before `adapter.probed` has to sweep it — with no protocol `cancel`,
 // since no `execute` has been authorized.
+// The gated handoff is the first window of the call and precedes every other observation
+// point, so a cancellation arriving there has to end it rather than wait for a process that
+// is still starting.
+func TestExecuteCancellationDuringLaunchEndsTheCall(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	var order []string
+	client := newClient([]string{fakeModeEnv + "=hang_no_response"}, incidentalTestDeadline, 20*time.Millisecond)
+	cancel := make(chan struct{})
+	client.launch = func(ctx context.Context, _ launch.Request) (*launch.Process, error) {
+		close(cancel)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	plan := executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	plan.Cancel = cancel
+	// Bounded well below the client's own 10s deadline: without the launch watcher that
+	// deadline is what ends the call, and the test would pass for the wrong reason.
+	report, err := executeWithin(t, client, plan, 2*time.Second)
+	if err == nil {
+		t.Fatalf("report = %#v, error = %v", report, err)
+	}
+	// The launch never happened, so nothing was recorded at all.
+	if len(order) != 0 {
+		t.Fatalf("journal order = %v, want nothing recorded", order)
+	}
+}
+
 func TestExecuteCancellationIsObservedBeforeTheProbeCompletes(t *testing.T) {
 	for _, test := range []struct {
 		name       string

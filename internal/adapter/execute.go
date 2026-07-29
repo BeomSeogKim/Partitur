@@ -60,7 +60,19 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 	defer timer.Stop()
 
 	launchContext, cancelLaunch := context.WithDeadline(ctx, deadline)
+	// The launch is the first window of the call, and it precedes every other observation
+	// point. §6's watch covers the driver's whole tenure, so a cancellation arriving during
+	// the gated handoff has to end it rather than wait for a process that is still starting.
+	launchDone := make(chan struct{})
+	go func() {
+		select {
+		case <-plan.Cancel:
+			cancelLaunch()
+		case <-launchDone:
+		}
+	}()
 	running, err := c.startExecute(launchContext, plan)
+	close(launchDone)
 	cancelLaunch()
 	if err != nil {
 		return ExecuteReport{}, err
@@ -135,10 +147,25 @@ func (c *Client) execute(ctx context.Context, plan ExecutePlan) (ExecuteReport, 
 		go func() {
 			completed <- c.write(stdin, request)
 		}()
-		// A write that has already finished is taken over a cancellation that is also
-		// ready: discarding a completed write would lose work for nothing, and the very
-		// next select observes the cancellation anyway. Without this the two are peers and
-		// Go picks between them at random.
+		// An expiry that has already happened wins over everything: §4's completion deadline
+		// covers the request write, so admitting a write that finished after it would spend
+		// the deadline and then ignore it. Not reached by these tests, and stated rather than
+		// claimed: each timer is armed immediately before its own write, so neither can have
+		// fired by the time this runs. The ordering is here because the alternative is only
+		// safe by accident.
+		select {
+		case <-deadline:
+			return nil, writeDeadlineExpired
+		case <-cancelTimeout:
+			return nil, writeExpired
+		case <-ctx.Done():
+			return nil, writeInterrupted
+		default:
+		}
+		// Below that, a finished write is taken over a cancellation that is also ready:
+		// discarding a completed write would lose work for nothing, and the very next
+		// select observes the cancellation anyway. Without this the two are peers and Go
+		// picks between them at random.
 		select {
 		case writeErr := <-completed:
 			return writeErr, writeCompleted
