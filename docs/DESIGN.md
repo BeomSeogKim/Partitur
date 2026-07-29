@@ -5771,8 +5771,9 @@ acknowledgement and wedged-owner escalation. Without that acknowledgement path, 
 is indistinguishable from a wedged owner and the deadline would terminate it; that hazard is created
 by implementation order, not by §6.
 
-The five `cancel.*` E.2 edges remain outside 2.1a; 2.1b owns their subprocess fixture and the
-required `(b, c, d)` matrix.
+The five `cancel.*` E.2 edges remain outside 2.1a; 2.1b supplies their real `cancel` subprocess
+fixture and required `(b, c, d)` matrix. The harness carries an `EdgeID` only as its selection
+catalogue: no production path carries one yet.
 
 - The Go types implement E.1's semantics and carry E.2's edge IDs verbatim.
 - They **do not restate the assertions.** An invariant in a doc comment is a second normative text,
