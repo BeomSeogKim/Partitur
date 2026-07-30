@@ -205,7 +205,7 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 	projection := recovery.Projection{
 		State:                state,
 		RevisionRestarts:     facts.revisionRestarts(state),
-		CompositionTerminals: facts.compositionTerminals(events),
+		CompositionTerminals: facts.compositionTerminals(events, state.ScoreHead.Revision),
 		Scheduler:            schedulerFromScore(state, pinned),
 	}
 	projection.CompositionRecovery = facts.compositionRecovery(state, projection.Scheduler)
@@ -294,7 +294,7 @@ type replayFact struct {
 	sequence          map[runstate.AttemptID]uint64
 	failed            map[runstate.AttemptID]bool
 	approvals         []revisionApproval
-	compositionCloses map[string]bool
+	compositionCloses map[string]compositionClose
 	compositionEvents []recovery.CompositionTerminal
 	performers        map[runstate.AttemptID]string
 	visitedPerformers map[runstate.MovementID][]string
@@ -307,13 +307,18 @@ type revisionApproval struct {
 	SupersededAttemptID []runstate.AttemptID
 }
 
+type compositionClose struct {
+	recovered     bool
+	scoreRevision uint64
+}
+
 func replayFacts(events []runstate.Event) replayFact {
 	facts := replayFact{
 		attempts:          make(map[runstate.AttemptID]*recovery.AttemptRecovery),
 		gates:             make(map[runstate.AttemptID]*recovery.GateRecovery),
 		sequence:          make(map[runstate.AttemptID]uint64),
 		failed:            make(map[runstate.AttemptID]bool),
-		compositionCloses: make(map[string]bool),
+		compositionCloses: make(map[string]compositionClose),
 		performers:        make(map[runstate.AttemptID]string),
 		visitedPerformers: make(map[runstate.MovementID][]string),
 		retriesConsumed:   make(map[runstate.MovementID]int),
@@ -409,18 +414,21 @@ func replayFacts(events []runstate.Event) replayFact {
 			facts.approvals = append(facts.approvals, approval)
 		case runstate.EventExecutionStarted:
 			if stringValue(payload, "phase") == "composition" {
-				facts.compositionCloses[stringValue(payload, "interval_id")] = false
+				facts.compositionCloses[stringValue(payload, "interval_id")] = compositionClose{scoreRevision: event.ScoreRevision}
 			}
 		case runstate.EventExecutionStopped:
 			intervalID := stringValue(payload, "interval_id")
-			if _, tracked := facts.compositionCloses[intervalID]; tracked && stringValue(payload, "reason") == "recovered" {
-				facts.compositionCloses[intervalID] = true
+			if close, tracked := facts.compositionCloses[intervalID]; tracked && stringValue(payload, "reason") == "recovered" {
+				close.recovered = true
+				facts.compositionCloses[intervalID] = close
 			}
 		case runstate.EventCompositionConflicted, runstate.EventCompositionFailed:
 			evidence := recovery.CompositionTerminal{
-				Scope:    stringValue(payload, "scope"),
-				TargetID: stringValue(payload, "target_id"),
-				Reason:   "composition_unresolvable",
+				Scope:           stringValue(payload, "scope"),
+				TargetID:        stringValue(payload, "target_id"),
+				Reason:          "composition_unresolvable",
+				EvidenceEventID: event.EventID,
+				ScoreRevision:   event.ScoreRevision,
 			}
 			if event.Type == runstate.EventCompositionFailed {
 				evidence.Reason = "composition_failed"
@@ -485,61 +493,81 @@ func (facts replayFact) hasAttemptOnRevision(movementID runstate.MovementID, rev
 	return false
 }
 
-func (facts replayFact) compositionTerminals(events []runstate.Event) []recovery.CompositionTerminal {
-	var terminals []recovery.CompositionTerminal
-	for index, event := range events {
+func (facts replayFact) compositionTerminals(events []runstate.Event, scoreRevision uint64) []recovery.CompositionTerminal {
+	evidenceByEventID := map[string]recovery.CompositionTerminal{}
+	completedSubjects := map[string]bool{}
+	var evidence []recovery.CompositionTerminal
+	for _, event := range events {
 		if event.Type != runstate.EventCompositionConflicted && event.Type != runstate.EventCompositionFailed {
+			if cause, ok := evidenceByEventID[event.CausationID]; ok && compositionTerminalFollows(event, cause) {
+				completedSubjects[compositionSubjectKey(cause)] = true
+			}
 			continue
 		}
-		payload, err := eventPayload(event)
-		if err != nil {
-			continue
+		if event.ScoreRevision == scoreRevision {
+			payload, err := eventPayload(event)
+			if err != nil {
+				continue
+			}
+			terminal := recovery.CompositionTerminal{
+				Scope:           stringValue(payload, "scope"),
+				TargetID:        stringValue(payload, "target_id"),
+				Reason:          "composition_unresolvable",
+				EvidenceEventID: event.EventID,
+				ScoreRevision:   event.ScoreRevision,
+			}
+			if event.Type == runstate.EventCompositionFailed {
+				terminal.Reason = "composition_failed"
+			}
+			evidence = append(evidence, terminal)
+			evidenceByEventID[event.EventID] = terminal
 		}
-		terminal := recovery.CompositionTerminal{
-			Scope:    stringValue(payload, "scope"),
-			TargetID: stringValue(payload, "target_id"),
-			Reason:   "composition_unresolvable",
-		}
-		if event.Type == runstate.EventCompositionFailed {
-			terminal.Reason = "composition_failed"
-		}
-		if !compositionTerminalFollows(events[index+1:], terminal) {
+	}
+	var terminals []recovery.CompositionTerminal
+	for _, terminal := range evidence {
+		if !completedSubjects[compositionSubjectKey(terminal)] {
 			terminals = append(terminals, terminal)
 		}
 	}
 	return terminals
 }
 
-func compositionTerminalFollows(events []runstate.Event, terminal recovery.CompositionTerminal) bool {
-	for _, event := range events {
-		payload, err := eventPayload(event)
-		if err != nil {
-			continue
-		}
-		switch terminal.Scope {
-		case "movement":
-			if event.Type == runstate.EventMovementFailed && event.MovementID == runstate.MovementID(terminal.TargetID) && stringValue(payload, "reason") == terminal.Reason {
-				return true
-			}
-		case "candidate":
-			if event.Type == runstate.EventRunFailed && stringValue(payload, "reason") == terminal.Reason {
-				return true
-			}
-		}
+func compositionTerminalFollows(event runstate.Event, evidence recovery.CompositionTerminal) bool {
+	payload, err := eventPayload(event)
+	if err != nil {
+		return false
 	}
-	return false
+	switch evidence.Scope {
+	case "movement":
+		return event.Type == runstate.EventMovementFailed &&
+			event.ScoreRevision == evidence.ScoreRevision &&
+			event.CausationID == evidence.EvidenceEventID &&
+			event.MovementID == runstate.MovementID(evidence.TargetID) &&
+			stringValue(payload, "reason") == evidence.Reason
+	case "candidate":
+		return event.Type == runstate.EventRunFailed &&
+			event.ScoreRevision == evidence.ScoreRevision &&
+			event.CausationID == evidence.EvidenceEventID &&
+			stringValue(payload, "reason") == evidence.Reason
+	default:
+		return false
+	}
+}
+
+func compositionSubjectKey(evidence recovery.CompositionTerminal) string {
+	return evidence.Scope + "\x00" + evidence.TargetID
 }
 
 func (facts replayFact) compositionRecovery(state runstate.State, scheduler recovery.Scheduler) *recovery.CompositionRecovery {
 	for _, recovered := range facts.compositionCloses {
-		if !recovered {
+		if !recovered.recovered || recovered.scoreRevision != state.ScoreHead.Revision {
 			continue
 		}
-		if movementID, ok := compositionMovement(state, scheduler); ok && !facts.hasCompositionEvidence("movement", string(movementID)) {
-			return &recovery.CompositionRecovery{Scope: "movement", MovementID: movementID, Recovered: true}
+		if movementID, ok := compositionMovement(state, scheduler); ok && !facts.hasCompositionEvidence("movement", string(movementID), state.ScoreHead.Revision) {
+			return &recovery.CompositionRecovery{Scope: "movement", MovementID: movementID, Recovered: true, ScoreRevision: recovered.scoreRevision}
 		}
-		if candidateCompositionPending(state, scheduler) && !facts.hasCompositionEvidenceScope("candidate") {
-			return &recovery.CompositionRecovery{Scope: "candidate", Recovered: true}
+		if candidateCompositionPending(state, scheduler) && !facts.hasCompositionEvidenceScope("candidate", state.ScoreHead.Revision) {
+			return &recovery.CompositionRecovery{Scope: "candidate", Recovered: true, ScoreRevision: recovered.scoreRevision}
 		}
 	}
 	return nil
@@ -569,18 +597,18 @@ func candidateCompositionPending(state runstate.State, scheduler recovery.Schedu
 	return true
 }
 
-func (facts replayFact) hasCompositionEvidence(scope, targetID string) bool {
+func (facts replayFact) hasCompositionEvidence(scope, targetID string, scoreRevision uint64) bool {
 	for _, event := range facts.compositionEvents {
-		if event.Scope == scope && event.TargetID == targetID {
+		if event.Scope == scope && event.TargetID == targetID && event.ScoreRevision == scoreRevision {
 			return true
 		}
 	}
 	return false
 }
 
-func (facts replayFact) hasCompositionEvidenceScope(scope string) bool {
+func (facts replayFact) hasCompositionEvidenceScope(scope string, scoreRevision uint64) bool {
 	for _, event := range facts.compositionEvents {
-		if event.Scope == scope {
+		if event.Scope == scope && event.ScoreRevision == scoreRevision {
 			return true
 		}
 	}

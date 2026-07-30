@@ -20,6 +20,20 @@ import (
 func (run *Run) CreateAttempt(
 	movementID string,
 ) (*AttemptWorkspace, error) {
+	return run.createAttempt(movementID, run.baseCommit)
+}
+
+// CreateAttemptAtBase creates an attempt at a previously pinned composed base.
+func (run *Run) CreateAttemptAtBase(movementID, baseCommit string) (*AttemptWorkspace, error) {
+	if baseCommit == "" {
+		return nil, errors.New("workspace: composed attempt base is absent")
+	}
+	return run.createAttempt(movementID, baseCommit)
+}
+
+func (run *Run) createAttempt(
+	movementID, baseCommit string,
+) (*AttemptWorkspace, error) {
 	if run == nil {
 		return nil, errors.New("workspace: nil Run")
 	}
@@ -54,7 +68,7 @@ func (run *Run) CreateAttempt(
 		"add",
 		"--detach",
 		worktree,
-		run.baseCommit,
+		baseCommit,
 	); err != nil {
 		return nil, fmt.Errorf("create attempt worktree: %w", err)
 	}
@@ -73,6 +87,7 @@ func (run *Run) CreateAttempt(
 		Worktree:          worktree,
 		OutputDir:         output,
 		run:               run,
+		baseCommit:        baseCommit,
 		readOnly:          !hasGrant(movement.Grants, "repo_write"),
 		protectedBaseline: baseline,
 	}, nil
@@ -137,7 +152,7 @@ func (attempt *AttemptWorkspace) VerifyReadOnlyAndRecord() (
 		"diff-index",
 		"--name-only",
 		"-z",
-		attempt.run.baseCommit,
+		attempt.baseCommit,
 		"--",
 	)
 	if err != nil {

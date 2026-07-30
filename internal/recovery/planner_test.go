@@ -1088,7 +1088,10 @@ func withRevisionRestart(input Input) Input {
 }
 
 func withCompositionTerminal(input Input) Input {
-	input.Projection.CompositionTerminals = []CompositionTerminal{{Scope: "movement", TargetID: "movement", Reason: "composition_failed"}}
+	input.Projection.CompositionTerminals = []CompositionTerminal{{
+		Scope: "movement", TargetID: "movement", Reason: "composition_failed",
+		EvidenceEventID: "composition-evidence", ScoreRevision: input.Projection.State.ScoreHead.Revision,
+	}}
 	return input
 }
 

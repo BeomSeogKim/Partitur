@@ -173,18 +173,21 @@ type RevisionRestart struct {
 // event Appendix B.3 already determines. The evidence itself remains outside
 // runstate's ordinary lifecycle projection.
 type CompositionTerminal struct {
-	Scope    string
-	TargetID string
-	Reason   string
+	Scope           string
+	TargetID        string
+	Reason          string
+	EvidenceEventID string
+	ScoreRevision   uint64
 }
 
 // CompositionRecovery is the replay-derived close of a composition interval.
 // A recovered close is deliberately not a conflict or failure verdict. Those
 // verdicts are represented separately by CompositionTerminal once observed.
 type CompositionRecovery struct {
-	Scope      string
-	MovementID runstate.MovementID
-	Recovered  bool
+	Scope         string
+	MovementID    runstate.MovementID
+	Recovered     bool
+	ScoreRevision uint64
 }
 
 // ScheduledMovement is the compiled, declaration-ordered lifecycle input C.4

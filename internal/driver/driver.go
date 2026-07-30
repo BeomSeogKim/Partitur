@@ -228,13 +228,40 @@ func liveRunLoop(
 			if err != nil {
 				return interrupted(result, err)
 			}
-			attempt, err := run.CreateAttempt(movement.ID)
+			baseCommit := ""
+			baseTree := input.BaseTree
+			baseCompositionHash := ""
+			if len(movement.Needs) != 0 {
+				composed, err := PrepareMovementBase(store, authority, input, decision.Action.MovementID, input.Projection.Scheduler.RemainingTime, dependencies.now, dependencies.newID)
+				if err != nil {
+					if errors.Is(err, ErrCompositionCancelled) {
+						if err := control.Execute(ctx); err != nil {
+							if errors.Is(err, runstate.ErrSweepUnverifiable) {
+								return halted(result, "sweep_unverifiable", err)
+							}
+							return stopped(result, err)
+						}
+						return Result{RunID: result.RunID, Outcome: OutcomeCancelled}
+					}
+					if errors.Is(err, ErrCompositionTerminalized) {
+						return Result{RunID: result.RunID, Outcome: OutcomeFailed, Reason: "composition_terminal"}
+					}
+					return stopped(result, err)
+				}
+				baseCommit, baseTree, baseCompositionHash = composed.Commit, composed.Tree, composed.Hash
+			}
+			var attempt *workspace.AttemptWorkspace
+			if baseCommit == "" {
+				attempt, err = run.CreateAttempt(movement.ID)
+			} else {
+				attempt, err = run.CreateAttemptAtBase(movement.ID, baseCommit)
+			}
 			if err != nil {
 				return stopped(result, err)
 			}
 			attemptResult := ExecuteAttempt(ctx, AttemptExecution{
 				RepositoryRoot: store.RepositoryRoot(), Score: input.Score, Cast: input.Cast,
-				RunID: result.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: liveCandidateTree(input),
+				RunID: result.RunID, Attempt: attempt, BaseTree: baseTree, BaseCompositionHash: baseCompositionHash, CandidateTree: liveCandidateTree(input),
 				Authority: authority, PerformerID: performer.ID, SelectionReason: "initial",
 				RemainingMS: input.Projection.Scheduler.RemainingTime, Control: control,
 			}, executionDependenciesFrom(dependencies))
@@ -320,11 +347,13 @@ func ExecuteAttempt(
 	if err != nil {
 		return Result{RunID: execution.RunID, Err: err}
 	}
-	baseCompositionHash := ""
+	baseCompositionHash := execution.BaseCompositionHash
 	if len(movement.Needs) != 0 {
-		baseCompositionHash, err = movementCompositionDependencyHash(movement.ID, execution.BaseTree)
-		if err != nil {
-			return Result{RunID: execution.RunID, Err: err}
+		if baseCompositionHash == "" {
+			baseCompositionHash, err = movementCompositionDependencyHash(movement.ID, execution.BaseTree)
+			if err != nil {
+				return Result{RunID: execution.RunID, Err: err}
+			}
 		}
 	}
 	startResult := workspace.StartResult{RunID: execution.RunID}

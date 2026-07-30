@@ -59,6 +59,7 @@ type AttemptWorkspace struct {
 	OutputDir  string
 
 	run               *Run
+	baseCommit        string
 	readOnly          bool
 	protectedBaseline map[string]protectedEntry
 }
