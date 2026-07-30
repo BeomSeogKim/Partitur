@@ -84,6 +84,39 @@ func TestNewStateProjectsSeedFinality(t *testing.T) {
 	}
 }
 
+func TestAttemptStartedRequiresCompositionHashExactlyForDependencies(t *testing.T) {
+	t.Run("missing for dependent movement", func(t *testing.T) {
+		state := attemptStartingState(t, true)
+		_, err := Apply(state, attemptStartedEvent(attemptStartedPayload()))
+		if !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("error = %v, want ErrInvalidEvent", err)
+		}
+	})
+
+	t.Run("present for independent movement", func(t *testing.T) {
+		state := attemptStartingState(t, false)
+		payload := attemptStartedPayload()
+		payload["base_composition_hash"] = "sha256:composition"
+		_, err := Apply(state, attemptStartedEvent(payload))
+		if !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("error = %v, want ErrInvalidEvent", err)
+		}
+	})
+
+	t.Run("present for dependent movement", func(t *testing.T) {
+		state := attemptStartingState(t, true)
+		payload := attemptStartedPayload()
+		payload["base_composition_hash"] = "sha256:composition"
+		next, err := Apply(state, attemptStartedEvent(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next.Attempts["a1"].State != AttemptRunning {
+			t.Fatalf("attempt state = %s, want RUNNING", next.Attempts["a1"].State)
+		}
+	})
+}
+
 func TestUnregisteredEventFailsAsInvalid(t *testing.T) {
 	state := NewState(nil)
 	_, err := Apply(state, fixtureEvent("unknown.event", map[string]any{}, nil))
@@ -1125,6 +1158,36 @@ func TestShippingRecoveryProjectionUsesJournalTransactions(t *testing.T) {
 
 func runningAttemptState(t *testing.T) State {
 	return runningAttemptStateWithFinality(t, true)
+}
+
+func attemptStartingState(t *testing.T, hasDependencies bool) State {
+	t.Helper()
+	state := NewState([]MovementSeed{{
+		ID: "m1", Initial: MovementPending, HasDependencies: hasDependencies,
+	}})
+	var err error
+	for _, event := range []Event{
+		fixtureEvent(EventRunStarted, runStartedPayload(), nil),
+		fixtureEvent(EventMovementReady, map[string]any{}, func(event *Event) { event.MovementID = "m1" }),
+		fixtureEvent(EventMovementStarted, map[string]any{}, func(event *Event) { event.MovementID = "m1" }),
+		fixtureEvent(EventPerformerSelected, performerSelectedPayload(), func(event *Event) {
+			event.MovementID = "m1"
+			event.AttemptID = "a1"
+		}),
+	} {
+		state, err = Apply(state, event)
+		if err != nil {
+			t.Fatalf("apply %s: %v", event.Type, err)
+		}
+	}
+	return state
+}
+
+func attemptStartedEvent(payload map[string]any) Event {
+	return fixtureEvent(EventAttemptStarted, payload, func(event *Event) {
+		event.MovementID = "m1"
+		event.AttemptID = "a1"
+	})
 }
 
 func runningAttemptStateWithFinality(t *testing.T, final bool) State {

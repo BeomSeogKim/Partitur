@@ -44,6 +44,7 @@ type AttemptExecution struct {
 	Cast                 *cast.Cast
 	RunID                runstate.RunID
 	Attempt              *workspace.AttemptWorkspace
+	BaseTree             string
 	CandidateTree        string
 	Authority            *runstore.Driver
 	PerformerID          string

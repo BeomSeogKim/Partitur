@@ -266,6 +266,10 @@ func Apply(input State, event Event) (State, error) {
 		if err != nil {
 			return state, err
 		}
+		_, hasBaseCompositionHash := payload["base_composition_hash"]
+		if state.DependencyMovements[event.MovementID] != hasBaseCompositionHash {
+			return state, invalid(event, "base_composition_hash presence does not match movement dependencies")
+		}
 		process, err := processIdentity(mustObject(payload, "adapter_process"))
 		if err != nil {
 			return state, invalid(event, err.Error())

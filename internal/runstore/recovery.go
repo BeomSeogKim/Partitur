@@ -280,8 +280,9 @@ func movementSeed(pinned *score.Score) []runstate.MovementSeed {
 		}
 		seed = append(seed, runstate.MovementSeed{
 			ID: runstate.MovementID(movement.ID), Initial: initial,
-			RepoWrite: hasGrant(movement.Grants, "repo_write"),
-			Final:     movement.ID == execution.FinalMovementID,
+			RepoWrite:       hasGrant(movement.Grants, "repo_write"),
+			HasDependencies: len(movement.Needs) != 0,
+			Final:           movement.ID == execution.FinalMovementID,
 		})
 	}
 	return seed

@@ -257,10 +257,11 @@ func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 	seeds := make([]runstate.MovementSeed, len(movements))
 	for index, movement := range movements {
 		seeds[index] = runstate.MovementSeed{
-			ID:        runstate.MovementID(movement.ID),
-			Initial:   runstate.MovementPending,
-			RepoWrite: slices.Contains(movement.Grants, "repo_write"),
-			Final:     movement.ID == execution.FinalMovementID,
+			ID:              runstate.MovementID(movement.ID),
+			Initial:         runstate.MovementPending,
+			RepoWrite:       slices.Contains(movement.Grants, "repo_write"),
+			HasDependencies: len(movement.Needs) != 0,
+			Final:           movement.ID == execution.FinalMovementID,
 		}
 	}
 	return seeds
