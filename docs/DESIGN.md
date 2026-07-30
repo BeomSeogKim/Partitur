@@ -2201,6 +2201,32 @@ first). Commands that address an existing run accept its explicit id or select t
 run. The nonterminal journal state is the logical guard; the lease guards concurrent *drivers* of
 the same run.
 
+**Live between-unit continuation.** A live driver may advance ordinary between-unit work only
+while the run is nonterminal, it holds the current matching authority and lease, and it has itself
+completed an attempt or composition effect and that effect's applicable §4–§5 post-effect boundary:
+every recorded adapter or criterion session for it is verified empty, every execution interval it
+opened is durably closed, and every change set §5 requires is durable. It then reloads the journal
+and run-owned score and cast inputs and projects that snapshot before selecting. This is stronger
+than recovery's observation that no other owner may be proceeding: the live driver has both the
+matching authority and its own closed boundary, so it need not rediscover process or lease state at
+every scheduler step.
+
+At such a cut, and only when that projection has no current-head, non-superseded in-flight attempt,
+the driver advances **exactly one** between-unit selection step. The shared selector applies only
+C.4's lifecycle choices in their stated order: budget exhaustion, materialization of an already
+durable pending successor, declaration-order readiness, start, fan-in, and initial selection,
+candidate composition, and waived completion. It selects the corresponding durable effect required
+by §3.1, §5, §8, and Appendix B; it does not select an `RC-RESUME-*` row or any recovery action.
+The driver executes the selected effect itself and reprojects the resulting durable journal state
+before selecting again. Thus live and recovery share one selection procedure but have separate
+executors; `run` does not enter Appendix C.
+
+The control channel and a pending prepare take the precedence already specified below; ordinary
+live continuation yields to them. With `remaining_time == 0`, it starts no new unit of work; recovery
+applies the same restriction in `RC-RESUME-045`. If the driver cannot establish the local
+post-effect safety condition, it takes the operational interruption §7 defines; only `partitur
+resume` continues from that outcome under Appendix C.
+
 **Cancellation is run-scoped.** `partitur cancel` cancels the *run*, not a single attempt.
 An attempt-scoped cancel would leave the movement `RUNNING` with no selection reason for what
 comes next — not a retry, not a fallback, not a restart — so v0.2 does not offer one. The
