@@ -22,12 +22,20 @@ type gitCommand interface {
 	RunWithEnvironment(repositoryRoot string, stdin []byte, environment []string, args ...string) (gitResult, error)
 }
 
+// compositionGitCommand adds the exact merge execution path required by the
+// composition contract without changing the environment or hardening applied
+// to the repository's other Git operations.
+type compositionGitCommand interface {
+	gitCommand
+	RunComposition(workingDirectory string, stdin []byte, environment []string, args ...string) (gitResult, error)
+}
+
 type systemGit struct {
 	path string
 	env  []string
 }
 
-func newSystemGit() (gitCommand, error) {
+func newSystemGit() (compositionGitCommand, error) {
 	path, err := exec.LookPath("git")
 	if err != nil {
 		return nil, fmt.Errorf("find git: %w", err)
@@ -73,6 +81,47 @@ func (g systemGit) RunWithEnvironment(
 	commandArgs = append(commandArgs, args...)
 	command := exec.Command(g.path, commandArgs...)
 	command.Env = append(append([]string(nil), g.env...), environment...)
+	if stdin != nil {
+		command.Stdin = bytes.NewReader(stdin)
+	}
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	result := gitResult{
+		stdout:   stdout.Bytes(),
+		stderr:   stderr.Bytes(),
+		exitCode: 0,
+	}
+	if err == nil {
+		return result, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		result.exitCode = exitError.ExitCode()
+		return result, nil
+	}
+	return gitResult{}, err
+}
+
+// RunComposition executes the §5 merge invocation exactly as supplied. It is
+// deliberately separate from RunWithEnvironment: composition must neither add
+// shared hardening flags nor inherit the shared Git environment. Its temporary
+// repository is initialized from a core-created empty template, so no project
+// template hook or configuration can enter that repository.
+func (g systemGit) RunComposition(
+	workingDirectory string,
+	stdin []byte,
+	environment []string,
+	args ...string,
+) (gitResult, error) {
+	return runGitCommandIn(workingDirectory, g.path, args, environment, stdin)
+}
+
+func runGitCommandIn(workingDirectory, path string, args, environment []string, stdin []byte) (gitResult, error) {
+	command := exec.Command(path, args...)
+	command.Dir = workingDirectory
+	command.Env = append([]string(nil), environment...)
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
 	}
