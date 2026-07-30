@@ -217,8 +217,7 @@ func runWithReaders(
 			switch {
 			case errors.Is(result.Err, workspace.ErrDirtySource),
 				errors.Is(result.Err, workspace.ErrExternalMergeDriver),
-				errors.Is(result.Err, acceptance.ErrUnsupportedCriteria),
-				errors.Is(result.Err, driver.ErrUnsupportedSlice):
+				errors.Is(result.Err, acceptance.ErrUnsupportedCriteria):
 				fmt.Fprintf(stderr, "run validation failed: %v\n", result.Err)
 				return 3
 			default:
@@ -293,6 +292,10 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 	}
 	result, err := resume(context.Background(), requestedID)
 	if err != nil {
+		if errors.Is(err, driver.ErrWriterCompositionUnsupported) {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
 		var selectionErr resumeSelectionError
 		if errors.As(err, &selectionErr) {
 			code := statusErrorCode(err)
@@ -332,6 +335,10 @@ func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner
 	defer stop()
 	result, err := cancel(ctx, requestedID)
 	if err != nil {
+		if errors.Is(err, driver.ErrWriterCompositionUnsupported) {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
 		if errors.Is(err, runstore.ErrCancellationNotAllowed) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
@@ -408,6 +415,9 @@ func cancel(ctx context.Context, requestedID string) (recoveryexec.Result, error
 		return recoveryexec.Result{}, cancelSelectionError{err: err}
 	}
 	runID := runstate.RunID(report.Run.ID)
+	if err := refuseUnsupportedWriterRecovery(store, runID); err != nil {
+		return recoveryexec.Result{}, err
+	}
 	if err := store.RequestCancellation(runID); err != nil {
 		return recoveryexec.Result{}, err
 	}
@@ -456,6 +466,9 @@ func newCancellationWaiter(store *runstore.Store, runID runstate.RunID) cancelwa
 }
 
 func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {
+	if err := refuseUnsupportedWriterRecovery(store, runID); err != nil {
+		return recoveryexec.Result{}, err
+	}
 	executor := &recoveryexec.Executor{Store: store, RunID: runID}
 	executor.Load = func(context.Context) (recovery.Input, error) {
 		durable, err := store.LoadRunInput(runID)
@@ -475,6 +488,25 @@ func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.
 		}
 	}
 	return result, err
+}
+
+// refuseUnsupportedWriterRecovery retains terminal RC-RESUME-002 cleanup while
+// refusing a nonterminal pinned writer score before recovery can acquire a
+// driver lease or execute an effect. §5 candidate composition owns this
+// capability, not the scheduler's movement shape.
+func refuseUnsupportedWriterRecovery(store *runstore.Store, runID runstate.RunID) error {
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		// This pre-check cannot classify the score, so it steps aside. Returning
+		// the load error here would bypass recovery's own classification, where an
+		// untrusted authoritative input becomes a named Appendix D halt and §7
+		// maps it to exit 5 -- reporting it as an operational interruption instead.
+		return nil
+	}
+	if !input.Projection.State.Run.Terminal() && driver.HasWriterMovement(input.Score) {
+		return driver.ErrWriterCompositionUnsupported
+	}
+	return nil
 }
 
 func terminalCleanupRan(result recoveryexec.Result) bool {

@@ -108,6 +108,21 @@ func Apply(input State, event Event) (State, error) {
 		if state.Run != RunRunning {
 			return state, transition(event, "run is not RUNNING")
 		}
+		candidate := mustObject(payload, "candidate")
+		versions, encodeErr := json.Marshal(payload["identity_versions"])
+		if encodeErr != nil {
+			return state, invalid(event, encodeErr.Error())
+		}
+		state.ApplicationCandidate = &ApplicationCandidate{
+			ID:                        mustString(candidate, "candidate_id"),
+			Revision:                  event.ScoreRevision,
+			BaseTree:                  mustString(candidate, "base_tree"),
+			ResultTree:                mustString(candidate, "result_tree"),
+			OrderedChangeSets:         mustStrings(candidate, "ordered_change_sets"),
+			Contributors:              candidateContributors(candidate["contributors"].([]any)),
+			CompositionDependencyHash: Hash(mustString(candidate, "candidate_composition_dependency_hash")),
+			IdentityVersions:          versions,
+		}
 		state.Run = RunSucceeded
 		closeAllPendingDecisions(&state)
 	case EventRunFailed:

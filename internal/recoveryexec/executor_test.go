@@ -698,6 +698,76 @@ func TestProjectorAcceptsRunSucceededAfterNonFinalMovementSucceeded(t *testing.T
 	}
 }
 
+func TestResumeSchedulesNextDurableMovementInDeclarationOrder(t *testing.T) {
+	store, driver := handlerStore(t, true)
+	advanceHandlerAcceptance(t, driver, false)
+	if _, err := driver.Append(runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1",
+		Type: runstate.EventAttemptCompleted, Payload: handlerPayload(t, map[string]any{}),
+	}, "test.attempt_completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendMovementSucceeded(context.Background(), HandlerContext{
+		Store: store, Driver: driver, RunID: "run-1",
+	}, recovery.Action{Kind: recovery.ActionAppendMovementSucceeded, AttemptID: "attempt-1"}); err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("observed durable movement.ready")
+	executor := &Executor{Store: store, RunID: "run-1", Driver: driver}
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		for _, event := range journal.Events {
+			if event.Type == runstate.EventMovementReady && event.MovementID == "read" {
+				return recovery.Input{}, stop
+			}
+		}
+		state, err := driver.State()
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		input := recovery.Input{Projection: recovery.Projection{
+			State: state,
+			// This fixture declares write before read, and read depends only on
+			// write. The expected next event is therefore fixed here as read,
+			// not derived by invoking the scheduler under test.
+			Scheduler: recovery.Scheduler{RemainingTime: 600000, Movements: []recovery.ScheduledMovement{
+				{ID: "write"}, {ID: "read", Needs: []runstate.MovementID{"write"}},
+			}},
+		}}
+		lease, present, err := store.ReadLease("run-1")
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		if present {
+			input.Observations.Lease = recovery.LeaseObservation{
+				Exists: true, Readable: true, Epoch: lease.Epoch, Owner: recovery.OwnerLive,
+				Identity: &recovery.LeaseIdentity{Epoch: lease.Epoch, Token: lease.Token, PID: lease.PID, Start: lease.Start},
+			}
+		}
+		return input, nil
+	}
+	result, err := executor.Execute(context.Background())
+	if !errors.Is(err, stop) {
+		t.Fatalf("resume result=%+v error=%v, want durable ready stop", result, err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := 0
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventMovementReady && event.MovementID == "read" {
+			ready++
+		}
+	}
+	if ready != 1 {
+		t.Fatalf("read movement.ready count=%d, want one", ready)
+	}
+}
+
 func TestExecutorRecoversIncompleteCriterionAfterSweep(t *testing.T) {
 	tests := []struct {
 		name              string

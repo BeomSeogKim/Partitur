@@ -99,6 +99,7 @@ type ExecutionView struct {
 	VerificationExpectationPresent bool
 	FinalMovementID                string
 	GateWaived                     bool
+	WaiverReason                   string
 }
 
 // PolicyView is a defensive read view of effective score policy.

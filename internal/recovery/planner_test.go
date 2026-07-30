@@ -179,6 +179,70 @@ func TestPlanBetweenUnitAppliesLifecyclePrecedenceWithoutRecoveryObservations(t 
 	}
 }
 
+func TestPlanBetweenUnitResumesTheSameDependencySatisfiedMovement(t *testing.T) {
+	projection := baseInput().Projection
+	projection.Scheduler = Scheduler{RemainingTime: 1, Movements: []ScheduledMovement{
+		{ID: "blocked", Needs: []runstate.MovementID{"dependency"}},
+		{ID: "eligible"},
+		{ID: "dependency"},
+	}}
+	projection.State.Movements = map[runstate.MovementID]runstate.MovementState{
+		"blocked":    runstate.MovementPending,
+		"eligible":   runstate.MovementPending,
+		"dependency": runstate.MovementSucceeded,
+	}
+
+	decision := PlanBetweenUnit(projection)
+	if decision.CaseID != CaseScheduler {
+		t.Fatalf("case = %s, want %s", decision.CaseID, CaseScheduler)
+	}
+	if decision.Action == nil {
+		t.Fatal("resume decision has no action")
+	}
+	if decision.Action.Kind != ActionAppendMovementReady {
+		t.Fatalf("action = %s, want %s", decision.Action.Kind, ActionAppendMovementReady)
+	}
+	if decision.Action.MovementID != "blocked" {
+		t.Fatalf("movement = %s, want blocked", decision.Action.MovementID)
+	}
+}
+
+func TestPlanBetweenUnitDoesNotReadyAnUnsucceededDependency(t *testing.T) {
+	projection := baseInput().Projection
+	projection.Scheduler = Scheduler{RemainingTime: 1, Movements: []ScheduledMovement{
+		{ID: "blocked", Needs: []runstate.MovementID{"dependency"}},
+		{ID: "eligible"},
+		{ID: "dependency"},
+	}}
+	projection.State.Movements = map[runstate.MovementID]runstate.MovementState{
+		"blocked":    runstate.MovementPending,
+		"eligible":   runstate.MovementPending,
+		"dependency": runstate.MovementPending,
+	}
+
+	decision := PlanBetweenUnit(projection)
+	if decision.CaseID != CaseScheduler {
+		t.Fatalf("case = %s, want %s", decision.CaseID, CaseScheduler)
+	}
+	if decision.Action == nil {
+		t.Fatal("scheduler decision has no action")
+	}
+	if decision.Action.Kind != ActionAppendMovementReady {
+		t.Fatalf("action = %s, want %s", decision.Action.Kind, ActionAppendMovementReady)
+	}
+	if decision.Action.MovementID != "eligible" {
+		t.Fatalf("movement = %s, want eligible", decision.Action.MovementID)
+	}
+	projection.State.Movements["dependency"] = runstate.MovementWaitingHuman
+	decision = PlanBetweenUnit(projection)
+	if decision.Action == nil {
+		t.Fatal("waiting dependency decision has no action")
+	}
+	if decision.Action.MovementID != "eligible" {
+		t.Fatalf("waiting dependency movement = %s, want eligible", decision.Action.MovementID)
+	}
+}
+
 func TestPlanC4RecoveredCloseNeverSynthesizesCompositionFailure(t *testing.T) {
 	input := baseInput()
 	input.Projection.Scheduler = Scheduler{

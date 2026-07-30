@@ -668,6 +668,9 @@ func PlanAttempt(input Input) Decision {
 		decision.Action.AttemptID = attempt.AttemptID
 		return decision
 	}
+	if attempt.State == runstate.AttemptCompleted && attempt.MovementSucceeded {
+		return proceedScheduler()
+	}
 	if attempt.MovementFailed && !input.Projection.State.Run.Terminal() {
 		decision := action(CaseRunFailed, ActionAppendRunFailed, true)
 		decision.Action.AttemptID = attempt.AttemptID
