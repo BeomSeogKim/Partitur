@@ -76,6 +76,8 @@ const (
 	PointAcceptanceFailureRecorded        PointID = "acceptance.failure_recorded"
 	PointLifecycleAttemptCompleted        PointID = "lifecycle.attempt_completed"
 	PointLifecycleMovementSucceeded       PointID = "lifecycle.movement_succeeded"
+	PointLifecycleMovementFailed          PointID = "lifecycle.movement_failed"
+	PointLifecycleRunFailed               PointID = "lifecycle.run_failed"
 )
 
 // MutationKind identifies a receipt-producing operation from DESIGN Appendix E.1.

@@ -1,6 +1,7 @@
 package scheduler_test
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -104,6 +107,57 @@ func TestFailedMovementStopsTheLiveScheduler(t *testing.T) {
 	}
 }
 
+func TestMovementFailureCutPointsSurviveSubprocessKill(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := build(t, root, bin, "partitur")
+	build(t, root, bin, "partitur-adapter-codex")
+	build(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, cut := range []struct {
+		name         string
+		point        faultpoint.PointID
+		wantTerminal bool
+	}{
+		{name: "movement_failed", point: faultpoint.PointLifecycleMovementFailed},
+		{name: "run_failed", point: faultpoint.PointLifecycleRunFailed, wantTerminal: true},
+	} {
+		cut := cut
+		t.Run(cut.name, func(t *testing.T) {
+			repository, environment := schedulerFailureRepository(t, bin, vendor)
+			runID := killSchedulerAtPoint(t, partitur, repository, environment, cut.point)
+			store, err := runstore.New(repository, faultpoint.Nop{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal, err := store.ReadJournal(runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err := store.LoadRunInput(runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsEvent(journal.Events, runstate.EventMovementFailed) {
+				t.Fatalf("journal at %s lacks movement.failed: %v", cut.point, eventTypes(journal.Events))
+			}
+			if containsEvent(journal.Events, runstate.EventRunFailed) != cut.wantTerminal {
+				t.Fatalf("journal at %s run.failed=%t, want %t: %v", cut.point, containsEvent(journal.Events, runstate.EventRunFailed), cut.wantTerminal, eventTypes(journal.Events))
+			}
+			if input.Projection.State.Run.Terminal() != cut.wantTerminal {
+				t.Fatalf("state at %s terminal=%t, want %t", cut.point, input.Projection.State.Run.Terminal(), cut.wantTerminal)
+			}
+		})
+	}
+}
+
 func runScore(t *testing.T, score map[string]any, failedMovement string) []runstate.Event {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -151,6 +205,130 @@ func runScore(t *testing.T, score map[string]any, failedMovement string) []runst
 		t.Fatal(err)
 	}
 	return journal.Events
+}
+
+func schedulerFailureRepository(t *testing.T, bin, vendor string) (string, []string) {
+	t.Helper()
+	repository := t.TempDir()
+	writeInputs(t, repository, nonWaivedScore())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+	return repository, append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN="+vendor,
+		vendorEnvironment+"=1",
+		"PARTITUR_SCHEDULER_FAIL_MOVEMENT=c",
+	)
+}
+
+func killSchedulerAtPoint(
+	t *testing.T,
+	binary, repository string,
+	environment []string,
+	target faultpoint.PointID,
+) runstate.RunID {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRead.Close()
+	defer releaseWrite.Close()
+
+	files := make([]*os.File, 0, 8)
+	for range 6 {
+		file, err := os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+		defer file.Close()
+	}
+	files = append(files, notifyWrite, releaseRead)
+
+	var stdout, stderr bytes.Buffer
+	command := exec.Command(binary, "run")
+	command.Dir = repository
+	command.Env = append(environment,
+		"PARTITUR_FAULTPOINT_NOTIFY_FD=9",
+		"PARTITUR_FAULTPOINT_RELEASE_FD=10",
+	)
+	command.ExtraFiles = files
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = notifyWrite.Close()
+	_ = releaseRead.Close()
+
+	scanner := bufio.NewScanner(notifyRead)
+	for {
+		point, pid := nextSchedulerFaultPoint(t, scanner)
+		if point != target {
+			if _, err := releaseWrite.Write([]byte{1}); err != nil {
+				t.Fatalf("release %q: %v", point, err)
+			}
+			continue
+		}
+		if pid != command.Process.Pid {
+			t.Fatalf("faultpoint %q pid=%d, want command pid=%d", point, pid, command.Process.Pid)
+		}
+		if err := command.Process.Kill(); err != nil {
+			t.Fatalf("kill at %q: %v", point, err)
+		}
+		_ = releaseWrite.Close()
+		if err := command.Wait(); err == nil {
+			t.Fatalf("run at %q exited successfully\nstdout:\n%s\nstderr:\n%s", target, &stdout, &stderr)
+		}
+		runID := runstate.RunID(strings.TrimSpace(stdout.String()))
+		if runID == "" {
+			t.Fatalf("run at %q did not publish a run id\nstderr:\n%s", target, &stderr)
+		}
+		return runID
+	}
+}
+
+func nextSchedulerFaultPoint(t *testing.T, scanner *bufio.Scanner) (faultpoint.PointID, int) {
+	t.Helper()
+	type reached struct {
+		point faultpoint.PointID
+		pid   int
+		err   error
+	}
+	result := make(chan reached, 1)
+	go func() {
+		if !scanner.Scan() {
+			result <- reached{err: scanner.Err()}
+			return
+		}
+		fields := strings.Fields(scanner.Text())
+		if len(fields) != 2 {
+			result <- reached{err: fmt.Errorf("malformed probe notification %q", scanner.Text())}
+			return
+		}
+		pid, err := strconv.Atoi(fields[1])
+		result <- reached{point: faultpoint.PointID(fields[0]), pid: pid, err: err}
+	}()
+	select {
+	case reached := <-result:
+		if reached.err != nil || reached.point == "" || reached.pid <= 0 {
+			t.Fatalf("probe notification = %#v", reached)
+		}
+		return reached.point, reached.pid
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for movement-failure faultpoint")
+		return "", 0
+	}
 }
 
 func build(t *testing.T, root, bin, name string) string {

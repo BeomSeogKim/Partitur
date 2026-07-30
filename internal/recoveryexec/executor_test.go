@@ -480,6 +480,34 @@ func TestDefaultDirectKindsAppendToRealStore(t *testing.T) {
 	})
 }
 
+func TestRecoveryMovementFailureCutPointsAreReached(t *testing.T) {
+	probe := &recoveryPointProbe{}
+	store, driver := handlerStoreWithSeedsAndProbe(t, false, []runstate.MovementSeed{
+		{ID: "write", Initial: runstate.MovementPending},
+	}, probe)
+	appendBudgetExhaustedInterval(t, store, driver)
+	executor := &Executor{Store: store, Driver: driver}
+	_, err := executor.execute(context.Background(), recovery.Input{}, recovery.Decision{CaseID: recovery.CaseBudgetExhausted, Action: &recovery.Action{
+		Kind:          recovery.ActionAppendBudgetFailure,
+		MovementID:    "write",
+		FailureReason: "budget_exhausted",
+		Steps: []recovery.ActionStep{
+			recovery.StepAppendMovementBudgetFailure,
+			recovery.StepAppendRunFailed,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []faultpoint.PointID{
+		faultpoint.PointLifecycleMovementFailed,
+		faultpoint.PointLifecycleRunFailed,
+	}
+	if !slices.Equal(probe.movementFailurePoints(), want) {
+		t.Fatalf("movement-failure points=%v, want %v", probe.movementFailurePoints(), want)
+	}
+}
+
 func TestBudgetFailureCitesBudgetExhaustingExecutionStop(t *testing.T) {
 	t.Run("movement fan-in binds both terminal events to its closed interval", func(t *testing.T) {
 		store, driver := handlerStore(t, false)
@@ -1123,9 +1151,18 @@ func handlerStore(t *testing.T, selectAttempt bool) (*runstore.Store, *runstore.
 }
 
 func handlerStoreWithSeeds(t *testing.T, selectAttempt bool, seed []runstate.MovementSeed) (*runstore.Store, *runstore.Driver) {
+	return handlerStoreWithSeedsAndProbe(t, selectAttempt, seed, faultpoint.Nop{})
+}
+
+func handlerStoreWithSeedsAndProbe(
+	t *testing.T,
+	selectAttempt bool,
+	seed []runstate.MovementSeed,
+	probe faultpoint.Probe,
+) (*runstore.Store, *runstore.Driver) {
 	t.Helper()
 	root := t.TempDir()
-	store, err := runstore.New(root, faultpoint.Nop{})
+	store, err := runstore.New(root, probe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1144,6 +1181,25 @@ func handlerStoreWithSeeds(t *testing.T, selectAttempt bool, seed []runstate.Mov
 	}
 	t.Cleanup(func() { _ = driver.Release() })
 	return store, driver
+}
+
+type recoveryPointProbe struct {
+	points []faultpoint.PointID
+}
+
+func (probe *recoveryPointProbe) Reached(point faultpoint.PointID) {
+	probe.points = append(probe.points, point)
+}
+
+func (probe *recoveryPointProbe) movementFailurePoints() []faultpoint.PointID {
+	var points []faultpoint.PointID
+	for _, point := range probe.points {
+		switch point {
+		case faultpoint.PointLifecycleMovementFailed, faultpoint.PointLifecycleRunFailed:
+			points = append(points, point)
+		}
+	}
+	return points
 }
 
 func appendHandlerEvent(t *testing.T, store *runstore.Store, event runstate.Event) {

@@ -530,7 +530,7 @@ func TestRealizeRecordedNoneDispositionCancelsBetweenMovementAndRunFailure(t *te
 	defer control.Stop()
 	result, handled := realizeRecordedNoneDisposition(
 		context.Background(), Result{RunID: start.RunID}, store, authority, control,
-		dependencies{afterMovementFailed: func() {
+		dependencies{probe: faultpoint.Nop{}, afterMovementFailed: func() {
 			if err := store.RequestCancellation(start.RunID); err != nil {
 				t.Fatal(err)
 			}
