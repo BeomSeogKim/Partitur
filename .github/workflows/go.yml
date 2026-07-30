@@ -41,6 +41,21 @@ jobs:
       - name: Race
         run: go test -race -count=1 ./...
 
+  # This job always runs for every pull request and push to main. Configure its
+  # resulting `mutation` status check as required in the repository ruleset or
+  # branch protection; workflow YAML cannot enforce merge requirements itself.
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Mutation proofs
+        run: go test -tags=mutation -count=1 ./...
+
   # `spikes` is a nested module, so the root job's `./...` never reaches it.
   # The suites are compatibility probes, not just a compile check: they assert
   # the platform behaviour the design rests on — session sweeping, fencing,
