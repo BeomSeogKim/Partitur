@@ -40,7 +40,7 @@ const (
 	ProjectionVersionCandidateComposition   = 1
 	ProjectionVersionMovementComposition    = 1
 	ProjectionVersionCompositionEnvironment = 1
-	ProjectionVersionCompositionSubject     = 1
+	ProjectionVersionCompositionSubject     = 2
 	ProjectionVersionExecutionDependency    = 1
 	ProjectionVersionPatchOperations        = 1
 	ProjectionVersionResolutionBody         = 1
