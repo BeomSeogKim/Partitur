@@ -335,15 +335,17 @@ func ExecuteAttempt(
 		}
 		return receipt, nil
 	}
-	initialSelection, err := workspace.PerformerSelectedEvent(
-		attempt, execution.Score.Revision(), performer.ID, performer.Adapter, performer.Model,
-		execution.SelectionReason, execution.SelectionCausationID,
-	)
-	if err != nil {
-		return interrupted(result, err)
-	}
-	if _, err := authority.Append(initialSelection, faultpoint.ReceiptAddress("attempt.performer_selected")); err != nil {
-		return stopped(result, err)
+	if !execution.SelectionDurable {
+		initialSelection, err := workspace.PerformerSelectedEvent(
+			attempt, execution.Score.Revision(), performer.ID, performer.Adapter, performer.Model,
+			execution.SelectionReason, execution.SelectionCausationID,
+		)
+		if err != nil {
+			return interrupted(result, err)
+		}
+		if _, err := authority.Append(initialSelection, faultpoint.ReceiptAddress("attempt.performer_selected")); err != nil {
+			return stopped(result, err)
+		}
 	}
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
@@ -458,8 +460,12 @@ func ExecuteAttempt(
 	recordIdentity := func(
 		identity runstate.ProcessIdentity,
 	) (faultpoint.DurabilityReceipt, error) {
+		attemptNumber, err := journalAttemptNumber(store, execution.RunID, attempt.MovementID)
+		if err != nil {
+			return faultpoint.DurabilityReceipt{}, err
+		}
 		return appendEvent(runstate.EventAttemptStarted, map[string]any{
-			"attempt_number":    1,
+			"attempt_number":    attemptNumber,
 			"adapter_process":   processPayload(identity),
 			"granted_authority": grants,
 			"identity_versions": attemptVersions,
@@ -637,7 +643,7 @@ func ExecuteAttempt(
 		}
 		return stopped(result, err)
 	}
-	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies.afterMovementFailed); handled {
+	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
 		return terminal
 	}
 	if report.Result == nil || report.Result.Outcome != protocol.OutcomeCompleted {
@@ -660,7 +666,7 @@ func ExecuteAttempt(
 		}, "attempt.failed"); appendErr != nil {
 			return stopped(result, appendErr)
 		}
-		if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies.afterMovementFailed); handled {
+		if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
 			return terminal
 		}
 		return interrupted(result, err)
@@ -741,7 +747,7 @@ func ExecuteAttempt(
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
-	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies.afterMovementFailed); handled {
+	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
 		return terminal
 	}
 	if !evaluation.EvaluationCompleted || !evaluation.Verified {
@@ -1162,16 +1168,16 @@ func dispositionPayload(disposition runstate.Disposition) map[string]any {
 	return payload
 }
 
-// realizeRecordedNoneDisposition realizes only the terminal Arm 2 branch. The
-// charged successor branches remain recovery-only until the next live retry
-// and fallback PR supplies their executor.
+// realizeRecordedNoneDisposition realizes Arm 2 from its recorded durable
+// disposition. Charged successors return through the live between-unit
+// selector before any new adapter is launched.
 func realizeRecordedNoneDisposition(
 	ctx context.Context,
 	result Result,
 	store *runstore.Store,
 	authority *runstore.Driver,
 	control *cancellation.Watcher,
-	afterMovementFailed func(),
+	dependencies dependencies,
 ) (Result, bool) {
 	input, err := store.LoadRunInput(result.RunID)
 	if err != nil {
@@ -1209,9 +1215,11 @@ func realizeRecordedNoneDisposition(
 	if err != nil {
 		return interrupted(result, err), true
 	}
+	if realization.Action == successor.ActionPendingSuccessor {
+		return liveMaterializeSuccessor(ctx, result, store, authority, control, dependencies, input), true
+	}
 	if liveNoneRealizationMismatch(realization) {
-		// The next PR realizes quality_retry and fallback on the live surface.
-		return interrupted(result, errors.New("driver: live charged successor realization is not implemented")), true
+		return interrupted(result, errors.New("driver: recorded disposition has no live realization")), true
 	}
 	state := input.Projection.State
 	payload, err := json.Marshal(map[string]any{
@@ -1227,8 +1235,8 @@ func realizeRecordedNoneDisposition(
 	}, faultpoint.ReceiptAddress("movement.failed")); err != nil {
 		return stopped(result, err), true
 	}
-	if afterMovementFailed != nil {
-		afterMovementFailed()
+	if dependencies.afterMovementFailed != nil {
+		dependencies.afterMovementFailed()
 	}
 
 	input, err = store.LoadRunInput(result.RunID)
@@ -1266,6 +1274,207 @@ func realizeRecordedNoneDisposition(
 	result.Reason = "movement_failed"
 	result.Err = nil
 	return result, true
+}
+
+// liveMaterializeSuccessor performs exactly one durable live continuation.
+// Every invocation appends one performer.selected and reloads the journal.
+// Revision restarts and decision resumes have no retry-policy attempt bound;
+// progress is instead the durable effect and re-projection at each selection cut.
+func liveMaterializeSuccessor(
+	ctx context.Context,
+	result Result,
+	store *runstore.Store,
+	authority *runstore.Driver,
+	control *cancellation.Watcher,
+	dependencies dependencies,
+	input runstore.RunInput,
+) Result {
+	current := input.Projection.CurrentHeadAttempt
+	if current == nil {
+		return interrupted(result, errors.New("driver: pending successor has no current attempt"))
+	}
+	pending := input.Projection.Scheduler.PendingSuccessor
+	if pending == nil {
+		return interrupted(result, errors.New("driver: charged disposition has no pending successor"))
+	}
+	if !liveBetweenUnitEntry(input.Projection, store, authority) {
+		return interrupted(result, errors.New("driver: live between-unit entry condition is not established"))
+	}
+	decision := recovery.PlanBetweenUnit(input.Projection)
+	if decision.CaseID == recovery.CaseBudgetExhausted {
+		return liveBudgetExhaustion(result, store, authority, input, decision.Action)
+	}
+	if liveMaterializationMismatch(decision.Action, pending) {
+		return interrupted(result, errors.New("driver: live selector did not materialize recorded successor"))
+	}
+	if decision.CaseID != recovery.CaseScheduler {
+		return interrupted(result, errors.New("driver: successor materialization has unexpected selector case"))
+	}
+	performer, ok := input.Cast.Performer(pending.Performer)
+	if !ok {
+		return interrupted(result, fmt.Errorf("driver: pending successor performer %q is absent from resolved cast", pending.Performer))
+	}
+	causationID, err := latestFailureEventID(store, result.RunID, pending.AttemptID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	attempt, err := workspace.CreateRecoveredAttempt(store, authority, input, string(pending.MovementID))
+	if err != nil {
+		return stopped(result, err)
+	}
+	selection, err := workspace.PerformerSelectedEvent(
+		attempt, input.Projection.State.ScoreHead.Revision, performer.ID, performer.Adapter, performer.Model,
+		pending.Reason, causationID,
+	)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	before, err := store.ReadJournal(result.RunID)
+	if err != nil {
+		return stopped(result, err)
+	}
+	if _, err := authority.Append(selection, faultpoint.ReceiptAddress("attempt.performer_selected")); err != nil {
+		return stopped(result, err)
+	}
+	next, err := store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	after, err := store.ReadJournal(result.RunID)
+	if err != nil {
+		return stopped(result, err)
+	}
+	if len(after.Events) <= len(before.Events) {
+		return interrupted(result, errors.New("driver: live successor made no durable journal progress"))
+	}
+	if next.Projection.CurrentHeadAttempt == nil {
+		return interrupted(result, errors.New("driver: durable successor projection is absent"))
+	}
+	if next.Projection.CurrentHeadAttempt.AttemptID != attempt.AttemptID {
+		return interrupted(result, errors.New("driver: durable successor projection selected another attempt"))
+	}
+	if next.Projection.Scheduler.PendingSuccessor != nil {
+		return interrupted(result, errors.New("driver: durable successor remains pending after selection"))
+	}
+	candidate := next.Projection.State.ApplicationCandidate
+	if candidate == nil {
+		return interrupted(result, errors.New("driver: durable application candidate is absent"))
+	}
+	return ExecuteAttempt(ctx, AttemptExecution{
+		RepositoryRoot:       store.RepositoryRoot(),
+		Score:                next.Score,
+		Cast:                 next.Cast,
+		RunID:                result.RunID,
+		Attempt:              attempt,
+		CandidateTree:        candidate.ResultTree,
+		Authority:            authority,
+		PerformerID:          performer.ID,
+		SelectionReason:      pending.Reason,
+		SelectionCausationID: causationID,
+		SelectionDurable:     true,
+		RemainingMS:          next.Projection.Scheduler.RemainingTime,
+		RetriesConsumed:      next.Projection.CurrentHeadAttempt.FailureClassification.RetriesConsumed,
+		VisitedPerformers:    append([]string(nil), next.Projection.CurrentHeadAttempt.FailureClassification.VisitedPerformers...),
+		Control:              control,
+	}, executionDependenciesFrom(dependencies))
+}
+
+// liveBudgetExhaustion realizes RC-RESUME-045 when a pending successor reaches
+// a zero-budget selection cut. The already-recorded disposition remains intact,
+// but exhaustion starts no successor attempt.
+func liveBudgetExhaustion(
+	result Result,
+	store *runstore.Store,
+	authority *runstore.Driver,
+	input runstore.RunInput,
+	action *recovery.Action,
+) Result {
+	if action == nil || action.Kind != recovery.ActionAppendBudgetFailure ||
+		action.MovementID == "" || input.Projection.State.Movements[action.MovementID] != runstate.MovementRunning {
+		return interrupted(result, errors.New("driver: budget exhaustion has no running movement action"))
+	}
+	payload, err := json.Marshal(map[string]any{"reason": "budget_exhausted", "run_failed": false})
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if _, err := authority.Append(runstate.Event{
+		RunID: result.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		MovementID: action.MovementID, Type: runstate.EventMovementFailed, Payload: payload,
+	}, faultpoint.ReceiptAddress("movement.failed.budget_exhausted")); err != nil {
+		return stopped(result, err)
+	}
+	input, err = store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	payload, err = json.Marshal(map[string]any{"reason": action.FailureReason})
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if _, err := authority.Append(runstate.Event{
+		RunID: result.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		Type: runstate.EventRunFailed, Payload: payload,
+	}, faultpoint.ReceiptAddress("run.failed.budget_exhausted")); err != nil {
+		return stopped(result, err)
+	}
+	input, err = store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if liveFailedTerminalProjectionAbsent(input.Projection.State.Run) {
+		return interrupted(result, errors.New("driver: durable failed terminal projection is absent"))
+	}
+	result.Outcome = OutcomeFailed
+	result.Reason = action.FailureReason
+	result.Err = nil
+	return result
+}
+
+func liveMaterializationMismatch(action *recovery.Action, pending *recovery.PendingSuccessor) bool {
+	return action == nil || action.Kind != recovery.ActionMaterializeSuccessor ||
+		action.MovementID != pending.MovementID || action.PendingSuccessor == nil
+}
+
+func latestFailureEventID(store *runstore.Store, runID runstate.RunID, attemptID runstate.AttemptID) (string, error) {
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		return "", err
+	}
+	for index := len(journal.Events) - 1; index >= 0; index-- {
+		event := journal.Events[index]
+		if event.AttemptID != attemptID {
+			continue
+		}
+		if event.Type == runstate.EventAttemptFailed || event.Type == runstate.EventAcceptanceFailed {
+			if event.EventID == "" {
+				return "", errors.New("driver: successor failure causation_id is absent")
+			}
+			return event.EventID, nil
+		}
+	}
+	return "", errors.New("driver: successor failure event is absent")
+}
+
+func liveMovementAttemptCount(state runstate.State, movementID runstate.MovementID) int {
+	count := 0
+	for _, attempt := range state.Attempts {
+		if attempt.MovementID == movementID {
+			count++
+		}
+	}
+	return count
+}
+
+func journalAttemptNumber(store *runstore.Store, runID runstate.RunID, movementID runstate.MovementID) (int, error) {
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		return 0, err
+	}
+	count := liveMovementAttemptCount(input.Projection.State, movementID)
+	if count == 0 {
+		return 0, errors.New("driver: attempt.started has no durable performer selection")
+	}
+	return count, nil
 }
 
 func liveFailedTerminalProjectionAbsent(run runstate.RunLifecycle) bool {
