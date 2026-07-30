@@ -74,7 +74,7 @@ func TestCancellationFixtureCanBeCancelledBySubprocess(t *testing.T) {
 			if code != 4 || stdout != "" || stderr != "" {
 				t.Fatalf("cancel exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
-			input, err := store.LoadRecoveryInput(runstate.RunID(runID))
+			input, err := store.LoadRunInput(runstate.RunID(runID))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -495,7 +495,7 @@ func assertCancellationFixturePredicates(
 	predicates cancellationFixturePredicates,
 ) {
 	t.Helper()
-	input, err := store.LoadRecoveryInput(runstate.RunID(runID))
+	input, err := store.LoadRunInput(runstate.RunID(runID))
 	if err != nil {
 		t.Fatal(err)
 	}

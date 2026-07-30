@@ -19,7 +19,7 @@ import (
 func RecordRecoveredZeroWriterCandidate(
 	store *runstore.Store,
 	driver *runstore.Driver,
-	input runstore.RecoveryInput,
+	input runstore.RunInput,
 ) (Candidate, error) {
 	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" || input.BaseTree == "" {
 		return Candidate{}, errors.New("workspace: incomplete zero-writer recovery input")
@@ -49,7 +49,7 @@ func RecordRecoveredZeroWriterCandidate(
 func CreateRecoveredAttempt(
 	store *runstore.Store,
 	driver *runstore.Driver,
-	input runstore.RecoveryInput,
+	input runstore.RunInput,
 	movementID string,
 ) (*AttemptWorkspace, error) {
 	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" {
@@ -120,7 +120,7 @@ func PerformerSelectedEvent(
 func VerifyRecoveredPostHoc(
 	store *runstore.Store,
 	driver *runstore.Driver,
-	input runstore.RecoveryInput,
+	input runstore.RunInput,
 	attemptID runstate.AttemptID,
 ) error {
 	if store == nil || driver == nil || input.Score == nil || attemptID == "" {

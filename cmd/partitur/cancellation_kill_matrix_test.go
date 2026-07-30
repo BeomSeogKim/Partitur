@@ -240,7 +240,7 @@ func assertFenceDecisionDurableState(t *testing.T, repository, runID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.LoadRecoveryInput(runstate.RunID(runID))
+	input, err := store.LoadRunInput(runstate.RunID(runID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func assertCancellationTerminalRetainsFencedLease(t *testing.T, repository, runI
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.LoadRecoveryInput(runstate.RunID(runID))
+	input, err := store.LoadRunInput(runstate.RunID(runID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func assertCancellationDurableFixedPoint(t *testing.T, repository, runID string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.LoadRecoveryInput(runstate.RunID(runID))
+	input, err := store.LoadRunInput(runstate.RunID(runID))
 	if err != nil {
 		t.Fatal(err)
 	}

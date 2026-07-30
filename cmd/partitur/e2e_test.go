@@ -340,6 +340,134 @@ func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRunTaskFailureTerminalizesThroughLiveNoneDisposition(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, runScore(), runCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":                      t.TempDir(),
+		"PATH":                      bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN":        vendor,
+		runVendorEnvironment:        "1",
+		runVendorOutcomeEnvironment: "task_failed",
+	})
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := strings.TrimSpace(stdout)
+	if code != 4 || runID == "" || stdout != runID+"\n" || !strings.Contains(stderr, "movement_failed") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	journalPath := filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl")
+	got := journalEventTypes(t, journalPath)
+	want := []string{
+		"run.started", "authority.granted", "application_candidate.recorded",
+		"movement.ready", "movement.started", "performer.selected", "execution.started",
+		"attempt.started", "adapter.probed", "execution.stopped", "attempt.failed",
+		"movement.failed", "run.failed",
+	}
+	if !slicesEqual(got, want) {
+		t.Fatalf("event order=%v want=%v", got, want)
+	}
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Run != runstate.RunFailed || input.Projection.State.Movements["inspect"] != runstate.MovementFailed {
+		t.Fatalf("terminal projection=%+v", input.Projection.State)
+	}
+}
+
+func TestRunGrantAndAcceptanceFailuresTerminalizeThroughLiveNoneDisposition(t *testing.T) {
+	tests := []struct {
+		name    string
+		score   map[string]any
+		outcome string
+		failed  string
+	}{
+		{
+			name: "grant denial", score: runScore(), outcome: "read_only_violation", failed: "attempt.failed",
+		},
+		{
+			name: "acceptance failure", score: func() map[string]any {
+				score := runScore()
+				criterion := score["movements"].([]any)[0].(map[string]any)["acceptance"].(map[string]any)["hard"].([]any)[0].(map[string]any)
+				criterion["expected_hash"] = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+				return score
+			}(), failed: "acceptance.failed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runID, events := runLiveNoneFailure(t, test.score, test.outcome)
+			failed := -1
+			for index, event := range events {
+				if event == test.failed {
+					failed = index
+				}
+			}
+			if failed == -1 || len(events) < 2 || failed >= len(events)-2 || events[len(events)-2] != "movement.failed" || events[len(events)-1] != "run.failed" {
+				t.Fatalf("run=%s event order=%v", runID, events)
+			}
+		})
+	}
+}
+
+func runLiveNoneFailure(t *testing.T, score map[string]any, outcome string) (string, []string) {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, score, runCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":                      t.TempDir(),
+		"PATH":                      bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN":        vendor,
+		runVendorEnvironment:        "1",
+		runVendorOutcomeEnvironment: outcome,
+	})
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := strings.TrimSpace(stdout)
+	if code != 4 || runID == "" || stdout != runID+"\n" || !strings.Contains(stderr, "movement_failed") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	return runID, journalEventTypes(t, filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl"))
+}
+
 func TestValidateEndToEnd(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

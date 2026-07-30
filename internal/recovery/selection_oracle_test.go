@@ -127,22 +127,34 @@ func TestAppendixC4RowsFollowDeclaredPrecedence(t *testing.T) {
 		want  CaseID
 	}{
 		{
-			name: "budget exhaustion has no in-flight attempt or recovered composition above it",
+			name: "budget exhaustion outranks recovered composition",
 			input: func() Input {
 				input := c4Cut(runstate.MovementRunning)
 				input.Projection.Scheduler.RemainingTime = 0
+				input.Projection.CompositionRecovery = &CompositionRecovery{Scope: "movement", MovementID: "write", Recovered: true}
 				return input
 			}(),
 			want: CaseBudgetExhausted,
 		},
 		{
-			name: "recovered composition has available budget and no in-flight attempt above it",
+			name: "recovered composition outranks scheduler",
 			input: func() Input {
 				input := c4Cut(runstate.MovementRunning)
 				input.Projection.CompositionRecovery = &CompositionRecovery{Scope: "movement", MovementID: "write", Recovered: true}
+				input.Projection.Scheduler.PendingSuccessor = &PendingSuccessor{MovementID: "write", AttemptID: "prior", Performer: "writer", Reason: "quality_retry"}
 				return input
 			}(),
 			want: CaseRecoveredComposition,
+		},
+		{
+			name: "budget exhaustion outranks scheduler",
+			input: func() Input {
+				input := c4Cut(runstate.MovementPending)
+				input.Projection.Scheduler.RemainingTime = 0
+				input.Projection.Scheduler.PendingSuccessor = &PendingSuccessor{MovementID: "write", AttemptID: "prior", Performer: "writer", Reason: "quality_retry"}
+				return input
+			}(),
+			want: CaseBudgetExhausted,
 		},
 		{
 			name:  "scheduler advances only after budget, recovered composition, and pending successor are absent",
@@ -150,21 +162,21 @@ func TestAppendixC4RowsFollowDeclaredPrecedence(t *testing.T) {
 			want:  CaseScheduler,
 		},
 	}
-	if len(cases) != 3 {
-		t.Fatalf("C.4 rows = %d, want 3", len(cases))
+	if len(cases) != 4 {
+		t.Fatalf("C.4 precedence cuts = %d, want 4", len(cases))
 	}
 	seen := map[CaseID]bool{}
 	for _, test := range cases {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			if seen[test.want] {
-				t.Fatalf("duplicate C.4 case %s", test.want)
-			}
 			seen[test.want] = true
 			if got := PlanScheduler(test.input); got.CaseID != test.want {
 				t.Fatalf("C.4 selected %s, want %s", got.CaseID, test.want)
 			}
 		})
+	}
+	if len(seen) != 3 {
+		t.Fatalf("C.4 selected case set = %d, want 3 table rows", len(seen))
 	}
 
 	for _, state := range []runstate.AttemptState{

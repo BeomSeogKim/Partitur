@@ -765,7 +765,6 @@ func PlanAcceptance(input Input) Decision {
 // return to Plan before taking another step.
 func PlanScheduler(input Input) Decision {
 	state := input.Projection.State
-	scheduler := input.Projection.Scheduler
 
 	if state.Run.Terminal() {
 		return action(CaseTerminal, ActionTerminalCleanup, false)
@@ -775,13 +774,32 @@ func PlanScheduler(input Input) Decision {
 		decision.Action.Continuation = ContinuationC2
 		return decision
 	}
-	if scheduler.RemainingTime == 0 {
-		return budgetExhaustion(state, scheduler)
+	decision := PlanBetweenUnit(input.Projection)
+	if decision.CaseID == CaseBudgetExhausted {
+		return decision
 	}
 	if recovery := input.Projection.CompositionRecovery; recovery != nil && recovery.Recovered {
 		decision := action(CaseRecoveredComposition, ActionRerunComposition, true)
 		decision.Action.MovementID = recovery.MovementID
 		return decision
+	}
+	if !decision.Valid() {
+		// This preserves PlanScheduler's total recovery surface for synthetic,
+		// uncompiled planner inputs. A live caller must treat this as an error.
+		return action(CaseScheduler, ActionProceedScheduler, false)
+	}
+	return decision
+}
+
+// PlanBetweenUnit is the pure shared selector for one compiled lifecycle
+// choice between units. Both live execution and recovery replay the same
+// projection before using it; it deliberately accepts no recovery observation.
+func PlanBetweenUnit(projection Projection) Decision {
+	state := projection.State
+	scheduler := projection.Scheduler
+
+	if scheduler.RemainingTime == 0 {
+		return budgetExhaustion(state, scheduler)
 	}
 	if successor := scheduler.PendingSuccessor; successor != nil {
 		decision := action(CaseScheduler, ActionMaterializeSuccessor, true)
@@ -824,11 +842,10 @@ func PlanScheduler(input Input) Decision {
 		return decision
 	}
 
-	// A compiled lifecycle never reaches this fixed point: it either has a
-	// pending/ready/running movement, needs candidate materialization, or is
-	// complete on the waived path. Keep the pure planner total for an empty
-	// caller-provided lifecycle without manufacturing a journal append.
-	return action(CaseScheduler, ActionProceedScheduler, false)
+	// This invalid decision is an error sentinel for live callers: a compiled
+	// lifecycle must always have a next effect. It is intentionally not
+	// ActionProceedScheduler, which a live executor could otherwise loop on.
+	return Decision{CaseID: CaseScheduler}
 }
 
 func budgetExhaustion(state runstate.State, scheduler Scheduler) Decision {

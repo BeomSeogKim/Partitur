@@ -119,6 +119,66 @@ func TestPlanC4RowsAndSchedulerOrder(t *testing.T) {
 	}
 }
 
+func TestPlanBetweenUnitAppliesLifecyclePrecedenceWithoutRecoveryObservations(t *testing.T) {
+	base := func() Projection {
+		input := baseInput()
+		input.Projection.Scheduler = Scheduler{RemainingTime: 1, Movements: []ScheduledMovement{
+			{ID: "first"}, {ID: "second"},
+		}}
+		input.Projection.State.Movements = map[runstate.MovementID]runstate.MovementState{
+			"first": runstate.MovementPending, "second": runstate.MovementPending,
+		}
+		return input.Projection
+	}
+	tests := []struct {
+		name       string
+		projection Projection
+		caseID     CaseID
+		kind       ActionKind
+		movement   runstate.MovementID
+	}{
+		{
+			name: "zero budget wins over pending successor and readiness",
+			projection: func() Projection {
+				projection := base()
+				projection.Scheduler.RemainingTime = 0
+				projection.Scheduler.PendingSuccessor = &PendingSuccessor{MovementID: "first", AttemptID: "old", Performer: "worker", Reason: "quality_retry"}
+				return projection
+			}(),
+			caseID: CaseBudgetExhausted, kind: ActionAppendRunFailed,
+		},
+		{
+			name: "pending successor wins over ordinary scheduling",
+			projection: func() Projection {
+				projection := base()
+				projection.Scheduler.PendingSuccessor = &PendingSuccessor{MovementID: "second", AttemptID: "old", Performer: "worker", Reason: "quality_retry"}
+				return projection
+			}(),
+			caseID: CaseScheduler, kind: ActionMaterializeSuccessor, movement: "second",
+		},
+		{
+			name:       "declaration order chooses the first eligible movement",
+			projection: base(),
+			caseID:     CaseScheduler, kind: ActionAppendMovementReady, movement: "first",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := PlanBetweenUnit(test.projection)
+			if got.CaseID != test.caseID || got.Action == nil || got.Action.Kind != test.kind || got.Action.MovementID != test.movement {
+				t.Fatalf("PlanBetweenUnit() = %+v, want case=%s kind=%s movement=%s", got, test.caseID, test.kind, test.movement)
+			}
+		})
+	}
+
+	if got := PlanBetweenUnit(Projection{
+		State:     runstate.State{ApplicationCandidate: &runstate.ApplicationCandidate{}},
+		Scheduler: Scheduler{RemainingTime: 1},
+	}); got.Valid() || got.Action != nil || got.CaseID != CaseScheduler {
+		t.Fatalf("compiled-lifecycle error sentinel = %+v", got)
+	}
+}
+
 func TestPlanC4RecoveredCloseNeverSynthesizesCompositionFailure(t *testing.T) {
 	input := baseInput()
 	input.Projection.Scheduler = Scheduler{

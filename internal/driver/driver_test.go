@@ -4,21 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
+	"github.com/BeomSeogKim/Partitur/internal/successor"
 	"github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
@@ -388,6 +396,304 @@ func TestBudgetTimeoutDoesNotOverflowWireSafeRemainder(t *testing.T) {
 	}
 }
 
+func TestLiveSelectionMismatchRejectsEachSelectorConjunct(t *testing.T) {
+	want := recovery.ActionAppendMovementReady
+	movementID := runstate.MovementID("write")
+	for _, test := range []struct {
+		name   string
+		action *recovery.Action
+		want   bool
+	}{
+		{name: "nil action", want: true},
+		{name: "empty action", action: &recovery.Action{MovementID: movementID}, want: true},
+		{name: "wrong action", action: &recovery.Action{Kind: recovery.ActionAppendMovementStarted, MovementID: movementID}, want: true},
+		{name: "wrong movement", action: &recovery.Action{Kind: want, MovementID: "check"}, want: true},
+		{name: "wrong movement above target", action: &recovery.Action{Kind: want, MovementID: "zcheck"}, want: true},
+		{name: "exact selection", action: &recovery.Action{Kind: want, MovementID: movementID}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := liveSelectionMismatch(test.action, want, movementID); got != test.want {
+				t.Fatalf("liveSelectionMismatch() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLiveNoneRealizationMismatchRejectsEachConjunct(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		realization successor.Realization
+		want        bool
+	}{
+		{name: "wrong action below target", realization: successor.Realization{Charge: successor.ChargeNone}, want: true},
+		{name: "wrong action above target", realization: successor.Realization{Action: successor.ActionPendingSuccessor, Charge: successor.ChargeNone}, want: true},
+		{name: "wrong charge below target", realization: successor.Realization{Action: successor.ActionMovementFailed}, want: true},
+		{name: "wrong charge above target", realization: successor.Realization{Action: successor.ActionMovementFailed, Charge: successor.ChargeFallback}, want: true},
+		{name: "wrong charge above fallback", realization: successor.Realization{Action: successor.ActionMovementFailed, Charge: successor.ChargeQualityRetry}, want: true},
+		{name: "exact terminal realization", realization: successor.Realization{Action: successor.ActionMovementFailed, Charge: successor.ChargeNone}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := liveNoneRealizationMismatch(test.realization); got != test.want {
+				t.Fatalf("liveNoneRealizationMismatch() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsTerminalRunWithMatchingLease(t *testing.T) {
+	preparation, store, authority, start := liveEntryFixture(t)
+	defer authority.Release()
+	if _, err := authority.Append(runstate.Event{
+		RunID: start.RunID, ScoreRevision: preparation.Score.Revision(),
+		Type: runstate.EventRunFailed, Payload: testPayload(t, map[string]any{"reason": "movement_failed"}),
+	}, faultpoint.ReceiptAddress("test.run.failed")); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !input.Projection.State.Run.Terminal() {
+		t.Fatalf("run=%s, want terminal", input.Projection.State.Run)
+	}
+	if !liveBetweenUnitEntry(input.Projection, store, authority) {
+		return
+	}
+	t.Fatal("terminal run with matching lease entered live between-unit path")
+}
+
+func TestLiveBetweenUnitEntryRejectsOpenExecution(t *testing.T) {
+	preparation, store, authority, start := liveEntryFixture(t)
+	defer authority.Release()
+	if _, err := authority.Append(runstate.Event{
+		RunID: start.RunID, ScoreRevision: preparation.Score.Revision(),
+		Type: runstate.EventExecutionStarted,
+		Payload: testPayload(t, map[string]any{
+			"interval_id": "adapter-1", "phase": "adapter", "wall_start": "2026-07-30T00:00:00.000Z", "remaining_at_start": 600000,
+		}),
+	}, faultpoint.ReceiptAddress("test.execution.started")); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.OpenExecution == nil {
+		t.Fatal("fixture did not retain an open execution interval")
+	}
+	if !liveBetweenUnitEntry(input.Projection, store, authority) {
+		return
+	}
+	t.Fatal("open execution interval entered live between-unit path")
+}
+
+func TestLiveBetweenUnitEntryRejectsFreshHeadAttempt(t *testing.T) {
+	_, store, authority, start := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []runstate.AttemptState{
+		runstate.AttemptStarting,
+		runstate.AttemptRunning,
+		runstate.AttemptVerifying,
+	} {
+		projection := input.Projection
+		projection.CurrentHeadAttempt = &recovery.AttemptRecovery{
+			ScoreRevision: projection.State.ScoreHead.Revision,
+			State:         state,
+		}
+		if liveBetweenUnitEntry(projection, store, authority) {
+			t.Fatalf("fresh %s attempt entered live between-unit path", state)
+		}
+	}
+	for _, current := range []*recovery.AttemptRecovery{
+		nil,
+		{ScoreRevision: input.Projection.State.ScoreHead.Revision - 1, State: runstate.AttemptStarting},
+		{ScoreRevision: input.Projection.State.ScoreHead.Revision, State: runstate.AttemptFailed},
+	} {
+		projection := input.Projection
+		projection.CurrentHeadAttempt = current
+		if !liveBetweenUnitEntry(projection, store, authority) {
+			t.Fatalf("non-fresh current attempt %#v was refused", current)
+		}
+	}
+}
+
+func TestRealizeRecordedNoneDispositionCancelsBetweenMovementAndRunFailure(t *testing.T) {
+	preparation, store, authority, start := liveEntryFixture(t)
+	defer authority.Release()
+	movementID := runstate.MovementID(preparation.Score.Movements()[0].ID)
+	attemptID := runstate.AttemptID("attempt-1")
+	for _, event := range []runstate.Event{
+		{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, Type: runstate.EventMovementReady, Payload: testPayload(t, map[string]any{})},
+		{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, Type: runstate.EventMovementStarted, Payload: testPayload(t, map[string]any{})},
+		{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: attemptID, Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "gpt-5.6-sol"})},
+		{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: attemptID, Type: runstate.EventAttemptFailed, Payload: testPayload(t, map[string]any{"kind": "grant_denied", "disposition": map[string]any{"charged": "none", "movement_terminal": true, "terminal_reason": "grant_denied"}})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	control, err := cancellation.Watch(store, start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Stop()
+	result, handled := realizeRecordedNoneDisposition(
+		context.Background(), Result{RunID: start.RunID}, store, authority, control,
+		func() {
+			if err := store.RequestCancellation(start.RunID); err != nil {
+				t.Fatal(err)
+			}
+		},
+	)
+	if !handled || result.Outcome != OutcomeCancelled || result.Err != nil {
+		t.Fatalf("result=%+v handled=%t", result, handled)
+	}
+	journal, err := store.ReadJournal(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventRunFailed {
+			t.Fatal("run.failed appended after cancellation became durable")
+		}
+	}
+}
+
+func TestLiveFailedTerminalProjectionAbsentRejectsBothDirections(t *testing.T) {
+	for _, run := range []runstate.RunLifecycle{runstate.RunRunning, runstate.RunSucceeded, runstate.RunCancelled} {
+		if !liveFailedTerminalProjectionAbsent(run) {
+			t.Fatalf("run %s was accepted as durable run.failed", run)
+		}
+	}
+	if liveFailedTerminalProjectionAbsent(runstate.RunFailed) {
+		t.Fatal("run.failed was rejected")
+	}
+}
+
+func TestLiveBetweenUnitEntryCallSitesRespectPostEffectBoundary(t *testing.T) {
+	_, testPath, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate driver test source")
+	}
+	directory := filepath.Dir(testPath)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileSet := token.NewFileSet()
+	functions := map[string]*ast.FuncDecl{}
+	parsedFiles := 0
+	functionDeclarations := 0
+	liveEntryCalls := 0
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, filepath.Join(directory, entry.Name()), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsedFiles++
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			functionDeclarations++
+			functions[function.Name.Name] = function
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee := calledName(call.Fun)
+				if callee != "liveBetweenUnitEntry" && callee != "selectLiveBetweenUnit" {
+					return true
+				}
+				liveEntryCalls++
+				if !approvedLiveBetweenUnitCall(function.Name.Name, callee) {
+					position := fileSet.Position(call.Pos())
+					t.Errorf("%s calls %s outside an approved live-entry path at %s", function.Name.Name, callee, position)
+				}
+				return true
+			})
+		}
+	}
+	if parsedFiles == 0 {
+		t.Fatal("parsed zero non-test Go files in internal/driver")
+	}
+	if functionDeclarations == 0 {
+		t.Fatal("found zero function declarations in internal/driver non-test files")
+	}
+	if liveEntryCalls == 0 {
+		t.Fatal("found zero live-between-unit entry calls in internal/driver non-test files")
+	}
+	if !allCallsBefore(functions["run"], "selectLiveBetweenUnit", "ExecuteAttempt") {
+		t.Fatal("initial live entry must remain before ExecuteAttempt")
+	}
+	if !allCallsBefore(functions["ExecuteAttempt"], "Execute", "realizeRecordedNoneDisposition") {
+		t.Fatal("post-effect live entry must be reachable only after Client.Execute returns")
+	}
+}
+
+func approvedLiveBetweenUnitCall(function, callee string) bool {
+	switch callee {
+	case "selectLiveBetweenUnit":
+		return function == "run"
+	case "liveBetweenUnitEntry":
+		return function == "selectLiveBetweenUnit" || function == "realizeRecordedNoneDisposition"
+	default:
+		return false
+	}
+}
+
+func allCallsBefore(function *ast.FuncDecl, before, after string) bool {
+	if function == nil {
+		return false
+	}
+	var beforePositions []token.Pos
+	var afterPositions []token.Pos
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch calledName(call.Fun) {
+		case before:
+			beforePositions = append(beforePositions, call.Pos())
+		case after:
+			afterPositions = append(afterPositions, call.Pos())
+		}
+		return true
+	})
+	if len(beforePositions) == 0 || len(afterPositions) == 0 {
+		return false
+	}
+	for _, left := range beforePositions {
+		for _, right := range afterPositions {
+			if left >= right {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func calledName(expression ast.Expr) string {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		return expression.Name
+	case *ast.SelectorExpr:
+		return expression.Sel.Name
+	default:
+		return ""
+	}
+}
+
 func testDependencies() dependencies {
 	return dependencies{
 		probe:             faultpoint.Nop{},
@@ -397,6 +703,33 @@ func testDependencies() dependencies {
 		newID:             workspace.NewID,
 		workspaceStart:    workspace.Start,
 	}
+}
+
+func liveEntryFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
+	t.Helper()
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	start, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(start.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return preparation, store, authority, start
+}
+
+func testPayload(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func prepareRunnableFixture(

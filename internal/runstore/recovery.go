@@ -17,9 +17,9 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/successor"
 )
 
-// RecoveryInput is the complete durable input available before recovery
-// observes leases, processes, worktrees, or references.
-type RecoveryInput struct {
+// RunInput is the complete authoritative input owned by a run. It is shared
+// by live execution and recovery before either surface adds its own inputs.
+type RunInput struct {
 	Projection recovery.Projection
 	Score      *score.Score
 	Cast       *cast.Cast
@@ -30,7 +30,7 @@ type RecoveryInput struct {
 // AcquireRecoveryDriver establishes authority from the selected run's pinned
 // score, never from current repository inputs.
 func (store *Store) AcquireRecoveryDriver(runID runstate.RunID) (*Driver, error) {
-	input, err := store.LoadRecoveryInput(runID)
+	input, err := store.LoadRunInput(runID)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,7 @@ func (store *Store) AcquireRecoveryDriver(runID runstate.RunID) (*Driver, error)
 // ReclaimDeadRecoveryDriver replaces the exact dead lease observed before
 // recovery planning with a new recovery driver under one state lock.
 func (store *Store) ReclaimDeadRecoveryDriver(runID runstate.RunID, expected LeaseIdentity) (*Driver, error) {
-	input, err := store.LoadRecoveryInput(runID)
+	input, err := store.LoadRunInput(runID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,45 +110,45 @@ func (store *Store) ReclaimDeadRecoveryDriver(runID runstate.RunID, expected Lea
 	return &Driver{store: store, runID: runID, seed: movementSeed(input.Score), lease: acquired}, nil
 }
 
-// LoadRecoveryInput reads only the selected run's journal and authoritative
+// LoadRunInput reads only the selected run's journal and authoritative
 // run-owned inputs. It never reads or recompiles the repository root score or
 // current cast layers.
-func (store *Store) LoadRecoveryInput(runID runstate.RunID) (RecoveryInput, error) {
+func (store *Store) LoadRunInput(runID runstate.RunID) (RunInput, error) {
 	journal, err := store.ReadJournal(runID)
 	if err != nil {
-		return RecoveryInput{}, err
+		return RunInput{}, err
 	}
 	started, err := runStartedEventFrom(journal.Events)
 	if err != nil {
-		return RecoveryInput{}, err
+		return RunInput{}, err
 	}
 	startPayload, err := eventPayload(started)
 	if err != nil {
-		return RecoveryInput{}, err
+		return RunInput{}, err
 	}
 
 	initialScore, err := store.loadPinnedScore(runID, started.ScoreRevision, startPayload)
 	if err != nil {
-		return RecoveryInput{}, err
+		return RunInput{}, err
 	}
 	seed := movementSeed(initialScore)
 	replay, err := replayJournal(journal, seed)
 	if err != nil {
-		return RecoveryInput{}, err
+		return RunInput{}, err
 	}
 	currentScore, err := store.loadPinnedScore(runID, replay.State.ScoreHead.Revision, map[string]any{
 		"score_hash":      string(replay.State.ScoreHead.SemanticHash),
 		"score_file_hash": string(replay.State.ScoreHead.FileHash),
 	})
 	if err != nil {
-		return RecoveryInput{}, err
+		return RunInput{}, err
 	}
 	resolvedCast, err := store.loadResolvedCast(runID, startPayload)
 	if err != nil {
-		return RecoveryInput{}, err
+		return RunInput{}, err
 	}
 
-	return RecoveryInput{
+	return RunInput{
 		Projection: recoveryProjection(replay.State, journal.Events, currentScore, resolvedCast),
 		Score:      currentScore,
 		Cast:       resolvedCast,
