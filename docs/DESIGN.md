@@ -1836,8 +1836,11 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   rather than environment, and it still says nothing about whether the trees compose. Collapsing the
   two reasons would let a machine with a broken Git report a clean repository as unmergeable.
 
-  **The exact invocation is normative**, because the composed tree depends on it. Each step runs,
-  in a **non-bare** repository with system and global Git config isolated:
+  **The exact invocation sequence is normative**, because the composed tree depends on it. A fan-in
+  runs one invocation for each contributing change set in its deterministic composition order; the
+  singular command below is invocation *i*, with its current `C` and `T`. `argv[i]` and `env[i]`
+  describe that same invocation, and the two sequences share that order. Each invocation runs in a
+  **non-bare** repository with system and global Git config isolated:
 
   The Git subprocess environment is an **allowlist, not the inherited environment**: only the
   variables below are passed, so `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` —
@@ -1899,7 +1902,7 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   never have been read.
 
   Because `candidate_id` is a *content* identity (§8), the composition dependency records **more
-  than the Git version**: the exact Git build, object format, merge invocation and strategy
+  than the Git version**: the exact Git build, object format, ordered merge invocation sequence and strategy
   options, `merge.renormalize`, and every applicable repository merge-config input. Version alone
   is demonstrably insufficient — `merge.renormalize` alone changes the result tree for identical
   inputs.
@@ -3803,7 +3806,7 @@ projection changed. Four versions move independently:
 | Version | Governs | v0.2 value |
 |---|---|---|
 | `canonical_encoding_version` | A.1 — the encoder itself | 1 |
-| per-domain `projection_version` | what each domain feeds the encoder (A.4) | 1 |
+| per-domain `projection_version` | what each domain feeds the encoder (A.4) | 1, except `partitur/composition-subject`: 2 |
 | `amendment_classifier_version` | §9 typed classification and impact rules | 1 |
 | `composition_algorithm_version` | §5 fan-in merge algorithm and Git merge implementation | 1 |
 
@@ -3825,8 +3828,8 @@ a defect.
 | `partitur/candidate` | `{base_tree, result_tree, ordered_change_sets: [change_set_id]}` — the **content-deduplicated applied** sequence (§8). |
 | `partitur/candidate-composition` | Tagged union: zero contributors ⇒ `{composition_mode: "identity", base_tree, contributors: [], composition_algorithm_version}`; one or more contributors ⇒ `{composition_mode: "merge", base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` with `contributors` non-empty. The tag and cardinality must agree. `identity` states that no merge ran, so an environment hash is forbidden rather than fabricated; `merge` records the **full pre-dedup ordered** sequence, so adding, removing, or reordering an identical or no-op writer stays detectable. |
 | `partitur/movement-composition` | The same tagged union as `partitur/candidate-composition`, with `movement_id` added to both variants: zero contributors ⇒ `{composition_mode: "identity", movement_id, base_tree, contributors: [], composition_algorithm_version}`; one or more ⇒ `{composition_mode: "merge", movement_id, base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` with `contributors` non-empty. This is a movement's own fan-in (§5), including the reachable case where it has `needs` but every dependency is read-only. The candidate-level hash covers only the final composition, so without this a movement's clean base has no identity and a change to how it was assembled would be invisible. |
-| `partitur/composition-environment` | §5, exactly: `{git_version_string, object_format, argv, env, merge_renormalize, merge_config}` where `git_version_string` is `git --version` verbatim, `argv` is the full merge argv as executed, `env` is the **allowlisted** subset the core passes (sorted key/value pairs), and `merge_config` is every `merge.*` key effective in the composition repository, sorted. Separate because both `composition_mode: merge` identities need it, and because the environment can change while every tree stays the same. It is absent from `composition_mode: identity`, where no merge invocation exists to describe. |
-| `partitur/composition-subject` | `{scope, target_id, contributors: [change_set_id], composition_algorithm_version, composition_environment_hash}` — identifies *which* composition failed to yield a usable result, and is the third component of both non-success evidence keys — `composition.conflicted` and `composition.failed` (B.3). It must include the algorithm and environment because the payloads do: the same contributors failing under a different Git configuration is a different fact, and omitting them would let one idempotency key acquire two differing payloads. Distinct from the two dependency hashes: those identify a **successful** composition's inputs, this identifies a composition that produced none. |
+| `partitur/composition-environment` | §5, exactly: `{git_version_string, object_format, argv, env, merge_renormalize, merge_config}` where `git_version_string` is `git --version` verbatim, `argv` is the ordered sequence of full merge argvs as executed, and `env` is the equally ordered sequence of the **allowlisted** subsets the core passes (each entry sorted key/value pairs). The order is the deterministic composition order of the executed contributing change sets, and entry *i* of each sequence describes the same invocation. `merge_config` is every `merge.*` key effective in the composition repository, sorted. Separate because both `composition_mode: merge` identities need it, and because the environment can change while every tree stays the same. It is absent from `composition_mode: identity`, where no merge invocation exists to describe. |
+| `partitur/composition-subject` | `{scope, target_id, contributors: [change_set_id], composition_algorithm_version, composition_environment_hash?}` — identifies *which* composition failed to yield a usable result, and is the third component of both non-success evidence keys — `composition.conflicted` and `composition.failed` (B.3). `contributors` is non-empty and ordered. `composition_environment_hash` is required iff at least one merge invocation executed; it is absent when the first merge subprocess could not start, because no invocation exists to describe (§5; Appendix D `spawn_failed`). The remaining fields distinguish such no-invocation failures by scope, target, ordered contributor sequence, and algorithm version — including, for example, a two-contributor composition from a five-contributor one. They intentionally do not distinguish two failed launch observations of that same composition which differ only in an unexecuted environment or sanitized diagnostic: no retry can produce a second outcome for that subject, and those observations are not different composition inputs. When present, the hash is required because the payloads do: the same contributors failing under a different Git configuration is a different fact, and omitting it would let one idempotency key acquire two differing payloads. Distinct from the two dependency hashes: those identify a **successful** composition's inputs, this identifies a composition that produced none. **The optionality changes the preimage shape, so this is projection version 2 for `partitur/composition-subject`: version 1 required the field unconditionally; version 2 omits it exactly when no invocation executed. This does not bump `partitur/composition-environment`, whose sequence wording states its existing preimage.** |
 | `partitur/execution-dependency` | A.5 — exhaustive. |
 | `partitur/patch-operations` | The raw RFC 6902 operations array **as the proposer wrote it**, order preserved, for pre-validation rejection records (§9). |
 | `partitur/resolution-body` | `{kind, answer}` for an answered question, or `{kind, reason}` for an amendment rejection — the resolution's semantic content and nothing else. Used for `resolved_decisions[].digest` in A.5, so an answer's length cannot bloat the projection while its *content* still binds. |
@@ -3835,12 +3838,15 @@ a defect.
 contributor selection, ordering, and content deduplication — including the conclusion that the
 contributor list is empty. It binds that rule without claiming that a merge subprocess ran.
 
-The two modes are disjoint facts, not sentinel values: `identity` requires exactly zero
-contributors and forbids `composition_environment_hash`; `merge` requires at least one contributor
-and requires it. `partitur/composition-subject` has no `identity` variant because a zero-contributor
-composition completes as the identity result without attempting a merge and therefore cannot yield
-`composition.conflicted` or `composition.failed`. Every composition subject consequently describes
-an attempted `merge` branch and retains its non-empty contributor list and environment hash.
+The two **successful-composition** modes are disjoint facts, not sentinel values: `identity`
+requires exactly zero contributors and forbids `composition_environment_hash`; `merge` requires at
+least one contributor and requires it. `partitur/composition-subject` has no `identity` variant
+because a zero-contributor composition completes as the identity result without attempting a merge
+and therefore cannot yield `composition.conflicted` or `composition.failed`. Every composition
+subject consequently describes an attempted `merge` branch and retains its non-empty contributor
+list; it retains an environment hash only after at least one invocation executed. The no-invocation
+`spawn_failed` branch records the absent hash as a fact rather than fabricating one for a subprocess
+that never ran (§5), while its non-empty contributors keep it distinct from `identity`.
 
 ### A.4.3 Scoped identifiers — derived, but not content identities
 
