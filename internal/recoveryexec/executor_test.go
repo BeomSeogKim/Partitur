@@ -47,7 +47,7 @@ func TestLiveAndResumeSuccessorSelectionJournalIdentity(t *testing.T) {
 			candidate := live.input.Projection.State.ApplicationCandidate
 			result := driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
 				RepositoryRoot: live.store.RepositoryRoot(), Score: live.input.Score, Cast: live.input.Cast,
-				RunID: live.runID, Attempt: attempt, CandidateTree: candidate.ResultTree, Authority: live.driver,
+				RunID: live.runID, Attempt: attempt, BaseTree: live.input.BaseTree, CandidateTree: candidate.ResultTree, Authority: live.driver,
 				PerformerID: test.wantPerformer, SelectionReason: test.charged, SelectionCausationID: live.failure.EventID,
 				RemainingMS: live.input.Projection.Scheduler.RemainingTime,
 			}, driver.DefaultExecutionDependencies(faultpoint.Nop{}))

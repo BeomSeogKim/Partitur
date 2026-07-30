@@ -234,7 +234,7 @@ func liveRunLoop(
 			}
 			attemptResult := ExecuteAttempt(ctx, AttemptExecution{
 				RepositoryRoot: store.RepositoryRoot(), Score: input.Score, Cast: input.Cast,
-				RunID: result.RunID, Attempt: attempt, CandidateTree: liveCandidateTree(input),
+				RunID: result.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: liveCandidateTree(input),
 				Authority: authority, PerformerID: performer.ID, SelectionReason: "initial",
 				RemainingMS: input.Projection.Scheduler.RemainingTime, Control: control,
 			}, executionDependenciesFrom(dependencies))
@@ -307,7 +307,7 @@ func ExecuteAttempt(
 	executionDependencies ExecutionDependencies,
 ) (result Result) {
 	if execution.RepositoryRoot == "" || execution.Score == nil || execution.Cast == nil ||
-		execution.RunID == "" || execution.Attempt == nil || execution.CandidateTree == "" ||
+		execution.RunID == "" || execution.Attempt == nil || execution.BaseTree == "" || execution.CandidateTree == "" ||
 		execution.Authority == nil || execution.PerformerID == "" || execution.SelectionReason == "" ||
 		executionDependencies.Probe == nil || executionDependencies.Client == nil ||
 		executionDependencies.ResolveTrampoline == nil || executionDependencies.Now == nil ||
@@ -319,6 +319,13 @@ func ExecuteAttempt(
 	)
 	if err != nil {
 		return Result{RunID: execution.RunID, Err: err}
+	}
+	baseCompositionHash := ""
+	if len(movement.Needs) != 0 {
+		baseCompositionHash, err = movementCompositionDependencyHash(movement.ID, execution.BaseTree)
+		if err != nil {
+			return Result{RunID: execution.RunID, Err: err}
+		}
 	}
 	startResult := workspace.StartResult{RunID: execution.RunID}
 	attempt := execution.Attempt
@@ -466,9 +473,16 @@ func ExecuteAttempt(
 	if err != nil {
 		return interrupted(result, err)
 	}
-	attemptVersions, err := identityVersions()
+	attemptDomains := []canonical.Domain(nil)
+	if baseCompositionHash != "" {
+		attemptDomains = append(attemptDomains, canonical.DomainMovementComposition)
+	}
+	attemptVersions, err := identityVersions(attemptDomains...)
 	if err != nil {
 		return interrupted(result, err)
+	}
+	if baseCompositionHash != "" {
+		attemptVersions["composition"] = canonical.CompositionAlgorithmVersion
 	}
 	var advisory []string
 	var executionHash string
@@ -492,6 +506,7 @@ func ExecuteAttempt(
 			grants,
 			globalInvariants,
 			plan.Hash(),
+			baseCompositionHash,
 		)
 		if err != nil {
 			return faultpoint.DurabilityReceipt{}, err
@@ -514,12 +529,16 @@ func ExecuteAttempt(
 		if err != nil {
 			return faultpoint.DurabilityReceipt{}, err
 		}
-		return appendEvent(runstate.EventAttemptStarted, map[string]any{
+		payload := map[string]any{
 			"attempt_number":    attemptNumber,
 			"adapter_process":   processPayload(identity),
 			"granted_authority": grants,
 			"identity_versions": attemptVersions,
-		}, "attempt.started")
+		}
+		if baseCompositionHash != "" {
+			payload["base_composition_hash"] = baseCompositionHash
+		}
+		return appendEvent(runstate.EventAttemptStarted, payload, "attempt.started")
 	}
 	var observationErr error
 	adapterChargedMS := int64(0)
@@ -907,10 +926,11 @@ func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 	result := make([]runstate.MovementSeed, len(movements))
 	for index, movement := range movements {
 		result[index] = runstate.MovementSeed{
-			ID:        runstate.MovementID(movement.ID),
-			Initial:   runstate.MovementPending,
-			RepoWrite: hasGrant(movement.Grants, "repo_write"),
-			Final:     movement.ID == execution.FinalMovementID,
+			ID:              runstate.MovementID(movement.ID),
+			Initial:         runstate.MovementPending,
+			RepoWrite:       hasGrant(movement.Grants, "repo_write"),
+			HasDependencies: len(movement.Needs) != 0,
+			Final:           movement.ID == execution.FinalMovementID,
 		}
 	}
 	return result
@@ -1023,7 +1043,31 @@ func executionDependencyHash(
 	grants protocol.Grants,
 	global map[string]any,
 	acceptanceHash runstate.Hash,
+	baseCompositionHash string,
 ) (string, error) {
+	value := executionDependencyProjection(
+		compiled,
+		movement,
+		part,
+		performer,
+		grants,
+		global,
+		acceptanceHash,
+		baseCompositionHash,
+	)
+	return canonical.Hash(canonical.DomainExecutionDependency, value)
+}
+
+func executionDependencyProjection(
+	compiled *score.Score,
+	movement score.MovementView,
+	part score.PartView,
+	performer cast.PerformerView,
+	grants protocol.Grants,
+	global map[string]any,
+	acceptanceHash runstate.Hash,
+	baseCompositionHash string,
+) map[string]any {
 	outputs := make([]any, len(movement.Outputs))
 	for index, output := range movement.Outputs {
 		outputs[index] = map[string]any{
@@ -1035,12 +1079,19 @@ func executionDependencyHash(
 		"id":          movement.ID,
 		"part":        movement.PartID,
 		"instruction": movement.Instruction,
-		"needs":       []any{},
+		"needs":       stringsToAny(movement.Needs),
+		// Score-declared inputs cannot enter this projection until artifact-instance
+		// resolution provides instance_id and content_hash. A.5 binds delivered
+		// instance bytes as well as the logical artifact id, so an upstream retry
+		// with different bytes must not share a dependency hash.
 		"inputs":      []any{},
 		"outputs":     outputs,
 		"grants":      stringsToAny(movement.Grants),
 		"may_propose": movement.MayPropose,
 		"acceptance":  string(acceptanceHash),
+	}
+	if baseCompositionHash != "" {
+		movementValue["base_composition_hash"] = baseCompositionHash
 	}
 	execution := compiled.Execution()
 	scoreValue := map[string]any{
@@ -1073,7 +1124,17 @@ func executionDependencyHash(
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		value["extensions"] = extension
 	}
-	return canonical.Hash(canonical.DomainExecutionDependency, value)
+	return value
+}
+
+func movementCompositionDependencyHash(movementID, baseTree string) (string, error) {
+	return canonical.Hash(canonical.DomainMovementComposition, map[string]any{
+		"composition_mode":              "identity",
+		"movement_id":                   movementID,
+		"base_tree":                     baseTree,
+		"contributors":                  []any{},
+		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
+	})
 }
 
 func recognizedFeatures(_ []string) []string {
@@ -1394,6 +1455,7 @@ func liveMaterializeSuccessor(
 		Cast:                 next.Cast,
 		RunID:                result.RunID,
 		Attempt:              attempt,
+		BaseTree:             next.BaseTree,
 		CandidateTree:        liveCandidateTree(next),
 		Authority:            authority,
 		PerformerID:          performer.ID,

@@ -44,6 +44,40 @@ func TestSequentialDeclarationOrderDAGScheduling(t *testing.T) {
 	}
 }
 
+func TestReadOnlyFanInJournalsIdentityCompositionHash(t *testing.T) {
+	events := runScore(t, nonWaivedScore(), "")
+	wantHash := map[string]bool{"a": false, "b": true, "c": false, "final": true}
+	seen := make(map[string]bool, len(wantHash))
+	for _, event := range events {
+		if event.Type != runstate.EventAttemptStarted {
+			continue
+		}
+		movement := string(event.MovementID)
+		want, tracked := wantHash[movement]
+		if !tracked {
+			continue
+		}
+		seen[movement] = true
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		got, present := payload["base_composition_hash"]
+		if present != want {
+			t.Fatalf("movement %s composition hash present=%t, want %t; payload=%v", movement, present, want, payload)
+		}
+		if want {
+			hash, ok := got.(string)
+			if !ok || !strings.HasPrefix(hash, "sha256:") {
+				t.Fatalf("movement %s composition hash = %#v, want sha256 hash", movement, got)
+			}
+		}
+	}
+	if len(seen) != len(wantHash) {
+		t.Fatalf("attempt.started movements = %v, want %v", seen, wantHash)
+	}
+}
+
 func TestWaivedRunCarriesItsCandidateWithoutMovementTerminalTransition(t *testing.T) {
 	events := runScore(t, waivedScore(), "")
 	for _, movement := range []string{"first", "second"} {

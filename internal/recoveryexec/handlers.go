@@ -411,6 +411,7 @@ func executeRecoveredAttempt(
 		Cast:                 input.Cast,
 		RunID:                execution.Driver.RunID(),
 		Attempt:              attempt,
+		BaseTree:             input.BaseTree,
 		CandidateTree:        candidateTree,
 		Authority:            execution.Driver,
 		PerformerID:          performerID,

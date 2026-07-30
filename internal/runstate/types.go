@@ -25,10 +25,11 @@ type Hash string
 
 // MovementSeed is derived from the authenticated pinned score.
 type MovementSeed struct {
-	ID        MovementID
-	Initial   MovementState
-	RepoWrite bool
-	Final     bool
+	ID              MovementID
+	Initial         MovementState
+	RepoWrite       bool
+	HasDependencies bool
+	Final           bool
 }
 
 type RunLifecycle string
@@ -320,6 +321,7 @@ type State struct {
 	Run                  RunLifecycle
 	Movements            map[MovementID]MovementState
 	RepoWriteMovements   map[MovementID]bool
+	DependencyMovements  map[MovementID]bool
 	FinalMovements       map[MovementID]bool
 	Attempts             map[AttemptID]Attempt
 	ScoreHead            ScoreHead
