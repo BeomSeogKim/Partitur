@@ -69,11 +69,7 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
 		recovery.ActionExecuteCancellation:        executeCancellation,
 		recovery.ActionCompleteOrAbandonPrepare:   unreachableActionOwnedBy("4.2"),
-		// The waived completion branch became selectable once run_succeeded
-		// started meaning finality. selectSlice still refuses a waived score,
-		// because §2 rule 12 forbids its final movement, so no live or recovery
-		// path reaches this action yet. PR D2 opens it together with its handler.
-		recovery.ActionAppendRunSucceeded: unreachableActionOwnedBy("2.2 PR D2"),
+		recovery.ActionAppendRunSucceeded:         appendRunSucceeded,
 	}
 }
 
@@ -94,6 +90,23 @@ func composeZeroWriterCandidate(_ context.Context, execution HandlerContext, _ r
 	}
 	_, err = workspace.RecordRecoveredZeroWriterCandidate(execution.Store, execution.Driver, input)
 	return err
+}
+
+func appendRunSucceeded(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil {
+		return errors.New("recovery executor requires store for waived completion")
+	}
+	if execution.Driver == nil {
+		return errors.New("recovery executor requires driver for waived completion")
+	}
+	if execution.RunID == "" {
+		return errors.New("recovery executor requires run id for waived completion")
+	}
+	input, err := execution.Store.LoadRunInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	return workspace.AppendWaivedRunSucceeded(execution.Driver, input, "recovery.run.succeeded")
 }
 
 func rerunPostHocVerification(ctx context.Context, execution HandlerContext, action recovery.Action) error {
@@ -362,9 +375,9 @@ func executeRecoveredAttempt(
 	if execution.Store == nil || execution.Driver == nil || input.Score == nil || input.Cast == nil {
 		return errors.New("recovery attempt execution requires durable score, cast, store, and driver")
 	}
-	candidate := input.Projection.State.ApplicationCandidate
-	if candidate == nil || candidate.ResultTree == "" {
-		return errors.New("recovery attempt execution requires a durable application candidate")
+	candidateTree := input.BaseTree
+	if candidate := input.Projection.State.ApplicationCandidate; candidate != nil {
+		candidateTree = candidate.ResultTree
 	}
 	attempt, err := workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)
 	if err != nil {
@@ -376,7 +389,7 @@ func executeRecoveredAttempt(
 		Cast:                 input.Cast,
 		RunID:                execution.Driver.RunID(),
 		Attempt:              attempt,
-		CandidateTree:        candidate.ResultTree,
+		CandidateTree:        candidateTree,
 		Authority:            execution.Driver,
 		PerformerID:          performerID,
 		SelectionReason:      reason,

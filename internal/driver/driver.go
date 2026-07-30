@@ -31,9 +31,10 @@ import (
 )
 
 var (
-	ErrUnsupportedSlice = errors.New("score is outside the one-movement artifact slice")
-	ErrCapability       = errors.New("capability_unavailable")
-	ErrEnforcement      = errors.New("enforcement_unavailable")
+	ErrAttemptSelectionInconsistent = errors.New("attempt selection is inconsistent with the pinned score or resolved cast.")
+	ErrWriterCompositionUnsupported = errors.New("repo_write movements require unsupported candidate composition pending §5")
+	ErrCapability                   = errors.New("capability_unavailable")
+	ErrEnforcement                  = errors.New("enforcement_unavailable")
 )
 
 type dependencies struct {
@@ -114,9 +115,8 @@ func run(
 		dependencies.workspaceStart == nil {
 		return Result{Err: errors.New("driver: incomplete run")}
 	}
-	movement, _, performer, _, err := selectSlice(preparation)
-	if err != nil {
-		return Result{Err: err}
+	if HasWriterMovement(preparation.Score) {
+		return Result{Err: ErrWriterCompositionUnsupported}
 	}
 	startResult, err := dependencies.workspaceStart(preparation, dependencies.probe)
 	if err != nil {
@@ -126,12 +126,9 @@ func run(
 	if err := started(startResult.RunID); err != nil {
 		return interrupted(result, err)
 	}
-	policy := preparation.Score.EffectivePolicy()
-	remainingMS, err := initialRemainingMS(policy.ActiveWallClockMin)
-	if err != nil {
+	if _, err := initialRemainingMS(preparation.Score.EffectivePolicy().ActiveWallClockMin); err != nil {
 		return interrupted(result, err)
 	}
-
 	seeds := movementSeeds(preparation.Score)
 	store, err := runstore.New(preparation.RepositoryRoot, dependencies.probe)
 	if err != nil {
@@ -181,71 +178,124 @@ func run(
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
-	candidate, err := startResult.Run.RecordZeroWriterCandidate()
-	if err != nil {
-		return stopped(result, err)
-	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
-		return cancelled
-	}
-	for _, step := range []struct {
-		action recovery.ActionKind
-		event  runstate.EventType
-	}{
-		{recovery.ActionAppendMovementReady, runstate.EventMovementReady},
-		{recovery.ActionAppendMovementStarted, runstate.EventMovementStarted},
-	} {
+	return liveRunLoop(ctx, result, startResult.Run, store, authority, control, dependencies)
+}
+
+// liveRunLoop executes exactly one selector decision per iteration, then
+// reloads through selectLiveBetweenUnit before advancing again.
+func liveRunLoop(
+	ctx context.Context,
+	result Result,
+	run *workspace.Run,
+	store *runstore.Store,
+	authority *runstore.Driver,
+	control *cancellation.Watcher,
+	dependencies dependencies,
+) Result {
+	for {
+		if cancelled, handled := cancellationResult(ctx, result, control); handled {
+			return cancelled
+		}
+		input, err := store.LoadRunInput(result.RunID)
+		if err != nil {
+			return interrupted(result, err)
+		}
+		if input.Projection.State.Run == runstate.RunSucceeded {
+			result.Outcome = OutcomeSucceeded
+			return result
+		}
 		decision, err := selectLiveBetweenUnit(store, authority)
 		if err != nil {
 			return interrupted(result, err)
 		}
-		if liveSelectionMismatch(decision.Action, step.action, runstate.MovementID(movement.ID)) {
-			return interrupted(result, fmt.Errorf("driver: live selector chose %s for initial movement", decision.Action.Kind))
+		if decision.Action == nil {
+			return interrupted(result, errors.New("driver: live selector returned no action"))
 		}
-		event := runstate.Event{
-			RunID:         startResult.RunID,
-			ScoreRevision: preparation.Score.Revision(),
-			MovementID:    runstate.MovementID(movement.ID),
-			Type:          step.event,
-			Payload:       json.RawMessage(`{}`),
+		switch decision.Action.Kind {
+		case recovery.ActionAppendMovementReady, recovery.ActionAppendMovementStarted:
+			eventType := runstate.EventMovementReady
+			if decision.Action.Kind == recovery.ActionAppendMovementStarted {
+				eventType = runstate.EventMovementStarted
+			}
+			if _, err := authority.Append(runstate.Event{
+				RunID: result.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+				MovementID: decision.Action.MovementID, Type: eventType, Payload: json.RawMessage(`{}`),
+			}, faultpoint.ReceiptAddress("movement."+string(eventType))); err != nil {
+				return stopped(result, err)
+			}
+		case recovery.ActionSelectInitialPerformer:
+			movement, performer, err := liveInitialSelection(input, decision.Action.MovementID)
+			if err != nil {
+				return interrupted(result, err)
+			}
+			attempt, err := run.CreateAttempt(movement.ID)
+			if err != nil {
+				return stopped(result, err)
+			}
+			attemptResult := ExecuteAttempt(ctx, AttemptExecution{
+				RepositoryRoot: store.RepositoryRoot(), Score: input.Score, Cast: input.Cast,
+				RunID: result.RunID, Attempt: attempt, CandidateTree: liveCandidateTree(input),
+				Authority: authority, PerformerID: performer.ID, SelectionReason: "initial",
+				RemainingMS: input.Projection.Scheduler.RemainingTime, Control: control,
+			}, executionDependenciesFrom(dependencies))
+			if attemptResult.Outcome != OutcomeSucceeded {
+				return attemptResult
+			}
+		case recovery.ActionMaterializeSuccessor:
+			attemptResult := liveMaterializeSuccessor(ctx, result, store, authority, control, dependencies, input)
+			if attemptResult.Outcome != OutcomeSucceeded {
+				return attemptResult
+			}
+		case recovery.ActionComposeCandidate:
+			if _, err := run.RecordZeroWriterCandidate(); err != nil {
+				return stopped(result, err)
+			}
+		case recovery.ActionAppendRunSucceeded:
+			if err := workspace.AppendWaivedRunSucceeded(authority, input, "run.succeeded"); err != nil {
+				return stopped(result, err)
+			}
+			result.Outcome = OutcomeSucceeded
+			return result
+		case recovery.ActionAppendBudgetFailure, recovery.ActionAppendRunFailed:
+			return liveBudgetExhaustion(result, store, authority, input, decision.Action)
+		default:
+			return interrupted(result, fmt.Errorf("driver: unsupported live scheduler action %s", decision.Action.Kind))
 		}
-		if _, err := authority.Append(
-			event,
-			faultpoint.ReceiptAddress("movement."+string(step.event)),
-		); err != nil {
-			return stopped(result, err)
+	}
+}
+
+func liveInitialSelection(
+	input runstore.RunInput,
+	movementID runstate.MovementID,
+) (score.MovementView, cast.PerformerView, error) {
+	if input.Score == nil {
+		return score.MovementView{}, cast.PerformerView{}, errors.New("driver: live selection has no pinned score")
+	}
+	if input.Cast == nil {
+		return score.MovementView{}, cast.PerformerView{}, errors.New("driver: live selection has no resolved cast")
+	}
+	for _, movement := range input.Score.Movements() {
+		if runstate.MovementID(movement.ID) != movementID {
+			continue
 		}
-		if cancelled, handled := cancellationResult(ctx, result, control); handled {
-			return cancelled
+		binding, ok := input.Cast.Binding(movement.PartID)
+		if !ok {
+			return score.MovementView{}, cast.PerformerView{}, errors.New("driver: selected movement has no binding")
 		}
+		performer, ok := input.Cast.Performer(binding.Performer)
+		if !ok {
+			return score.MovementView{}, cast.PerformerView{}, errors.New("driver: selected performer is absent")
+		}
+		return movement, performer, nil
 	}
-	decision, err := selectLiveBetweenUnit(store, authority)
-	if err != nil {
-		return interrupted(result, err)
+	return score.MovementView{}, cast.PerformerView{}, fmt.Errorf("driver: selected movement %q is absent", movementID)
+}
+
+func liveCandidateTree(input runstore.RunInput) string {
+	if input.Projection.State.ApplicationCandidate != nil {
+		return input.Projection.State.ApplicationCandidate.ResultTree
 	}
-	if liveSelectionMismatch(decision.Action, recovery.ActionSelectInitialPerformer, runstate.MovementID(movement.ID)) {
-		return interrupted(result, fmt.Errorf("driver: live selector chose %s for initial performer", decision.Action.Kind))
-	}
-	attempt, err := startResult.Run.CreateAttempt(movement.ID)
-	if err != nil {
-		return stopped(result, err)
-	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
-		return cancelled
-	}
-	return ExecuteAttempt(ctx, AttemptExecution{
-		RepositoryRoot:  preparation.RepositoryRoot,
-		Score:           preparation.Score,
-		Cast:            preparation.Cast,
-		RunID:           startResult.RunID,
-		Attempt:         attempt,
-		CandidateTree:   candidate.ResultTree,
-		Authority:       authority,
-		PerformerID:     performer.ID,
-		SelectionReason: "initial",
-		RemainingMS:     remainingMS,
-		Control:         control,
-	}, executionDependenciesFrom(dependencies))
+	return input.BaseTree
 }
 
 // ExecuteAttempt drives one fresh attempt after its workspace already exists.
@@ -813,39 +863,6 @@ func admitProbe(
 	return advisory, nil
 }
 
-func selectSlice(
-	preparation *validate.Preparation,
-) (
-	score.MovementView,
-	score.PartView,
-	cast.PerformerView,
-	*acceptance.Plan,
-	error,
-) {
-	movements := preparation.Score.Movements()
-	execution := preparation.Score.Execution()
-	if len(movements) != 1 || execution.FinalMovementID != movements[0].ID {
-		return score.MovementView{}, score.PartView{}, cast.PerformerView{},
-			nil, ErrUnsupportedSlice
-	}
-	var part score.PartView
-	found := false
-	for _, candidate := range preparation.Score.Parts() {
-		if candidate.ID == movements[0].PartID {
-			part, found = candidate, true
-			break
-		}
-	}
-	binding, bound := preparation.Cast.Binding(movements[0].PartID)
-	performer, exists := preparation.Cast.Performer(binding.Performer)
-	if !found || !bound || !exists {
-		return score.MovementView{}, score.PartView{}, cast.PerformerView{},
-			nil, ErrUnsupportedSlice
-	}
-	plan, err := acceptance.Compile(movements[0])
-	return movements[0], part, performer, plan, err
-}
-
 func selectAttempt(
 	compiled *score.Score,
 	resolvedCast *cast.Cast,
@@ -853,7 +870,7 @@ func selectAttempt(
 	performerID string,
 ) (score.MovementView, score.PartView, cast.PerformerView, *acceptance.Plan, error) {
 	if compiled == nil || resolvedCast == nil || movementID == "" || performerID == "" {
-		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrUnsupportedSlice
+		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrAttemptSelectionInconsistent
 	}
 	var movement score.MovementView
 	foundMovement := false
@@ -865,7 +882,7 @@ func selectAttempt(
 		}
 	}
 	if !foundMovement {
-		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrUnsupportedSlice
+		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrAttemptSelectionInconsistent
 	}
 	var part score.PartView
 	foundPart := false
@@ -878,7 +895,7 @@ func selectAttempt(
 	}
 	performer, foundPerformer := resolvedCast.Performer(performerID)
 	if !foundPart || !foundPerformer {
-		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrUnsupportedSlice
+		return score.MovementView{}, score.PartView{}, cast.PerformerView{}, nil, ErrAttemptSelectionInconsistent
 	}
 	plan, err := acceptance.Compile(movement)
 	return movement, part, performer, plan, err
@@ -897,6 +914,17 @@ func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 		}
 	}
 	return result
+}
+
+// HasWriterMovement reports whether the compiled score requires repository
+// writing, which remains unsupported until §5 candidate composition lands.
+func HasWriterMovement(compiled *score.Score) bool {
+	for _, movement := range compiled.Movements() {
+		if slices.Contains(movement.Grants, "repo_write") {
+			return true
+		}
+	}
+	return false
 }
 
 func effectiveGrants(
@@ -1358,17 +1386,13 @@ func liveMaterializeSuccessor(
 	if next.Projection.Scheduler.PendingSuccessor != nil {
 		return interrupted(result, errors.New("driver: durable successor remains pending after selection"))
 	}
-	candidate := next.Projection.State.ApplicationCandidate
-	if candidate == nil {
-		return interrupted(result, errors.New("driver: durable application candidate is absent"))
-	}
 	return ExecuteAttempt(ctx, AttemptExecution{
 		RepositoryRoot:       store.RepositoryRoot(),
 		Score:                next.Score,
 		Cast:                 next.Cast,
 		RunID:                result.RunID,
 		Attempt:              attempt,
-		CandidateTree:        candidate.ResultTree,
+		CandidateTree:        liveCandidateTree(next),
 		Authority:            authority,
 		PerformerID:          performer.ID,
 		SelectionReason:      pending.Reason,
@@ -1381,9 +1405,9 @@ func liveMaterializeSuccessor(
 	}, executionDependenciesFrom(dependencies))
 }
 
-// liveBudgetExhaustion realizes RC-RESUME-045 when a pending successor reaches
-// a zero-budget selection cut. The already-recorded disposition remains intact,
-// but exhaustion starts no successor attempt.
+// liveBudgetExhaustion realizes RC-RESUME-045 at a zero-budget selection cut.
+// A RUNNING movement fails before the run; between movements the run fails
+// directly, because there is no live movement to terminalize.
 func liveBudgetExhaustion(
 	result Result,
 	store *runstore.Store,
@@ -1391,25 +1415,31 @@ func liveBudgetExhaustion(
 	input runstore.RunInput,
 	action *recovery.Action,
 ) Result {
-	if action == nil || action.Kind != recovery.ActionAppendBudgetFailure ||
-		action.MovementID == "" || input.Projection.State.Movements[action.MovementID] != runstate.MovementRunning {
-		return interrupted(result, errors.New("driver: budget exhaustion has no running movement action"))
+	if action == nil {
+		return interrupted(result, errors.New("driver: budget exhaustion has no action"))
 	}
-	payload, err := json.Marshal(map[string]any{"reason": "budget_exhausted", "run_failed": false})
-	if err != nil {
-		return interrupted(result, err)
+	if action.Kind == recovery.ActionAppendBudgetFailure {
+		if action.MovementID == "" || input.Projection.State.Movements[action.MovementID] != runstate.MovementRunning {
+			return interrupted(result, errors.New("driver: budget exhaustion has no running movement action"))
+		}
+		payload, err := json.Marshal(map[string]any{"reason": "budget_exhausted", "run_failed": false})
+		if err != nil {
+			return interrupted(result, err)
+		}
+		if _, err := authority.Append(runstate.Event{
+			RunID: result.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			MovementID: action.MovementID, Type: runstate.EventMovementFailed, Payload: payload,
+		}, faultpoint.ReceiptAddress("movement.failed.budget_exhausted")); err != nil {
+			return stopped(result, err)
+		}
+		input, err = store.LoadRunInput(result.RunID)
+		if err != nil {
+			return interrupted(result, err)
+		}
+	} else if action.Kind != recovery.ActionAppendRunFailed {
+		return interrupted(result, fmt.Errorf("driver: unsupported budget exhaustion action %s", action.Kind))
 	}
-	if _, err := authority.Append(runstate.Event{
-		RunID: result.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
-		MovementID: action.MovementID, Type: runstate.EventMovementFailed, Payload: payload,
-	}, faultpoint.ReceiptAddress("movement.failed.budget_exhausted")); err != nil {
-		return stopped(result, err)
-	}
-	input, err = store.LoadRunInput(result.RunID)
-	if err != nil {
-		return interrupted(result, err)
-	}
-	payload, err = json.Marshal(map[string]any{"reason": action.FailureReason})
+	payload, err := json.Marshal(map[string]any{"reason": action.FailureReason})
 	if err != nil {
 		return interrupted(result, err)
 	}

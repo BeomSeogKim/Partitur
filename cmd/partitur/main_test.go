@@ -871,6 +871,73 @@ func TestResumeRefusesLiveOwnerWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestResumeRefusesNonterminalWriterScoreWithoutMutation(t *testing.T) {
+	root, _ := resumeFixtureWithInputs(t, "", resumeWriterScore(), resumeWriterCast())
+	journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	lease := filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease")
+	before, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"repo_write movements require unsupported candidate composition pending §5\"\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("writer refusal appended to journal")
+	}
+	if _, err := os.Stat(lease); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("writer refusal acquired lease: %v", err)
+	}
+}
+
+func TestResumeKeepsTerminalWriterScoreIdempotent(t *testing.T) {
+	root, _ := resumeFixtureWithInputs(t, "FAILED", resumeWriterScore(), resumeWriterCast())
+	journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	before, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("terminal writer resume appended to journal")
+	}
+}
+
+func TestCancelRefusesNonterminalWriterScoreWithoutMutation(t *testing.T) {
+	root, _ := resumeFixtureWithInputs(t, "", resumeWriterScore(), resumeWriterCast())
+	journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	before, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"cancel", "run-1"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"repo_write movements require unsupported candidate composition pending §5\"\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("writer cancellation refusal appended to journal")
+	}
+}
+
 func TestResumeTreatsTerminalProjectionIdempotently(t *testing.T) {
 	for _, test := range []struct {
 		state string
@@ -888,6 +955,48 @@ func TestResumeTreatsTerminalProjectionIdempotently(t *testing.T) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
+	}
+}
+
+func TestResumeCompletesWaivedReadOnlyTailExactlyOnce(t *testing.T) {
+	root, store := resumeFixtureWithInputs(t, "", resumeAttemptScore(), []byte("cast: \"0.1\"\nperformers:\n  reviewer:\n    adapter: adapter\n    model: model\nbindings:\n  reviewer:\n    performer: reviewer\n"))
+	appendWaivedReadOnlyMovementSucceeded(t, store)
+	t.Chdir(root)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("first resume: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventRunSucceeded) != 1 {
+		t.Fatalf("run.succeeded count=%d, want exactly one", countEvents(journal.Events, runstate.EventRunSucceeded))
+	}
+	terminal := journal.Events[len(journal.Events)-1]
+	if terminal.Type != runstate.EventRunSucceeded {
+		t.Fatalf("terminal event=%s, want run.succeeded", terminal.Type)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(terminal.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if candidate, ok := payload["candidate"].(map[string]any); !ok || candidate["candidate_id"] == "" {
+		t.Fatalf("run.succeeded lacks candidate: %v", payload)
+	}
+	before := len(journal.Events)
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("second resume: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) != before || countEvents(journal.Events, runstate.EventRunSucceeded) != 1 {
+		t.Fatalf("second resume appended events=%d run.succeeded=%d", len(journal.Events)-before, countEvents(journal.Events, runstate.EventRunSucceeded))
 	}
 }
 
@@ -1252,6 +1361,44 @@ func appendResumeAttempt(t *testing.T, store *runstore.Store, started bool) {
 	}
 }
 
+func appendWaivedReadOnlyMovementSucceeded(t *testing.T, store *runstore.Store) {
+	t.Helper()
+	versions := resumeIdentityVersions()
+	events := []runstate.Event{
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", Type: runstate.EventMovementReady, Payload: resumePayload(t, map[string]any{})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", Type: runstate.EventMovementStarted, Payload: resumePayload(t, map[string]any{})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: resumePayload(t, map[string]any{"reason": "initial", "performer_id": "reviewer", "adapter_id": "adapter", "model": "model"})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: resumePayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": versions})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: resumePayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventPerformerCompleted, Payload: resumePayload(t, map[string]any{"session_hint_stored": false})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventVerificationPassed, Payload: resumePayload(t, map[string]any{})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAcceptanceStarted, Payload: resumePayload(t, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{}, "identity_versions": versions})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAcceptanceEvaluationCompleted, Payload: resumePayload(t, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{}, "identity_versions": versions})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAttemptCompleted, Payload: resumePayload(t, map[string]any{})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventMovementSucceeded, Payload: resumePayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "identity_versions": versions, "run_succeeded": false})},
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		for _, event := range events {
+			if _, err := tx.At("fixture.waived.succeeded").Append(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func countEvents(events []runstate.Event, want runstate.EventType) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == want {
+			count++
+		}
+	}
+	return count
+}
+
 func appendResumeRecordedArtifact(t *testing.T, store *runstore.Store) string {
 	t.Helper()
 	contents := []byte("durably recorded artifact\n")
@@ -1364,6 +1511,14 @@ func resumeScore(revision int, goal string) []byte {
 
 func resumeAttemptScore() []byte {
 	return []byte("score: \"0.2\"\nname: resume-attempt-fixture\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts:\n  reviewer:\n    capabilities: [repo_read]\nmovements:\n  - id: review\n    part: reviewer\n    grants: [repo_read]\n    instruction: inspect\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n")
+}
+
+func resumeWriterScore() []byte {
+	return []byte("score: \"0.2\"\nname: resume-writer-fixture\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts:\n  writer:\n    capabilities: [repo_read, repo_write]\nmovements:\n  - id: write\n    part: writer\n    grants: [repo_read, repo_write]\n    instruction: write\n    outputs:\n      - id: change-set\n        kind: change_set\n    acceptance:\n      hard:\n        - id: tests\n          run: [\"true\"]\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n")
+}
+
+func resumeWriterCast() []byte {
+	return []byte("cast: \"0.1\"\nperformers:\n  writer:\n    adapter: adapter\n    model: model\nbindings:\n  writer:\n    performer: writer\n")
 }
 
 func resumeIdentityVersions() map[string]any {

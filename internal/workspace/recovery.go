@@ -9,10 +9,84 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
+
+// AppendWaivedRunSucceeded materializes the identity candidate and waiver in
+// the waived terminal event. A waived run never records a candidate first.
+func AppendWaivedRunSucceeded(
+	driver *runstore.Driver,
+	input runstore.RunInput,
+	address faultpoint.ReceiptAddress,
+) error {
+	if driver == nil {
+		return errors.New("workspace: waived completion requires driver")
+	}
+	if input.Score == nil {
+		return errors.New("workspace: waived completion requires pinned score")
+	}
+	if input.BaseTree == "" {
+		return errors.New("workspace: waived completion requires base tree")
+	}
+	execution := input.Score.Execution()
+	if !execution.GateWaived {
+		return errors.New("workspace: waived completion requires waived gate")
+	}
+	if execution.WaiverReason == "" {
+		return errors.New("workspace: waived completion requires waiver reason")
+	}
+	for _, movement := range input.Score.Movements() {
+		if hasGrant(movement.Grants, "repo_write") {
+			return fmt.Errorf("workspace: waived completion cannot compose writer movement %q", movement.ID)
+		}
+		state := input.Projection.State.Movements[runstate.MovementID(movement.ID)]
+		if state == runstate.MovementSucceeded {
+			continue
+		}
+		if state == runstate.MovementInapplicable {
+			continue
+		}
+		return fmt.Errorf("workspace: waived completion movement %q is incomplete", movement.ID)
+	}
+	candidateID, err := canonical.Hash(canonical.DomainCandidate, map[string]any{
+		"base_tree": input.BaseTree, "result_tree": input.BaseTree, "ordered_change_sets": []any{},
+	})
+	if err != nil {
+		return err
+	}
+	compositionHash, err := canonical.Hash(canonical.DomainCandidateComposition, map[string]any{
+		"composition_mode": "identity", "base_tree": input.BaseTree, "contributors": []any{},
+		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
+	})
+	if err != nil {
+		return err
+	}
+	versions, err := identityVersions(canonical.DomainCandidate, canonical.DomainCandidateComposition)
+	if err != nil {
+		return err
+	}
+	versions["composition"] = canonical.CompositionAlgorithmVersion
+	payload, err := json.Marshal(map[string]any{
+		"candidate": map[string]any{
+			"candidate_id": candidateID, "base_tree": input.BaseTree, "result_tree": input.BaseTree,
+			"ordered_change_sets": []any{}, "contributors": []any{},
+			"candidate_composition_dependency_hash": compositionHash,
+		},
+		"waiver":            map[string]any{"reason": execution.WaiverReason},
+		"identity_versions": versions,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = driver.Append(runstate.Event{
+		RunID: driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		Type: runstate.EventRunSucceeded, Payload: payload,
+	}, address)
+	return err
+}
 
 // RecordRecoveredZeroWriterCandidate records the same identity candidate as
 // the live run path from run-owned recovery inputs.

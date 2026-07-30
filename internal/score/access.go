@@ -69,9 +69,19 @@ func (s *Score) Execution() ExecutionView {
 			result.VerificationExpectation = *expectation.Intent
 			result.VerificationExpectationPresent = true
 		}
-		if expectation := s.document.Verification.Expectation; expectation != nil &&
-			expectation.ApplyGate != nil && expectation.ApplyGate.Waived != nil {
-			result.GateWaived = *expectation.ApplyGate.Waived
+		expectation := s.document.Verification.Expectation
+		if expectation == nil {
+			return result
+		}
+		if expectation.ApplyGate == nil {
+			return result
+		}
+		if expectation.ApplyGate.Waived == nil {
+			return result
+		}
+		result.GateWaived = *expectation.ApplyGate.Waived
+		if expectation.ApplyGate.Reason != nil {
+			result.WaiverReason = *expectation.ApplyGate.Reason
 		}
 	}
 	return result

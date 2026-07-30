@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -16,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
@@ -30,76 +30,6 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
-
-func TestSelectSliceRejectsEachUnsupportedShape(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(map[string]any)
-		want   error
-	}{
-		{
-			name: "more than one movement",
-			mutate: func(score map[string]any) {
-				final := score["movements"].([]any)[0].(map[string]any)
-				final["needs"] = []any{"prepare"}
-				final["inputs"] = []any{"notes"}
-				score["movements"] = append(
-					[]any{
-						map[string]any{
-							"id":          "prepare",
-							"part":        "reader",
-							"grants":      []any{"repo_read"},
-							"instruction": "Prepare notes.",
-							"outputs": []any{
-								map[string]any{
-									"id":   "notes",
-									"kind": "artifact",
-								},
-							},
-							"acceptance": map[string]any{
-								"hard": []any{
-									map[string]any{
-										"id":       "notes-present",
-										"artifact": "notes",
-									},
-								},
-							},
-						},
-					},
-					map[string]any{
-						"id": "sentinel",
-					},
-				)
-				movements := score["movements"].([]any)
-				movements[len(movements)-1] = final
-			},
-			want: ErrUnsupportedSlice,
-		},
-		{
-			name: "external hard criterion",
-			mutate: func(score map[string]any) {
-				movement := score["movements"].([]any)[0].(map[string]any)
-				movement["acceptance"] = map[string]any{
-					"hard": []any{
-						map[string]any{"id": "external", "run": []any{"true"}},
-					},
-				}
-			},
-			want: acceptance.ErrUnsupportedCriteria,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			score := sliceScore()
-			test.mutate(score)
-			preparation := prepareFixture(t, score)
-			_, _, _, _, err := selectSlice(preparation)
-			if !errors.Is(err, test.want) {
-				t.Fatalf("error = %v, want %v", err, test.want)
-			}
-		})
-	}
-}
 
 func TestMovementSeedsProjectFinality(t *testing.T) {
 	final := movementSeeds(prepareFixture(t, sliceScore()).Score)
@@ -251,6 +181,24 @@ func TestUnrepresentableWireBudgetInterruptsBeforeDriverAuthority(t *testing.T) 
 		)
 	}
 	assertNoDriverLease(t, preparation.RepositoryRoot, result.RunID)
+}
+
+func TestRunRefusesWriterMovementsBeforeWorkspaceStart(t *testing.T) {
+	for _, waived := range []bool{false, true} {
+		t.Run(fmt.Sprintf("waived=%t", waived), func(t *testing.T) {
+			preparation := prepareRunnableFixture(t, writerSliceScore(waived), sliceCast())
+			starts := 0
+			dependencies := testDependencies()
+			dependencies.workspaceStart = func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error) {
+				starts++
+				return workspace.StartResult{}, errors.New("workspace.Start must not be called")
+			}
+			result := run(context.Background(), preparation, func(runstate.RunID) error { return nil }, dependencies)
+			if result.RunID != "" || !errors.Is(result.Err, ErrWriterCompositionUnsupported) || starts != 0 {
+				t.Fatalf("result=%+v workspace starts=%d", result, starts)
+			}
+		})
+	}
 }
 
 func TestPostCreationOperationalFailureLeavesResumableRun(t *testing.T) {
@@ -745,6 +693,74 @@ func TestLiveChainTerminatesWhenBudgetExhaustsMidChain(t *testing.T) {
 	}
 }
 
+func TestLiveLoopFailsRunDirectlyWhenBudgetExhaustsBetweenMovements(t *testing.T) {
+	scoreDocument := writerFreeTwoMovementWaivedScore()
+	preparation := prepareRunnableFixture(t, scoreDocument, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	if err := started.Run.BindDriver(authority); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []runstate.Event{
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementReady, Payload: testPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementStarted, Payload: testPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "gpt-5.6-sol"})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: testPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: testPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventPerformerCompleted, Payload: testPayload(t, map[string]any{"session_hint_stored": false})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventVerificationPassed, Payload: testPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: testPayload(t, map[string]any{"interval_id": "acceptance-1", "phase": "acceptance", "wall_start": "2026-07-30T00:00:00.000Z", "remaining_at_start": 60000})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventAcceptanceStarted, Payload: testPayload(t, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventAcceptanceEvaluationCompleted, Payload: testPayload(t, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+		{RunID: started.RunID, ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: testPayload(t, map[string]any{"interval_id": "acceptance-1", "reason": "normal", "charging": "measured", "charged_duration": 60000})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventAttemptCompleted, Payload: testPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventMovementSucceeded, Payload: testPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}, "run_succeeded": false})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.Scheduler.RemainingTime != 0 || input.Projection.State.Movements["second"] != runstate.MovementPending {
+		t.Fatalf("pre-loop scheduler=%+v movements=%+v", input.Projection.Scheduler, input.Projection.State.Movements)
+	}
+	control, err := cancellation.Watch(store, started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Stop()
+	result := liveRunLoop(context.Background(), Result{RunID: started.RunID}, started.Run, store, authority, control, testDependencies())
+	if result.Outcome != OutcomeFailed || result.Reason != "budget_exhausted" || result.Err != nil {
+		t.Fatalf("result=%+v", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := journal.Events[len(journal.Events)-1]; got.Type != runstate.EventRunFailed || got.MovementID != "" {
+		t.Fatalf("last event=%+v, want direct run.failed", got)
+	}
+	for _, event := range journal.Events {
+		if event.MovementID == "second" {
+			t.Fatalf("pending successor was scheduled after exhaustion: %+v", event)
+		}
+	}
+}
+
 func TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap(t *testing.T) {
 	store, authority, runID, input, _ := liveChargedSuccessorFixture(t, "quality_retry")
 	defer authority.Release()
@@ -951,8 +967,8 @@ func TestLiveBetweenUnitEntryCallSitesRespectPostEffectBoundary(t *testing.T) {
 	if liveEntryCalls == 0 {
 		t.Fatal("found zero live-between-unit entry calls in internal/driver non-test files")
 	}
-	if !allCallsBefore(functions["run"], "selectLiveBetweenUnit", "ExecuteAttempt") {
-		t.Fatal("initial live entry must remain before ExecuteAttempt")
+	if !allCallsBefore(functions["liveRunLoop"], "selectLiveBetweenUnit", "ExecuteAttempt") {
+		t.Fatal("live scheduler selection must remain before ExecuteAttempt")
 	}
 	if !allCallsBefore(functions["ExecuteAttempt"], "Execute", "realizeRecordedNoneDisposition") {
 		t.Fatal("post-effect live entry must be reachable only after Client.Execute returns")
@@ -965,7 +981,7 @@ func TestLiveBetweenUnitEntryCallSitesRespectPostEffectBoundary(t *testing.T) {
 func approvedLiveBetweenUnitCall(function, callee string) bool {
 	switch callee {
 	case "selectLiveBetweenUnit":
-		return function == "run"
+		return function == "liveRunLoop"
 	case "liveBetweenUnitEntry":
 		return function == "selectLiveBetweenUnit" || function == "realizeRecordedNoneDisposition" || function == "liveMaterializeSuccessor"
 	default:
@@ -1214,6 +1230,50 @@ func sliceScore() map[string]any {
 			},
 		},
 	}
+}
+
+func writerSliceScore(waived bool) map[string]any {
+	scoreDocument := sliceScore()
+	part := scoreDocument["parts"].(map[string]any)["reader"].(map[string]any)
+	part["capabilities"] = []any{"repo_read", "repo_write"}
+	delete(part, "read_only")
+	movement := scoreDocument["movements"].([]any)[0].(map[string]any)
+	movement["grants"] = []any{"repo_read", "repo_write"}
+	movement["outputs"] = []any{map[string]any{"id": "change-set", "kind": "change_set"}}
+	movement["acceptance"] = map[string]any{"hard": []any{map[string]any{"id": "tests", "run": []any{"true"}}}}
+	if waived {
+		verification := scoreDocument["verification"].(map[string]any)
+		verification["expectation"].(map[string]any)["apply_gate"] = map[string]any{"waived": true, "reason": "writer fixture"}
+		delete(verification, "final_movement")
+	} else {
+		final := map[string]any{
+			"id": "final", "part": "reader", "needs": []any{"inspect"}, "grants": []any{"repo_read"},
+			"instruction": "Verify the result.", "outputs": []any{map[string]any{"id": "final-report", "kind": "artifact"}},
+			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "final-report-present", "artifact": "final-report"}}},
+		}
+		scoreDocument["movements"] = append(scoreDocument["movements"].([]any), final)
+		scoreDocument["verification"].(map[string]any)["final_movement"] = "final"
+	}
+	return scoreDocument
+}
+
+func writerFreeTwoMovementWaivedScore() map[string]any {
+	scoreDocument := sliceScore()
+	verification := scoreDocument["verification"].(map[string]any)
+	verification["expectation"].(map[string]any)["apply_gate"] = map[string]any{"waived": true, "reason": "budget fixture"}
+	delete(verification, "final_movement")
+	first := scoreDocument["movements"].([]any)[0].(map[string]any)
+	second := map[string]any{}
+	for key, value := range first {
+		second[key] = value
+	}
+	second["id"] = "second"
+	second["needs"] = []any{"inspect"}
+	second["outputs"] = []any{map[string]any{"id": "second-report", "kind": "artifact"}}
+	second["acceptance"] = map[string]any{"hard": []any{map[string]any{"id": "second-report-present", "artifact": "second-report"}}}
+	scoreDocument["movements"] = []any{first, second}
+	scoreDocument["policy"].(map[string]any)["budget"].(map[string]any)["active_wall_clock_min"] = float64(1)
+	return scoreDocument
 }
 
 func sliceCast() map[string]any {
