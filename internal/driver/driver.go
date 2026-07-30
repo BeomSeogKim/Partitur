@@ -1265,6 +1265,7 @@ func realizeRecordedNoneDisposition(
 	}, faultpoint.ReceiptAddress("movement.failed")); err != nil {
 		return stopped(result, err), true
 	}
+	dependencies.probe.Reached(faultpoint.PointLifecycleMovementFailed)
 	if dependencies.afterMovementFailed != nil {
 		dependencies.afterMovementFailed()
 	}
@@ -1293,6 +1294,7 @@ func realizeRecordedNoneDisposition(
 	}, faultpoint.ReceiptAddress("run.failed")); err != nil {
 		return stopped(result, err), true
 	}
+	dependencies.probe.Reached(faultpoint.PointLifecycleRunFailed)
 	input, err = store.LoadRunInput(result.RunID)
 	if err != nil {
 		return interrupted(result, err), true

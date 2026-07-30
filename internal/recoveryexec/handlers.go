@@ -778,9 +778,13 @@ func appendMovementBudgetFailure(_ context.Context, execution HandlerContext, ac
 	if err != nil {
 		return err
 	}
-	return appendEvent(execution, state, withMovement(action, movementID), runstate.EventMovementFailed, map[string]any{
+	if err := appendEvent(execution, state, withMovement(action, movementID), runstate.EventMovementFailed, map[string]any{
 		"reason": "budget_exhausted", "run_failed": false,
-	})
+	}); err != nil {
+		return err
+	}
+	execution.Store.Reached(faultpoint.PointLifecycleMovementFailed)
+	return nil
 }
 
 func appendRunFailed(_ context.Context, execution HandlerContext, action recovery.Action) error {
@@ -792,7 +796,11 @@ func appendRunFailed(_ context.Context, execution HandlerContext, action recover
 	if reason == "" {
 		reason = "movement_failed"
 	}
-	return appendEvent(execution, state, action, runstate.EventRunFailed, map[string]any{"reason": reason})
+	if err := appendEvent(execution, state, action, runstate.EventRunFailed, map[string]any{"reason": reason}); err != nil {
+		return err
+	}
+	execution.Store.Reached(faultpoint.PointLifecycleRunFailed)
+	return nil
 }
 
 func returnWaitingHuman(context.Context, HandlerContext, recovery.Action) error { return nil }

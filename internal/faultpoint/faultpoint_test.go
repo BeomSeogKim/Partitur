@@ -503,6 +503,8 @@ func TestBoundaryPointIDsAreSemanticAndUnique(t *testing.T) {
 		PointExecuteOutcomeRecorded,
 		PointLifecycleAttemptCompleted,
 		PointLifecycleMovementSucceeded,
+		PointLifecycleMovementFailed,
+		PointLifecycleRunFailed,
 	}
 	seen := map[PointID]bool{}
 	for _, point := range points {
