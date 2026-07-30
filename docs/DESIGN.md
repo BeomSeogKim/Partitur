@@ -5667,7 +5667,7 @@ requires, not the number of review rounds that have run.
 
 ## E.2 The catalog
 
-`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the twenty-eight
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-one
 have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
 
 **Prepare and quiesce**
@@ -5724,6 +5724,14 @@ one sequence (§4).
 |---|---|---|---|---|
 | `execute.adapter_swept_to_interval_stopped` | complete response validated, adapter exited zero, and recorded adapter session verified empty `B` | `execution.stopped {reason: normal, charging: measured}` appended `R` | §4; §6; C.2 | A crash leaves the interval open. Recovery does not trust the volatile response: it sweeps again, closes the interval `recovered`/`clamped`, and records an incomplete-attempt failure. Closing before the left endpoint would stop charging a survivor |
 | `execute.interval_stopped_to_outcome` | ordinary adapter `execution.stopped` durable `R` | the response-derived B.2 event appended `R` | §4; B.2; C.2 | A crash records no outcome from the lost response and never enters acceptance. C.2 re-sweeps, observes the interval already closed, and records the incomplete-attempt failure without a second charge. In particular, `performer.completed` can never coexist with an open adapter interval or an unswept session |
+
+**Change-set capture and composition**
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `change_set.captured_to_recorded` | checkpoint commit pinned at `refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset` `R` | `change_set.recorded` appended `R` | §5; B.3; C.2 `RC-RESUME-016` | A pinned checkpoint with no `change_set.recorded` authorizes neither composition nor acceptance. Recovery treats the surviving worktree tree as authoritative and captures the change set idempotently; if that worktree is gone, it records `attempt.failed {reason: worktree_lost}` instead. This does **not** make the checkpoint commit OID a semantic change-set identity or let the ref substitute for the event |
+| `composition.movement_evidence_to_terminal` | `composition.conflicted` or `composition.failed` for `scope: movement` appended `R` | matching `movement.failed` appended `R` | B.3; C.1 `RC-RESUME-011` | Durable movement-scoped composition evidence cannot leave that movement nonterminal after recovery reaches its fixed point: C.1 first lets a durable `cancel.requested` win, otherwise `RC-RESUME-011` appends the matching `movement.failed` reason. This does **not** claim that the evidence itself projects state or collapse a no-verdict failure into a conflict |
+| `composition.candidate_evidence_to_terminal` | `composition.conflicted` or `composition.failed` for `scope: candidate` appended `R` | matching `run.failed` appended `R` | B.3; C.1 `RC-RESUME-011` | Durable candidate-scoped composition evidence cannot leave the run nonterminal after recovery reaches its fixed point: C.1 first lets a durable `cancel.requested` win, otherwise `RC-RESUME-011` appends the matching `run.failed` reason. This does **not** claim that a candidate exists or collapse a no-verdict failure into a conflict |
 
 **Evidence and lifecycle consequences**
 
