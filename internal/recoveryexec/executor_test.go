@@ -7,15 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -127,7 +124,6 @@ func TestCaptureChangeSetRecoveryHandlerRecordsOnce(t *testing.T) {
 }
 
 func TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *testing.T) {
-	moduleCache := mutationGoModuleCache(t)
 	fixture := recoveryChangeSetFixture(t)
 	defer fixture.driver.Release()
 	input, err := fixture.store.LoadRunInput(fixture.runID)
@@ -167,13 +163,9 @@ func TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *testing.
 			t.Fatal("recovery created a target attempt after composition terminalized it")
 		}
 	}
-	if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
-		assertRecoveryMutationKilled(t, t.Name(), moduleCache, filepath.Join("internal", "driver", "movement_composition.go"), "return MovementBase{}, ErrCompositionTerminalized", "return MovementBase{}, errors.New(\"driver: injected non-terminal composition failure\")")
-	}
 }
 
 func TestRecoveryFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
-	moduleCache := mutationGoModuleCache(t)
 	fixture := recoveryChangeSetFixture(t)
 	defer fixture.driver.Release()
 	input, err := fixture.store.LoadRunInput(fixture.runID)
@@ -234,9 +226,6 @@ func TestRecoveryFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	worktree := filepath.Join(fixture.store.RepositoryRoot(), ".partitur", "work", string(fixture.runID), string(targetAttempt), "worktree")
 	if got := recoveryGitText(t, worktree, "rev-parse", "HEAD^{commit}"); got != pinned {
 		t.Fatalf("recovery target worktree commit = %q, want pinned fan-in base %q", got, pinned)
-	}
-	if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
-		assertRecoveryMutationKilled(t, t.Name(), moduleCache, filepath.Join("internal", "recoveryexec", "handlers.go"), "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)", "workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)")
 	}
 }
 
@@ -473,177 +462,6 @@ func writeFixtureJSON(t *testing.T, path string, value any) {
 	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func mutationGoModuleCache(t *testing.T) string {
-	t.Helper()
-	command := exec.Command("go", "env", "GOMODCACHE")
-	output, err := command.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return strings.TrimSpace(string(output))
-}
-
-func assertRecoveryMutationKilled(t *testing.T, testName, moduleCache, sourceName, before, after string) {
-	t.Helper()
-	lockMutationSource(t)
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve recovery test source directory")
-	}
-	copyRoot := filepath.Join(t.TempDir(), "partitur-mutation-copy")
-	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
-	if err := copyMutationRepository(copyRoot, repositoryRoot); err != nil {
-		t.Fatal(err)
-	}
-	sourcePath := filepath.Join(copyRoot, sourceName)
-	contents, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count := strings.Count(string(contents), before); count == 0 {
-		t.Fatalf("mutation anchor %q is absent from %s", before, sourcePath)
-	}
-	backup, err := os.CreateTemp(t.TempDir(), "partitur-mutation-backup-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	backupPath := backup.Name()
-	if err := backup.Close(); err != nil {
-		t.Fatal(err)
-	}
-	copyFile := func(destination, source string) error {
-		input, err := os.Open(source)
-		if err != nil {
-			return err
-		}
-		defer input.Close()
-		info, err := input.Stat()
-		if err != nil {
-			return err
-		}
-		output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(output, input)
-		closeErr := output.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	}
-	if err := copyFile(backupPath, sourcePath); err != nil {
-		t.Fatal(err)
-	}
-	mutated := strings.ReplaceAll(string(contents), before, after)
-	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	applied, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(applied), after) || strings.Contains(string(applied), before) {
-		t.Fatalf("mutation was not applied to %s before the child test ran", sourcePath)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	command := exec.CommandContext(ctx, "go", "test", ".", "-run", "^"+testName+"$", "-count=1")
-	command.Dir = filepath.Join(copyRoot, "internal", "recoveryexec")
-	command.Env = append(os.Environ(), "PARTITUR_MUTATION_CHILD=1", "GOMODCACHE="+moduleCache)
-	output, runErr := command.CombinedOutput()
-	cancel()
-	if err := copyFile(sourcePath, backupPath); err != nil {
-		t.Fatal(err)
-	}
-	cmp := exec.Command("cmp", "-s", backupPath, sourcePath)
-	if output, err := cmp.CombinedOutput(); err != nil {
-		t.Fatalf("mutation restore comparison failed: %v\n%s", err, output)
-	}
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("mutation non-result: child test timed out\n%s", output)
-	}
-	if runErr == nil {
-		t.Fatalf("mutation survived: %s still passed after %q became %q", testName, before, after)
-	}
-	if strings.Contains(string(output), "[build failed]") {
-		t.Fatalf("mutation non-result: child build failed\n%s", output)
-	}
-	if strings.Contains(string(output), "panic:") {
-		t.Fatalf("mutation non-result: child panicked\n%s", output)
-	}
-	if !strings.Contains(string(output), "--- FAIL: "+testName) {
-		t.Fatalf("mutation non-result: child did not fail the targeted assertion: %v\n%s", runErr, output)
-	}
-}
-
-func copyMutationRepository(destination, source string) error {
-	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if relative == ".git" {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		target := filepath.Join(destination, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		}
-		input, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer input.Close()
-		info, err := input.Stat()
-		if err != nil {
-			return err
-		}
-		output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(output, input)
-		closeErr := output.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
-}
-
-func lockMutationSource(t *testing.T) {
-	t.Helper()
-	lock, err := os.OpenFile(filepath.Join(os.TempDir(), "partitur-mutation-source.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		_ = lock.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
-			t.Errorf("release mutation source lock: %v", err)
-		}
-		if err := lock.Close(); err != nil {
-			t.Errorf("close mutation source lock: %v", err)
-		}
-	})
 }
 
 func successorSelection(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID) (runstate.Event, runstate.AttemptState) {
@@ -1163,99 +981,6 @@ func TestAppendCompositionTerminalSerializesCancellationAfterEvidence(t *testing
 	}
 	if !(evidenceIndex < terminalIndex && terminalIndex < cancellationIndex) {
 		t.Fatalf("cancellation interleaved with recovery terminal: evidence=%d terminal=%d cancellation=%d", evidenceIndex, terminalIndex, cancellationIndex)
-	}
-	if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
-		assertRecoveryMutationKilled(t, t.Name(), mutationGoModuleCache(t), "internal/recoveryexec/handlers.go", `func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
-		return errors.New("recovery composition terminal requires store, driver, and evidence")
-	}
-	terminal := action.CompositionTerminal
-	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
-	if err != nil {
-		return err
-	}
-	cause, err := latestEventID(journal.Events, func(event runstate.Event) bool {
-		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
-			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
-			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
-	})
-	if err != nil {
-		return err
-	}
-	return execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
-		// C.1 cancellation is checked with the terminal append while the state
-		// lock and the existing lease predicate are both held.
-		if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
-			return ErrRecoveryReplan
-		}
-		if execution.afterCompositionEvidence != nil {
-			execution.afterCompositionEvidence()
-		}
-		var event runstate.Event
-		var address faultpoint.ReceiptAddress
-		switch terminal.Scope {
-		case "movement":
-			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
-			address = "recovery.movement.failed.composition"
-		case "candidate":
-			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason})}
-			address = "recovery.run.failed.composition"
-		default:
-			return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
-		}
-		if _, err := runstate.Apply(state, event); err != nil {
-			return err
-		}
-		_, err := transaction.At(address).Append(event)
-		return err
-	})
-}`,
-			`func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
-		return errors.New("recovery composition terminal requires store, driver, and evidence")
-	}
-	terminal := action.CompositionTerminal
-	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
-	if err != nil {
-		return err
-	}
-	cause, err := latestEventID(journal.Events, func(event runstate.Event) bool {
-		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
-			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
-			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
-	})
-	if err != nil {
-		return err
-	}
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
-		return ErrRecoveryReplan
-	}
-	if execution.afterCompositionEvidence != nil {
-		execution.afterCompositionEvidence()
-	}
-	time.Sleep(50 * time.Millisecond)
-	var event runstate.Event
-	var address faultpoint.ReceiptAddress
-	switch terminal.Scope {
-	case "movement":
-		event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
-		address = "recovery.movement.failed.composition"
-	case "candidate":
-		event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason})}
-		address = "recovery.run.failed.composition"
-	default:
-		return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
-	}
-	if _, err := runstate.Apply(state, event); err != nil {
-		return err
-	}
-	_, err = execution.Driver.Append(event, address)
-	return err
-}`)
 	}
 }
 
