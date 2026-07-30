@@ -41,8 +41,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 		t.Fatalf("planner ActionKind count = %d, want 46", len(declared))
 	}
 
-	if len(namedUnimplementedActionOwners) != 12 {
-		t.Fatalf("named unimplemented action count = %d, want 12", len(namedUnimplementedActionOwners))
+	if len(namedUnimplementedActionOwners) != 10 {
+		t.Fatalf("named unimplemented action count = %d, want 10", len(namedUnimplementedActionOwners))
 	}
 	for kind, unit := range namedUnimplementedActionOwners {
 		if !unitIdentifier.MatchString(unit) {
@@ -60,8 +60,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 	}
 
 	handlers := defaultKinds()
-	if len(handlers) != 23 {
-		t.Fatalf("implemented defaultKinds count = %d, want 23", len(handlers))
+	if len(handlers) != 25 {
+		t.Fatalf("implemented defaultKinds count = %d, want 25", len(handlers))
 	}
 
 	bucketCounts := map[string]int{}
@@ -93,8 +93,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 			t.Fatalf("ActionKind %q has multiple classification buckets: %v", kind, buckets)
 		}
 	}
-	if bucketCounts["defaultKinds"] != 23 || bucketCounts["Steps"] != 7 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 12 {
-		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 23, 7, 3, 1, 12", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
+	if bucketCounts["defaultKinds"] != 25 || bucketCounts["Steps"] != 7 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 10 {
+		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 25, 7, 3, 1, 10", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
 	}
 }
 

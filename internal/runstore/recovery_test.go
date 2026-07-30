@@ -11,6 +11,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
@@ -338,7 +339,7 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := input.Projection.CompositionTerminals; len(got) != 1 || got[0].Scope != "movement" || got[0].TargetID != "write" || got[0].Reason != "composition_failed" {
+		if got := input.Projection.CompositionTerminals; len(got) != 1 || got[0].Scope != "movement" || got[0].TargetID != "write" || got[0].Reason != "composition_failed" || got[0].EvidenceEventID == "" || got[0].ScoreRevision != 1 {
 			t.Fatalf("composition terminals = %+v", got)
 		}
 	})
@@ -346,7 +347,7 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 	t.Run("movement terminal suppresses matching composition evidence", func(t *testing.T) {
 		store := recoveryStore(t)
 		appendRecoveryMovementStarted(t, store)
-		appendRecoveryEvent(t, store, runstate.Event{
+		firstEvidence := appendRecoveryEvent(t, store, runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventCompositionFailed,
 			Payload: recoveryPayload(t, map[string]any{
 				"scope": "movement", "target_id": "write", "composition_subject_hash": "sha256:subject",
@@ -355,8 +356,17 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 			}),
 		})
 		appendRecoveryEvent(t, store, runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventCompositionFailed,
+			Payload: recoveryPayload(t, map[string]any{
+				"scope": "movement", "target_id": "write", "composition_subject_hash": "sha256:sibling-subject",
+				"cause": "spawn_failed", "diagnostic": "second evidence", "contributors": []any{},
+				"composition_algorithm_version": "1", "identity_versions": recoveryVersions(),
+			}),
+		})
+		appendRecoveryEvent(t, store, runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementFailed,
-			Payload: recoveryPayload(t, map[string]any{"reason": "composition_failed", "run_failed": false}),
+			CausationID: firstEvidence.Mutation.EventID,
+			Payload:     recoveryPayload(t, map[string]any{"reason": "composition_failed", "run_failed": false}),
 		})
 
 		input, err := store.LoadRunInput("run-1")
@@ -366,12 +376,16 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		if got := input.Projection.CompositionTerminals; len(got) != 0 {
 			t.Fatalf("suppressed movement composition terminals = %+v, want none", got)
 		}
+		decision := recovery.Plan(recovery.Input{Projection: input.Projection})
+		if decision.CaseID == recovery.CaseCompositionTerminal || decision.Action == nil || decision.Action.Kind == recovery.ActionAppendCompositionTerminal {
+			t.Fatalf("sibling composition evidence selected a second terminal after reload = %+v", decision)
+		}
 	})
 
 	t.Run("run terminal suppresses matching candidate composition evidence", func(t *testing.T) {
 		store := recoveryStore(t)
 		appendRecoveryWriteSucceeded(t, store)
-		appendRecoveryEvent(t, store, runstate.Event{
+		evidence := appendRecoveryEvent(t, store, runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCompositionFailed,
 			Payload: recoveryPayload(t, map[string]any{
 				"scope": "candidate", "target_id": "run-1", "composition_subject_hash": "sha256:subject",
@@ -381,7 +395,8 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		})
 		appendRecoveryEvent(t, store, runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventRunFailed,
-			Payload: recoveryPayload(t, map[string]any{"reason": "composition_failed"}),
+			CausationID: evidence.Mutation.EventID,
+			Payload:     recoveryPayload(t, map[string]any{"reason": "composition_failed"}),
 		})
 
 		input, err := store.LoadRunInput("run-1")
@@ -476,6 +491,16 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 func TestLoadRunInputProjectsRevisionRestart(t *testing.T) {
 	store := recoveryStore(t)
 	appendAttemptToRunning(t, store)
+	// This evidence is durable at revision 1, but the crash leaves its terminal
+	// absent before the approved amendment restarts the movement.
+	appendRecoveryEvent(t, store, runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventCompositionFailed,
+		Payload: recoveryPayload(t, map[string]any{
+			"scope": "movement", "target_id": "write", "composition_subject_hash": "sha256:subject",
+			"cause": "git_exit", "git_exit_code": 2, "diagnostic": "crashed before terminal", "contributors": []any{},
+			"composition_algorithm_version": "1", "identity_versions": recoveryVersions(),
+		}),
+	})
 
 	baseScore, diagnostics := score.Compile(recoveryScoreJSON(t, 1, "pinned recovery fixture"))
 	if len(diagnostics) != 0 {
@@ -530,6 +555,28 @@ func TestLoadRunInputProjectsRevisionRestart(t *testing.T) {
 	if got := input.Projection.RevisionRestarts; len(got) != 1 || got[0].MovementID != "write" {
 		t.Fatalf("revision restarts = %+v", got)
 	}
+	// The revision-1 composition failure crashed before its terminal. Once the
+	// revision restart materializes the revision-2 attempt, that old evidence
+	// must neither select RC-RESUME-011 nor fail the restarted movement.
+	appendRecoveryEvent(t, store, runstate.Event{
+		RunID: "run-1", ScoreRevision: 2, MovementID: "write", AttemptID: "attempt-2", Type: runstate.EventPerformerSelected,
+		Payload: recoveryPayload(t, map[string]any{"reason": "revision_restart", "performer_id": "writer", "adapter_id": "adapter", "model": "model"}),
+	})
+
+	input, err = store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := input.Projection.CompositionTerminals; len(got) != 0 {
+		t.Fatalf("revision-1 composition evidence selected for revision 2 = %+v", got)
+	}
+	if got := input.Projection.State.Movements["write"]; got != runstate.MovementRunning {
+		t.Fatalf("revision-2 movement state = %s, want RUNNING", got)
+	}
+	decision := recovery.Plan(recovery.Input{Projection: input.Projection})
+	if decision.CaseID == recovery.CaseCompositionTerminal || decision.Action == nil || decision.Action.Kind != recovery.ActionProceedAttempt {
+		t.Fatalf("revision-1 evidence terminalized revision-2 movement: %+v", decision)
+	}
 }
 
 func TestRevisionRestartExclusions(t *testing.T) {
@@ -561,6 +608,25 @@ func TestRevisionRestartExclusions(t *testing.T) {
 			t.Fatalf("restart after finalization approval = %+v, want none", got)
 		}
 	})
+}
+
+func TestCompositionRecoveryIgnoresSupersededRevisionClose(t *testing.T) {
+	state := runstate.NewState([]runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+	state.Run = runstate.RunRunning
+	state.ScoreHead.Revision = 2
+	state.Movements["write"] = runstate.MovementRunning
+	scheduler := recovery.Scheduler{Movements: []recovery.ScheduledMovement{{ID: "write", RepoWrite: true}}}
+	events := []runstate.Event{
+		{ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: recoveryPayload(t, map[string]any{
+			"interval_id": "composition-1", "phase": "composition", "wall_start": "2026-07-28T00:00:00.000Z", "remaining_at_start": 1,
+		})},
+		{ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: recoveryPayload(t, map[string]any{
+			"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+		})},
+	}
+	if got := replayFacts(events).compositionRecovery(state, scheduler); got != nil {
+		t.Fatalf("revision-1 recovered close selected RC-RESUME-044 on revision 2: %+v", got)
+	}
 }
 
 func recoveryStore(t *testing.T) *Store {

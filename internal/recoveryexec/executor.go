@@ -22,11 +22,16 @@ var (
 	ErrUnreachableAction   = errors.New("recovery action is unreachable in this slice")
 	ErrUnreachableStep     = errors.New("recovery action step is unreachable in this slice")
 	ErrHandoffUnverifiable = errors.New("recovery spawn handoff is unverifiable")
+	// errMovementCompositionTerminalized reports that selecting a recovered
+	// movement's initial performer durably failed that movement before an
+	// attempt could be created.
+	errMovementCompositionTerminalized = errors.New("recovery movement composition terminalized")
 	// ErrRunCancelledDuringRecovery reports that a recovery-owned attempt observed a
 	// cancellation and terminalized through the §6 oracle. It is not a failure: the
 	// executor replans so C.1's terminal row supplies the outcome, rather than a second
 	// exit path inventing one.
 	ErrRunCancelledDuringRecovery = errors.New("recovery attempt was cancelled and terminalized")
+	ErrRecoveryReplan             = errors.New("recovery action must replan before mutation")
 )
 
 // LoadInput returns a fresh, fully observed recovery input. It is called again
@@ -42,6 +47,10 @@ type HandlerContext struct {
 	Driver *runstore.Driver
 	RunID  runstate.RunID
 	Input  recovery.Input
+
+	// afterCompositionEvidence is a deterministic interleave seam for package
+	// tests. Production contexts leave it nil.
+	afterCompositionEvidence func()
 }
 
 // StepHandler performs one planner-selected, order-sensitive recovery step.
@@ -222,6 +231,25 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
 			}
 			if err := handler(ctx, handlerContext, action); err != nil {
+				if errors.Is(err, errMovementCompositionTerminalized) {
+					result.Outcome = OutcomeFailed
+					return result, nil
+				}
+				if errors.Is(err, ErrRecoveryReplan) {
+					refreshed, halted, reloadErr := executor.reloadAfterEffect(ctx, input, decision)
+					if reloadErr != nil {
+						return result, reloadErr
+					}
+					if halted.Halt != "" {
+						result.Decision = halted
+						result.Outcome = OutcomeHalted
+						return result, nil
+					}
+					input = refreshed
+					result.Replans++
+					decision = recovery.Plan(input)
+					continue
+				}
 				if errors.Is(err, ErrRunCancelledDuringRecovery) {
 					// As above: the action ran before it reported the cancellation.
 					result.Kinds = append(result.Kinds, action.Kind)

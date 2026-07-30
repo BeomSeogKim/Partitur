@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
@@ -50,6 +51,35 @@ func TestExecutionDependencyProjectionCompleteness(t *testing.T) {
 	}
 	if got := movementValue["base_composition_hash"]; got != compositionHash {
 		t.Fatalf("A.5 movement composition hash = %#v, want %q", got, compositionHash)
+	}
+}
+
+func TestMovementCompositionContributorsUsePinnedTopologicalDeclarationOrder(t *testing.T) {
+	document := writerSliceScore(false)
+	document["verification"].(map[string]any)["final_movement"] = "target"
+	document["movements"] = []any{
+		map[string]any{"id": "z", "part": "reader", "needs": []any{"b"}, "grants": []any{"repo_read", "repo_write"}, "instruction": "z", "outputs": []any{map[string]any{"id": "z-change", "kind": "change_set"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "z-test", "run": []any{"true"}}}}},
+		map[string]any{"id": "b", "part": "reader", "grants": []any{"repo_read", "repo_write"}, "instruction": "b", "outputs": []any{map[string]any{"id": "b-change", "kind": "change_set"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "b-test", "run": []any{"true"}}}}},
+		map[string]any{"id": "a", "part": "reader", "grants": []any{"repo_read", "repo_write"}, "instruction": "a", "outputs": []any{map[string]any{"id": "a-change", "kind": "change_set"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "a-test", "run": []any{"true"}}}}},
+		map[string]any{"id": "target", "part": "reader", "needs": []any{"z", "a"}, "grants": []any{"repo_read"}, "instruction": "target", "outputs": []any{}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "target-test", "run": []any{"true"}}}}},
+	}
+	prepared := prepareFixture(t, document)
+	state := runstate.State{MovementResults: map[runstate.MovementID]runstate.MovementResult{}, ChangeSets: map[runstate.AttemptID]runstate.ChangeSetRecord{}}
+	for _, id := range []string{"a", "b", "z"} {
+		attempt, changeSet := runstate.AttemptID("attempt-"+id), "sha256:"+id
+		state.MovementResults[runstate.MovementID(id)] = runstate.MovementResult{AttemptID: attempt, ApprovedChangeSetID: changeSet}
+		state.ChangeSets[attempt] = runstate.ChangeSetRecord{AttemptID: attempt, ChangeSetID: changeSet, BaseTree: "git-sha1:base", ResultTree: "git-sha1:" + id}
+	}
+	contributors, err := movementCompositionContributors(prepared.Score, state, "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []runstate.MovementID{contributors[0].MovementID, contributors[1].MovementID, contributors[2].MovementID}
+	if want := []runstate.MovementID{"b", "z", "a"}; !slices.Equal(got, want) {
+		t.Fatalf("contributor order = %v, want topological declaration order %v", got, want)
+	}
+	if contributors[0].ChangeSetID != "sha256:b" || contributors[1].BaseTree != "git-sha1:base" {
+		t.Fatalf("contributors did not bridge movement result attempt ids to change sets: %+v", contributors)
 	}
 }
 

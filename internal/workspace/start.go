@@ -38,6 +38,10 @@ const (
 	// A changeset ref is attempt-scoped: before change_set.recorded names it,
 	// recovery may move it to the surviving worktree checkpoint, but only by CAS.
 	refExistingMayMove
+	// A composed movement base is run- and movement-scoped. A replay may have
+	// created another wrapper commit for the same tree, but it must never move
+	// the pin to different content.
+	refExistingMustMatchTree
 )
 
 // Start checks the Git preconditions and durably records the prepared run.
@@ -371,8 +375,23 @@ func ensureRef(
 			return faultpoint.DurabilityReceipt{}, err
 		}
 		expected = string(bytesTrimSpace(current))
-		if policy == refExistingMustMatchObject && expected != object {
-			return faultpoint.DurabilityReceipt{}, ErrRunIDCollision
+		switch policy {
+		case refExistingMustMatchObject:
+			if expected != object {
+				return faultpoint.DurabilityReceipt{}, ErrRunIDCollision
+			}
+		case refExistingMustMatchTree:
+			currentTree, err := gitOutput(git, root, nil, "rev-parse", expected+"^{tree}")
+			if err != nil {
+				return faultpoint.DurabilityReceipt{}, err
+			}
+			targetTree, err := gitOutput(git, root, nil, "rev-parse", object+"^{tree}")
+			if err != nil {
+				return faultpoint.DurabilityReceipt{}, err
+			}
+			if string(bytesTrimSpace(currentTree)) != string(bytesTrimSpace(targetTree)) {
+				return faultpoint.DurabilityReceipt{}, ErrRunIDCollision
+			}
 		}
 	case 1:
 	default:

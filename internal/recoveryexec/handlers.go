@@ -34,11 +34,10 @@ const recoverySweepGrace = 30 * time.Second
 // their values, only their presence, uniqueness of bucket, and propagation
 // into the refusal message.
 var namedUnimplementedActionOwners = map[recovery.ActionKind]string{
-	recovery.ActionCompleteOrAbandonPrepare:  "4.2",
-	recovery.ActionAppendRoutedRequest:       "4.2",
-	recovery.ActionSelectRevisionRestart:     "4.2",
-	recovery.ActionAppendCompositionTerminal: "3.1",
-	recovery.ActionAppendQuestionRequest:     "4.1",
+	recovery.ActionCompleteOrAbandonPrepare: "4.2",
+	recovery.ActionAppendRoutedRequest:      "4.2",
+	recovery.ActionSelectRevisionRestart:    "4.2",
+	recovery.ActionAppendQuestionRequest:    "4.1",
 	// Temporary executor/planner mismatch, not a 4.1 handler requirement:
 	// RC-RESUME-041 must hand decision_resume materialization to C.4.
 	recovery.ActionSelectDecisionResume:       "4.1",
@@ -46,7 +45,6 @@ var namedUnimplementedActionOwners = map[recovery.ActionKind]string{
 	recovery.ActionAppendEvaluationCompleted:  "4.1",
 	recovery.ActionAppendHumanGateRequest:     "4.1",
 	recovery.ActionAppendGateRejectedFailure:  "4.1",
-	recovery.ActionRerunComposition:           "3.1",
 	recovery.ActionRecoverIncompleteCriterion: "3.2",
 }
 
@@ -92,6 +90,8 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionCaptureChangeSet:           captureChangeSet,
 		recovery.ActionExecuteCancellation:        executeCancellation,
 		recovery.ActionAppendRunSucceeded:         appendRunSucceeded,
+		recovery.ActionAppendCompositionTerminal:  appendCompositionTerminal,
+		recovery.ActionRerunComposition:           rerunMovementComposition,
 	}
 }
 
@@ -129,6 +129,75 @@ func appendRunSucceeded(_ context.Context, execution HandlerContext, _ recovery.
 		return err
 	}
 	return workspace.AppendWaivedRunSucceeded(execution.Driver, input, "recovery.run.succeeded")
+}
+
+func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
+		return errors.New("recovery composition terminal requires store, driver, and evidence")
+	}
+	terminal := action.CompositionTerminal
+	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
+	if err != nil {
+		return err
+	}
+	cause, err := latestEventID(journal.Events, func(event runstate.Event) bool {
+		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
+			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
+			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
+	})
+	if err != nil {
+		return err
+	}
+	return execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
+		// C.1 cancellation is checked with the terminal append while the state
+		// lock and the existing lease predicate are both held.
+		if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
+			return ErrRecoveryReplan
+		}
+		if execution.afterCompositionEvidence != nil {
+			execution.afterCompositionEvidence()
+		}
+		var event runstate.Event
+		var address faultpoint.ReceiptAddress
+		switch terminal.Scope {
+		case "movement":
+			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
+			address = "recovery.movement.failed.composition"
+		case "candidate":
+			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason})}
+			address = "recovery.run.failed.composition"
+		default:
+			return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
+		}
+		if _, err := runstate.Apply(state, event); err != nil {
+			return err
+		}
+		_, err := transaction.At(address).Append(event)
+		return err
+	})
+}
+
+func recoveryPayload(value any) json.RawMessage {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}
+
+func rerunMovementComposition(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.MovementID == "" {
+		return errors.New("recovery movement composition rerun requires store, driver, and movement")
+	}
+	input, err := execution.Store.LoadRunInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	_, err = driver.PrepareMovementBase(execution.Store, execution.Driver, input, action.MovementID, input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)
+	if errors.Is(err, driver.ErrCompositionTerminalized) {
+		return nil
+	}
+	return err
 }
 
 func rerunPostHocVerification(ctx context.Context, execution HandlerContext, action recovery.Action) error {
@@ -309,9 +378,24 @@ func selectInitialPerformer(ctx context.Context, execution HandlerContext, actio
 	if !ok {
 		return fmt.Errorf("recovery initial performer %q is absent from resolved cast", binding.Performer)
 	}
-	return executeRecoveredAttempt(
-		ctx, execution, input, movementID, performer.ID, "initial", "",
-	)
+	baseCommit := ""
+	baseTree := input.BaseTree
+	baseHash := ""
+	for _, movement := range input.Score.Movements() {
+		if movement.ID != movementID || len(movement.Needs) == 0 {
+			continue
+		}
+		composed, err := driver.PrepareMovementBase(execution.Store, execution.Driver, input, action.MovementID, input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)
+		if err != nil {
+			if errors.Is(err, driver.ErrCompositionTerminalized) {
+				return errMovementCompositionTerminalized
+			}
+			return err
+		}
+		baseCommit, baseTree, baseHash = composed.Commit, composed.Tree, composed.Hash
+		break
+	}
+	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performer.ID, "initial", "", baseCommit, baseTree, baseHash)
 }
 
 func resumeCriterion(_ context.Context, execution HandlerContext, action recovery.Action) error {
@@ -444,6 +528,15 @@ func executeRecoveredAttempt(
 	input runstore.RunInput,
 	movementID, performerID, reason, causationID string,
 ) error {
+	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performerID, reason, causationID, "", input.BaseTree, "")
+}
+
+func executeRecoveredAttemptAtBase(
+	ctx context.Context,
+	execution HandlerContext,
+	input runstore.RunInput,
+	movementID, performerID, reason, causationID, baseCommit, baseTree, baseCompositionHash string,
+) error {
 	if execution.Store == nil || execution.Driver == nil || input.Score == nil || input.Cast == nil {
 		return errors.New("recovery attempt execution requires durable score, cast, store, and driver")
 	}
@@ -451,7 +544,7 @@ func executeRecoveredAttempt(
 	if candidate := input.Projection.State.ApplicationCandidate; candidate != nil {
 		candidateTree = candidate.ResultTree
 	}
-	attempt, err := workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)
+	attempt, err := workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)
 	if err != nil {
 		return err
 	}
@@ -461,7 +554,8 @@ func executeRecoveredAttempt(
 		Cast:                 input.Cast,
 		RunID:                execution.Driver.RunID(),
 		Attempt:              attempt,
-		BaseTree:             input.BaseTree,
+		BaseTree:             baseTree,
+		BaseCompositionHash:  baseCompositionHash,
 		CandidateTree:        candidateTree,
 		Authority:            execution.Driver,
 		PerformerID:          performerID,

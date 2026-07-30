@@ -146,6 +146,27 @@ func TestEnsureRefStrictPolicyRejectsExistingDifferentObject(t *testing.T) {
 	}
 }
 
+func TestEnsureRefMovementBasePolicyAcceptsSameTreeWrapperOnly(t *testing.T) {
+	repository, _ := prepareRepository(t)
+	git := newRecordingGit(t)
+	ref := "refs/partitur/tests/movement-base"
+	base := gitText(t, repository, "rev-parse", "HEAD")
+	tree := gitText(t, repository, "rev-parse", "HEAD^{tree}")
+	first := gitText(t, repository, "commit-tree", tree, "-p", base, "-m", "first wrapper")
+	second := gitText(t, repository, "commit-tree", tree, "-p", base, "-m", "second wrapper")
+	if _, err := ensureRef(git, repository, ref, first, testRunID, "test.movement.initial", refExistingMustMatchTree); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureRef(git, repository, ref, second, testRunID, "test.movement.same-tree", refExistingMustMatchTree); err != nil {
+		t.Fatalf("same-tree wrapper rejected: %v", err)
+	}
+	otherTree := gitText(t, repository, "mktree")
+	other := gitText(t, repository, "commit-tree", otherTree, "-p", base, "-m", "other wrapper")
+	if _, err := ensureRef(git, repository, ref, other, testRunID, "test.movement.other-tree", refExistingMustMatchTree); !errors.Is(err, ErrRunIDCollision) {
+		t.Fatalf("different-tree wrapper error = %v, want ErrRunIDCollision", err)
+	}
+}
+
 func TestStartRejectsIncompletePreparation(t *testing.T) {
 	for _, preparation := range []*validate.Preparation{
 		nil,

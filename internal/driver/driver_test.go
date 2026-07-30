@@ -8,12 +8,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -633,6 +635,522 @@ func TestLiveBetweenUnitEntryRejectsOpenExecution(t *testing.T) {
 	t.Fatal("open execution interval entered live between-unit path")
 }
 
+func TestLiveMovementCompositionTerminalBindsItsEvidence(t *testing.T) {
+	_, store, authority, started := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			MovementID: "inspect", Type: eventType, Payload: testPayload(t, map[string]any{}),
+		}, faultpoint.ReceiptAddress("test.live_composition."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = composeMovementBase(
+		store,
+		authority,
+		input,
+		"inspect",
+		[]workspace.CompositionContributor{{
+			MovementID: "dependency", ChangeSetID: "sha256:change-set",
+			BaseTree: input.BaseTree, ResultTree: "git-sha1:missing-tree",
+		}},
+		1,
+		time.Now,
+		func() (string, error) { return "composition-interval", nil },
+	)
+	if !errors.Is(err, ErrCompositionTerminalized) {
+		t.Fatalf("compose movement base error = %v, want terminalized composition", err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence, terminal runstate.Event
+	for _, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventCompositionFailed:
+			evidence = event
+		case runstate.EventMovementFailed:
+			terminal = event
+		}
+	}
+	if evidence.EventID == "" || terminal.EventID == "" {
+		t.Fatalf("live composition evidence=%+v terminal=%+v", evidence, terminal)
+	}
+	if terminal.CausationID != evidence.EventID {
+		t.Fatalf("live movement.failed causation = %q, want evidence %q", terminal.CausationID, evidence.EventID)
+	}
+	reloaded, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Projection.CompositionTerminals; len(got) != 0 {
+		t.Fatalf("bound live composition terminal remains open after reload = %+v", got)
+	}
+}
+
+func TestLiveMovementCompositionTerminalSerializesCancellationAfterEvidence(t *testing.T) {
+	moduleCache := mutationGoModuleCache(t)
+	_, store, authority, started := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			MovementID: "inspect", Type: eventType, Payload: testPayload(t, map[string]any{}),
+		}, faultpoint.ReceiptAddress("test.live_composition_interleave."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requestStarted := make(chan struct{})
+	requestDone := make(chan error, 1)
+	hook := func() {
+		go func() {
+			close(requestStarted)
+			requestDone <- store.RequestCancellation(started.RunID)
+		}()
+		<-requestStarted
+	}
+	_, err = composeMovementBaseWithAfterEvidence(
+		store,
+		authority,
+		input,
+		"inspect",
+		[]workspace.CompositionContributor{{
+			MovementID: "dependency", ChangeSetID: "sha256:change-set",
+			BaseTree: input.BaseTree, ResultTree: "git-sha1:missing-tree",
+		}},
+		1,
+		time.Now,
+		func() (string, error) { return "composition-interval", nil },
+		hook,
+	)
+	if !errors.Is(err, ErrCompositionTerminalized) {
+		t.Fatalf("compose movement base error = %v, want terminalized composition", err)
+	}
+	select {
+	case err := <-requestDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation request did not complete after composition terminalized")
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stoppedIndex, evidenceIndex, terminalIndex, cancellationIndex := -1, -1, -1, -1
+	for index, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventExecutionStopped:
+			stoppedIndex = index
+		case runstate.EventCompositionFailed:
+			evidenceIndex = index
+		case runstate.EventMovementFailed:
+			terminalIndex = index
+		case runstate.EventCancelRequested:
+			cancellationIndex = index
+		}
+	}
+	if stoppedIndex < 0 || evidenceIndex < 0 || terminalIndex < 0 || cancellationIndex < 0 {
+		t.Fatalf("composition/cancellation journal sequence is incomplete: %+v", journal.Events)
+	}
+	if !(stoppedIndex < evidenceIndex && evidenceIndex < terminalIndex && terminalIndex < cancellationIndex) {
+		t.Fatalf("cancellation interleaved with composition terminal: stopped=%d evidence=%d terminal=%d cancellation=%d", stoppedIndex, evidenceIndex, terminalIndex, cancellationIndex)
+	}
+	if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
+		assertDriverMutationKilled(t, t.Name(), moduleCache, "movement_composition.go", `func appendMovementCompositionTerminal(authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
+	return authority.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
+		if state.CancelRequested {
+			return ErrCompositionCancelled
+		}
+		next, err := runstate.Apply(state, stopped)
+		if err != nil {
+			return err
+		}
+		if _, err := transaction.At(stoppedAddress).Append(stopped); err != nil {
+			return err
+		}
+		state = next
+		next, err = runstate.Apply(state, evidence)
+		if err != nil {
+			return err
+		}
+		evidenceReceipt, err := transaction.At(evidenceAddress).Append(evidence)
+		if err != nil {
+			return err
+		}
+		if afterEvidence != nil {
+			afterEvidence()
+		}
+		terminal.CausationID = evidenceReceipt.Mutation.EventID
+		if _, err := runstate.Apply(next, terminal); err != nil {
+			return err
+		}
+		_, err = transaction.At(terminalAddress).Append(terminal)
+		return err
+	})
+}`,
+			`func appendMovementCompositionTerminal(authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
+	state, err := authority.State()
+	if err != nil {
+		return err
+	}
+	if state.CancelRequested {
+		return ErrCompositionCancelled
+	}
+	var evidenceReceipt runstore.DurabilityReceipt
+	err = authority.Mutate(func(transaction *runstore.Txn, _ runstate.State) error {
+		next, err := runstate.Apply(state, stopped)
+		if err != nil {
+			return err
+		}
+		if _, err := transaction.At(stoppedAddress).Append(stopped); err != nil {
+			return err
+		}
+		state = next
+		next, err = runstate.Apply(state, evidence)
+		if err != nil {
+			return err
+		}
+		evidenceReceipt, err = transaction.At(evidenceAddress).Append(evidence)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if afterEvidence != nil {
+		afterEvidence()
+	}
+	time.Sleep(50 * time.Millisecond)
+	terminal.CausationID = evidenceReceipt.Mutation.EventID
+	if _, err := runstate.Apply(state, terminal); err != nil {
+		return err
+	}
+	_, err = authority.Append(terminal, terminalAddress)
+	return err
+}`)
+	}
+}
+
+func TestLiveMovementCompositionConflictTerminalBindsItsEvidence(t *testing.T) {
+	preparation, store, authority, started := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(arguments ...string) string {
+		t.Helper()
+		command := exec.Command("git", arguments...)
+		command.Dir = preparation.RepositoryRoot
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", arguments, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	path := filepath.Join(preparation.RepositoryRoot, "partitur.yaml")
+	if err := os.WriteFile(path, []byte("ours\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "partitur.yaml")
+	git("commit", "-m", "conflicting ours")
+	ours := "git-sha1:" + git("rev-parse", "HEAD^{tree}")
+	git("reset", "--hard", "HEAD~1")
+	if err := os.WriteFile(path, []byte("theirs\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "partitur.yaml")
+	git("commit", "-m", "conflicting theirs")
+	theirs := "git-sha1:" + git("rev-parse", "HEAD^{tree}")
+
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			MovementID: "inspect", Type: eventType, Payload: testPayload(t, map[string]any{}),
+		}, faultpoint.ReceiptAddress("test.live_composition_conflict."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = composeMovementBase(
+		store,
+		authority,
+		input,
+		"inspect",
+		[]workspace.CompositionContributor{
+			{MovementID: "ours", ChangeSetID: "sha256:ours", BaseTree: input.BaseTree, ResultTree: ours},
+			{MovementID: "theirs", ChangeSetID: "sha256:theirs", BaseTree: input.BaseTree, ResultTree: theirs},
+		},
+		1,
+		time.Now,
+		func() (string, error) { return "composition-interval", nil },
+	)
+	if !errors.Is(err, ErrCompositionTerminalized) {
+		t.Fatalf("compose movement base error = %v, want terminalized composition", err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence, terminal runstate.Event
+	for _, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventCompositionConflicted:
+			evidence = event
+		case runstate.EventMovementFailed:
+			terminal = event
+		}
+	}
+	if evidence.EventID == "" || terminal.EventID == "" {
+		t.Fatalf("live composition evidence=%+v terminal=%+v", evidence, terminal)
+	}
+	if terminal.CausationID != evidence.EventID {
+		t.Fatalf("live movement.failed causation = %q, want evidence %q", terminal.CausationID, evidence.EventID)
+	}
+	reloaded, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Projection.CompositionTerminals; len(got) != 0 {
+		t.Fatalf("bound live composition conflict remains open after reload = %+v", got)
+	}
+}
+
+func TestComposeMovementBasePinsCleanComposedTreeAndMergeHash(t *testing.T) {
+	preparation, store, authority, started := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(arguments ...string) string {
+		t.Helper()
+		command := exec.Command("git", arguments...)
+		command.Dir = preparation.RepositoryRoot
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", arguments, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	oursPath := filepath.Join(preparation.RepositoryRoot, "ours.txt")
+	if err := os.WriteFile(oursPath, []byte("ours\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "ours.txt")
+	git("commit", "-m", "clean ours")
+	ours := "git-sha1:" + git("rev-parse", "HEAD^{tree}")
+	git("reset", "--hard", "HEAD~1")
+	theirsPath := filepath.Join(preparation.RepositoryRoot, "theirs.txt")
+	if err := os.WriteFile(theirsPath, []byte("theirs\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "theirs.txt")
+	git("commit", "-m", "clean theirs")
+	theirs := "git-sha1:" + git("rev-parse", "HEAD^{tree}")
+	contributors := []workspace.CompositionContributor{
+		{MovementID: "ours", ChangeSetID: "sha256:ours", BaseTree: input.BaseTree, ResultTree: ours},
+		{MovementID: "theirs", ChangeSetID: "sha256:theirs", BaseTree: input.BaseTree, ResultTree: theirs},
+	}
+	expected := workspace.Compose(workspace.CompositionInput{
+		RepositoryRoot: preparation.RepositoryRoot,
+		BaseTree:       input.BaseTree,
+		Contributors:   contributors,
+	})
+	if expected.ResultTree == "" {
+		t.Fatalf("clean composition result = %+v", expected)
+	}
+	wantHash, err := movementCompositionMergeDependencyHash("inspect", input.BaseTree, contributors, expected.EnvironmentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityHash, err := movementCompositionDependencyHash("inspect", input.BaseTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := composeMovementBase(
+		store, authority, input, "inspect", contributors, 1, time.Now,
+		func() (string, error) { return "composition-interval", nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if composed.Tree != expected.ResultTree || composed.Hash != wantHash || composed.Commit == "" {
+		t.Fatalf("composed base = %+v, want tree=%q hash=%q and a wrapper commit", composed, expected.ResultTree, wantHash)
+	}
+	if composed.Hash == identityHash {
+		t.Fatalf("composition hash = %q, want merge variant rather than identity variant %q", composed.Hash, identityHash)
+	}
+	ref := "refs/partitur/runs/" + string(started.RunID) + "/movements/inspect/base"
+	if got := git("rev-parse", ref); got != composed.Commit {
+		t.Fatalf("pinned movement base = %q, want wrapper %q", got, composed.Commit)
+	}
+	if got := "git-sha1:" + git("show", "-s", "--format=%T", composed.Commit); got != composed.Tree {
+		t.Fatalf("wrapper tree = %q, want composed tree %q", got, composed.Tree)
+	}
+	if got := "git-sha1:" + git("rev-parse", composed.Commit+"^"); got != input.BaseCommit {
+		t.Fatalf("wrapper parent = %q, want run base %q", got, input.BaseCommit)
+	}
+}
+
+func TestPrepareMovementBaseUsesIdentityForZeroContributors(t *testing.T) {
+	moduleCache := mutationGoModuleCache(t)
+	_, store, authority, started := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := PrepareMovementBase(store, authority, input, "inspect", 1, time.Now, func() (string, error) { return "unused", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHash, err := movementCompositionDependencyHash("inspect", input.BaseTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Commit != "" || base.Tree != input.BaseTree || base.Hash != wantHash {
+		t.Fatalf("zero-contributor movement base = %+v, want empty commit, tree %q, hash %q", base, input.BaseTree, wantHash)
+	}
+	if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
+		assertDriverMutationKilled(t, t.Name(), moduleCache, "movement_composition.go", "if len(contributors) == 0 {", "if len(contributors) == 1 {")
+	}
+}
+
+func TestComposeMovementBaseReportsEachMissingOperand(t *testing.T) {
+	moduleCache := mutationGoModuleCache(t)
+	_, store, authority, started := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contributors := []workspace.CompositionContributor{{
+		MovementID: "dependency", ChangeSetID: "sha256:change-set", BaseTree: input.BaseTree, ResultTree: input.BaseTree,
+	}}
+	validNow := func() time.Time { return time.Now() }
+	validNewID := func() (string, error) { return "composition-interval", nil }
+	for _, test := range []struct {
+		name string
+		call func() error
+	}{
+		{name: "store", call: func() error {
+			_, err := composeMovementBase(nil, authority, input, "inspect", contributors, 1, validNow, validNewID)
+			return err
+		}},
+		{name: "authority", call: func() error {
+			_, err := composeMovementBase(store, nil, input, "inspect", contributors, 1, validNow, validNewID)
+			return err
+		}},
+		{name: "contributors", call: func() error {
+			_, err := composeMovementBase(store, authority, input, "inspect", nil, 1, validNow, validNewID)
+			return err
+		}},
+		{name: "now", call: func() error {
+			_, err := composeMovementBase(store, authority, input, "inspect", contributors, 1, nil, validNewID)
+			return err
+		}},
+		{name: "newID", call: func() error {
+			_, err := composeMovementBase(store, authority, input, "inspect", contributors, 1, validNow, nil)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got, want := test.call().Error(), "driver: incomplete movement composition execution: missing "+test.name; got != want {
+				t.Fatalf("composition precondition error = %q, want %q", got, want)
+			}
+			if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
+				assertDriverMutationKilled(t, t.Name(), moduleCache, "movement_composition.go", "missing = append(missing, \""+test.name+"\")", "missing = append(missing, \"mutated-"+test.name+"\")")
+			}
+		})
+	}
+}
+
+func TestLiveCompositionConflictStopsBeforeCreatingTargetAttempt(t *testing.T) {
+	moduleCache := mutationGoModuleCache(t)
+	_, store, authority, started, ours, theirs := fanInConflictFixture(t)
+	defer authority.Release()
+	control, err := cancellation.Watch(store, started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Stop()
+	result := liveRunLoop(context.Background(), Result{RunID: started.RunID}, started.Run, store, authority, control, testDependencies())
+	if result.Outcome != OutcomeFailed || result.Reason != "composition_terminal" || result.Err != nil {
+		t.Fatalf("live result = %+v, want composition terminal failure", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.MovementID == "target" && event.Type == runstate.EventPerformerSelected {
+			t.Fatalf("target attempt was selected after conflicting %q and %q", ours, theirs)
+		}
+	}
+	if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
+		assertDriverMutationKilled(t, t.Name(), moduleCache, "movement_composition.go", "return MovementBase{}, ErrCompositionTerminalized", "return MovementBase{}, errors.New(\"driver: injected non-terminal composition failure\")")
+	}
+}
+
+func TestLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
+	moduleCache := mutationGoModuleCache(t)
+	preparation, store, authority, started, _, _ := fanInCleanFixture(t)
+	defer authority.Release()
+	control, err := cancellation.Watch(store, started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Stop()
+	result := liveRunLoop(context.Background(), Result{RunID: started.RunID}, started.Run, store, authority, control, testDependencies())
+	if result.Outcome != OutcomeInterrupted || result.Err == nil {
+		t.Fatalf("live fan-in result = %+v, want ordinary attempt execution stop after creation", result)
+	}
+	state, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targetAttempt runstate.AttemptID
+	for attemptID, attempt := range state.Attempts {
+		if attempt.MovementID == "target" {
+			targetAttempt = attemptID
+			break
+		}
+	}
+	if targetAttempt == "" {
+		t.Fatal("live fan-in did not create a target attempt")
+	}
+	git := func(directory string, arguments ...string) string {
+		t.Helper()
+		command := exec.Command("git", arguments...)
+		command.Dir = directory
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", arguments, err)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	ref := "refs/partitur/runs/" + string(started.RunID) + "/movements/target/base"
+	pinned := git(preparation.RepositoryRoot, "rev-parse", ref)
+	worktree := filepath.Join(preparation.RepositoryRoot, ".partitur", "work", string(started.RunID), string(targetAttempt), "worktree")
+	if got := git(worktree, "rev-parse", "HEAD^{commit}"); got != pinned {
+		t.Fatalf("target worktree commit = %q, want pinned fan-in base %q", got, pinned)
+	}
+	if os.Getenv("PARTITUR_MUTATION_CHILD") == "" {
+		assertDriverMutationKilled(t, t.Name(), moduleCache, "driver.go", "attempt, err = run.CreateAttemptAtBase(movement.ID, baseCommit)", "attempt, err = run.CreateAttempt(movement.ID)")
+	}
+}
+
 func TestLiveBetweenUnitEntryRejectsFreshHeadAttempt(t *testing.T) {
 	_, store, authority, start := liveEntryFixture(t)
 	defer authority.Release()
@@ -1220,6 +1738,112 @@ func liveEntryFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *ru
 	return preparation, store, authority, start
 }
 
+func fanInConflictFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixture(t, true)
+}
+
+func fanInCleanFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixture(t, false)
+}
+
+func fanInFixture(t *testing.T, conflict bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	t.Helper()
+	document := writerSliceScore(true)
+	first := document["movements"].([]any)[0].(map[string]any)
+	first["id"] = "ours"
+	first["outputs"] = []any{map[string]any{"id": "ours-change-set", "kind": "change_set"}}
+	second := make(map[string]any, len(first))
+	for key, value := range first {
+		second[key] = value
+	}
+	second["id"] = "theirs"
+	second["outputs"] = []any{map[string]any{"id": "theirs-change-set", "kind": "change_set"}}
+	target := map[string]any{
+		"id": "target", "part": "reader", "needs": []any{"ours", "theirs"}, "grants": []any{"repo_read"},
+		"instruction": "inspect the composed base", "outputs": []any{map[string]any{"id": "target-report", "kind": "artifact"}},
+		"acceptance": map[string]any{"hard": []any{map[string]any{"id": "target-report-present", "artifact": "target-report"}}},
+	}
+	document["movements"] = []any{first, second, target}
+	preparation := prepareRunnableFixture(t, document, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := started.Run.BindDriver(authority); err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	git := func(arguments ...string) string {
+		t.Helper()
+		command := exec.Command("git", arguments...)
+		command.Dir = preparation.RepositoryRoot
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", arguments, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	oursPath := filepath.Join(preparation.RepositoryRoot, "conflict.txt")
+	theirsPath := oursPath
+	if !conflict {
+		oursPath = filepath.Join(preparation.RepositoryRoot, "ours.txt")
+		theirsPath = filepath.Join(preparation.RepositoryRoot, "theirs.txt")
+	}
+	if err := os.WriteFile(oursPath, []byte("ours\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", filepath.Base(oursPath))
+	git("commit", "-m", "fan-in ours")
+	ours := "git-sha1:" + git("rev-parse", "HEAD^{tree}")
+	git("reset", "--hard", "HEAD~1")
+	if err := os.WriteFile(theirsPath, []byte("theirs\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", filepath.Base(theirsPath))
+	git("commit", "-m", "fan-in theirs")
+	theirs := "git-sha1:" + git("rev-parse", "HEAD^{tree}")
+	appendSucceededWriter := func(movementID, attemptID, changeSetID, tree string) {
+		for _, event := range []runstate.Event{
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), Type: runstate.EventMovementReady, Payload: testPayload(t, map[string]any{})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), Type: runstate.EventMovementStarted, Payload: testPayload(t, map[string]any{})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "gpt-5.6-sol"})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAttemptStarted, Payload: testPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{"**"}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAdapterProbed, Payload: testPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": true, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventPerformerCompleted, Payload: testPayload(t, map[string]any{"session_hint_stored": false})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventChangeSetRecorded, Payload: testPayload(t, map[string]any{"change_set_id": changeSetID, "base_tree": input.BaseTree, "result_tree": tree, "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(started.RunID) + "/attempts/" + attemptID + "/changeset", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventVerificationPassed, Payload: testPayload(t, map[string]any{})},
+			{RunID: started.RunID, ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: testPayload(t, map[string]any{"interval_id": "acceptance-" + attemptID, "phase": "acceptance", "wall_start": "2026-07-30T00:00:00.000Z", "remaining_at_start": 600000})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAcceptanceStarted, Payload: testPayload(t, map[string]any{"subject_tree": tree, "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{"tests"}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventCriterionStarted, Payload: testPayload(t, map[string]any{"criterion_id": "tests", "criterion_spec_hash": "sha256:criterion", "subject_tree": tree, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventCriterionCompleted, Payload: testPayload(t, map[string]any{"criterion_id": "tests", "criterion_spec_hash": "sha256:criterion", "subject_tree": tree, "outcome": "PASS", "duration_ms": 1, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAcceptanceEvaluationCompleted, Payload: testPayload(t, map[string]any{"subject_tree": tree, "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{map[string]any{"criterion_id": "tests", "criterion_spec_hash": "sha256:criterion", "outcome": "PASS"}}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: testPayload(t, map[string]any{"interval_id": "acceptance-" + attemptID, "reason": "normal", "charging": "measured", "charged_duration": 1})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAttemptCompleted, Payload: testPayload(t, map[string]any{})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventMovementSucceeded, Payload: testPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": changeSetID, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}, "run_succeeded": false})},
+		} {
+			if _, err := authority.Append(event, faultpoint.ReceiptAddress("test.fan_in."+string(event.Type))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	appendSucceededWriter("ours", "ours-attempt", "sha256:ours", ours)
+	appendSucceededWriter("theirs", "theirs-attempt", "sha256:theirs", theirs)
+	return preparation, store, authority, started, ours, theirs
+}
+
 func writerCaptureFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, *workspace.AttemptWorkspace) {
 	t.Helper()
 	preparation := prepareRunnableFixture(t, writerSliceScore(true), sliceCast())
@@ -1419,6 +2043,177 @@ func writeJSON(t *testing.T, path string, value any) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mutationGoModuleCache(t *testing.T) string {
+	t.Helper()
+	command := exec.Command("go", "env", "GOMODCACHE")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func assertDriverMutationKilled(t *testing.T, testName, moduleCache, sourceName, before, after string) {
+	t.Helper()
+	lockMutationSource(t)
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve driver test source directory")
+	}
+	copyRoot := filepath.Join(t.TempDir(), "partitur-mutation-copy")
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	if err := copyMutationRepository(copyRoot, repositoryRoot); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(copyRoot, "internal", "driver", sourceName)
+	contents, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(contents), before); count == 0 {
+		t.Fatalf("mutation anchor %q is absent from %s", before, sourcePath)
+	}
+	backup, err := os.CreateTemp(t.TempDir(), "partitur-mutation-backup-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupPath := backup.Name()
+	if err := backup.Close(); err != nil {
+		t.Fatal(err)
+	}
+	copyFile := func(destination, source string) error {
+		input, err := os.Open(source)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		info, err := input.Stat()
+		if err != nil {
+			return err
+		}
+		output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		closeErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	}
+	if err := copyFile(backupPath, sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	mutated := strings.ReplaceAll(string(contents), before, after)
+	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(applied), after) || strings.Contains(string(applied), before) {
+		t.Fatalf("mutation was not applied to %s before the child test ran", sourcePath)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	command := exec.CommandContext(ctx, "go", "test", ".", "-run", "^"+testName+"$", "-count=1")
+	command.Dir = filepath.Join(copyRoot, "internal", "driver")
+	command.Env = append(os.Environ(), "PARTITUR_MUTATION_CHILD=1", "GOMODCACHE="+moduleCache)
+	output, runErr := command.CombinedOutput()
+	cancel()
+	if err := copyFile(sourcePath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	cmp := exec.Command("cmp", "-s", backupPath, sourcePath)
+	if output, err := cmp.CombinedOutput(); err != nil {
+		t.Fatalf("mutation restore comparison failed: %v\n%s", err, output)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("mutation non-result: child test timed out\n%s", output)
+	}
+	if runErr == nil {
+		t.Fatalf("mutation survived: %s still passed after %q became %q", testName, before, after)
+	}
+	if strings.Contains(string(output), "[build failed]") {
+		t.Fatalf("mutation non-result: child build failed\n%s", output)
+	}
+	if strings.Contains(string(output), "panic:") {
+		t.Fatalf("mutation non-result: child panicked\n%s", output)
+	}
+	if !strings.Contains(string(output), "--- FAIL: "+testName) {
+		t.Fatalf("mutation non-result: child did not fail the targeted assertion: %v\n%s", runErr, output)
+	}
+}
+
+func copyMutationRepository(destination, source string) error {
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if relative == ".git" {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		target := filepath.Join(destination, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		info, err := input.Stat()
+		if err != nil {
+			return err
+		}
+		output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		closeErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+}
+
+func lockMutationSource(t *testing.T) {
+	t.Helper()
+	lock, err := os.OpenFile(filepath.Join(os.TempDir(), "partitur-mutation-source.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lock.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+			t.Errorf("release mutation source lock: %v", err)
+		}
+		if err := lock.Close(); err != nil {
+			t.Errorf("close mutation source lock: %v", err)
+		}
+	})
 }
 
 func sliceScore() map[string]any {

@@ -78,7 +78,8 @@ type CompositionResult struct {
 
 // Compose merges contributors in their supplied deterministic order. It never
 // executes a merge in the source repository and does not emit lifecycle
-// evidence or mutate Partitur refs.
+// evidence or mutate Partitur refs. A successful result tree is imported into
+// the source object database so the caller can wrap and pin it.
 func Compose(input CompositionInput) CompositionResult {
 	git, err := newSystemGit()
 	if err != nil {
@@ -185,8 +186,29 @@ func compose(git compositionGitCommand, input CompositionInput) CompositionResul
 			return compositionFailureWithEnvironment(result, "merge-tree", intPointer(merge.exitCode), gitFailure("merge-tree", merge))
 		}
 	}
+	if err := persistCompositionResult(git, input.RepositoryRoot, temporary, current); err != nil {
+		return compositionFailureWithEnvironment(result, "persist composition result", nil, err)
+	}
 	result.ResultTree = qualifyGitObject(format, current)
 	return result
+}
+
+func persistCompositionResult(git gitCommand, sourceRoot string, temporary compositionRepository, tree string) error {
+	packed, err := temporary.run(git, []byte(tree+"\n"), "pack-objects", "--stdout", "--revs")
+	if err != nil {
+		return err
+	}
+	if packed.exitCode != 0 {
+		return gitFailure("pack composed result", packed)
+	}
+	indexed, err := git.Run(sourceRoot, packed.stdout, "index-pack", "--stdin", "--fix-thin")
+	if err != nil {
+		return err
+	}
+	if indexed.exitCode != 0 {
+		return gitFailure("import composed result", indexed)
+	}
+	return nil
 }
 
 // MovementCompositionHash returns the A.4 movement-composition identity. The

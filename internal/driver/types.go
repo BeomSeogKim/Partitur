@@ -45,6 +45,7 @@ type AttemptExecution struct {
 	RunID                runstate.RunID
 	Attempt              *workspace.AttemptWorkspace
 	BaseTree             string
+	BaseCompositionHash  string
 	CandidateTree        string
 	Authority            *runstore.Driver
 	PerformerID          string

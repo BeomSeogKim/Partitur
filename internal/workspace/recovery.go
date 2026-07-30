@@ -127,6 +127,17 @@ func CreateRecoveredAttempt(
 	input runstore.RunInput,
 	movementID string,
 ) (*AttemptWorkspace, error) {
+	return CreateRecoveredAttemptAtBase(store, driver, input, movementID, "")
+}
+
+// CreateRecoveredAttemptAtBase uses a base commit freshly selected by the
+// recovery composition caller. An empty value retains the run base.
+func CreateRecoveredAttemptAtBase(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RunInput,
+	movementID, baseCommit string,
+) (*AttemptWorkspace, error) {
 	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" {
 		return nil, errors.New("workspace: incomplete recovered attempt input")
 	}
@@ -147,7 +158,10 @@ func CreateRecoveredAttempt(
 	if err := run.BindDriver(driver); err != nil {
 		return nil, err
 	}
-	return run.CreateAttempt(movementID)
+	if baseCommit == "" {
+		baseCommit = run.baseCommit
+	}
+	return run.CreateAttemptAtBase(movementID, baseCommit)
 }
 
 // CaptureRecoveredChangeSet captures the authoritative existing worktree for
