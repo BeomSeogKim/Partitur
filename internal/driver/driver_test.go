@@ -101,6 +101,23 @@ func TestSelectSliceRejectsEachUnsupportedShape(t *testing.T) {
 	}
 }
 
+func TestMovementSeedsProjectFinality(t *testing.T) {
+	final := movementSeeds(prepareFixture(t, sliceScore()).Score)
+	if len(final) != 1 || !final[0].Final {
+		t.Fatalf("final seeds = %#v", final)
+	}
+
+	waivedScore := sliceScore()
+	verification := waivedScore["verification"].(map[string]any)
+	expectation := verification["expectation"].(map[string]any)
+	expectation["apply_gate"] = map[string]any{"waived": true, "reason": "fixture waiver"}
+	delete(verification, "final_movement")
+	waived := movementSeeds(prepareFixture(t, waivedScore).Score)
+	if len(waived) != 1 || waived[0].Final {
+		t.Fatalf("waived seeds = %#v", waived)
+	}
+}
+
 func TestEffectiveAuthorityDoesNotInferReadFromWrite(t *testing.T) {
 	score := prepareFixture(t, sliceScore()).Score
 	movement := score.Movements()[0]

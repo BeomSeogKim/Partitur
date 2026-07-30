@@ -69,6 +69,11 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
 		recovery.ActionExecuteCancellation:        executeCancellation,
 		recovery.ActionCompleteOrAbandonPrepare:   unreachableActionOwnedBy("4.2"),
+		// The waived completion branch became selectable once run_succeeded
+		// started meaning finality. selectSlice still refuses a waived score,
+		// because §2 rule 12 forbids its final movement, so no live or recovery
+		// path reaches this action yet. PR D2 opens it together with its handler.
+		recovery.ActionAppendRunSucceeded: unreachableActionOwnedBy("2.2 PR D2"),
 	}
 }
 
@@ -732,14 +737,14 @@ func appendMovementSucceeded(_ context.Context, execution HandlerContext, action
 		}
 	}
 	slices.Sort(artifactIDs)
-	versions, err := identityVersions(canonical.DomainChangeSet)
+	versions, err := identityVersions()
 	if err != nil {
 		return err
 	}
 	payload := map[string]any{
 		"approved_artifact_instance_ids": artifactIDs,
 		"identity_versions":              versions,
-		"run_succeeded":                  allOtherMovementsFinished(state, movementID),
+		"run_succeeded":                  state.FinalMovements[movementID],
 	}
 	if state.RepoWriteMovements[movementID] {
 		changeSet, ok := state.ChangeSets[action.AttemptID]
@@ -971,15 +976,6 @@ func actionMovement(state runstate.State, action recovery.Action) (runstate.Move
 func withMovement(action recovery.Action, movementID runstate.MovementID) recovery.Action {
 	action.MovementID = movementID
 	return action
-}
-
-func allOtherMovementsFinished(state runstate.State, target runstate.MovementID) bool {
-	for movementID, lifecycle := range state.Movements {
-		if movementID != target && lifecycle != runstate.MovementSucceeded && lifecycle != runstate.MovementInapplicable {
-			return false
-		}
-	}
-	return true
 }
 
 func dispositionPayload(disposition runstate.Disposition) map[string]any {

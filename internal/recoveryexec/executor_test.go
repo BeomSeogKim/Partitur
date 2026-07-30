@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -592,6 +593,111 @@ func TestDefaultAcceptanceHandlersAppendToRealStore(t *testing.T) {
 	})
 }
 
+func TestRCResume019MatchesLiveMovementSuccessPayload(t *testing.T) {
+	for _, final := range []bool{false, true} {
+		t.Run(fmt.Sprintf("final=%t", final), func(t *testing.T) {
+			store, driver := handlerStoreWithSeeds(t, true, []runstate.MovementSeed{{
+				ID: "write", Initial: runstate.MovementPending, Final: final,
+			}})
+			appendHandlerCandidate(t, driver)
+			advanceHandlerAcceptance(t, driver, false)
+			if _, err := driver.Append(runstate.Event{
+				RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1",
+				Type: runstate.EventAttemptCompleted, Payload: handlerPayload(t, map[string]any{}),
+			}, "test.attempt_completed"); err != nil {
+				t.Fatal(err)
+			}
+			state, err := driver.State()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := appendMovementSucceeded(context.Background(), HandlerContext{
+				Store: store, Driver: driver, RunID: "run-1",
+			}, recovery.Action{Kind: recovery.ActionAppendMovementSucceeded, AttemptID: "attempt-1"}); err != nil {
+				t.Fatal(err)
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &got); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{
+				"approved_artifact_instance_ids": []any{},
+				"identity_versions":              map[string]any{"canonical_encoding": float64(1), "projections": map[string]any{}},
+				"run_succeeded":                  final,
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("RC-RESUME-019 payload = %#v, want live payload %#v", got, want)
+			}
+			if state.FinalMovements["write"] != final {
+				t.Fatalf("seeded finality = %#v, want %t", state.FinalMovements, final)
+			}
+		})
+	}
+}
+
+// TestProjectorAcceptsRunSucceededAfterNonFinalMovementSucceeded pins the event
+// shape the projector now accepts, and nothing more. It is deliberately NOT a
+// waived-runtime test: it pre-records application_candidate.recorded, whereas §8
+// gives an active waived run no recorded candidate -- the candidate is folded
+// into run.succeeded. No live or recovery surface reaches a waived score today,
+// because selectSlice refuses one for want of a final movement. Unit 2.2 PR D2
+// owns the real waived path and its ActionAppendRunSucceeded handler.
+func TestProjectorAcceptsRunSucceededAfterNonFinalMovementSucceeded(t *testing.T) {
+	store, driver := handlerStoreWithSeeds(t, true, []runstate.MovementSeed{{
+		ID: "write", Initial: runstate.MovementPending,
+	}})
+	appendHandlerCandidate(t, driver)
+	advanceHandlerAcceptance(t, driver, false)
+	if _, err := driver.Append(runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1",
+		Type: runstate.EventAttemptCompleted, Payload: handlerPayload(t, map[string]any{}),
+	}, "test.attempt_completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendMovementSucceeded(context.Background(), HandlerContext{
+		Store: store, Driver: driver, RunID: "run-1",
+	}, recovery.Action{Kind: recovery.ActionAppendMovementSucceeded, AttemptID: "attempt-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.Append(runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, Type: runstate.EventRunSucceeded,
+		Payload: handlerPayload(t, map[string]any{
+			"candidate": map[string]any{
+				"candidate_id": "candidate-1", "base_tree": "git-sha1:tree", "result_tree": "git-sha1:tree",
+				"ordered_change_sets": []any{}, "contributors": []any{},
+				"candidate_composition_dependency_hash": "sha256:composition",
+			},
+			"waiver":            map[string]any{"reason": "fixture waiver"},
+			"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
+		}),
+	}, "test.run_succeeded"); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []runstate.EventType{journal.Events[len(journal.Events)-2].Type, journal.Events[len(journal.Events)-1].Type}
+	if want := []runstate.EventType{runstate.EventMovementSucceeded, runstate.EventRunSucceeded}; !slices.Equal(got, want) {
+		t.Fatalf("terminal durable events = %v, want %v", got, want)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["candidate"] == nil || payload["waiver"].(map[string]any)["reason"] != "fixture waiver" {
+		t.Fatalf("run.succeeded payload = %#v", payload)
+	}
+	state, err := driver.State()
+	if err != nil || state.Run != runstate.RunSucceeded {
+		t.Fatalf("state=%+v error=%v", state.Run, err)
+	}
+}
+
 func TestExecutorRecoversIncompleteCriterionAfterSweep(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -924,7 +1030,29 @@ func handlerAttempt(state runstate.State) *recovery.AttemptRecovery {
 		FailureClassification: recovery.FailureClassification{CurrentPerformer: "writer", VisitedPerformers: []string{"writer"}, RetriesPerMovement: 1, RemainingTimeMS: 1}}
 }
 
+func appendHandlerCandidate(t *testing.T, driver *runstore.Driver) {
+	t.Helper()
+	if _, err := driver.Append(runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, Type: runstate.EventApplicationCandidateRecorded,
+		Payload: handlerPayload(t, map[string]any{
+			"candidate_id": "candidate-1", "base_tree": "git-sha1:tree", "result_tree": "git-sha1:tree",
+			"ordered_change_sets": []any{}, "contributors": []any{},
+			"candidate_composition_dependency_hash": "sha256:composition",
+			"identity_versions":                     map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
+		}),
+	}, "test.application_candidate_recorded"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func handlerStore(t *testing.T, selectAttempt bool) (*runstore.Store, *runstore.Driver) {
+	return handlerStoreWithSeeds(t, selectAttempt, []runstate.MovementSeed{
+		{ID: "write", Initial: runstate.MovementPending},
+		{ID: "read", Initial: runstate.MovementPending},
+	})
+}
+
+func handlerStoreWithSeeds(t *testing.T, selectAttempt bool, seed []runstate.MovementSeed) (*runstore.Store, *runstore.Driver) {
 	t.Helper()
 	root := t.TempDir()
 	store, err := runstore.New(root, faultpoint.Nop{})
@@ -940,7 +1068,7 @@ func handlerStore(t *testing.T, selectAttempt bool) (*runstore.Store, *runstore.
 	if selectAttempt {
 		appendHandlerEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: handlerPayload(t, map[string]any{"reason": "initial", "performer_id": "writer", "adapter_id": "adapter", "model": "model"})})
 	}
-	driver, err := store.AcquireDriver("run-1", []runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}, {ID: "read", Initial: runstate.MovementPending}})
+	driver, err := store.AcquireDriver("run-1", seed)
 	if err != nil {
 		t.Fatal(err)
 	}

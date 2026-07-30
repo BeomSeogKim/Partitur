@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -46,6 +47,23 @@ func TestReadProjectsPinnedRunWithoutMutatingIt(t *testing.T) {
 	}
 	if string(encoded) == "" || string(encoded) == "null" {
 		t.Fatalf("encoded report = %q", encoded)
+	}
+}
+
+func TestMovementSeedsProjectFinality(t *testing.T) {
+	final := movementSeeds(mustCompile(t, statusScore()))
+	if len(final) != 1 || !final[0].Final {
+		t.Fatalf("final seeds = %#v", final)
+	}
+	waivedSource := strings.Replace(
+		statusScore(),
+		"      require: [verified]\n  final_movement: inspect",
+		"      waived: true\n      reason: fixture waiver",
+		1,
+	)
+	waived := movementSeeds(mustCompile(t, waivedSource))
+	if len(waived) != 1 || waived[0].Final {
+		t.Fatalf("waived seeds = %#v", waived)
 	}
 }
 

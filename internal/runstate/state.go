@@ -8,6 +8,7 @@ func NewState(seed []MovementSeed) State {
 	state := State{
 		Movements:           make(map[MovementID]MovementState, len(seed)),
 		RepoWriteMovements:  make(map[MovementID]bool),
+		FinalMovements:      make(map[MovementID]bool),
 		Attempts:            make(map[AttemptID]Attempt),
 		AdapterLaunches:     make(map[AttemptID]AdapterLaunch),
 		AdapterObservations: make(map[AttemptID]AdapterObservation),
@@ -37,6 +38,9 @@ func NewState(seed []MovementSeed) State {
 		if movement.RepoWrite {
 			state.RepoWriteMovements[movement.ID] = true
 		}
+		if movement.Final {
+			state.FinalMovements[movement.ID] = true
+		}
 	}
 	return state
 }
@@ -45,6 +49,7 @@ func cloneState(input State) State {
 	output := input
 	output.Movements = cloneMap(input.Movements)
 	output.RepoWriteMovements = cloneMap(input.RepoWriteMovements)
+	output.FinalMovements = cloneMap(input.FinalMovements)
 	output.Attempts = cloneMap(input.Attempts)
 	for id, attempt := range output.Attempts {
 		if attempt.Failure != nil {

@@ -176,7 +176,7 @@ func Apply(input State, event Event) (State, error) {
 			if attempt.MovementID != event.MovementID {
 				return state, invalid(event, "attempt does not belong to movement")
 			}
-			finishesRun := allMovementsFinishedAfter(state, event.MovementID)
+			finishesRun := allOtherMovementsFinished(state, event.MovementID)
 			if mustBool(payload, "run_failed") != finishesRun {
 				return state, invalid(event, "run_failed does not match final movement")
 			}
@@ -215,7 +215,7 @@ func Apply(input State, event Event) (State, error) {
 		if state.RepoWriteMovements[event.MovementID] != hasApprovedChangeSet {
 			return state, invalid(event, "approved_change_set_id presence does not match repo_write")
 		}
-		finishesRun := allMovementsFinishedAfter(state, event.MovementID)
+		finishesRun := state.FinalMovements[event.MovementID]
 		if mustBool(payload, "run_succeeded") != finishesRun {
 			return state, invalid(event, "run_succeeded does not match final movement")
 		}
@@ -1087,7 +1087,7 @@ func artifactIDsForAttempt(state State, attemptID AttemptID) []string {
 	return ids
 }
 
-func allMovementsFinishedAfter(state State, succeededID MovementID) bool {
+func allOtherMovementsFinished(state State, succeededID MovementID) bool {
 	for id, movementState := range state.Movements {
 		if id == succeededID {
 			continue

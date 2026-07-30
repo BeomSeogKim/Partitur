@@ -181,6 +181,18 @@ func TestLoadRunInputIgnoresCurrentRootScore(t *testing.T) {
 	}
 }
 
+func TestMovementSeedProjectsWaivedFinality(t *testing.T) {
+	compiled, diagnostics := score.Compile(recoveryScoreJSON(t, 1, "pinned recovery fixture"))
+	if len(diagnostics) != 0 {
+		t.Fatalf("compile diagnostics = %v", diagnostics)
+	}
+	for _, seed := range movementSeed(compiled) {
+		if seed.Final {
+			t.Fatalf("waived seed is final: %#v", seed)
+		}
+	}
+}
+
 func TestLoadRunInputDoesNotFallBackToRootScore(t *testing.T) {
 	store := recoveryStore(t)
 	root := filepath.Join(store.RepositoryRoot(), "partitur.yaml")

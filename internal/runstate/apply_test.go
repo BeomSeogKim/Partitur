@@ -64,6 +64,26 @@ func TestApplyDoesNotAliasInputOnSuccessOrError(t *testing.T) {
 	}
 }
 
+func TestNewStateProjectsSeedFinality(t *testing.T) {
+	state := NewState([]MovementSeed{
+		{ID: "final", Initial: MovementPending, Final: true},
+		{ID: "ordinary", Initial: MovementPending},
+	})
+	if !state.FinalMovements["final"] || state.FinalMovements["ordinary"] {
+		t.Fatalf("final movements = %#v", state.FinalMovements)
+	}
+	next, err := Apply(state, fixtureEvent(EventMovementReady, map[string]any{}, func(event *Event) {
+		event.MovementID = "ordinary"
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.FinalMovements["final"] = false
+	if !state.FinalMovements["final"] {
+		t.Fatal("final movement projection aliases input")
+	}
+}
+
 func TestUnregisteredEventFailsAsInvalid(t *testing.T) {
 	state := NewState(nil)
 	_, err := Apply(state, fixtureEvent("unknown.event", map[string]any{}, nil))
@@ -1104,8 +1124,12 @@ func TestShippingRecoveryProjectionUsesJournalTransactions(t *testing.T) {
 }
 
 func runningAttemptState(t *testing.T) State {
+	return runningAttemptStateWithFinality(t, true)
+}
+
+func runningAttemptStateWithFinality(t *testing.T, final bool) State {
 	t.Helper()
-	state := NewState([]MovementSeed{{ID: "m1", Initial: MovementPending}})
+	state := NewState([]MovementSeed{{ID: "m1", Initial: MovementPending, Final: final}})
 	var err error
 	for _, event := range []Event{
 		fixtureEvent(EventRunStarted, runStartedPayload(), nil),
