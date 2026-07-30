@@ -122,6 +122,14 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		}
 
 		action := *decision.Action
+		// A named unimplemented zero-step action is a refusal, not a recovery
+		// effect. It must not acquire a driver or append an authority event.
+		// Nonempty Steps select step dispatch before kind handling below.
+		if len(action.Steps) == 0 {
+			if unit, ok := namedUnimplementedActionOwners[action.Kind]; ok {
+				return result, fmt.Errorf("%w: %s is owned by unit %s", ErrUnreachableAction, action.Kind, unit)
+			}
+		}
 		if action.Kind == recovery.ActionReclaimAuthority || (actionRequiresDriver(action) && executor.Driver == nil) {
 			if err := executor.acquireAuthority(input); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
@@ -303,8 +311,7 @@ func actionRequiresDriver(action recovery.Action) bool {
 		recovery.ActionQuarantineOrphanLease,
 		recovery.ActionRefuseResume,
 		recovery.ActionReturnWaitingHuman,
-		recovery.ActionExecuteCancellation,
-		recovery.ActionCompleteOrAbandonPrepare:
+		recovery.ActionExecuteCancellation:
 		return false
 	default:
 		return true

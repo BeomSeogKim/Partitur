@@ -28,6 +28,29 @@ import (
 
 const recoverySweepGrace = 30 * time.Second
 
+// namedUnimplementedActionOwners is the single owner assignment for recovery
+// actions whose implementation belongs to a later unit. The unit assignments
+// are documentation whose authority is the project roadmap; no test validates
+// their values, only their presence, uniqueness of bucket, and propagation
+// into the refusal message.
+var namedUnimplementedActionOwners = map[recovery.ActionKind]string{
+	recovery.ActionCompleteOrAbandonPrepare:  "4.2",
+	recovery.ActionAppendRoutedRequest:       "4.2",
+	recovery.ActionSelectRevisionRestart:     "4.2",
+	recovery.ActionAppendCompositionTerminal: "3.1",
+	recovery.ActionAppendQuestionRequest:     "4.1",
+	// Temporary executor/planner mismatch, not a 4.1 handler requirement:
+	// RC-RESUME-041 must hand decision_resume materialization to C.4.
+	recovery.ActionSelectDecisionResume:       "4.1",
+	recovery.ActionCaptureChangeSet:           "3.1",
+	recovery.ActionAppendFinalGateFailure:     "4.1",
+	recovery.ActionAppendEvaluationCompleted:  "4.1",
+	recovery.ActionAppendHumanGateRequest:     "4.1",
+	recovery.ActionAppendGateRejectedFailure:  "4.1",
+	recovery.ActionRerunComposition:           "3.1",
+	recovery.ActionRecoverIncompleteCriterion: "3.2",
+}
+
 func defaultSteps() map[recovery.ActionStep]StepHandler {
 	return map[recovery.ActionStep]StepHandler{
 		recovery.StepStabilizeHandoff:            stabilizeHandoff,
@@ -68,7 +91,6 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionComposeCandidate:           composeZeroWriterCandidate,
 		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
 		recovery.ActionExecuteCancellation:        executeCancellation,
-		recovery.ActionCompleteOrAbandonPrepare:   unreachableActionOwnedBy("4.2"),
 		recovery.ActionAppendRunSucceeded:         appendRunSucceeded,
 	}
 }
@@ -437,12 +459,6 @@ func visitedPerformers(projection recovery.Projection, movementID runstate.Movem
 		return nil
 	}
 	return append([]string(nil), attempt.FailureClassification.VisitedPerformers...)
-}
-
-func unreachableActionOwnedBy(unit string) StepHandler {
-	return func(_ context.Context, _ HandlerContext, action recovery.Action) error {
-		return fmt.Errorf("%w: %s is owned by unit %s", ErrUnreachableAction, action.Kind, unit)
-	}
 }
 
 func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Action) error {

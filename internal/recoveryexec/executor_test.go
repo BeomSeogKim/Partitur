@@ -1,6 +1,7 @@
 package recoveryexec
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -1437,14 +1438,9 @@ func TestExecutorRequiresAuthorityBeforeEffect(t *testing.T) {
 	}
 }
 
-func TestExecutorRejectsUnimplementedControlActionsBeforeAcquiringAuthority(t *testing.T) {
-	for _, test := range []struct {
-		action recovery.ActionKind
-		unit   string
-	}{
-		{action: recovery.ActionCompleteOrAbandonPrepare, unit: "4.2"},
-	} {
-		t.Run(string(test.action), func(t *testing.T) {
+func TestExecutorRejectsNamedUnimplementedActionsBeforeAuthority(t *testing.T) {
+	for action, unit := range namedUnimplementedActionOwners {
+		t.Run(string(action), func(t *testing.T) {
 			store := acquirableRecoveryStore(t)
 			journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
 			before, err := os.ReadFile(journalPath)
@@ -1452,25 +1448,30 @@ func TestExecutorRejectsUnimplementedControlActionsBeforeAcquiringAuthority(t *t
 				t.Fatal(err)
 			}
 
-			input := recovery.Input{Projection: recovery.Projection{State: runstate.State{Run: runstate.RunRunning}}}
-			if test.action == recovery.ActionCompleteOrAbandonPrepare {
-				input.Projection.State.PendingPrepare = &runstate.PendingPrepare{}
-				input.Observations.Prepare = recovery.PrepareObservation{PlanPresent: true, SnapshotPresent: true}
+			executor := &Executor{
+				Store: store,
+				RunID: "run-1",
+				Load: func(context.Context) (recovery.Input, error) {
+					return recovery.Input{}, nil
+				},
 			}
-			executor := &Executor{Store: store, RunID: "run-1", Load: func(context.Context) (recovery.Input, error) { return input, nil }}
 			_, err = executor.execute(context.Background(), recovery.Input{}, recovery.Decision{
 				CaseID: "RC-test",
-				Action: &recovery.Action{Kind: test.action},
+				Action: &recovery.Action{Kind: action},
 			})
-			if !errors.Is(err, ErrUnreachableAction) || !strings.Contains(err.Error(), "unit "+test.unit) {
+			if !errors.Is(err, ErrUnreachableAction) || !strings.Contains(err.Error(), "unit "+unit) {
 				t.Fatalf("error=%v", err)
+			}
+			if executor.Driver != nil {
+				t.Fatal("named refusal acquired a driver")
 			}
 			if _, present, leaseErr := store.ReadLease("run-1"); leaseErr != nil || present {
 				t.Fatalf("lease present=%t error=%v", present, leaseErr)
 			}
+
 			after, err := os.ReadFile(journalPath)
-			if err != nil || string(after) != string(before) {
-				t.Fatalf("journal changed=%t error=%v", string(after) != string(before), err)
+			if err != nil || !bytes.Equal(after, before) {
+				t.Fatalf("journal changed=%t error=%v", !bytes.Equal(after, before), err)
 			}
 		})
 	}
@@ -1879,7 +1880,6 @@ func TestReclaimAuthorityIsTheOnlyAuthorityBoundary(t *testing.T) {
 		recovery.ActionRefuseResume,
 		recovery.ActionReturnWaitingHuman,
 		recovery.ActionExecuteCancellation,
-		recovery.ActionCompleteOrAbandonPrepare,
 	} {
 		if actionRequiresDriver(recovery.Action{Kind: action}) {
 			t.Fatalf("%s unexpectedly requires authority", action)
