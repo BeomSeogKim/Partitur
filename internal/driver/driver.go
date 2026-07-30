@@ -1123,13 +1123,18 @@ func executionDependencyProjection(
 }
 
 func movementCompositionDependencyHash(movementID, baseTree string) (string, error) {
-	return canonical.Hash(canonical.DomainMovementComposition, map[string]any{
-		"composition_mode":              "identity",
-		"movement_id":                   movementID,
-		"base_tree":                     baseTree,
-		"contributors":                  []any{},
-		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
-	})
+	return workspace.MovementCompositionHash(runstate.MovementID(movementID), baseTree, nil, "")
+}
+
+func movementCompositionMergeDependencyHash(
+	movementID runstate.MovementID,
+	baseTree string,
+	contributors []workspace.CompositionContributor,
+	environmentHash string,
+) (string, error) {
+	return workspace.MovementCompositionHash(
+		movementID, baseTree, contributors, environmentHash,
+	)
 }
 
 func recognizedFeatures(_ []string) []string {

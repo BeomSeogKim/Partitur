@@ -10,6 +10,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/validate"
+	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
 // TestExecutionDependencyProjectionCompleteness locks A.5's declared field
@@ -127,6 +128,49 @@ func TestMovementCompositionIdentityForbidsEnvironmentHash(t *testing.T) {
 	}
 	if got, err := movementCompositionDependencyHash("inspect", "sha256:tree"); err != nil || got != identity {
 		t.Fatalf("identity composition helper = %q, %v; want %q", got, err, identity)
+	}
+}
+
+func TestMovementCompositionMergeUsesFullPreDedupContributorPreimage(t *testing.T) {
+	contributors := []workspace.CompositionContributor{
+		{MovementID: "prepare", ChangeSetID: "sha256:first"},
+		{MovementID: "prepare-again", ChangeSetID: "sha256:first"},
+	}
+	const environment = "sha256:environment"
+	got, err := movementCompositionMergeDependencyHash(
+		"inspect", "sha256:tree", contributors, environment,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is independently constructed from A.4's merge preimage. In
+	// particular, the duplicate stays in the identity even though the engine
+	// applies that change set only once.
+	want, err := canonical.Hash(canonical.DomainMovementComposition, map[string]any{
+		"composition_mode": "merge",
+		"movement_id":      "inspect",
+		"base_tree":        "sha256:tree",
+		"contributors": []any{
+			map[string]any{"movement_id": "prepare", "change_set_id": "sha256:first"},
+			map[string]any{"movement_id": "prepare-again", "change_set_id": "sha256:first"},
+		},
+		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
+		"composition_environment_hash":  environment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("merge composition hash = %q, want A.4 merge preimage hash %q", got, want)
+	}
+	withoutDuplicate, err := movementCompositionMergeDependencyHash(
+		"inspect", "sha256:tree", contributors[:1], environment,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == withoutDuplicate {
+		t.Fatal("merge composition hash deduplicated its contributor identity")
 	}
 }
 
