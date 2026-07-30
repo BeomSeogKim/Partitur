@@ -31,6 +31,15 @@ type startDependencies struct {
 	newID func() (string, error)
 }
 
+type refExistingValuePolicy uint8
+
+const (
+	refExistingMustMatchObject refExistingValuePolicy = iota
+	// A changeset ref is attempt-scoped: before change_set.recorded names it,
+	// recovery may move it to the surviving worktree checkpoint, but only by CAS.
+	refExistingMayMove
+)
+
 // Start checks the Git preconditions and durably records the prepared run.
 // It returns no RunID until run.started is fsynced.
 func Start(
@@ -129,6 +138,7 @@ func start(
 			facts.commit,
 			runID,
 			receiptBaseRef,
+			refExistingMustMatchObject,
 		); err != nil {
 			return err
 		}
@@ -259,6 +269,7 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 			run.baseCommit,
 			run.id,
 			receiptCandidateRef,
+			refExistingMustMatchObject,
 		); err != nil {
 			return err
 		}
@@ -346,6 +357,7 @@ func ensureRef(
 	root, ref, object string,
 	runID runstate.RunID,
 	address faultpoint.ReceiptAddress,
+	policy refExistingValuePolicy,
 ) (faultpoint.DurabilityReceipt, error) {
 	result, err := git.Run(root, nil, "show-ref", "--verify", "--quiet", ref)
 	if err != nil {
@@ -359,7 +371,7 @@ func ensureRef(
 			return faultpoint.DurabilityReceipt{}, err
 		}
 		expected = string(bytesTrimSpace(current))
-		if expected != object {
+		if policy == refExistingMustMatchObject && expected != object {
 			return faultpoint.DurabilityReceipt{}, ErrRunIDCollision
 		}
 	case 1:

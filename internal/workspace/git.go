@@ -19,6 +19,7 @@ type gitResult struct {
 
 type gitCommand interface {
 	Run(repositoryRoot string, stdin []byte, args ...string) (gitResult, error)
+	RunWithEnvironment(repositoryRoot string, stdin []byte, environment []string, args ...string) (gitResult, error)
 }
 
 type systemGit struct {
@@ -51,6 +52,15 @@ func (g systemGit) Run(
 	stdin []byte,
 	args ...string,
 ) (gitResult, error) {
+	return g.RunWithEnvironment(repositoryRoot, stdin, nil, args...)
+}
+
+func (g systemGit) RunWithEnvironment(
+	repositoryRoot string,
+	stdin []byte,
+	environment []string,
+	args ...string,
+) (gitResult, error) {
 	commandArgs := make([]string, 0, len(args)+6)
 	commandArgs = append(
 		commandArgs,
@@ -62,7 +72,7 @@ func (g systemGit) Run(
 	}
 	commandArgs = append(commandArgs, args...)
 	command := exec.Command(g.path, commandArgs...)
-	command.Env = append([]string(nil), g.env...)
+	command.Env = append(append([]string(nil), g.env...), environment...)
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
 	}

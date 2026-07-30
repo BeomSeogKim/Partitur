@@ -112,6 +112,7 @@ func TestEnsureRefReturnsAddressableDurabilityReceipt(t *testing.T) {
 		gitText(t, repository, "rev-parse", "HEAD"),
 		testRunID,
 		address,
+		refExistingMustMatchObject,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +124,26 @@ func TestEnsureRefReturnsAddressableDurabilityReceipt(t *testing.T) {
 		t.Fatalf("receipt = %#v", receipt)
 	}
 	assertDurableRefUpdate(t, git.calls, ref)
+}
+
+func TestEnsureRefStrictPolicyRejectsExistingDifferentObject(t *testing.T) {
+	repository, _ := prepareRepository(t)
+	git := newRecordingGit(t)
+	ref := "refs/partitur/tests/strict"
+	object := gitText(t, repository, "rev-parse", "HEAD")
+	if _, err := ensureRef(
+		git, repository, ref, object, testRunID,
+		faultpoint.ReceiptAddress("test.strict.initial"), refExistingMustMatchObject,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ensureRef(
+		git, repository, ref, strings.Repeat("0", len(object)), testRunID,
+		faultpoint.ReceiptAddress("test.strict.collision"), refExistingMustMatchObject,
+	)
+	if !errors.Is(err, ErrRunIDCollision) {
+		t.Fatalf("strict ref policy error = %v, want ErrRunIDCollision", err)
+	}
 }
 
 func TestStartRejectsIncompletePreparation(t *testing.T) {
@@ -459,6 +480,119 @@ func TestCreateAttemptUsesFreshBaseAndSeparatesOutput(t *testing.T) {
 	}
 }
 
+func TestCaptureChangeSetStagesUntrackedContentPinsCheckpointAndIsIdempotent(t *testing.T) {
+	repository, preparation := prepareRepositoryWithScore(t, writerScore())
+	git := newRecordingGit(t)
+	started := startFixture(t, preparation, git, testRunID)
+	started.Run.newID = idSequence(testAttemptID)
+	attempt, err := started.Run.CreateAttempt(preparation.Score.Movements()[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(attempt.Worktree, "new.txt"), []byte("new\n"), 0o600)
+	if err := os.Symlink("new.txt", filepath.Join(attempt.Worktree, "new-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := attempt.CaptureChangeSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.BaseTree == first.ResultTree {
+		t.Fatal("capture discarded non-ignored untracked content")
+	}
+	if got := gitText(t, repository, "show-ref", "--hash", first.Ref); got != first.Commit {
+		t.Fatalf("change set ref = %q, want %q", got, first.Commit)
+	}
+	if got := gitText(t, attempt.Worktree, "ls-tree", recoveryGitObject(first.ResultTree), "--", "new.txt"); !strings.Contains(got, "new.txt") {
+		t.Fatalf("captured tree omits untracked file: %q", got)
+	}
+	if got := gitText(t, attempt.Worktree, "ls-tree", recoveryGitObject(first.ResultTree), "--", "new-link"); !strings.Contains(got, "120000") {
+		t.Fatalf("captured tree omits symlink mode: %q", got)
+	}
+	if got := gitText(t, attempt.Worktree, "show", "-s", "--format=%an|%ae|%ad|%cn|%ce|%cd|%P|%s", "--date=iso-strict", first.Commit); got != "Partitur|partitur@invalid|1970-01-01T00:00:00Z|Partitur|partitur@invalid|1970-01-01T00:00:00Z||partitur: change set" {
+		t.Fatalf("checkpoint metadata = %q", got)
+	}
+	second, err := attempt.CaptureChangeSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.Commit != first.Commit {
+		t.Fatalf("second capture = %#v, want same id and commit as %#v", second, first)
+	}
+	assertDurableRefUpdate(t, git.calls, changesetRef(testRunID, testAttemptID))
+}
+
+func TestCaptureChangeSetRecapturesChangedWorktreeWithCompareAndSwap(t *testing.T) {
+	repository, preparation := prepareRepositoryWithScore(t, writerScore())
+	git := newRecordingGit(t)
+	started := startFixture(t, preparation, git, testRunID)
+	started.Run.newID = idSequence(testAttemptID)
+	attempt, err := started.Run.CreateAttempt(preparation.Score.Movements()[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(attempt.Worktree, "surviving.txt")
+	writeFile(t, path, []byte("before crash\n"), 0o600)
+	first, err := attempt.CaptureChangeSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, []byte("after crash\n"), 0o600)
+	second, err := attempt.CaptureChangeSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID || second.Commit == first.Commit || second.ResultTree == first.ResultTree {
+		t.Fatalf("changed worktree recapture = %#v, want a new checkpoint after %#v", second, first)
+	}
+	if got := gitText(t, repository, "show-ref", "--hash", second.Ref); got != second.Commit {
+		t.Fatalf("change set ref = %q, want later commit %q", got, second.Commit)
+	}
+	if got := gitText(t, attempt.Worktree, "show", second.Commit+":surviving.txt"); got != "after crash" {
+		t.Fatalf("later checkpoint content = %q, want surviving worktree content", got)
+	}
+	assertDurableRefCompareAndSwap(t, git.calls, second.Ref, second.Commit, first.Commit)
+}
+
+func TestCaptureChangeSetRecordsNoOpAndExcludesProtectedPartiturContent(t *testing.T) {
+	t.Run("no-op", func(t *testing.T) {
+		_, preparation := prepareRepositoryWithScore(t, writerScore())
+		started := startFixture(t, preparation, newRecordingGit(t), testRunID)
+		started.Run.newID = idSequence(testAttemptID)
+		attempt, err := started.Run.CreateAttempt(preparation.Score.Movements()[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changeSet, err := attempt.CaptureChangeSet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changeSet.BaseTree != changeSet.ResultTree {
+			t.Fatalf("no-op trees = %q and %q, want equal", changeSet.BaseTree, changeSet.ResultTree)
+		}
+	})
+
+	t.Run("partitur is excluded from the staged tree", func(t *testing.T) {
+		_, preparation := prepareRepositoryWithScore(t, writerScore())
+		started := startFixture(t, preparation, newRecordingGit(t), testRunID)
+		started.Run.newID = idSequence(testAttemptID)
+		attempt, err := started.Run.CreateAttempt(preparation.Score.Movements()[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(attempt.Worktree, ".partitur", "runtime.txt"), []byte("run data\n"), 0o600)
+		gitRun(t, attempt.Worktree, "add", ".partitur/runtime.txt")
+		changeSet, err := attempt.CaptureChangeSet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changeSet.BaseTree != changeSet.ResultTree {
+			t.Fatalf("capture included protected .partitur content: %q and %q", changeSet.BaseTree, changeSet.ResultTree)
+		}
+	})
+}
+
 func TestVerifyRecoverySubjectChecksCompleteInvariant(t *testing.T) {
 	t.Run("matching linked worktree", func(t *testing.T) {
 		repository, worktree, subjectTree := recoverySubjectFixture(t)
@@ -774,6 +908,11 @@ func (git *recordingGit) Run(root string, stdin []byte, args ...string) (gitResu
 		}
 	}
 	return result, err
+}
+
+func (git *recordingGit) RunWithEnvironment(root string, stdin []byte, environment []string, args ...string) (gitResult, error) {
+	git.calls = append(git.calls, slices.Clone(args))
+	return git.delegate.RunWithEnvironment(root, stdin, environment, args...)
 }
 
 func prepareRepository(t *testing.T) (string, *validate.Preparation) {
@@ -1104,6 +1243,20 @@ func assertDurableRefUpdate(t *testing.T, calls [][]string, ref string) {
 		}
 	}
 	t.Fatalf("no durable update-ref for %q in %#v", ref, calls)
+}
+
+func assertDurableRefCompareAndSwap(t *testing.T, calls [][]string, ref, object, expected string) {
+	t.Helper()
+	for _, call := range calls {
+		if len(call) == 8 && slices.Equal(call[:6], []string{
+			"-c", "core.fsync=reference",
+			"-c", "core.fsyncMethod=fsync",
+			"update-ref", ref,
+		}) && call[6] == object && call[7] == expected {
+			return
+		}
+	}
+	t.Fatalf("no durable compare-and-swap update-ref for %q from %q to %q in %#v", ref, expected, object, calls)
 }
 
 func writeJSON(t *testing.T, path string, value any) {

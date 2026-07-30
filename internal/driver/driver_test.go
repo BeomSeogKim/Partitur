@@ -201,6 +201,165 @@ func TestRunRefusesWriterMovementsBeforeWorkspaceStart(t *testing.T) {
 	}
 }
 
+func TestCaptureAndRecordChangeSetPinsRefBeforeOneNoOpEvent(t *testing.T) {
+	preparation, store, authority, started, attempt := writerCaptureFixture(t)
+	defer authority.Release()
+	appends := 0
+	first, err := captureAndRecordChangeSet(attempt, authority, func(event runstate.Event) error {
+		journal, err := store.ReadJournal(started.RunID)
+		if err != nil {
+			return err
+		}
+		for _, previous := range journal.Events {
+			if previous.Type == runstate.EventChangeSetRecorded && previous.AttemptID == attempt.AttemptID {
+				t.Fatalf("change set event already present before its ref callback: %+v", previous)
+			}
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		ref, _ := payload["ref"].(string)
+		commit, _ := payload["commit"].(string)
+		contents, err := os.ReadFile(filepath.Join(preparation.RepositoryRoot, ".git", filepath.FromSlash(ref)))
+		if err != nil || strings.TrimSpace(string(contents)) != commit {
+			t.Fatalf("change set ref before event = (%q, %v), want %q", contents, err, commit)
+		}
+		appends++
+		_, err = authority.Append(event, "test.change_set.recorded")
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.BaseTree != first.ResultTree {
+		t.Fatalf("no-op change set trees = %q and %q, want equal", first.BaseTree, first.ResultTree)
+	}
+	second, err := CaptureAndRecordChangeSet(attempt, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || appends != 1 {
+		t.Fatalf("second capture=%#v appends=%d, want one event and id %q", second, appends, first.ID)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matching := 0
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventChangeSetRecorded && event.AttemptID == attempt.AttemptID {
+			matching++
+		}
+	}
+	if matching == 0 {
+		t.Fatal("capture journal inspection observed zero matching change_set.recorded events")
+	}
+	if matching != 1 {
+		t.Fatalf("change_set.recorded events = %d, want 1", matching)
+	}
+}
+
+func TestWriterVerificationRejectsProtectedPathWithoutAttestation(t *testing.T) {
+	_, store, authority, started, attempt := writerCaptureFixture(t)
+	defer authority.Release()
+	protected := filepath.Join(attempt.Worktree, "partitur.yaml")
+	if err := os.WriteFile(protected, []byte("corrupt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "corrupt\n" {
+		t.Fatalf("protected mutation = %q, want corrupt content", contents)
+	}
+
+	failed, err := completeAttemptVerification(
+		attempt,
+		true,
+		authority,
+		writerVerificationAppender(t, authority, started.RunID, attempt),
+		grantDeniedClassifier(t),
+	)
+	if !failed {
+		t.Fatal("protected path violation did not record attempt.failed")
+	}
+	var verification *workspace.VerificationError
+	if !errors.As(err, &verification) || verification.Reason != "protected_path_violation" {
+		t.Fatalf("verification error = %#v, want protected_path_violation", err)
+	}
+
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failedEvent *runstate.Event
+	for index := range journal.Events {
+		event := &journal.Events[index]
+		if event.AttemptID != attempt.AttemptID {
+			continue
+		}
+		if event.Type == runstate.EventVerificationPassed {
+			t.Fatal("verification.passed appended for protected path violation")
+		}
+		if event.Type == runstate.EventChangeSetRecorded {
+			t.Fatal("change_set.recorded appended before protected path verification")
+		}
+		if event.Type == runstate.EventAttemptFailed {
+			failedEvent = event
+		}
+	}
+	if failedEvent == nil {
+		t.Fatal("attempt.failed event is absent")
+	}
+	payload := decodeDriverPayload(t, *failedEvent)
+	if payload["kind"] != successor.KindGrantDenied || payload["reason"] != "protected_path_violation" {
+		t.Fatalf("attempt.failed payload = %#v", payload)
+	}
+	disposition, ok := payload["disposition"].(map[string]any)
+	if !ok || disposition["terminal_reason"] != successor.KindGrantDenied {
+		t.Fatalf("attempt.failed disposition = %#v", payload["disposition"])
+	}
+}
+
+func TestWriterVerificationRecordsAttestationAfterProtectedPathCheck(t *testing.T) {
+	_, store, authority, started, attempt := writerCaptureFixture(t)
+	defer authority.Release()
+
+	failed, err := completeAttemptVerification(
+		attempt,
+		true,
+		authority,
+		writerVerificationAppender(t, authority, started.RunID, attempt),
+		grantDeniedClassifier(t),
+	)
+	if err != nil || failed {
+		t.Fatalf("writer verification = failed:%t err:%v", failed, err)
+	}
+
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeSetIndex := -1
+	verificationIndex := -1
+	for index, event := range journal.Events {
+		if event.AttemptID != attempt.AttemptID {
+			continue
+		}
+		switch event.Type {
+		case runstate.EventChangeSetRecorded:
+			changeSetIndex = index
+		case runstate.EventVerificationPassed:
+			verificationIndex = index
+		}
+	}
+	if changeSetIndex == -1 || verificationIndex == -1 || changeSetIndex >= verificationIndex {
+		t.Fatalf("writer verification event order: change_set=%d verification=%d", changeSetIndex, verificationIndex)
+	}
+}
+
 func TestPostCreationOperationalFailureLeavesResumableRun(t *testing.T) {
 	castDocument := sliceCast()
 	worker := castDocument["performers"].(map[string]any)["worker"].(map[string]any)
@@ -1059,6 +1218,86 @@ func liveEntryFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *ru
 		t.Fatal(err)
 	}
 	return preparation, store, authority, start
+}
+
+func writerCaptureFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, *workspace.AttemptWorkspace) {
+	t.Helper()
+	preparation := prepareRunnableFixture(t, writerSliceScore(true), sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := started.Run.BindDriver(authority); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	for _, event := range []runstate.Event{
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementReady, Payload: testPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementStarted, Payload: testPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: attempt.AttemptID, Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "gpt-5.6-sol"})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: attempt.AttemptID, Type: runstate.EventAttemptStarted, Payload: testPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{"**"}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": versions})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: attempt.AttemptID, Type: runstate.EventAdapterProbed, Payload: testPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": true, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: attempt.AttemptID, Type: runstate.EventPerformerCompleted, Payload: testPayload(t, map[string]any{"session_hint_stored": false})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test.writer_capture."+string(event.Type))); err != nil {
+			authority.Release()
+			t.Fatal(err)
+		}
+	}
+	return preparation, store, authority, started, attempt
+}
+
+func writerVerificationAppender(
+	t *testing.T,
+	authority *runstore.Driver,
+	runID runstate.RunID,
+	attempt *workspace.AttemptWorkspace,
+) func(runstate.EventType, any, string) (faultpoint.DurabilityReceipt, error) {
+	t.Helper()
+	return func(eventType runstate.EventType, payload any, address string) (faultpoint.DurabilityReceipt, error) {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return faultpoint.DurabilityReceipt{}, err
+		}
+		return authority.Append(runstate.Event{
+			RunID: runID, ScoreRevision: 1, MovementID: attempt.MovementID,
+			PartID: attempt.PartID, AttemptID: attempt.AttemptID,
+			Type: eventType, Payload: encoded,
+		}, faultpoint.ReceiptAddress(address))
+	}
+}
+
+func grantDeniedClassifier(t *testing.T) func(successor.FailureCase) (runstate.Disposition, error) {
+	t.Helper()
+	return func(failure successor.FailureCase) (runstate.Disposition, error) {
+		if failure.AttemptKind != successor.KindGrantDenied {
+			t.Fatalf("failure case = %#v, want grant_denied", failure)
+		}
+		return successor.Classify(successor.ClassificationInput{
+			Failure: failure, RemainingTimeMS: 1,
+		})
+	}
+}
+
+func decodeDriverPayload(t *testing.T, event runstate.Event) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func testPayload(t *testing.T, value any) json.RawMessage {

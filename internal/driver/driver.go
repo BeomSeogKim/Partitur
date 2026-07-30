@@ -719,21 +719,16 @@ func ExecuteAttempt(
 		return interrupted(result, errors.New("adapter did not complete"))
 	}
 
-	if _, err := attempt.VerifyReadOnlyAndRecord(); err != nil {
-		var verification *workspace.VerificationError
-		if !errors.As(err, &verification) {
+	verificationFailed, err := completeAttemptVerification(
+		attempt,
+		hasGrant(movement.Grants, "repo_write"),
+		authority,
+		appendEvent,
+		classifyFailure,
+	)
+	if err != nil {
+		if !verificationFailed {
 			return stopped(result, err)
-		}
-		disposition, classifyErr := classifyFailure(successor.FailureCase{AttemptKind: successor.KindGrantDenied})
-		if classifyErr != nil {
-			return stopped(result, classifyErr)
-		}
-		if _, appendErr := appendEvent(runstate.EventAttemptFailed, map[string]any{
-			"kind":        successor.KindGrantDenied,
-			"reason":      verification.Reason,
-			"disposition": dispositionPayload(disposition),
-		}, "attempt.failed"); appendErr != nil {
-			return stopped(result, appendErr)
 		}
 		if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
 			return terminal
