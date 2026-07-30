@@ -44,7 +44,7 @@ Exactly Appendix E's: the **control channel** (prepare, quiesce, cancellation, s
 
 ## Selection manifest
 
-This gate reaches twelve E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirteen E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -169,7 +169,7 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `execute.adapter_swept_to_interval_stopped` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `execute.interval_stopped_to_outcome` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |
-| `lifecycle.movement_failed_to_run_failed` | not reached by this gate's cuts | §7 lifecycle; E.2 | No movement-failure fixture |
+| `lifecycle.movement_failed_to_run_failed` | reachable | §7 lifecycle; E.2 | Real `run` subprocess matrix uses a terminal adapter-failure fixture at both endpoints; before `resume`, the crashed journal and projection prove the durable movement-failed/run-failed cut window |
 | `acceptance.criterion_error_to_failed` | not reached by this gate's cuts | §7 acceptance; E.2 | No criterion-error fixture |
 | `acceptance.evaluation_completed_to_decision_requested` | not reached by this gate's cuts | §7 acceptance; E.2 | No human-gate fixture |
 

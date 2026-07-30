@@ -22,9 +22,10 @@ import (
 )
 
 type killEdge struct {
-	id     faultpoint.EdgeID
-	before faultpoint.PointID
-	after  faultpoint.PointID
+	id      faultpoint.EdgeID
+	before  faultpoint.PointID
+	after   faultpoint.PointID
+	fixture func(*testing.T, string, string) (string, []string)
 }
 
 type expectedFailure struct {
@@ -32,6 +33,7 @@ type expectedFailure struct {
 	kind           string
 	reason         string
 	terminalReason string
+	runReason      string
 }
 
 func TestSubprocessKillHarness(t *testing.T) {
@@ -60,8 +62,9 @@ func TestSubprocessKillHarness(t *testing.T) {
 			} {
 				side := side
 				t.Run(side.name, func(t *testing.T) {
-					repository, environment := killHarnessRepository(t, bin, vendor)
+					repository, environment := edge.fixture(t, bin, vendor)
 					runID := killAtPoint(t, partitur, repository, environment, side.point)
+					assertCrashedStateBeforeResume(t, repository, runID, side.point)
 					assertRecoveryFixedPoint(t, partitur, repository, environment, runID, expectedFailureFor(side.point))
 				})
 			}
@@ -197,23 +200,24 @@ func TestAcceptanceFailureWindowHarness(t *testing.T) {
 func killHarnessEdges() []killEdge {
 	edges := nonCancellationKillHarnessEdges()
 	return append(edges,
-		killEdge{faultpoint.EdgeCancelSweptToTerminal, faultpoint.PointCancelSessionsSwept, faultpoint.PointCancelRunCancelled},
-		killEdge{faultpoint.EdgeCancelSweptToQuarantined, faultpoint.PointCancelSessionsSwept, faultpoint.PointCancelSnapshotQuarantined},
-		killEdge{faultpoint.EdgeCancelIntervalStoppedToTerminal, faultpoint.PointCancelExecutionStopped, faultpoint.PointCancelRunCancelled},
-		killEdge{faultpoint.EdgeCancelFenceDecidedToTerminal, faultpoint.PointCancelFenceDecided, faultpoint.PointCancelRunCancelled},
-		killEdge{faultpoint.EdgeCancelTerminalToLeaseRemoved, faultpoint.PointCancelRunCancelled, faultpoint.PointCancelLeaseRemoved},
+		killEdge{faultpoint.EdgeCancelSweptToTerminal, faultpoint.PointCancelSessionsSwept, faultpoint.PointCancelRunCancelled, nil},
+		killEdge{faultpoint.EdgeCancelSweptToQuarantined, faultpoint.PointCancelSessionsSwept, faultpoint.PointCancelSnapshotQuarantined, nil},
+		killEdge{faultpoint.EdgeCancelIntervalStoppedToTerminal, faultpoint.PointCancelExecutionStopped, faultpoint.PointCancelRunCancelled, nil},
+		killEdge{faultpoint.EdgeCancelFenceDecidedToTerminal, faultpoint.PointCancelFenceDecided, faultpoint.PointCancelRunCancelled, nil},
+		killEdge{faultpoint.EdgeCancelTerminalToLeaseRemoved, faultpoint.PointCancelRunCancelled, faultpoint.PointCancelLeaseRemoved, nil},
 	)
 }
 
 func nonCancellationKillHarnessEdges() []killEdge {
 	return []killEdge{
-		{faultpoint.EdgeAuthorityGrantedToLeaseCreated, faultpoint.PointAuthorityGranted, faultpoint.PointAuthorityLeaseCreated},
-		{faultpoint.EdgeLaunchAdapterMarkerHeldToIdentity, faultpoint.PointLaunchAdapterMarkerHeld, faultpoint.PointLaunchAdapterIdentityPublished},
-		{faultpoint.EdgeLaunchAdapterIdentityPublishedToRecorded, faultpoint.PointLaunchAdapterIdentityPublished, faultpoint.PointLaunchAdapterIdentityRecorded},
-		{faultpoint.EdgeLaunchAdapterRecordedToGate, faultpoint.PointLaunchAdapterIdentityRecorded, faultpoint.PointLaunchAdapterGateReleased},
-		{faultpoint.EdgeExecuteAdapterSweptToIntervalStopped, faultpoint.PointExecuteAdapterSwept, faultpoint.PointExecuteIntervalStopped},
-		{faultpoint.EdgeExecuteIntervalStoppedToOutcome, faultpoint.PointExecuteIntervalStopped, faultpoint.PointExecuteOutcomeRecorded},
-		{faultpoint.EdgeLifecycleAttemptCompletedToMovementSucceeded, faultpoint.PointLifecycleAttemptCompleted, faultpoint.PointLifecycleMovementSucceeded},
+		{faultpoint.EdgeAuthorityGrantedToLeaseCreated, faultpoint.PointAuthorityGranted, faultpoint.PointAuthorityLeaseCreated, killHarnessRepository},
+		{faultpoint.EdgeLaunchAdapterMarkerHeldToIdentity, faultpoint.PointLaunchAdapterMarkerHeld, faultpoint.PointLaunchAdapterIdentityPublished, killHarnessRepository},
+		{faultpoint.EdgeLaunchAdapterIdentityPublishedToRecorded, faultpoint.PointLaunchAdapterIdentityPublished, faultpoint.PointLaunchAdapterIdentityRecorded, killHarnessRepository},
+		{faultpoint.EdgeLaunchAdapterRecordedToGate, faultpoint.PointLaunchAdapterIdentityRecorded, faultpoint.PointLaunchAdapterGateReleased, killHarnessRepository},
+		{faultpoint.EdgeExecuteAdapterSweptToIntervalStopped, faultpoint.PointExecuteAdapterSwept, faultpoint.PointExecuteIntervalStopped, killHarnessRepository},
+		{faultpoint.EdgeExecuteIntervalStoppedToOutcome, faultpoint.PointExecuteIntervalStopped, faultpoint.PointExecuteOutcomeRecorded, killHarnessRepository},
+		{faultpoint.EdgeLifecycleAttemptCompletedToMovementSucceeded, faultpoint.PointLifecycleAttemptCompleted, faultpoint.PointLifecycleMovementSucceeded, killHarnessRepository},
+		{faultpoint.EdgeLifecycleMovementFailedToRunFailed, faultpoint.PointLifecycleMovementFailed, faultpoint.PointLifecycleRunFailed, movementFailureKillHarnessRepository},
 	}
 }
 
@@ -242,8 +246,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 		}
 		reachable[id] = true
 	}
-	if len(reachable) != 12 {
-		t.Fatalf("reachable edge count=%d, want twelve", len(reachable))
+	if len(reachable) != 13 {
+		t.Fatalf("reachable edge count=%d, want thirteen", len(reachable))
 	}
 	if len(retryCoveragePoints()) != 2 || retryCoveragePoints()[0] == retryCoveragePoints()[1] {
 		t.Fatalf("retry coverage must name two distinct cut sides: %v", retryCoveragePoints())
@@ -372,6 +376,11 @@ func tableBoundsCounted(t *testing.T, lines []string, heading, nextHeading strin
 
 func killHarnessRepository(t *testing.T, bin, vendor string) (string, []string) {
 	return killHarnessRepositoryWithInputs(t, bin, vendor, runScore(), runCast())
+}
+
+func movementFailureKillHarnessRepository(t *testing.T, bin, vendor string) (string, []string) {
+	repository, environment := killHarnessRepository(t, bin, vendor)
+	return repository, fixtureOutcomeEnvironment(environment, "task_failed")
 }
 
 func killHarnessRepositoryWithInputs(
@@ -551,9 +560,115 @@ func expectedFailureFor(point faultpoint.PointID) *expectedFailure {
 		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "adapter_unavailable", reason: "probe_terminated_incomplete", terminalReason: "fallbacks_exhausted"}
 	case faultpoint.PointExecuteAdapterSwept, faultpoint.PointExecuteIntervalStopped:
 		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", reason: "attempt_terminated_incomplete", terminalReason: "retries_exhausted"}
-	default:
+	case faultpoint.PointExecuteOutcomeRecorded:
 		return nil
+	case faultpoint.PointLifecycleAttemptCompleted:
+		return nil
+	case faultpoint.PointLifecycleMovementSucceeded:
+		return nil
+	case faultpoint.PointLifecycleMovementFailed, faultpoint.PointLifecycleRunFailed:
+		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", terminalReason: "retries_exhausted", runReason: "movement_failed"}
+	default:
+		panic(fmt.Sprintf("no fixed-point failure expectation declared for point %q", point))
 	}
+}
+
+type crashedStateExpectation uint8
+
+const (
+	crashedStateProjectionOnly crashedStateExpectation = iota
+	crashedStateMovementFailed
+	crashedStateRunFailed
+)
+
+func crashedStateExpectationFor(point faultpoint.PointID) crashedStateExpectation {
+	switch point {
+	case faultpoint.PointAuthorityGranted:
+		return crashedStateProjectionOnly
+	case faultpoint.PointAuthorityLeaseCreated:
+		return crashedStateProjectionOnly
+	case faultpoint.PointLaunchAdapterMarkerHeld:
+		return crashedStateProjectionOnly
+	case faultpoint.PointLaunchAdapterIdentityPublished:
+		return crashedStateProjectionOnly
+	case faultpoint.PointLaunchAdapterIdentityRecorded:
+		return crashedStateProjectionOnly
+	case faultpoint.PointLaunchAdapterGateReleased:
+		return crashedStateProjectionOnly
+	case faultpoint.PointExecuteAdapterSwept:
+		return crashedStateProjectionOnly
+	case faultpoint.PointExecuteIntervalStopped:
+		return crashedStateProjectionOnly
+	case faultpoint.PointExecuteOutcomeRecorded:
+		return crashedStateProjectionOnly
+	case faultpoint.PointLifecycleAttemptCompleted:
+		return crashedStateProjectionOnly
+	case faultpoint.PointLifecycleMovementSucceeded:
+		return crashedStateProjectionOnly
+	case faultpoint.PointLifecycleMovementFailed:
+		return crashedStateMovementFailed
+	case faultpoint.PointLifecycleRunFailed:
+		return crashedStateRunFailed
+	default:
+		panic(fmt.Sprintf("no crashed-state expectation declared for point %q", point))
+	}
+}
+
+func assertCrashedStateBeforeResume(t *testing.T, repository, runID string, point faultpoint.PointID) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := input.Projection.State
+
+	switch crashedStateExpectationFor(point) {
+	case crashedStateProjectionOnly:
+		// These points have no lifecycle-window invariant. Loading the durable
+		// journal and its projection is the explicit pre-resume observation.
+		return
+	case crashedStateMovementFailed:
+		if !journalContainsEvent(journal.Events, runstate.EventMovementFailed) {
+			t.Fatalf("crashed journal at %s has no durable movement.failed", point)
+		}
+		if journalContainsEvent(journal.Events, runstate.EventRunFailed) {
+			t.Fatalf("crashed journal at %s already has run.failed", point)
+		}
+		if state.Run.Terminal() {
+			t.Fatalf("crashed projection at %s is terminal: %q", point, state.Run)
+		}
+	case crashedStateRunFailed:
+		// The edge is ordered: run.failed alone would satisfy Apply, which
+		// accepts a run failure from RUNNING without a failed movement.
+		if !journalContainsEvent(journal.Events, runstate.EventMovementFailed) {
+			t.Fatalf("crashed journal at %s has no durable movement.failed before run.failed", point)
+		}
+		if !journalContainsEvent(journal.Events, runstate.EventRunFailed) {
+			t.Fatalf("crashed journal at %s has no durable run.failed", point)
+		}
+		if !state.Run.Terminal() {
+			t.Fatalf("crashed projection at %s is nonterminal: %q", point, state.Run)
+		}
+	default:
+		t.Fatalf("unknown crashed-state expectation for point %q", point)
+	}
+}
+
+func journalContainsEvent(events []runstate.Event, want runstate.EventType) bool {
+	for _, event := range events {
+		if event.Type == want {
+			return true
+		}
+	}
+	return false
 }
 
 func assertRecoveryFixedPoint(t *testing.T, binary, repository string, environment []string, runID string, expected *expectedFailure) {
@@ -755,6 +870,10 @@ func gitRefCommit(t *testing.T, repository, ref string) string {
 
 func assertExpectedFailure(t *testing.T, journal []byte, expected expectedFailure) {
 	t.Helper()
+	if expected.event == runstate.EventRunFailed {
+		assertRunFailedReason(t, journal, expected.runReason)
+		return
+	}
 	scanner := bufio.NewScanner(bytes.NewReader(journal))
 	var last *runstate.Event
 	for scanner.Scan() {
@@ -786,6 +905,38 @@ func assertExpectedFailure(t *testing.T, journal []byte, expected expectedFailur
 		t.Fatalf("recorded failure = type=%q kind=%q reason=%q, want %q/%q/%q", last.Type, kind, reason, expected.event, expected.kind, expected.reason)
 	}
 	assertValidTerminalDisposition(t, payload, expected)
+	if expected.runReason != "" {
+		assertRunFailedReason(t, journal, expected.runReason)
+	}
+}
+
+func assertRunFailedReason(t *testing.T, journal []byte, want string) {
+	t.Helper()
+	var last *runstate.Event
+	scanner := bufio.NewScanner(bytes.NewReader(journal))
+	for scanner.Scan() {
+		var event runstate.Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == runstate.EventRunFailed {
+			copy := event
+			last = &copy
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if last == nil {
+		t.Fatalf("failed fixed point has no run.failed: journal=%s", journal)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := payload["reason"].(string); got != want {
+		t.Fatalf("run.failed reason=%q, want %q", got, want)
+	}
 }
 
 func assertValidTerminalDisposition(t *testing.T, payload map[string]any, expected expectedFailure) {
