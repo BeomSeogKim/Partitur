@@ -24,7 +24,185 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
+	"github.com/BeomSeogKim/Partitur/internal/validate"
+	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
+
+func TestLiveAndResumeSuccessorSelectionJournalIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name, charged, kind, wantPerformer string
+	}{
+		{name: "quality retry", charged: "quality_retry", kind: "task_failed", wantPerformer: "worker"},
+		{name: "ordered fallback", charged: "fallback", kind: "rate_limited", wantPerformer: "backup-a"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			live := successorIdentityFixture(t, test.charged, test.kind)
+			defer live.driver.Release()
+			attempt, err := workspace.CreateRecoveredAttempt(live.store, live.driver, live.input, "inspect")
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate := live.input.Projection.State.ApplicationCandidate
+			result := driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
+				RepositoryRoot: live.store.RepositoryRoot(), Score: live.input.Score, Cast: live.input.Cast,
+				RunID: live.runID, Attempt: attempt, CandidateTree: candidate.ResultTree, Authority: live.driver,
+				PerformerID: test.wantPerformer, SelectionReason: test.charged, SelectionCausationID: live.failure.EventID,
+				RemainingMS: live.input.Projection.Scheduler.RemainingTime,
+			}, driver.DefaultExecutionDependencies(faultpoint.Nop{}))
+			if result.Err == nil {
+				t.Fatal("live fixture unexpectedly executed beyond performer.selected")
+			}
+
+			resumed := successorIdentityFixture(t, test.charged, test.kind)
+			defer resumed.driver.Release()
+			pending := resumed.input.Projection.Scheduler.PendingSuccessor
+			if pending == nil {
+				t.Fatal("resume fixture has no pending successor")
+			}
+			err = materializeSuccessor(context.Background(), HandlerContext{
+				Store: resumed.store, Driver: resumed.driver, RunID: resumed.runID,
+			}, recovery.Action{Kind: recovery.ActionMaterializeSuccessor, MovementID: pending.MovementID, PendingSuccessor: pending})
+			if err == nil {
+				t.Fatal("resume fixture unexpectedly executed beyond performer.selected")
+			}
+
+			liveSelection, liveState := successorSelection(t, live.store, live.driver, live.runID)
+			resumeSelection, resumeState := successorSelection(t, resumed.store, resumed.driver, resumed.runID)
+			if liveSelection.Type != runstate.EventPerformerSelected || resumeSelection.Type != runstate.EventPerformerSelected {
+				t.Fatalf("selections = %s, %s", liveSelection.Type, resumeSelection.Type)
+			}
+			if liveSelection.CausationID != live.failure.EventID || resumeSelection.CausationID != resumed.failure.EventID {
+				t.Fatalf("selection causation = %q, %q; failure ids = %q, %q", liveSelection.CausationID, resumeSelection.CausationID, live.failure.EventID, resumed.failure.EventID)
+			}
+			if normalizedSuccessorSelection(liveSelection, live.runID, live.failure.EventID) != normalizedSuccessorSelection(resumeSelection, resumed.runID, resumed.failure.EventID) {
+				t.Fatalf("normalized live selection=%+v resume selection=%+v", normalizedSuccessorSelection(liveSelection, live.runID, live.failure.EventID), normalizedSuccessorSelection(resumeSelection, resumed.runID, resumed.failure.EventID))
+			}
+			if liveState != runstate.AttemptStarting || resumeState != runstate.AttemptStarting {
+				t.Fatalf("successor states = %s, %s; want STARTING", liveState, resumeState)
+			}
+		})
+	}
+}
+
+type successorIdentityFixtureState struct {
+	store   *runstore.Store
+	driver  *runstore.Driver
+	runID   runstate.RunID
+	input   runstore.RunInput
+	failure runstate.Event
+}
+
+func successorIdentityFixture(t *testing.T, charged, kind string) successorIdentityFixtureState {
+	t.Helper()
+	root := t.TempDir()
+	scoreDocument := map[string]any{
+		"score": "0.2", "name": "successor-identity", "revision": 1, "status": "finalized", "goal": "fixture",
+		"verification": map[string]any{"expectation": map[string]any{"intent": "pass-existing-tests", "apply_gate": map[string]any{"require": []any{"verified"}}}, "final_movement": "inspect"},
+		"parts":        map[string]any{"reader": map[string]any{"capabilities": []any{"repo_read"}, "read_only": true}},
+		"movements":    []any{map[string]any{"id": "inspect", "part": "reader", "grants": []any{"repo_read"}, "instruction": "fixture", "outputs": []any{map[string]any{"id": "report", "kind": "artifact"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "report-present", "artifact": "report"}}}}},
+		"policy":       map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10, "retries_per_movement": 3}},
+	}
+	castDocument := map[string]any{
+		"cast": "0.1", "performers": map[string]any{
+			"worker":   map[string]any{"adapter": "missing-successor-identity-adapter", "model": "model"},
+			"backup-a": map[string]any{"adapter": "missing-successor-identity-adapter", "model": "model"},
+		},
+		"bindings": map[string]any{"reader": map[string]any{"performer": "worker", "fallbacks": []any{"backup-a"}}},
+	}
+	writeFixtureJSON(t, filepath.Join(root, "partitur.yaml"), scoreDocument)
+	if err := os.Mkdir(filepath.Join(root, ".partitur"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureJSON(t, filepath.Join(root, ".partitur", "cast.yaml"), castDocument)
+	for _, arguments := range [][]string{{"init"}, {"config", "user.name", "Partitur Test"}, {"config", "user.email", "partitur@example.invalid"}, {"add", "partitur.yaml", ".partitur/cast.yaml"}, {"commit", "-m", "fixture"}} {
+		command := exec.Command("git", arguments...)
+		command.Dir = root
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", arguments, err, output)
+		}
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	preparation, validation := validate.Prepare()
+	if validation.Refusal != nil || validation.HasDiagnostics() || preparation == nil {
+		t.Fatalf("preparation=%+v validation=%+v", preparation, validation)
+	}
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver, err := store.AcquireDriver(started.RunID, []runstate.MovementSeed{{ID: "inspect", Initial: runstate.MovementPending}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := started.Run.BindDriver(driver); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := started.Run.RecordZeroWriterCandidate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []runstate.Event{
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementReady, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementStarted, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: handlerPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "missing-successor-identity-adapter", "model": "model"})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "attempt-1", Type: runstate.EventAttemptFailed, Payload: handlerPayload(t, map[string]any{"kind": kind, "disposition": map[string]any{"charged": charged, "movement_terminal": false}})},
+	} {
+		if _, err := driver.Append(event, faultpoint.ReceiptAddress("test."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return successorIdentityFixtureState{store: store, driver: driver, runID: started.RunID, input: input, failure: journal.Events[len(journal.Events)-1]}
+}
+
+func writeFixtureJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func successorSelection(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID) (runstate.Event, runstate.AttemptState) {
+	t.Helper()
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := journal.Events[len(journal.Events)-1]
+	state, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := state.Attempts[selection.AttemptID]
+	return selection, attempt.State
+}
+
+func normalizedSuccessorSelection(event runstate.Event, runID runstate.RunID, failureID string) string {
+	payload := map[string]any{}
+	_ = json.Unmarshal(event.Payload, &payload)
+	return fmt.Sprintf("run=%t revision=%d movement=%s part=%s attempt=%t type=%s causation_failure=%t payload=%v", event.RunID == runID, event.ScoreRevision, event.MovementID, event.PartID, event.AttemptID != "", event.Type, event.CausationID == failureID, payload)
+}
 
 func TestExecutorDoesNotCanonicalizeDifferentLiveLease(t *testing.T) {
 	store, driver := handlerStore(t, false)

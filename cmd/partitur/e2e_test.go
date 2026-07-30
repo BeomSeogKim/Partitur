@@ -397,6 +397,119 @@ func TestRunTaskFailureTerminalizesThroughLiveNoneDisposition(t *testing.T) {
 	}
 }
 
+func TestRunQualityRetryChainTerminatesAtRetryExhaustion(t *testing.T) {
+	score := runScore()
+	score["policy"].(map[string]any)["budget"].(map[string]any)["retries_per_movement"] = float64(1)
+	runID, events := runLiveChargedFailure(t, score, runCast(), "task_failed")
+	want := []string{
+		"run.started", "authority.granted", "application_candidate.recorded",
+		"movement.ready", "movement.started", "performer.selected", "execution.started",
+		"attempt.started", "adapter.probed", "execution.stopped", "attempt.failed",
+		"performer.selected", "execution.started", "attempt.started", "adapter.probed",
+		"execution.stopped", "attempt.failed", "movement.failed", "run.failed",
+	}
+	if !slicesEqual(events, want) {
+		t.Fatalf("run=%s event order=%v want=%v", runID, events, want)
+	}
+	assertChargedSelections(t, runID, "quality_retry", []string{"worker", "worker"})
+}
+
+func TestRunFallbackChainTerminatesWithoutRevisitingPerformer(t *testing.T) {
+	cast := runCast()
+	performers := cast["performers"].(map[string]any)
+	performers["backup-a"] = map[string]any{"adapter": "codex", "model": "gpt-5.6-terra"}
+	performers["backup-b"] = map[string]any{"adapter": "codex", "model": "gpt-5.6-terra"}
+	cast["bindings"].(map[string]any)["reader"] = map[string]any{
+		"performer": "worker", "fallbacks": []any{"backup-a", "backup-b"},
+	}
+	runID, events := runLiveChargedFailure(t, runScore(), cast, "rate_limited")
+	want := []string{
+		"run.started", "authority.granted", "application_candidate.recorded",
+		"movement.ready", "movement.started", "performer.selected", "execution.started",
+		"attempt.started", "adapter.probed", "execution.stopped", "attempt.failed",
+		"performer.selected", "execution.started", "attempt.started", "adapter.probed",
+		"execution.stopped", "attempt.failed", "performer.selected", "execution.started",
+		"attempt.started", "adapter.probed", "execution.stopped", "attempt.failed", "movement.failed", "run.failed",
+	}
+	if !slicesEqual(events, want) {
+		t.Fatalf("run=%s event order=%v want=%v", runID, events, want)
+	}
+	assertChargedSelections(t, runID, "fallback", []string{"worker", "backup-a", "backup-b"})
+}
+
+func runLiveChargedFailure(t *testing.T, score, cast map[string]any, outcome string) (string, []string) {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, score, cast)
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":                      t.TempDir(),
+		"PATH":                      bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN":        vendor,
+		runVendorEnvironment:        "1",
+		runVendorOutcomeEnvironment: outcome,
+	})
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := strings.TrimSpace(stdout)
+	if code != 4 || runID == "" || stdout != runID+"\n" || !strings.Contains(stderr, "movement_failed") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	return filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl"), journalEventTypes(t, filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl"))
+}
+
+func assertChargedSelections(t *testing.T, journalPath, reason string, wantPerformers []string) {
+	t.Helper()
+	store, err := runstore.New(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(journalPath)))), faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := runstate.RunID(filepath.Base(filepath.Dir(journalPath)))
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selections []runstate.Event
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventPerformerSelected {
+			selections = append(selections, event)
+		}
+	}
+	if len(selections) != len(wantPerformers) {
+		t.Fatalf("selected=%d want=%d", len(selections), len(wantPerformers))
+	}
+	for index, event := range selections {
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["performer_id"] != wantPerformers[index] {
+			t.Fatalf("selection %d performer=%q want=%q", index, payload["performer_id"], wantPerformers[index])
+		}
+		if index == 0 {
+			continue
+		}
+		if payload["reason"] != reason || event.CausationID == "" {
+			t.Fatalf("selection %d payload=%v causation=%q", index, payload, event.CausationID)
+		}
+	}
+}
+
 func TestRunGrantAndAcceptanceFailuresTerminalizeThroughLiveNoneDisposition(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1146,6 +1259,10 @@ func runVendorFixture() {
 	outcome := os.Getenv(runVendorOutcomeEnvironment)
 	if outcome == "task_failed" {
 		return
+	}
+	if outcome == "rate_limited" {
+		fmt.Fprintln(os.Stderr, "usage limit reached")
+		os.Exit(1)
 	}
 	if outcome == "block_until_killed" {
 		// Announce that the attempt is genuinely mid-execute, then wait to be swept.

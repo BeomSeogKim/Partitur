@@ -49,10 +49,13 @@ type AttemptExecution struct {
 	PerformerID          string
 	SelectionReason      string
 	SelectionCausationID string
-	RemainingMS          int64
-	RetriesConsumed      int
-	VisitedPerformers    []string
-	Control              *cancellation.Watcher
+	// SelectionDurable says the live between-unit scheduler has already
+	// appended performer.selected before this attempt is launched.
+	SelectionDurable  bool
+	RemainingMS       int64
+	RetriesConsumed   int
+	VisitedPerformers []string
+	Control           *cancellation.Watcher
 }
 
 // ExecutionDependencies are the process-facing dependencies of an attempt.

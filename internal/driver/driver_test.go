@@ -419,6 +419,28 @@ func TestLiveSelectionMismatchRejectsEachSelectorConjunct(t *testing.T) {
 	}
 }
 
+func TestLiveMaterializationMismatchRejectsEachSelectorConjunct(t *testing.T) {
+	pending := &recovery.PendingSuccessor{MovementID: "inspect", Performer: "worker", Reason: "quality_retry"}
+	for _, test := range []struct {
+		name   string
+		action *recovery.Action
+		want   bool
+	}{
+		{name: "nil action", want: true},
+		{name: "wrong action", action: &recovery.Action{Kind: recovery.ActionAppendMovementReady, MovementID: "inspect", PendingSuccessor: pending}, want: true},
+		{name: "movement below target", action: &recovery.Action{Kind: recovery.ActionMaterializeSuccessor, MovementID: "check", PendingSuccessor: pending}, want: true},
+		{name: "movement above target", action: &recovery.Action{Kind: recovery.ActionMaterializeSuccessor, MovementID: "zcheck", PendingSuccessor: pending}, want: true},
+		{name: "pending successor absent", action: &recovery.Action{Kind: recovery.ActionMaterializeSuccessor, MovementID: "inspect"}, want: true},
+		{name: "exact materialization", action: &recovery.Action{Kind: recovery.ActionMaterializeSuccessor, MovementID: "inspect", PendingSuccessor: pending}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := liveMaterializationMismatch(test.action, pending); got != test.want {
+				t.Fatalf("liveMaterializationMismatch()=%t want=%t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLiveNoneRealizationMismatchRejectsEachConjunct(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -543,11 +565,11 @@ func TestRealizeRecordedNoneDispositionCancelsBetweenMovementAndRunFailure(t *te
 	defer control.Stop()
 	result, handled := realizeRecordedNoneDisposition(
 		context.Background(), Result{RunID: start.RunID}, store, authority, control,
-		func() {
+		dependencies{afterMovementFailed: func() {
 			if err := store.RequestCancellation(start.RunID); err != nil {
 				t.Fatal(err)
 			}
-		},
+		}},
 	)
 	if !handled || result.Outcome != OutcomeCancelled || result.Err != nil {
 		t.Fatalf("result=%+v handled=%t", result, handled)
@@ -561,6 +583,286 @@ func TestRealizeRecordedNoneDispositionCancelsBetweenMovementAndRunFailure(t *te
 			t.Fatal("run.failed appended after cancellation became durable")
 		}
 	}
+}
+
+func TestLiveMaterializesRecordedSuccessorByRecordedDisposition(t *testing.T) {
+	tests := []struct {
+		name          string
+		charged       string
+		wantReason    string
+		wantPerformer string
+	}{
+		{name: "quality retry keeps current performer", charged: "quality_retry", wantReason: "quality_retry", wantPerformer: "worker"},
+		{name: "fallback chooses immediate unvisited performer", charged: "fallback", wantReason: "fallback", wantPerformer: "backup-a"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, authority, runID, input, failed := liveChargedSuccessorFixture(t, test.charged)
+			defer authority.Release()
+
+			// This is an independent oracle for the one scheduler step: these
+			// constants come from the recorded disposition, not from the planner.
+			decision := recovery.PlanBetweenUnit(input.Projection)
+			if decision.CaseID != recovery.CaseScheduler || decision.Action == nil ||
+				decision.Action.Kind != recovery.ActionMaterializeSuccessor ||
+				decision.Action.MovementID != "inspect" || decision.Action.PendingSuccessor == nil ||
+				decision.Action.PendingSuccessor.Performer != test.wantPerformer ||
+				decision.Action.PendingSuccessor.Reason != test.wantReason {
+				t.Fatalf("one-step decision = %+v, want materialized %s successor %s", decision, test.wantReason, test.wantPerformer)
+			}
+
+			result := liveMaterializeSuccessor(
+				context.Background(), Result{RunID: runID}, store, authority, nil, testDependencies(), input,
+			)
+			if result.Outcome != OutcomeInterrupted || result.Err == nil {
+				t.Fatalf("result=%+v, want adapter-resolution interruption after durable selection", result)
+			}
+			journal, err := store.ReadJournal(runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantOrder := []runstate.EventType{
+				runstate.EventRunStarted, runstate.EventAuthorityGranted, runstate.EventApplicationCandidateRecorded,
+				runstate.EventMovementReady, runstate.EventMovementStarted, runstate.EventPerformerSelected,
+				runstate.EventAttemptFailed, runstate.EventPerformerSelected,
+			}
+			gotOrder := make([]runstate.EventType, len(journal.Events))
+			for index, event := range journal.Events {
+				gotOrder[index] = event.Type
+			}
+			if !slices.Equal(gotOrder, wantOrder) {
+				t.Fatalf("durable event order=%v, want %v", gotOrder, wantOrder)
+			}
+			selected := journal.Events[len(journal.Events)-1]
+			var payload map[string]any
+			if err := json.Unmarshal(selected.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if selected.CausationID != failed.EventID || payload["reason"] != test.wantReason || payload["performer_id"] != test.wantPerformer {
+				t.Fatalf("selection=%+v payload=%v, want causation=%q reason=%q performer=%q", selected, payload, failed.EventID, test.wantReason, test.wantPerformer)
+			}
+		})
+	}
+}
+
+func TestLiveFallbackChainNeverRevisitsEarlierPerformer(t *testing.T) {
+	store, authority, runID, input, _ := liveChargedSuccessorFixture(t, "fallback")
+	defer authority.Release()
+	for _, wantPerformer := range []string{"backup-a", "backup-b"} {
+		decision := recovery.PlanBetweenUnit(input.Projection)
+		if decision.Action == nil || decision.Action.PendingSuccessor == nil || decision.Action.PendingSuccessor.Performer != wantPerformer {
+			t.Fatalf("pending successor=%+v, want %q", decision.Action, wantPerformer)
+		}
+		result := liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, testDependencies(), input)
+		if result.Outcome != OutcomeInterrupted || result.Err == nil {
+			t.Fatalf("materialization result=%+v", result)
+		}
+		input = appendRecordedFailure(t, store, authority, runID, "rate_limited", "fallback")
+	}
+	if input.Projection.Scheduler.PendingSuccessor != nil {
+		t.Fatalf("fallbacks exhausted, pending successor=%+v", input.Projection.Scheduler.PendingSuccessor)
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var performers []string
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventPerformerSelected {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		performers = append(performers, payload["performer_id"].(string))
+	}
+	if !slices.Equal(performers, []string{"worker", "backup-a", "backup-b"}) {
+		t.Fatalf("fallback performers=%v, want no revisit", performers)
+	}
+}
+
+func TestLiveChainTerminatesWhenBudgetExhaustsMidChain(t *testing.T) {
+	store, authority, runID, input, _ := liveChargedSuccessorAcceptanceFixture(t, "quality_retry")
+	defer authority.Release()
+	current := input.Projection.CurrentHeadAttempt
+	if current == nil {
+		t.Fatal("failed attempt is absent")
+	}
+	for _, event := range []runstate.Event{
+		{RunID: runID, ScoreRevision: input.Projection.State.ScoreHead.Revision, MovementID: current.MovementID, AttemptID: current.AttemptID, Type: runstate.EventExecutionStopped, Payload: testPayload(t, map[string]any{"interval_id": "acceptance", "reason": "normal", "charging": "measured", "charged_duration": 600000})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.Scheduler.RemainingTime != 0 {
+		t.Fatalf("remaining time=%d, want zero after acceptance close", input.Projection.Scheduler.RemainingTime)
+	}
+	terminal := liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, testDependencies(), input)
+	if terminal.Outcome != OutcomeFailed || terminal.Reason != "budget_exhausted" || terminal.Err != nil {
+		t.Fatalf("terminal result=%+v", terminal)
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]runstate.EventType, len(journal.Events))
+	for index, event := range journal.Events {
+		got[index] = event.Type
+	}
+	want := []runstate.EventType{
+		runstate.EventRunStarted, runstate.EventAuthorityGranted, runstate.EventApplicationCandidateRecorded,
+		runstate.EventMovementReady, runstate.EventMovementStarted, runstate.EventPerformerSelected,
+		runstate.EventAttemptStarted, runstate.EventAdapterProbed, runstate.EventPerformerCompleted,
+		runstate.EventVerificationPassed, runstate.EventExecutionStarted, runstate.EventAcceptanceStarted,
+		runstate.EventAcceptanceFailed, runstate.EventExecutionStopped,
+		runstate.EventMovementFailed, runstate.EventRunFailed,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("budget terminal event order=%v want=%v", got, want)
+	}
+}
+
+func TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap(t *testing.T) {
+	store, authority, runID, input, _ := liveChargedSuccessorFixture(t, "quality_retry")
+	defer authority.Release()
+	current := input.Projection.CurrentHeadAttempt
+	if current == nil || input.Projection.Scheduler.PendingSuccessor == nil {
+		t.Fatal("charged successor fixture is incomplete")
+	}
+	current.FailureClassification.RetriesPerMovement = 0
+	current.FailureClassification.Fallbacks = nil
+	result := liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, testDependencies(), input)
+	if result.Outcome != OutcomeInterrupted || result.Err == nil {
+		t.Fatalf("result=%+v, want selection then adapter-resolution interruption", result)
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := journal.Events[len(journal.Events)-1].Type; got != runstate.EventPerformerSelected {
+		t.Fatalf("last event=%s, want successor selection without a retry-policy attempt cap", got)
+	}
+}
+
+func liveChargedSuccessorFixture(t *testing.T, charged string) (*runstore.Store, *runstore.Driver, runstate.RunID, runstore.RunInput, runstate.Event) {
+	return liveChargedSuccessorFixtureAtAcceptanceCut(t, charged, false)
+}
+
+func liveChargedSuccessorAcceptanceFixture(t *testing.T, charged string) (*runstore.Store, *runstore.Driver, runstate.RunID, runstore.RunInput, runstate.Event) {
+	return liveChargedSuccessorFixtureAtAcceptanceCut(t, charged, true)
+}
+
+func liveChargedSuccessorFixtureAtAcceptanceCut(t *testing.T, charged string, acceptanceOpen bool) (*runstore.Store, *runstore.Driver, runstate.RunID, runstore.RunInput, runstate.Event) {
+	t.Helper()
+	score := sliceScore()
+	budget := score["policy"].(map[string]any)["budget"].(map[string]any)
+	budget["retries_per_movement"] = float64(3)
+	cast := sliceCast()
+	performers := cast["performers"].(map[string]any)
+	performers["backup-a"] = map[string]any{"adapter": "codex", "model": "gpt-5.6-terra"}
+	performers["backup-b"] = map[string]any{"adapter": "codex", "model": "gpt-5.6-terra"}
+	cast["bindings"].(map[string]any)["reader"] = map[string]any{"performer": "worker", "fallbacks": []any{"backup-a", "backup-b"}}
+	preparation := prepareRunnableFixture(t, score, cast)
+	start, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(start.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := start.Run.BindDriver(authority); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := start.Run.RecordZeroWriterCandidate(); err != nil {
+		t.Fatal(err)
+	}
+	movementID := runstate.MovementID("inspect")
+	for _, event := range []runstate.Event{
+		{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, Type: runstate.EventMovementReady, Payload: testPayload(t, map[string]any{})},
+		{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, Type: runstate.EventMovementStarted, Payload: testPayload(t, map[string]any{})},
+		{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "gpt-5.6-sol"})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kind := "task_failed"
+	if charged == "fallback" {
+		kind = "rate_limited"
+	}
+	if acceptanceOpen {
+		versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+		for _, event := range []runstate.Event{
+			{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: testPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "boot", "start_ticks": "1"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": versions})},
+			{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: testPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})},
+			{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: runstate.EventPerformerCompleted, Payload: testPayload(t, map[string]any{"session_hint_stored": false})},
+			{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: runstate.EventVerificationPassed, Payload: testPayload(t, map[string]any{})},
+			{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: runstate.EventExecutionStarted, Payload: testPayload(t, map[string]any{"interval_id": "acceptance", "phase": "acceptance", "wall_start": "2026-07-30T00:00:00.000Z", "remaining_at_start": 600000})},
+			{RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: runstate.EventAcceptanceStarted, Payload: testPayload(t, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{}, "identity_versions": versions})},
+		} {
+			if _, err := authority.Append(event, faultpoint.ReceiptAddress("test."+string(event.Type))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	failureType := runstate.EventAttemptFailed
+	if acceptanceOpen {
+		failureType = runstate.EventAcceptanceFailed
+	}
+	payload := map[string]any{"kind": kind, "disposition": map[string]any{"charged": charged, "movement_terminal": false}}
+	if acceptanceOpen {
+		payload = map[string]any{"reason": "criterion_errored", "subject_tree": "git-sha1:subject", "disposition": map[string]any{"charged": charged, "movement_terminal": false}}
+	}
+	if _, err := authority.Append(runstate.Event{
+		RunID: start.RunID, ScoreRevision: preparation.Score.Revision(), MovementID: movementID, AttemptID: "attempt-1", Type: failureType,
+		Payload: testPayload(t, payload),
+	}, faultpoint.ReceiptAddress("test.attempt.failed")); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, authority, start.RunID, input, journal.Events[len(journal.Events)-1]
+}
+
+func appendRecordedFailure(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID, kind, charged string) runstore.RunInput {
+	t.Helper()
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := input.Projection.CurrentHeadAttempt
+	if current == nil {
+		t.Fatal("current successor attempt is absent")
+	}
+	if _, err := authority.Append(runstate.Event{
+		RunID: runID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		MovementID: current.MovementID, AttemptID: current.AttemptID, Type: runstate.EventAttemptFailed,
+		Payload: testPayload(t, map[string]any{"kind": kind, "disposition": map[string]any{"charged": charged, "movement_terminal": false}}),
+	}, faultpoint.ReceiptAddress("test.attempt.failed")); err != nil {
+		t.Fatal(err)
+	}
+	input, err = store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return input
 }
 
 func TestLiveFailedTerminalProjectionAbsentRejectsBothDirections(t *testing.T) {
@@ -638,6 +940,9 @@ func TestLiveBetweenUnitEntryCallSitesRespectPostEffectBoundary(t *testing.T) {
 	if !allCallsBefore(functions["ExecuteAttempt"], "Execute", "realizeRecordedNoneDisposition") {
 		t.Fatal("post-effect live entry must be reachable only after Client.Execute returns")
 	}
+	if !allCallsBefore(functions["liveMaterializeSuccessor"], "liveBetweenUnitEntry", "ExecuteAttempt") {
+		t.Fatal("successor materialization must re-enter only after the durable post-effect boundary")
+	}
 }
 
 func approvedLiveBetweenUnitCall(function, callee string) bool {
@@ -645,7 +950,7 @@ func approvedLiveBetweenUnitCall(function, callee string) bool {
 	case "selectLiveBetweenUnit":
 		return function == "run"
 	case "liveBetweenUnitEntry":
-		return function == "selectLiveBetweenUnit" || function == "realizeRecordedNoneDisposition"
+		return function == "selectLiveBetweenUnit" || function == "realizeRecordedNoneDisposition" || function == "liveMaterializeSuccessor"
 	default:
 		return false
 	}
