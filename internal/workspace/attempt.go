@@ -87,6 +87,31 @@ func (run *Run) movement(id string) (score.MovementView, bool) {
 	return score.MovementView{}, false
 }
 
+// VerifyProtectedPaths checks that no protected path changed since this
+// attempt's worktree was created.
+func (attempt *AttemptWorkspace) VerifyProtectedPaths() error {
+	if attempt == nil || attempt.run == nil {
+		return errors.New(
+			"workspace: incomplete attempt",
+		)
+	}
+	currentProtected, err := snapshotProtected(attempt.Worktree)
+	if err != nil {
+		return err
+	}
+	if changed := changedProtected(
+		attempt.protectedBaseline,
+		currentProtected,
+	); len(changed) != 0 {
+		return &VerificationError{
+			Reason: "protected_path_violation",
+			Paths:  changed,
+			Cause:  ErrProtectedPathChanged,
+		}
+	}
+	return nil
+}
+
 // VerifyReadOnlyAndRecord checks the complete read-only invariant and appends
 // verification.passed with the authoritative empty payload.
 func (attempt *AttemptWorkspace) VerifyReadOnlyAndRecord() (
@@ -101,19 +126,8 @@ func (attempt *AttemptWorkspace) VerifyReadOnlyAndRecord() (
 	if !attempt.readOnly {
 		return faultpoint.DurabilityReceipt{}, ErrReadOnlyRequired
 	}
-	currentProtected, err := snapshotProtected(attempt.Worktree)
-	if err != nil {
+	if err := attempt.VerifyProtectedPaths(); err != nil {
 		return faultpoint.DurabilityReceipt{}, err
-	}
-	if changed := changedProtected(
-		attempt.protectedBaseline,
-		currentProtected,
-	); len(changed) != 0 {
-		return faultpoint.DurabilityReceipt{}, &VerificationError{
-			Reason: "protected_path_violation",
-			Paths:  changed,
-			Cause:  ErrProtectedPathChanged,
-		}
 	}
 
 	tracked, err := gitOutput(

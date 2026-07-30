@@ -13,6 +13,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/score"
 )
 
 // AppendWaivedRunSucceeded materializes the identity candidate and waiver in
@@ -147,6 +148,67 @@ func CreateRecoveredAttempt(
 		return nil, err
 	}
 	return run.CreateAttempt(movementID)
+}
+
+// CaptureRecoveredChangeSet captures the authoritative existing worktree for
+// RC-RESUME-016. The caller remains responsible for appending its event.
+func CaptureRecoveredChangeSet(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RunInput,
+	attemptID runstate.AttemptID,
+) (ChangeSet, error) {
+	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" || input.BaseTree == "" || attemptID == "" {
+		return ChangeSet{}, errors.New("workspace: incomplete change set recovery input")
+	}
+	state, err := driver.State()
+	if err != nil {
+		return ChangeSet{}, err
+	}
+	attemptState, ok := state.Attempts[attemptID]
+	if !ok {
+		return ChangeSet{}, fmt.Errorf("workspace: recovery attempt %q is absent", attemptID)
+	}
+	var movement score.MovementView
+	found := false
+	for _, candidate := range input.Score.Movements() {
+		if candidate.ID == string(attemptState.MovementID) {
+			movement, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return ChangeSet{}, fmt.Errorf("%w: %s", ErrMovementNotFound, attemptState.MovementID)
+	}
+	if !hasGrant(movement.Grants, "repo_write") {
+		return ChangeSet{}, ErrReadOnlyRequired
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return ChangeSet{}, err
+	}
+	run := &Run{
+		id:                driver.RunID(),
+		repositoryRoot:    store.RepositoryRoot(),
+		scoreRevision:     state.ScoreHead.Revision,
+		baseCommit:        recoveryGitObject(input.BaseCommit),
+		baseTreeQualified: input.BaseTree,
+		movements:         input.Score.Movements(),
+		store:             store,
+		git:               git,
+	}
+	if err := run.BindDriver(driver); err != nil {
+		return ChangeSet{}, err
+	}
+	attempt := &AttemptWorkspace{
+		RunID:      driver.RunID(),
+		AttemptID:  attemptID,
+		MovementID: attemptState.MovementID,
+		PartID:     movement.PartID,
+		Worktree:   filepath.Join(store.RepositoryRoot(), ".partitur", "work", string(driver.RunID()), string(attemptID), "worktree"),
+		run:        run,
+	}
+	return attempt.CaptureChangeSet()
 }
 
 // InitialPerformerSelectedEvent builds the shared durable initial-selection

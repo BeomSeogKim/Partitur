@@ -86,12 +86,182 @@ func TestLiveAndResumeSuccessorSelectionJournalIdentity(t *testing.T) {
 	}
 }
 
+func TestCaptureChangeSetRecoveryHandlerRecordsOnce(t *testing.T) {
+	fixture := recoveryChangeSetFixture(t)
+	defer fixture.driver.Release()
+	action := recovery.Action{Kind: recovery.ActionCaptureChangeSet, AttemptID: fixture.attemptID}
+	handlerContext := HandlerContext{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID}
+	if err := captureChangeSet(context.Background(), handlerContext, action); err != nil {
+		t.Fatal(err)
+	}
+	if err := captureChangeSet(context.Background(), handlerContext, action); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matching := 0
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventChangeSetRecorded && event.AttemptID == fixture.attemptID {
+			matching++
+		}
+	}
+	if matching == 0 {
+		t.Fatal("recovery capture journal inspection observed zero matching change_set.recorded events")
+	}
+	if matching != 1 {
+		t.Fatalf("change_set.recorded events = %d, want 1", matching)
+	}
+	state, err := fixture.driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, ok := state.ChangeSets[fixture.attemptID]
+	if !ok || recorded.ChangeSetID == "" || recorded.BaseTree != recorded.ResultTree {
+		t.Fatalf("recorded recovery change set = %#v", recorded)
+	}
+}
+
+func TestCaptureChangeSetRecoveryHandlerRecapturesPinnedSurvivingWorktree(t *testing.T) {
+	fixture := recoveryChangeSetFixture(t)
+	defer fixture.driver.Release()
+	input, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := workspace.CaptureRecoveredChangeSet(fixture.store, fixture.driver, input, fixture.attemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recoveryGitText(t, fixture.store.RepositoryRoot(), "show-ref", "--hash", pinned.Ref); got != pinned.Commit {
+		t.Fatalf("pinned change set ref = %q, want %q", got, pinned.Commit)
+	}
+	worktree := filepath.Join(fixture.store.RepositoryRoot(), ".partitur", "work", string(fixture.runID), string(fixture.attemptID), "worktree")
+	if err := os.WriteFile(filepath.Join(worktree, "surviving.txt"), []byte("later worktree\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	action := recovery.Action{Kind: recovery.ActionCaptureChangeSet, AttemptID: fixture.attemptID}
+	handlerContext := HandlerContext{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID}
+	if err := captureChangeSet(context.Background(), handlerContext, action); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, ok := state.ChangeSets[fixture.attemptID]
+	if !ok {
+		t.Fatal("recovery capture did not record the change set")
+	}
+	if recorded.ChangeSetID == pinned.ID || recorded.Commit == pinned.Commit || recorded.ResultTree == pinned.ResultTree {
+		t.Fatalf("recorded change set = %#v, want later worktree checkpoint after %#v", recorded, pinned)
+	}
+	if got := recoveryGitText(t, fixture.store.RepositoryRoot(), "show-ref", "--hash", recorded.Ref); got != recorded.Commit {
+		t.Fatalf("recorded change set ref = %q, want later commit %q", got, recorded.Commit)
+	}
+	if got := recoveryGitText(t, fixture.store.RepositoryRoot(), "show", recorded.Commit+":surviving.txt"); got != "later worktree" {
+		t.Fatalf("recorded checkpoint content = %q, want surviving worktree content", got)
+	}
+}
+
+func recoveryGitText(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
 type successorIdentityFixtureState struct {
 	store   *runstore.Store
 	driver  *runstore.Driver
 	runID   runstate.RunID
 	input   runstore.RunInput
 	failure runstate.Event
+}
+
+type recoveryChangeSetFixtureState struct {
+	store     *runstore.Store
+	driver    *runstore.Driver
+	runID     runstate.RunID
+	attemptID runstate.AttemptID
+}
+
+func recoveryChangeSetFixture(t *testing.T) recoveryChangeSetFixtureState {
+	t.Helper()
+	root := t.TempDir()
+	scoreDocument := map[string]any{
+		"score": "0.2", "name": "recovery-change-set", "revision": 1, "status": "finalized", "goal": "fixture",
+		"verification": map[string]any{"expectation": map[string]any{"intent": "pass-existing-tests", "apply_gate": map[string]any{"waived": true, "reason": "fixture"}}},
+		"parts":        map[string]any{"writer": map[string]any{"capabilities": []any{"repo_read", "repo_write"}}},
+		"movements":    []any{map[string]any{"id": "write", "part": "writer", "grants": []any{"repo_read", "repo_write"}, "instruction": "fixture", "outputs": []any{map[string]any{"id": "change-set", "kind": "change_set"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "tests", "run": []any{"true"}}}}}},
+		"policy":       map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10}},
+	}
+	castDocument := map[string]any{"cast": "0.1", "performers": map[string]any{"worker": map[string]any{"adapter": "codex", "model": "fixture"}}, "bindings": map[string]any{"writer": map[string]any{"performer": "worker"}}}
+	writeFixtureJSON(t, filepath.Join(root, "partitur.yaml"), scoreDocument)
+	if err := os.Mkdir(filepath.Join(root, ".partitur"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureJSON(t, filepath.Join(root, ".partitur", "cast.yaml"), castDocument)
+	for _, arguments := range [][]string{{"init"}, {"config", "user.name", "Partitur Test"}, {"config", "user.email", "partitur@example.invalid"}, {"add", "partitur.yaml", ".partitur/cast.yaml"}, {"commit", "-m", "fixture"}} {
+		command := exec.Command("git", arguments...)
+		command.Dir = root
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", arguments, err, output)
+		}
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	preparation, validation := validate.Prepare()
+	if validation.Refusal != nil || validation.HasDiagnostics() || preparation == nil {
+		t.Fatalf("preparation=%+v validation=%+v", preparation, validation)
+	}
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, []runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending, RepoWrite: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := started.Run.BindDriver(authority); err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("write")
+	if err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	for _, event := range []runstate.Event{
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementReady, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementStarted, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID, Type: runstate.EventPerformerSelected, Payload: handlerPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "fixture"})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID, Type: runstate.EventAttemptStarted, Payload: handlerPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{"**"}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": versions})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID, Type: runstate.EventAdapterProbed, Payload: handlerPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": true, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})},
+		{RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID, Type: runstate.EventPerformerCompleted, Payload: handlerPayload(t, map[string]any{"session_hint_stored": false})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test.recovery_change_set."+string(event.Type))); err != nil {
+			authority.Release()
+			t.Fatal(err)
+		}
+	}
+	return recoveryChangeSetFixtureState{store: store, driver: authority, runID: started.RunID, attemptID: attempt.AttemptID}
 }
 
 func successorIdentityFixture(t *testing.T, charged, kind string) successorIdentityFixtureState {

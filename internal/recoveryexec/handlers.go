@@ -42,7 +42,6 @@ var namedUnimplementedActionOwners = map[recovery.ActionKind]string{
 	// Temporary executor/planner mismatch, not a 4.1 handler requirement:
 	// RC-RESUME-041 must hand decision_resume materialization to C.4.
 	recovery.ActionSelectDecisionResume:       "4.1",
-	recovery.ActionCaptureChangeSet:           "3.1",
 	recovery.ActionAppendFinalGateFailure:     "4.1",
 	recovery.ActionAppendEvaluationCompleted:  "4.1",
 	recovery.ActionAppendHumanGateRequest:     "4.1",
@@ -90,6 +89,7 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
 		recovery.ActionComposeCandidate:           composeZeroWriterCandidate,
 		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
+		recovery.ActionCaptureChangeSet:           captureChangeSet,
 		recovery.ActionExecuteCancellation:        executeCancellation,
 		recovery.ActionAppendRunSucceeded:         appendRunSucceeded,
 	}
@@ -148,6 +148,56 @@ func rerunPostHocVerification(ctx context.Context, execution HandlerContext, act
 	failure.FailureKind = successor.KindGrantDenied
 	failure.FailureReason = verification.Reason
 	return appendAttemptFailure(ctx, execution, failure)
+}
+
+func captureChangeSet(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || execution.RunID == "" || action.AttemptID == "" {
+		return errors.New("recovery executor requires store, driver, run id, and attempt for change set capture")
+	}
+	input, err := execution.Store.LoadRunInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	state, err := execution.Driver.State()
+	if err != nil {
+		return err
+	}
+	if _, recorded := state.ChangeSets[action.AttemptID]; recorded {
+		return nil
+	}
+	changeSet, err := workspace.CaptureRecoveredChangeSet(
+		execution.Store,
+		execution.Driver,
+		input,
+		action.AttemptID,
+	)
+	if err != nil {
+		return err
+	}
+	attempt, ok := state.Attempts[action.AttemptID]
+	if !ok {
+		return fmt.Errorf("recovery change set attempt %q is absent", action.AttemptID)
+	}
+	partID := ""
+	for _, movement := range input.Score.Movements() {
+		if movement.ID == string(attempt.MovementID) {
+			partID = movement.PartID
+			break
+		}
+	}
+	event, err := workspace.ChangeSetRecordedEvent(
+		execution.RunID,
+		state.ScoreHead.Revision,
+		attempt.MovementID,
+		partID,
+		action.AttemptID,
+		changeSet,
+	)
+	if err != nil {
+		return err
+	}
+	_, err = execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.change_set.recorded"))
+	return err
 }
 
 func appendMovementReady(_ context.Context, execution HandlerContext, action recovery.Action) error {
