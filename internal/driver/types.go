@@ -64,4 +64,6 @@ type ExecutionDependencies struct {
 	ResolveTrampoline func() (string, error)
 	Now               func() time.Time
 	NewID             func() (string, error)
+	// afterMovementFailed is a test-only interleaving hook. Production leaves it nil.
+	afterMovementFailed func()
 }

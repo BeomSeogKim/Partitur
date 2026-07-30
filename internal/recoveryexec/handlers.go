@@ -83,7 +83,7 @@ func composeZeroWriterCandidate(_ context.Context, execution HandlerContext, _ r
 	if execution.Store == nil || execution.Driver == nil || execution.RunID == "" {
 		return errors.New("recovery executor requires store, driver, and run id for zero-writer candidate")
 	}
-	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func rerunPostHocVerification(ctx context.Context, execution HandlerContext, act
 	if execution.Store == nil || execution.Driver == nil || execution.RunID == "" {
 		return errors.New("recovery executor requires store, driver, and run id for post-hoc verification")
 	}
-	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" {
 		return errors.New("recovery acceptance start requires store, driver, and attempt")
 	}
-	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func selectInitialPerformer(ctx context.Context, execution HandlerContext, actio
 	if execution.Store == nil || execution.Driver == nil || action.MovementID == "" {
 		return errors.New("recovery initial performer selection requires store, driver, and movement")
 	}
-	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func resumeCriterion(_ context.Context, execution HandlerContext, action recover
 	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" || action.CriterionID == "" {
 		return errors.New("recovery criterion resume requires store, driver, attempt, and criterion")
 	}
-	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
 		return err
 	}
@@ -311,7 +311,7 @@ func materializeSuccessor(ctx context.Context, execution HandlerContext, action 
 		return errors.New("recovery successor materialization requires store, driver, and pending successor")
 	}
 	pending := action.PendingSuccessor
-	input, err := execution.Store.LoadRecoveryInput(execution.RunID)
+	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
 		return err
 	}
@@ -351,7 +351,7 @@ func materializeSuccessor(ctx context.Context, execution HandlerContext, action 
 func executeRecoveredAttempt(
 	ctx context.Context,
 	execution HandlerContext,
-	input runstore.RecoveryInput,
+	input runstore.RunInput,
 	movementID, performerID, reason, causationID string,
 ) error {
 	if execution.Store == nil || execution.Driver == nil || input.Score == nil || input.Cast == nil {

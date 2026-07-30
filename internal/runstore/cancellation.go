@@ -21,7 +21,7 @@ const cancellationSweepGrace = 30 * time.Second
 // RequestCancellation appends the run-scoped B.7 cancellation request while
 // holding the state lock. The request is idempotent by run ID.
 func (store *Store) RequestCancellation(runID runstate.RunID) error {
-	input, err := store.LoadRecoveryInput(runID)
+	input, err := store.LoadRunInput(runID)
 	if err != nil {
 		return err
 	}
@@ -57,7 +57,7 @@ func (store *Store) RequestCancellation(runID runstate.RunID) error {
 
 // ExecuteCancellation runs the §6 cancellation oracle as one ordered operation.
 func (store *Store) ExecuteCancellation(ctx context.Context, runID runstate.RunID) error {
-	input, err := store.LoadRecoveryInput(runID)
+	input, err := store.LoadRunInput(runID)
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (store *Store) ExecuteCancellation(ctx context.Context, runID runstate.RunI
 }
 
 func (store *Store) executeCancellation(runID runstate.RunID) error {
-	input, err := store.LoadRecoveryInput(runID)
+	input, err := store.LoadRunInput(runID)
 	if err != nil {
 		return err
 	}

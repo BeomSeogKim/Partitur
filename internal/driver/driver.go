@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
@@ -41,6 +43,8 @@ type dependencies struct {
 	now               func() time.Time
 	newID             func() (string, error)
 	workspaceStart    func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error)
+	// afterMovementFailed is a test-only interleaving hook. Production leaves it nil.
+	afterMovementFailed func()
 }
 
 func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {
@@ -70,11 +74,12 @@ func DefaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies 
 
 func executionDependenciesFrom(dependencies dependencies) ExecutionDependencies {
 	return ExecutionDependencies{
-		Probe:             dependencies.probe,
-		Client:            dependencies.client,
-		ResolveTrampoline: dependencies.resolveTrampoline,
-		Now:               dependencies.now,
-		NewID:             dependencies.newID,
+		Probe:               dependencies.probe,
+		Client:              dependencies.client,
+		ResolveTrampoline:   dependencies.resolveTrampoline,
+		Now:                 dependencies.now,
+		NewID:               dependencies.newID,
+		afterMovementFailed: dependencies.afterMovementFailed,
 	}
 }
 
@@ -183,33 +188,50 @@ func run(
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
-	attempt, err := startResult.Run.CreateAttempt(movement.ID)
-	if err != nil {
-		return stopped(result, err)
-	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
-		return cancelled
-	}
-	for _, transition := range []runstate.EventType{
-		runstate.EventMovementReady,
-		runstate.EventMovementStarted,
+	for _, step := range []struct {
+		action recovery.ActionKind
+		event  runstate.EventType
+	}{
+		{recovery.ActionAppendMovementReady, runstate.EventMovementReady},
+		{recovery.ActionAppendMovementStarted, runstate.EventMovementStarted},
 	} {
+		decision, err := selectLiveBetweenUnit(store, authority)
+		if err != nil {
+			return interrupted(result, err)
+		}
+		if liveSelectionMismatch(decision.Action, step.action, runstate.MovementID(movement.ID)) {
+			return interrupted(result, fmt.Errorf("driver: live selector chose %s for initial movement", decision.Action.Kind))
+		}
 		event := runstate.Event{
 			RunID:         startResult.RunID,
 			ScoreRevision: preparation.Score.Revision(),
 			MovementID:    runstate.MovementID(movement.ID),
-			Type:          transition,
+			Type:          step.event,
 			Payload:       json.RawMessage(`{}`),
 		}
 		if _, err := authority.Append(
 			event,
-			faultpoint.ReceiptAddress("movement."+string(transition)),
+			faultpoint.ReceiptAddress("movement."+string(step.event)),
 		); err != nil {
 			return stopped(result, err)
 		}
 		if cancelled, handled := cancellationResult(ctx, result, control); handled {
 			return cancelled
 		}
+	}
+	decision, err := selectLiveBetweenUnit(store, authority)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if liveSelectionMismatch(decision.Action, recovery.ActionSelectInitialPerformer, runstate.MovementID(movement.ID)) {
+		return interrupted(result, fmt.Errorf("driver: live selector chose %s for initial performer", decision.Action.Kind))
+	}
+	attempt, err := startResult.Run.CreateAttempt(movement.ID)
+	if err != nil {
+		return stopped(result, err)
+	}
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled
 	}
 	return ExecuteAttempt(ctx, AttemptExecution{
 		RepositoryRoot:  preparation.RepositoryRoot,
@@ -254,19 +276,20 @@ func ExecuteAttempt(
 	authority := execution.Authority
 	remainingMS := execution.RemainingMS
 	dependencies := dependencies{
-		probe:             executionDependencies.Probe,
-		client:            executionDependencies.Client,
-		resolveTrampoline: executionDependencies.ResolveTrampoline,
-		now:               executionDependencies.Now,
-		newID:             executionDependencies.NewID,
+		probe:               executionDependencies.Probe,
+		client:              executionDependencies.Client,
+		resolveTrampoline:   executionDependencies.ResolveTrampoline,
+		now:                 executionDependencies.Now,
+		newID:               executionDependencies.NewID,
+		afterMovementFailed: executionDependencies.afterMovementFailed,
 	}
 	result = Result{RunID: execution.RunID}
+	store, err := runstore.New(execution.RepositoryRoot, executionDependencies.Probe)
+	if err != nil {
+		return stopped(result, err)
+	}
 	control := execution.Control
 	if control == nil {
-		store, err := runstore.New(execution.RepositoryRoot, executionDependencies.Probe)
-		if err != nil {
-			return stopped(result, err)
-		}
 		control, err = cancellation.Watch(store, execution.RunID)
 		if err != nil {
 			return stopped(result, err)
@@ -277,7 +300,7 @@ func ExecuteAttempt(
 		return cancelled
 	}
 	policy := execution.Score.EffectivePolicy()
-	binding, ok := execution.Cast.Binding(movement.PartID)
+	_, ok := execution.Cast.Binding(movement.PartID)
 	if !ok {
 		return interrupted(result, errors.New("driver: selected movement has no binding"))
 	}
@@ -444,14 +467,23 @@ func ExecuteAttempt(
 	}
 	var observationErr error
 	adapterChargedMS := int64(0)
-	classifyFailure := func(failure successor.FailureCase, remainingMS int64) (runstate.Disposition, error) {
-		visited := make(map[string]bool, len(execution.VisitedPerformers)+1)
-		for _, performerID := range execution.VisitedPerformers {
+	classifyFailure := func(failure successor.FailureCase) (runstate.Disposition, error) {
+		input, err := store.LoadRunInput(execution.RunID)
+		if err != nil {
+			return runstate.Disposition{}, err
+		}
+		current := input.Projection.CurrentHeadAttempt
+		if current == nil || current.AttemptID != execution.Attempt.AttemptID {
+			return runstate.Disposition{}, errors.New("driver: classification attempt is not current")
+		}
+		facts := current.FailureClassification
+		visited := make(map[string]bool, len(facts.VisitedPerformers)+1)
+		for _, performerID := range facts.VisitedPerformers {
 			visited[performerID] = true
 		}
-		visited[performer.ID] = true
+		visited[facts.CurrentPerformer] = true
 		hasUnvisitedFallback := false
-		for _, fallback := range binding.Fallbacks {
+		for _, fallback := range facts.Fallbacks {
 			if !visited[fallback] {
 				hasUnvisitedFallback = true
 				break
@@ -460,9 +492,9 @@ func ExecuteAttempt(
 		return successor.Classify(successor.ClassificationInput{
 			Failure:              failure,
 			HasUnvisitedFallback: hasUnvisitedFallback,
-			RetriesConsumed:      execution.RetriesConsumed,
-			RetriesPerMovement:   int(policy.RetriesPerMovement),
-			RemainingTimeMS:      remainingMS,
+			RetriesConsumed:      facts.RetriesConsumed,
+			RetriesPerMovement:   facts.RetriesPerMovement,
+			RemainingTimeMS:      facts.RemainingTimeMS,
 		})
 	}
 	logCount := 0
@@ -527,10 +559,7 @@ func ExecuteAttempt(
 					kind = string(failure.Kind)
 					detail = failure.Detail
 				}
-				disposition, err := classifyFailure(
-					successor.FailureCase{AttemptKind: kind},
-					remainingAfter(remainingMS, adapterChargedMS),
-				)
+				disposition, err := classifyFailure(successor.FailureCase{AttemptKind: kind})
 				if err != nil {
 					return faultpoint.DurabilityReceipt{}, err
 				}
@@ -608,6 +637,9 @@ func ExecuteAttempt(
 		}
 		return stopped(result, err)
 	}
+	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies.afterMovementFailed); handled {
+		return terminal
+	}
 	if report.Result == nil || report.Result.Outcome != protocol.OutcomeCompleted {
 		return interrupted(result, errors.New("adapter did not complete"))
 	}
@@ -617,10 +649,7 @@ func ExecuteAttempt(
 		if !errors.As(err, &verification) {
 			return stopped(result, err)
 		}
-		disposition, classifyErr := classifyFailure(
-			successor.FailureCase{AttemptKind: successor.KindGrantDenied},
-			remainingAfter(remainingMS, adapterChargedMS),
-		)
+		disposition, classifyErr := classifyFailure(successor.FailureCase{AttemptKind: successor.KindGrantDenied})
 		if classifyErr != nil {
 			return stopped(result, classifyErr)
 		}
@@ -630,6 +659,9 @@ func ExecuteAttempt(
 			"disposition": dispositionPayload(disposition),
 		}, "attempt.failed"); appendErr != nil {
 			return stopped(result, appendErr)
+		}
+		if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies.afterMovementFailed); handled {
+			return terminal
 		}
 		return interrupted(result, err)
 	}
@@ -653,10 +685,7 @@ func ExecuteAttempt(
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
-	acceptanceDisposition, err := classifyFailure(
-		successor.FailureCase{AcceptanceReason: "acceptance_failed"},
-		remainingMS,
-	)
+	acceptanceDisposition, err := classifyFailure(successor.FailureCase{AcceptanceReason: "acceptance_failed"})
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -711,6 +740,9 @@ func ExecuteAttempt(
 	}
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
+	}
+	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies.afterMovementFailed); handled {
+		return terminal
 	}
 	if !evaluation.EvaluationCompleted || !evaluation.Verified {
 		return interrupted(result, errors.New("attempt did not earn VERIFIED"))
@@ -1128,6 +1160,165 @@ func dispositionPayload(disposition runstate.Disposition) map[string]any {
 		payload["terminal_reason"] = disposition.TerminalReason
 	}
 	return payload
+}
+
+// realizeRecordedNoneDisposition realizes only the terminal Arm 2 branch. The
+// charged successor branches remain recovery-only until the next live retry
+// and fallback PR supplies their executor.
+func realizeRecordedNoneDisposition(
+	ctx context.Context,
+	result Result,
+	store *runstore.Store,
+	authority *runstore.Driver,
+	control *cancellation.Watcher,
+	afterMovementFailed func(),
+) (Result, bool) {
+	input, err := store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err), true
+	}
+	current := input.Projection.CurrentHeadAttempt
+	if current == nil || current.RecordedDisposition == nil {
+		return Result{}, false
+	}
+	if input.Projection.State.CancelRequested {
+		if err := control.Execute(ctx); err != nil {
+			if errors.Is(err, runstate.ErrSweepUnverifiable) {
+				return halted(result, "sweep_unverifiable", err), true
+			}
+			return stopped(result, err), true
+		}
+		result.Outcome = OutcomeCancelled
+		return result, true
+	}
+	// §4 post-effect boundary: Client.Execute returned without a sweep halt, so
+	// this driver's adapter session is verified empty and its interval is
+	// durably closed. This failure disposition has no required change set.
+	if !liveBetweenUnitEntry(input.Projection, store, authority) {
+		return interrupted(result, errors.New("driver: live between-unit entry condition is not established")), true
+	}
+
+	realization, err := successor.Realize(successor.RealizationInput{
+		Disposition:      *current.RecordedDisposition,
+		CurrentPerformer: current.FailureClassification.CurrentPerformer,
+		Binding: cast.BindingView{
+			Fallbacks: current.FailureClassification.Fallbacks,
+		},
+		VisitedPerformers: current.FailureClassification.VisitedPerformers,
+	})
+	if err != nil {
+		return interrupted(result, err), true
+	}
+	if liveNoneRealizationMismatch(realization) {
+		// The next PR realizes quality_retry and fallback on the live surface.
+		return interrupted(result, errors.New("driver: live charged successor realization is not implemented")), true
+	}
+	state := input.Projection.State
+	payload, err := json.Marshal(map[string]any{
+		"reason": realization.TerminalReason, "run_failed": false,
+	})
+	if err != nil {
+		return interrupted(result, err), true
+	}
+	if _, err := authority.Append(runstate.Event{
+		RunID: result.RunID, ScoreRevision: state.ScoreHead.Revision,
+		MovementID: current.MovementID, AttemptID: current.AttemptID,
+		Type: runstate.EventMovementFailed, Payload: payload,
+	}, faultpoint.ReceiptAddress("movement.failed")); err != nil {
+		return stopped(result, err), true
+	}
+	if afterMovementFailed != nil {
+		afterMovementFailed()
+	}
+
+	input, err = store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err), true
+	}
+	if input.Projection.State.CancelRequested {
+		if err := control.Execute(ctx); err != nil {
+			if errors.Is(err, runstate.ErrSweepUnverifiable) {
+				return halted(result, "sweep_unverifiable", err), true
+			}
+			return stopped(result, err), true
+		}
+		result.Outcome = OutcomeCancelled
+		return result, true
+	}
+	payload, err = json.Marshal(map[string]any{"reason": "movement_failed"})
+	if err != nil {
+		return interrupted(result, err), true
+	}
+	if _, err := authority.Append(runstate.Event{
+		RunID: result.RunID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		Type: runstate.EventRunFailed, Payload: payload,
+	}, faultpoint.ReceiptAddress("run.failed")); err != nil {
+		return stopped(result, err), true
+	}
+	input, err = store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err), true
+	}
+	if liveFailedTerminalProjectionAbsent(input.Projection.State.Run) {
+		return interrupted(result, errors.New("driver: durable failed terminal projection is absent")), true
+	}
+	result.Outcome = OutcomeFailed
+	result.Reason = "movement_failed"
+	result.Err = nil
+	return result, true
+}
+
+func liveFailedTerminalProjectionAbsent(run runstate.RunLifecycle) bool {
+	return run != runstate.RunFailed
+}
+
+func liveSelectionMismatch(action *recovery.Action, want recovery.ActionKind, movementID runstate.MovementID) bool {
+	return action == nil || action.Kind != want || action.MovementID != movementID
+}
+
+func liveNoneRealizationMismatch(realization successor.Realization) bool {
+	return realization.Action != successor.ActionMovementFailed || realization.Charge != successor.ChargeNone
+}
+
+func liveBetweenUnitEntry(
+	projection recovery.Projection,
+	store *runstore.Store,
+	authority *runstore.Driver,
+) bool {
+	// The journal cannot attest the session and change-set conjuncts of §6's
+	// local post-effect boundary. Callers with a completed effect must establish
+	// them before this check; the direct failure-disposition call above is after
+	// Client.Execute's §4 cleanup. selectLiveBetweenUnit is used only before the
+	// first effect, when those conjuncts are vacuous. The test below pins both
+	// call sites so a new pre-cleanup entry is rejected in review and CI.
+	state := projection.State
+	lease, present, err := store.ReadLease(authority.RunID())
+	if err != nil || !present || state.Run.Terminal() || state.Authority.Owner == nil ||
+		state.Authority.Epoch != lease.Epoch || state.Authority.Owner.PID != lease.PID ||
+		!reflect.DeepEqual(state.Authority.Owner.Start, lease.Start) ||
+		!authority.MatchesLease(lease.Identity()) || state.OpenExecution != nil {
+		return false
+	}
+	current := projection.CurrentHeadAttempt
+	return current == nil || current.ScoreRevision != state.ScoreHead.Revision ||
+		(current.State != runstate.AttemptStarting && current.State != runstate.AttemptRunning && current.State != runstate.AttemptVerifying)
+}
+
+func selectLiveBetweenUnit(store *runstore.Store, authority *runstore.Driver) (recovery.Decision, error) {
+	input, err := store.LoadRunInput(authority.RunID())
+	if err != nil {
+		return recovery.Decision{}, err
+	}
+	// This initial-scheduling path has no completed driver effect yet; §6's
+	// session and change-set conjuncts are therefore vacuous.
+	if !liveBetweenUnitEntry(input.Projection, store, authority) {
+		return recovery.Decision{}, errors.New("driver: live between-unit entry condition is not established")
+	}
+	decision := recovery.PlanBetweenUnit(input.Projection)
+	if !decision.Valid() {
+		return recovery.Decision{}, errors.New("driver: compiled lifecycle has no between-unit action")
+	}
+	return decision, nil
 }
 
 func stopped(result Result, err error) Result {

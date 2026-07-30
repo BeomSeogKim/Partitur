@@ -1105,7 +1105,7 @@ func TestResumeMapsAuthorityAcquisitionInputHaltsToExitFive(t *testing.T) {
 			loaded := false
 			executor := &recoveryexec.Executor{Store: store, RunID: "run-1"}
 			executor.Load = func(context.Context) (recovery.Input, error) {
-				durable, err := store.LoadRecoveryInput("run-1")
+				durable, err := store.LoadRunInput("run-1")
 				if err != nil {
 					return recovery.Input{}, err
 				}

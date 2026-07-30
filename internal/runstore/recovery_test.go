@@ -94,14 +94,14 @@ func TestReclaimDeadRecoveryDriverKeepsReusedLivePIDLease(t *testing.T) {
 	}
 }
 
-func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
+func TestLoadRunInputUsesRunOwnedHistory(t *testing.T) {
 	tests := []struct {
 		name   string
 		append func(*testing.T, *Store)
-		check  func(*testing.T, RecoveryInput)
+		check  func(*testing.T, RunInput)
 	}{
 		{
-			name: "fresh run", check: func(t *testing.T, input RecoveryInput) {
+			name: "fresh run", check: func(t *testing.T, input RunInput) {
 				if input.Projection.CurrentHeadAttempt != nil || len(input.Projection.Scheduler.Movements) != 2 {
 					t.Fatalf("fresh projection = %+v", input.Projection)
 				}
@@ -112,7 +112,7 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 			},
 		},
 		{
-			name: "failed attempt retains recorded disposition and classification facts", append: appendFailedAttempt, check: func(t *testing.T, input RecoveryInput) {
+			name: "failed attempt retains recorded disposition and classification facts", append: appendFailedAttempt, check: func(t *testing.T, input RunInput) {
 				attempt := input.Projection.CurrentHeadAttempt
 				if attempt == nil || attempt.State != runstate.AttemptFailed || attempt.RecordedDisposition == nil || attempt.RecordedDisposition.Charged != "quality_retry" {
 					t.Fatalf("failed attempt projection = %+v", attempt)
@@ -128,7 +128,7 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 			},
 		},
 		{
-			name: "pending decision remains durable", append: appendPendingDecision, check: func(t *testing.T, input RecoveryInput) {
+			name: "pending decision remains durable", append: appendPendingDecision, check: func(t *testing.T, input RunInput) {
 				attempt := input.Projection.CurrentHeadAttempt
 				if attempt == nil || attempt.State != runstate.AttemptBlocked || len(attempt.QuestionRequests) != 1 || !attempt.QuestionRequests[0].Durable {
 					t.Fatalf("blocked attempt projection = %+v", attempt)
@@ -141,7 +141,7 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 		{
 			name: "terminal run", append: func(t *testing.T, store *Store) {
 				appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventRunFailed, Payload: recoveryPayload(t, map[string]any{"reason": "movement_failed"})})
-			}, check: func(t *testing.T, input RecoveryInput) {
+			}, check: func(t *testing.T, input RunInput) {
 				if input.Projection.State.Run != runstate.RunFailed {
 					t.Fatalf("terminal lifecycle = %s", input.Projection.State.Run)
 				}
@@ -154,7 +154,7 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 			if test.append != nil {
 				test.append(t, store)
 			}
-			input, err := store.LoadRecoveryInput("run-1")
+			input, err := store.LoadRunInput("run-1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,13 +166,13 @@ func TestLoadRecoveryInputUsesRunOwnedHistory(t *testing.T) {
 	}
 }
 
-func TestLoadRecoveryInputIgnoresCurrentRootScore(t *testing.T) {
+func TestLoadRunInputIgnoresCurrentRootScore(t *testing.T) {
 	store := recoveryStore(t)
 	root := filepath.Join(store.RepositoryRoot(), "partitur.yaml")
 	if err := os.WriteFile(root, recoveryScoreJSON(t, 99, "current root must not win"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.LoadRecoveryInput("run-1")
+	input, err := store.LoadRunInput("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestLoadRecoveryInputIgnoresCurrentRootScore(t *testing.T) {
 	}
 }
 
-func TestLoadRecoveryInputDoesNotFallBackToRootScore(t *testing.T) {
+func TestLoadRunInputDoesNotFallBackToRootScore(t *testing.T) {
 	store := recoveryStore(t)
 	root := filepath.Join(store.RepositoryRoot(), "partitur.yaml")
 	if err := os.WriteFile(root, recoveryScoreJSON(t, 99, "valid root score"), 0o600); err != nil {
@@ -192,13 +192,13 @@ func TestLoadRecoveryInputDoesNotFallBackToRootScore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := store.LoadRecoveryInput("run-1")
+	_, err := store.LoadRunInput("run-1")
 	if err == nil || !strings.Contains(err.Error(), "pinned score file hash does not match journal") {
-		t.Fatalf("LoadRecoveryInput() error = %v, want pinned score file hash mismatch", err)
+		t.Fatalf("LoadRunInput() error = %v, want pinned score file hash mismatch", err)
 	}
 }
 
-func TestLoadRecoveryInputIgnoresCurrentCastLayer(t *testing.T) {
+func TestLoadRunInputIgnoresCurrentCastLayer(t *testing.T) {
 	store := recoveryStore(t)
 	currentCast := filepath.Join(store.RepositoryRoot(), ".partitur", "cast.yaml")
 	if err := os.MkdirAll(filepath.Dir(currentCast), 0o700); err != nil {
@@ -208,7 +208,7 @@ func TestLoadRecoveryInputIgnoresCurrentCastLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	input, err := store.LoadRecoveryInput("run-1")
+	input, err := store.LoadRunInput("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestLoadRecoveryInputIgnoresCurrentCastLayer(t *testing.T) {
 	}
 }
 
-func TestLoadRecoveryInputUsesOneJournalSnapshot(t *testing.T) {
+func TestLoadRunInputUsesOneJournalSnapshot(t *testing.T) {
 	store := recoveryStore(t)
 	appendRecoveryMovementStarted(t, store)
 	journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
@@ -260,7 +260,7 @@ func TestLoadRecoveryInputUsesOneJournalSnapshot(t *testing.T) {
 	}
 	store.fs = growing
 
-	input, err := store.LoadRecoveryInput("run-1")
+	input, err := store.LoadRunInput("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestChangeSetRecordedAppendIsIdempotent(t *testing.T) {
 	if first.Mutation.Sequence != second.Mutation.Sequence || first.Mutation.EventID != second.Mutation.EventID {
 		t.Fatalf("idempotent change-set receipts = %+v %+v", first, second)
 	}
-	input, err := store.LoadRecoveryInput("run-1")
+	input, err := store.LoadRunInput("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestChangeSetRecordedAppendIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
+func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 	t.Run("terminal evidence remains visible until its movement terminal", func(t *testing.T) {
 		store := recoveryStore(t)
 		appendRecoveryMovementStarted(t, store)
@@ -322,7 +322,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 			}),
 		})
 
-		input, err := store.LoadRecoveryInput("run-1")
+		input, err := store.LoadRunInput("run-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -347,7 +347,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 			Payload: recoveryPayload(t, map[string]any{"reason": "composition_failed", "run_failed": false}),
 		})
 
-		input, err := store.LoadRecoveryInput("run-1")
+		input, err := store.LoadRunInput("run-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -372,7 +372,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 			Payload: recoveryPayload(t, map[string]any{"reason": "composition_failed"}),
 		})
 
-		input, err := store.LoadRecoveryInput("run-1")
+		input, err := store.LoadRunInput("run-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -397,7 +397,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 			}),
 		})
 
-		input, err := store.LoadRecoveryInput("run-1")
+		input, err := store.LoadRunInput("run-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -426,7 +426,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 			}),
 		})
 
-		input, err := store.LoadRecoveryInput("run-1")
+		input, err := store.LoadRunInput("run-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -451,7 +451,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 			}),
 		})
 
-		input, err := store.LoadRecoveryInput("run-1")
+		input, err := store.LoadRunInput("run-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -461,7 +461,7 @@ func TestLoadRecoveryInputProjectsCompositionRecoveryFacts(t *testing.T) {
 	})
 }
 
-func TestLoadRecoveryInputProjectsRevisionRestart(t *testing.T) {
+func TestLoadRunInputProjectsRevisionRestart(t *testing.T) {
 	store := recoveryStore(t)
 	appendAttemptToRunning(t, store)
 
@@ -508,7 +508,7 @@ func TestLoadRecoveryInputProjectsRevisionRestart(t *testing.T) {
 		}),
 	})
 
-	input, err := store.LoadRecoveryInput("run-1")
+	input, err := store.LoadRunInput("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -734,7 +734,7 @@ func distinctCancellationStart(t *testing.T, start runstate.StartIdentity) runst
 
 func assertCancellationRemainsNonterminal(t *testing.T, store *runstore.Store) {
 	t.Helper()
-	input, err := store.LoadRecoveryInput("run-1")
+	input, err := store.LoadRunInput("run-1")
 	if err != nil || input.Projection.State.Run.Terminal() {
 		t.Fatalf("state=%+v error=%v", input.Projection.State.Run, err)
 	}
@@ -1166,7 +1166,7 @@ func TestExecutorExecutesCancellationOracle(t *testing.T) {
 		if _, present, err := store.ReadLease("run-1"); err != nil || present {
 			t.Fatalf("lease present=%t error=%v", present, err)
 		}
-		state, err := store.LoadRecoveryInput("run-1")
+		state, err := store.LoadRunInput("run-1")
 		if err != nil || state.Projection.State.Run != runstate.RunCancelled || state.Projection.State.OpenExecution != nil || state.Projection.State.Authority.Epoch != 2 {
 			t.Fatalf("state=%+v error=%v", state.Projection.State, err)
 		}
@@ -1202,7 +1202,7 @@ func TestExecutorExecutesCancellationOracle(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(runRoot, "quarantine", "cancelled_prepare", strings.TrimPrefix(preparedSnapshotHash(t), "sha256:"), "revision-2.yaml")); err != nil {
 			t.Fatal(err)
 		}
-		state, err := store.LoadRecoveryInput("run-1")
+		state, err := store.LoadRunInput("run-1")
 		if err != nil || state.Projection.State.PendingPrepare != nil || state.Projection.State.Run != runstate.RunCancelled {
 			t.Fatalf("state=%+v error=%v", state.Projection.State, err)
 		}
@@ -1388,7 +1388,7 @@ func preparedCancellationStore(t *testing.T) (*runstore.Store, *runstore.Driver)
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := store.LoadRecoveryInput("run-1")
+	current, err := store.LoadRunInput("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}

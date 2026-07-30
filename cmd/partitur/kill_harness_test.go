@@ -403,7 +403,7 @@ func runUncrashed(t *testing.T, binary, repository string, environment []string)
 	t.Helper()
 	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "run")
 	runID := strings.TrimSpace(stdout)
-	if code != 6 || runID == "" || stdout != runID+"\n" || !strings.Contains(stderr, "run interrupted:") {
+	if code != 4 || runID == "" || stdout != runID+"\n" || !strings.Contains(stderr, "movement_failed") {
 		t.Fatalf("failure run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	return runID
@@ -634,7 +634,7 @@ func assertSettledFixedPointState(t *testing.T, repository, runID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.LoadRecoveryInput(runstate.RunID(runID))
+	input, err := store.LoadRunInput(runstate.RunID(runID))
 	if err != nil {
 		t.Fatal(err)
 	}

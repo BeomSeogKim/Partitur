@@ -425,7 +425,7 @@ func newCancellationWaiter(store *runstore.Store, runID runstate.RunID) cancelwa
 			return executeRecovery(ctx, store, runID)
 		},
 		Observe: func(context.Context) (cancelwait.Owner, error) {
-			durable, err := store.LoadRecoveryInput(runID)
+			durable, err := store.LoadRunInput(runID)
 			if err != nil {
 				return cancelwait.Owner{}, err
 			}
@@ -458,7 +458,7 @@ func newCancellationWaiter(store *runstore.Store, runID runstate.RunID) cancelwa
 func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {
 	executor := &recoveryexec.Executor{Store: store, RunID: runID}
 	executor.Load = func(context.Context) (recovery.Input, error) {
-		durable, err := store.LoadRecoveryInput(runID)
+		durable, err := store.LoadRunInput(runID)
 		if err != nil {
 			return recovery.Input{}, err
 		}
