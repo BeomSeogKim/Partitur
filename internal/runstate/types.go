@@ -28,6 +28,7 @@ type MovementSeed struct {
 	ID        MovementID
 	Initial   MovementState
 	RepoWrite bool
+	Final     bool
 }
 
 type RunLifecycle string
@@ -319,6 +320,7 @@ type State struct {
 	Run                  RunLifecycle
 	Movements            map[MovementID]MovementState
 	RepoWriteMovements   map[MovementID]bool
+	FinalMovements       map[MovementID]bool
 	Attempts             map[AttemptID]Attempt
 	ScoreHead            ScoreHead
 	Authority            Authority

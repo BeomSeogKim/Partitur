@@ -775,7 +775,7 @@ func ExecuteAttempt(
 	if _, err := appendEvent(runstate.EventMovementSucceeded, map[string]any{
 		"approved_artifact_instance_ids": artifactIDs,
 		"identity_versions":              movementVersions,
-		"run_succeeded":                  true,
+		"run_succeeded":                  state.FinalMovements[attempt.MovementID],
 	}, "movement.succeeded"); err != nil {
 		return stopped(result, err)
 	}
@@ -886,12 +886,14 @@ func selectAttempt(
 
 func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 	movements := compiled.Movements()
+	execution := compiled.Execution()
 	result := make([]runstate.MovementSeed, len(movements))
 	for index, movement := range movements {
 		result[index] = runstate.MovementSeed{
 			ID:        runstate.MovementID(movement.ID),
 			Initial:   runstate.MovementPending,
 			RepoWrite: hasGrant(movement.Grants, "repo_write"),
+			Final:     movement.ID == execution.FinalMovementID,
 		}
 	}
 	return result

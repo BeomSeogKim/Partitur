@@ -309,6 +309,7 @@ func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
 		[]runstate.MovementSeed{{
 			ID:      "inspect",
 			Initial: runstate.MovementPending,
+			Final:   true,
 		}},
 		"run.e2e.replay",
 	)

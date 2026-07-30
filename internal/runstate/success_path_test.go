@@ -72,6 +72,29 @@ func TestReadOnlySuccessPathProjectsAllSevenEvents(t *testing.T) {
 	}
 }
 
+func TestRunSuccessPathsUseMutuallyExclusiveEvents(t *testing.T) {
+	// This subtest pins the projector's acceptance of the event shape, not a
+	// waived runtime path: it pre-records a candidate, whereas §8 gives an
+	// active waived run none until run.succeeded folds it in. Unit 2.2 PR D2
+	// owns the real waived path.
+	t.Run("projector accepts candidate-carrying run success after a non-final movement success", func(t *testing.T) {
+		state := completedAttemptStateWithFinality(t, false)
+		state = applyFixture(t, state, EventMovementSucceeded, movementSucceededPayload(false), attemptEnvelope)
+		state = applyFixture(t, state, EventRunSucceeded, runSucceededPayload(), nil)
+		if state.Run != RunSucceeded {
+			t.Fatalf("run = %s, want %s", state.Run, RunSucceeded)
+		}
+	})
+
+	t.Run("non-waived final movement carries the only run success transition", func(t *testing.T) {
+		state := completedAttemptStateWithFinality(t, true)
+		state = applyFixture(t, state, EventMovementSucceeded, movementSucceededPayload(true), attemptEnvelope)
+		if state.Run != RunSucceeded {
+			t.Fatalf("run = %s, want %s", state.Run, RunSucceeded)
+		}
+	})
+}
+
 func TestAdapterProbedGuards(t *testing.T) {
 	event := fixtureEvent(EventAdapterProbed, adapterProbedPayload(), attemptEnvelope)
 
@@ -291,6 +314,24 @@ func TestMovementSucceededGuards(t *testing.T) {
 	t.Run("run succeeded must match final movement", func(t *testing.T) {
 		state := completedAttemptState(t)
 		event := fixtureEvent(EventMovementSucceeded, movementSucceededPayload(false), attemptEnvelope)
+		assertInvalidRejected(t, state, event)
+	})
+
+	t.Run("waived score movement never carries the run transition", func(t *testing.T) {
+		state := completedAttemptStateWithFinality(t, false)
+		event := fixtureEvent(EventMovementSucceeded, movementSucceededPayload(false), attemptEnvelope)
+		next, err := Apply(state, event)
+		if err != nil {
+			t.Fatalf("waived movement.succeeded: %v", err)
+		}
+		if next.Run != RunRunning {
+			t.Fatalf("run = %s, want %s", next.Run, RunRunning)
+		}
+	})
+
+	t.Run("non-final movement cannot carry the run transition", func(t *testing.T) {
+		state := completedAttemptStateWithFinality(t, false)
+		event := fixtureEvent(EventMovementSucceeded, movementSucceededPayload(true), attemptEnvelope)
 		assertInvalidRejected(t, state, event)
 	})
 
@@ -564,8 +605,12 @@ func evaluatedAcceptanceState(t *testing.T) State {
 }
 
 func completedAttemptState(t *testing.T) State {
+	return completedAttemptStateWithFinality(t, true)
+}
+
+func completedAttemptStateWithFinality(t *testing.T, final bool) State {
 	t.Helper()
-	state := runningAttemptState(t)
+	state := runningAttemptStateWithFinality(t, final)
 	state = applyFixture(t, state, EventAdapterProbed, adapterProbedPayload(), attemptEnvelope)
 	state = applyFixture(t, state, EventArtifactRecorded, artifactRecordedPayload(), attemptEnvelope)
 	state = applyFixture(t, state, EventPerformerCompleted, map[string]any{
@@ -698,5 +743,20 @@ func movementSucceededPayload(runSucceeded bool) map[string]any {
 		"approved_artifact_instance_ids": []any{"report@a1"},
 		"identity_versions":              testIdentityVersions(),
 		"run_succeeded":                  runSucceeded,
+	}
+}
+
+func runSucceededPayload() map[string]any {
+	return map[string]any{
+		"candidate": map[string]any{
+			"candidate_id":                          "candidate-1",
+			"base_tree":                             "git-sha1:tree",
+			"result_tree":                           "git-sha1:tree",
+			"ordered_change_sets":                   []any{},
+			"contributors":                          []any{},
+			"candidate_composition_dependency_hash": "sha256:candidate-composition",
+		},
+		"waiver":            map[string]any{"reason": "fixture waiver"},
+		"identity_versions": testIdentityVersions(),
 	}
 }

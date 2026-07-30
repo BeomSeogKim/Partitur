@@ -271,6 +271,7 @@ func schedulerFromScore(state runstate.State, pinned *score.Score) recovery.Sche
 
 func movementSeed(pinned *score.Score) []runstate.MovementSeed {
 	movements := pinned.Movements()
+	execution := pinned.Execution()
 	seed := make([]runstate.MovementSeed, 0, len(movements))
 	for _, movement := range movements {
 		initial := runstate.MovementPending
@@ -280,6 +281,7 @@ func movementSeed(pinned *score.Score) []runstate.MovementSeed {
 		seed = append(seed, runstate.MovementSeed{
 			ID: runstate.MovementID(movement.ID), Initial: initial,
 			RepoWrite: hasGrant(movement.Grants, "repo_write"),
+			Final:     movement.ID == execution.FinalMovementID,
 		})
 	}
 	return seed
