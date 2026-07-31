@@ -38,7 +38,7 @@ func TestLiveAndResumeSuccessorSelectionJournalIdentity(t *testing.T) {
 		{name: "ordered fallback", charged: "fallback", kind: "rate_limited", wantPerformer: "backup-a"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			live := successorIdentityFixture(t, test.charged, test.kind)
+			live := successorIdentityFixture(t, test.charged, test.kind, "")
 			defer live.driver.Release()
 			attempt, err := workspace.CreateRecoveredAttempt(live.store, live.driver, live.input, "inspect")
 			if err != nil {
@@ -55,7 +55,7 @@ func TestLiveAndResumeSuccessorSelectionJournalIdentity(t *testing.T) {
 				t.Fatal("live fixture unexpectedly executed beyond performer.selected")
 			}
 
-			resumed := successorIdentityFixture(t, test.charged, test.kind)
+			resumed := successorIdentityFixture(t, test.charged, test.kind, "")
 			defer resumed.driver.Release()
 			pending := resumed.input.Projection.Scheduler.PendingSuccessor
 			if pending == nil {
@@ -83,6 +83,51 @@ func TestLiveAndResumeSuccessorSelectionJournalIdentity(t *testing.T) {
 				t.Fatalf("successor states = %s, %s; want STARTING", liveState, resumeState)
 			}
 		})
+	}
+}
+
+func TestRecoveryFinalMovementAcceptanceStartsAtCandidateResultTree(t *testing.T) {
+	const candidateTree = "git-sha1:final-candidate-result"
+	fixture := successorIdentityFixture(t, "quality_retry", "task_failed", candidateTree)
+	defer fixture.driver.Release()
+	const attemptID = runstate.AttemptID("attempt-final")
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	appendEvent := func(eventType runstate.EventType, payload any) {
+		t.Helper()
+		if _, err := fixture.driver.Append(runstate.Event{
+			RunID: fixture.runID, ScoreRevision: 1, MovementID: "inspect", AttemptID: attemptID, Type: eventType,
+			Payload: handlerPayload(t, payload),
+		}, faultpoint.ReceiptAddress("test.recovery_final_acceptance."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent(runstate.EventPerformerSelected, map[string]any{"reason": "quality_retry", "performer_id": "worker", "adapter_id": "missing-successor-identity-adapter", "model": "model"})
+	appendEvent(runstate.EventAttemptStarted, map[string]any{
+		"attempt_number":    2,
+		"adapter_process":   map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}},
+		"granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false},
+		"identity_versions": versions,
+	})
+	appendEvent(runstate.EventAdapterProbed, map[string]any{
+		"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false},
+		"enforcement":         map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true},
+		"negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions,
+	})
+	appendEvent(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false})
+	appendEvent(runstate.EventVerificationPassed, map[string]any{})
+
+	if err := appendAcceptanceStarted(context.Background(), HandlerContext{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID}, recovery.Action{Kind: recovery.ActionAppendAcceptanceStarted, AttemptID: attemptID}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recorded := state.ChangeSets[attemptID]; recorded {
+		t.Fatal("final verification attempt unexpectedly has a change set")
+	}
+	if got := state.Acceptances[attemptID].SubjectTree; got != candidateTree {
+		t.Fatalf("final acceptance subject tree = %q, want candidate result %q", got, candidateTree)
 	}
 }
 
@@ -373,7 +418,7 @@ func recoveryChangeSetFixture(t *testing.T) recoveryChangeSetFixtureState {
 	return recoveryChangeSetFixtureState{store: store, driver: authority, runID: started.RunID, attemptID: attempt.AttemptID}
 }
 
-func successorIdentityFixture(t *testing.T, charged, kind string) successorIdentityFixtureState {
+func successorIdentityFixture(t *testing.T, charged, kind, candidateResultTree string) successorIdentityFixtureState {
 	t.Helper()
 	root := t.TempDir()
 	scoreDocument := map[string]any{
@@ -429,8 +474,25 @@ func successorIdentityFixture(t *testing.T, charged, kind string) successorIdent
 	if err := started.Run.BindDriver(driver); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := started.Run.RecordZeroWriterCandidate(); err != nil {
-		t.Fatal(err)
+	if candidateResultTree == "" {
+		if _, err := started.Run.RecordZeroWriterCandidate(); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := driver.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: 1, Type: runstate.EventApplicationCandidateRecorded,
+			Payload: handlerPayload(t, map[string]any{
+				"candidate_id": "candidate-1", "base_tree": input.BaseTree, "result_tree": candidateResultTree,
+				"ordered_change_sets": []any{}, "contributors": []any{}, "candidate_composition_dependency_hash": "sha256:composition",
+				"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
+			}),
+		}, "test.application_candidate_recorded"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, event := range []runstate.Event{
 		{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementReady, Payload: handlerPayload(t, map[string]any{})},
@@ -885,6 +947,50 @@ func TestAppendCompositionTerminalKeepsEvidenceStateNeutralUntilTerminal(t *test
 	}
 	if state.Movements["write"] != runstate.MovementFailed {
 		t.Fatalf("terminal movement state = %s, want FAILED", state.Movements["write"])
+	}
+}
+
+func TestAppendCompositionTerminalReachesScopeTerminalPoint(t *testing.T) {
+	for _, scenario := range []struct {
+		name  string
+		scope string
+		point faultpoint.PointID
+	}{
+		{name: "movement", scope: "movement", point: faultpoint.PointCompositionMovementTerminal},
+		{name: "candidate", scope: "candidate", point: faultpoint.PointCompositionCandidateTerminal},
+	} {
+		scenario := scenario
+		t.Run(scenario.name, func(t *testing.T) {
+			probe := &recoveryPointProbe{}
+			store, authority := handlerStoreWithSeedsAndProbe(t, false, []runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}}, probe)
+			evidence := runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventCompositionFailed, Payload: handlerPayload(t, map[string]any{
+				"scope": scenario.scope, "target_id": "run-1", "composition_subject_hash": "sha256:subject",
+				"cause": "spawn_failed", "diagnostic": "fixture", "contributors": []any{},
+				"composition_algorithm_version": "1", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{"partitur/composition-subject": 2}},
+			})}
+			if scenario.scope == "movement" {
+				evidence.MovementID = "write"
+				evidence.Payload = handlerPayload(t, map[string]any{
+					"scope": scenario.scope, "target_id": "write", "composition_subject_hash": "sha256:subject",
+					"cause": "spawn_failed", "diagnostic": "fixture", "contributors": []any{},
+					"composition_algorithm_version": "1", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{"partitur/composition-subject": 2}},
+				})
+			}
+			appendHandlerEvent(t, store, evidence)
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence = journal.Events[len(journal.Events)-1]
+			if err := appendCompositionTerminal(context.Background(), HandlerContext{Store: store, Driver: authority, RunID: "run-1"}, recovery.Action{CompositionTerminal: &recovery.CompositionTerminal{
+				Scope: scenario.scope, TargetID: map[bool]string{true: "write", false: "run-1"}[scenario.scope == "movement"], Reason: "composition_failed", EvidenceEventID: evidence.EventID, ScoreRevision: evidence.ScoreRevision,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if len(probe.points) == 0 || probe.points[len(probe.points)-1] != scenario.point {
+				t.Fatalf("recovery probe points = %v, want final %q", probe.points, scenario.point)
+			}
+		})
 	}
 }
 

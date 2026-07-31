@@ -50,7 +50,11 @@ func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t 
 	if err != nil {
 		return err
 	}
-	return execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
+	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
+	if err != nil {
+		return err
+	}
+	err = execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
 		// C.1 cancellation is checked with the terminal append while the state
 		// lock and the existing lease predicate are both held.
 		if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
@@ -77,6 +81,11 @@ func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t 
 		_, err := transaction.At(address).Append(event)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	execution.Store.Reached(terminalPoint)
+	return nil
 }`,
 		`func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
 	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
@@ -92,6 +101,10 @@ func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t 
 			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
 			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
 	})
+	if err != nil {
+		return err
+	}
+	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
 	if err != nil {
 		return err
 	}
@@ -121,8 +134,11 @@ func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t 
 	if _, err := runstate.Apply(state, event); err != nil {
 		return err
 	}
-	_, err = execution.Driver.Append(event, address)
-	return err
+	if _, err := execution.Driver.Append(event, address); err != nil {
+		return err
+	}
+	execution.Store.Reached(terminalPoint)
+	return nil
 }`)
 }
 

@@ -16,8 +16,9 @@ import (
 func CaptureAndRecordChangeSet(
 	attempt *workspace.AttemptWorkspace,
 	authority *runstore.Driver,
+	probe faultpoint.Probe,
 ) (workspace.ChangeSet, error) {
-	return captureAndRecordChangeSet(attempt, authority, func(event runstate.Event) error {
+	return captureAndRecordChangeSet(attempt, authority, probe, func(event runstate.Event) error {
 		_, err := authority.Append(
 			event,
 			faultpoint.ReceiptAddress("attempt."+string(attempt.AttemptID)+".changeset.recorded"),
@@ -29,6 +30,7 @@ func CaptureAndRecordChangeSet(
 func captureAndRecordChangeSet(
 	attempt *workspace.AttemptWorkspace,
 	authority *runstore.Driver,
+	probe faultpoint.Probe,
 	appendEvent func(runstate.Event) error,
 ) (workspace.ChangeSet, error) {
 	if attempt == nil || authority == nil || appendEvent == nil {
@@ -53,6 +55,7 @@ func captureAndRecordChangeSet(
 	if err != nil {
 		return workspace.ChangeSet{}, err
 	}
+	probe.Reached(faultpoint.PointChangeSetCaptured)
 	event, err := attempt.ChangeSetRecordedEvent(changeSet)
 	if err != nil {
 		return workspace.ChangeSet{}, err
@@ -60,6 +63,7 @@ func captureAndRecordChangeSet(
 	if err := appendEvent(event); err != nil {
 		return workspace.ChangeSet{}, err
 	}
+	probe.Reached(faultpoint.PointChangeSetRecorded)
 	return changeSet, nil
 }
 
@@ -70,13 +74,14 @@ func completeAttemptVerification(
 	attempt *workspace.AttemptWorkspace,
 	writer bool,
 	authority *runstore.Driver,
+	probe faultpoint.Probe,
 	appendEvent func(runstate.EventType, any, string) (faultpoint.DurabilityReceipt, error),
 	classifyFailure func(successor.FailureCase) (runstate.Disposition, error),
 ) (verificationFailed bool, err error) {
 	if writer {
 		err = attempt.VerifyProtectedPaths()
 		if err == nil {
-			_, err = CaptureAndRecordChangeSet(attempt, authority)
+			_, err = CaptureAndRecordChangeSet(attempt, authority, probe)
 		}
 		if err == nil {
 			_, err = appendEvent(

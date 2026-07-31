@@ -136,7 +136,11 @@ func appendCompositionTerminal(_ context.Context, execution HandlerContext, acti
 	if err != nil {
 		return err
 	}
-	return execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
+	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
+	if err != nil {
+		return err
+	}
+	err = execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
 		// C.1 cancellation is checked with the terminal append while the state
 		// lock and the existing lease predicate are both held.
 		if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
@@ -163,6 +167,22 @@ func appendCompositionTerminal(_ context.Context, execution HandlerContext, acti
 		_, err := transaction.At(address).Append(event)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	execution.Store.Reached(terminalPoint)
+	return nil
+}
+
+func compositionTerminalPoint(scope string) (faultpoint.PointID, error) {
+	switch scope {
+	case "movement":
+		return faultpoint.PointCompositionMovementTerminal, nil
+	case "candidate":
+		return faultpoint.PointCompositionCandidateTerminal, nil
+	default:
+		return "", fmt.Errorf("recovery composition terminal has invalid scope %q", scope)
+	}
 }
 
 func recoveryPayload(value any) json.RawMessage {
@@ -241,6 +261,7 @@ func captureChangeSet(_ context.Context, execution HandlerContext, action recove
 	if err != nil {
 		return err
 	}
+	execution.Store.Reached(faultpoint.PointChangeSetCaptured)
 	attempt, ok := state.Attempts[action.AttemptID]
 	if !ok {
 		return fmt.Errorf("recovery change set attempt %q is absent", action.AttemptID)
@@ -263,8 +284,11 @@ func captureChangeSet(_ context.Context, execution HandlerContext, action recove
 	if err != nil {
 		return err
 	}
-	_, err = execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.change_set.recorded"))
-	return err
+	if _, err := execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.change_set.recorded")); err != nil {
+		return err
+	}
+	execution.Store.Reached(faultpoint.PointChangeSetRecorded)
+	return nil
 }
 
 func appendMovementReady(_ context.Context, execution HandlerContext, action recovery.Action) error {
@@ -323,13 +347,17 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 		if err != nil {
 			return err
 		}
+		subjectTree := input.BaseTree
+		if candidate := input.Projection.State.ApplicationCandidate; candidate != nil {
+			subjectTree = candidate.ResultTree
+		}
 		event, err := plan.StartEvent(runstate.Event{
 			RunID:         execution.Driver.RunID(),
 			ScoreRevision: input.Projection.State.ScoreHead.Revision,
 			MovementID:    attempt.MovementID,
 			PartID:        movement.PartID,
 			AttemptID:     action.AttemptID,
-		}, input.Projection.State.ApplicationCandidate.ResultTree)
+		}, subjectTree)
 		if err != nil {
 			return err
 		}
