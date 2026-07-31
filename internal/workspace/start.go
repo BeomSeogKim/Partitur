@@ -204,31 +204,46 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 			)
 		}
 	}
-	candidateValue := map[string]any{
-		"base_tree":           run.baseTreeQualified,
-		"result_tree":         run.baseTreeQualified,
-		"ordered_change_sets": []any{},
-	}
-	candidateID, err := canonical.Hash(
-		canonical.DomainCandidate,
-		candidateValue,
-	)
+	compositionHash, err := CandidateCompositionHash(run.baseTreeQualified, nil, "")
 	if err != nil {
 		return Candidate{}, err
 	}
-	compositionValue := map[string]any{
-		"composition_mode":              "identity",
-		"base_tree":                     run.baseTreeQualified,
-		"contributors":                  []any{},
-		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
+	return run.recordCandidate(run.baseTreeQualified, nil, nil, compositionHash)
+}
+
+// RecordComposedCandidate records a merged candidate. The contributor list is
+// full pre-dedup stable topological order. orderedChangeSets is the separately
+// content-deduplicated sequence actually applied by Compose.
+func (run *Run) RecordComposedCandidate(
+	resultTree string,
+	orderedChangeSets []string,
+	contributors []CompositionContributor,
+	environmentHash string,
+) (Candidate, error) {
+	if run == nil || len(contributors) == 0 {
+		return Candidate{}, errors.New("workspace: incomplete merged candidate")
 	}
-	compositionHash, err := canonical.Hash(
-		canonical.DomainCandidateComposition,
-		compositionValue,
-	)
+	compositionHash, err := CandidateCompositionHash(run.baseTreeQualified, contributors, environmentHash)
 	if err != nil {
 		return Candidate{}, err
 	}
+	return run.recordCandidate(resultTree, orderedChangeSets, contributors, compositionHash)
+}
+
+func (run *Run) recordCandidate(
+	resultTree string,
+	orderedChangeSets []string,
+	contributors []CompositionContributor,
+	compositionHash string,
+) (Candidate, error) {
+	if run == nil || resultTree == "" || compositionHash == "" {
+		return Candidate{}, errors.New("workspace: incomplete candidate")
+	}
+	candidateValue, err := candidatePayload(run.baseTreeQualified, resultTree, orderedChangeSets, contributors, compositionHash)
+	if err != nil {
+		return Candidate{}, err
+	}
+	candidateID := candidateValue["candidate_id"].(string)
 	versions, err := identityVersions(
 		canonical.DomainCandidate,
 		canonical.DomainCandidateComposition,
@@ -237,17 +252,17 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 		return Candidate{}, err
 	}
 	versions["composition"] = canonical.CompositionAlgorithmVersion
-	payload, err := json.Marshal(map[string]any{
-		"candidate_id":                          candidateID,
-		"base_tree":                             run.baseTreeQualified,
-		"result_tree":                           run.baseTreeQualified,
-		"ordered_change_sets":                   []any{},
-		"contributors":                          []any{},
-		"candidate_composition_dependency_hash": compositionHash,
-		"identity_versions":                     versions,
-	})
+	candidateValue["identity_versions"] = versions
+	payload, err := json.Marshal(candidateValue)
 	if err != nil {
 		return Candidate{}, err
+	}
+	commit := run.baseCommit
+	if resultTree != run.baseTreeQualified {
+		commit, err = candidateCommit(run.git, run.repositoryRoot, run.baseCommit, resultTree)
+		if err != nil {
+			return Candidate{}, err
+		}
 	}
 	var receipt faultpoint.DurabilityReceipt
 	event := runstate.Event{
@@ -261,6 +276,9 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 		state runstate.State,
 		authorized bool,
 	) error {
+		if authorized && state.CancelRequested {
+			return ErrCandidateCancelled
+		}
 		if authorized {
 			if _, err := runstate.Apply(state, event); err != nil {
 				return err
@@ -270,7 +288,7 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 			run.git,
 			run.repositoryRoot,
 			candidateRef(run.id),
-			run.baseCommit,
+			commit,
 			run.id,
 			receiptCandidateRef,
 			refExistingMustMatchObject,
@@ -286,10 +304,64 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 	return Candidate{
 		ID:                        candidateID,
 		BaseTree:                  run.baseTreeQualified,
-		ResultTree:                run.baseTreeQualified,
+		ResultTree:                resultTree,
 		CompositionDependencyHash: compositionHash,
 		Receipt:                   receipt,
 	}, nil
+}
+
+func candidatePayload(
+	baseTree string,
+	resultTree string,
+	orderedChangeSets []string,
+	contributors []CompositionContributor,
+	compositionHash string,
+) (map[string]any, error) {
+	if baseTree == "" || resultTree == "" || compositionHash == "" {
+		return nil, errors.New("workspace: incomplete candidate")
+	}
+	ordered := stringsToAny(orderedChangeSets)
+	candidateID, err := canonical.Hash(canonical.DomainCandidate, map[string]any{
+		"base_tree": baseTree, "result_tree": resultTree, "ordered_change_sets": ordered,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"candidate_id":                          candidateID,
+		"base_tree":                             baseTree,
+		"result_tree":                           resultTree,
+		"ordered_change_sets":                   ordered,
+		"contributors":                          candidateContributorsValue(contributors),
+		"candidate_composition_dependency_hash": compositionHash,
+	}, nil
+}
+
+func candidateCommit(git gitCommand, root, baseCommit, tree string) (string, error) {
+	commit, err := gitOutputWithEnvironment(git, root, []string{
+		"GIT_AUTHOR_NAME=Partitur", "GIT_AUTHOR_EMAIL=partitur@invalid", "GIT_AUTHOR_DATE=1970-01-01T00:00:00Z",
+		"GIT_COMMITTER_NAME=Partitur", "GIT_COMMITTER_EMAIL=partitur@invalid", "GIT_COMMITTER_DATE=1970-01-01T00:00:00Z",
+	}, "commit-tree", recoveryGitObject(tree), "-p", recoveryGitObject(baseCommit), "-m", "partitur: candidate")
+	if err != nil {
+		return "", fmt.Errorf("create candidate wrapper: %w", err)
+	}
+	return string(bytesTrimSpace(commit)), nil
+}
+
+func stringsToAny(values []string) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = value
+	}
+	return result
+}
+
+func candidateContributorsValue(contributors []CompositionContributor) []any {
+	result := make([]any, len(contributors))
+	for index, contributor := range contributors {
+		result[index] = map[string]any{"movement_id": string(contributor.MovementID), "change_set_id": contributor.ChangeSetID}
+	}
+	return result
 }
 
 // BindDriver makes every subsequent workspace mutation recheck this driver's

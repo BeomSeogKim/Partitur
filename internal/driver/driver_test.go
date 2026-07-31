@@ -183,18 +183,19 @@ func TestUnrepresentableWireBudgetInterruptsBeforeDriverAuthority(t *testing.T) 
 	assertNoDriverLease(t, preparation.RepositoryRoot, result.RunID)
 }
 
-func TestRunRefusesWriterMovementsBeforeWorkspaceStart(t *testing.T) {
+func TestRunStartsWriterMovementsBeforeAttemptExecution(t *testing.T) {
 	for _, waived := range []bool{false, true} {
 		t.Run(fmt.Sprintf("waived=%t", waived), func(t *testing.T) {
 			preparation := prepareRunnableFixture(t, writerSliceScore(waived), sliceCast())
 			starts := 0
+			startErr := errors.New("workspace start reached")
 			dependencies := testDependencies()
 			dependencies.workspaceStart = func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error) {
 				starts++
-				return workspace.StartResult{}, errors.New("workspace.Start must not be called")
+				return workspace.StartResult{}, startErr
 			}
 			result := run(context.Background(), preparation, func(runstate.RunID) error { return nil }, dependencies)
-			if result.RunID != "" || !errors.Is(result.Err, ErrWriterCompositionUnsupported) || starts != 0 {
+			if result.RunID != "" || !errors.Is(result.Err, startErr) || starts != 1 {
 				t.Fatalf("result=%+v workspace starts=%d", result, starts)
 			}
 		})
@@ -1655,23 +1656,58 @@ func fanInCleanFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *r
 }
 
 func fanInFixture(t *testing.T, conflict bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixtureWithWriterIDs(t, conflict, "ours", "theirs", nil, true, true)
+}
+
+func fanInWaivedFixture(t *testing.T, conflict bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixtureWithWriterIDs(t, conflict, "ours", "theirs", nil, true, false)
+}
+
+func fanInWaivedNoOpWriterFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixtureWithNoOpWriterTrees(t, false, "noop-a", "noop-b", nil, true, false, true)
+}
+
+func candidateFanInCleanFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixtureWithWriterIDs(t, false, "ours", "theirs", nil, false, true)
+}
+
+func candidateFanInConflictFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixtureWithWriterIDs(t, true, "ours", "theirs", nil, false, true)
+}
+
+func fanInFixtureWithWriterIDs(t *testing.T, conflict bool, firstID, secondID string, firstNeeds []any, waived, withTarget bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixtureWithNoOpWriterTrees(t, conflict, firstID, secondID, firstNeeds, waived, withTarget, false)
+}
+
+func fanInFixtureWithNoOpWriterTrees(t *testing.T, conflict bool, firstID, secondID string, firstNeeds []any, waived, withTarget, noOpWriterTrees bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
 	t.Helper()
-	document := writerSliceScore(true)
+	document := writerSliceScore(waived)
 	first := document["movements"].([]any)[0].(map[string]any)
-	first["id"] = "ours"
-	first["outputs"] = []any{map[string]any{"id": "ours-change-set", "kind": "change_set"}}
+	first["id"] = firstID
+	first["outputs"] = []any{map[string]any{"id": firstID + "-change-set", "kind": "change_set"}}
+	if firstNeeds != nil {
+		first["needs"] = firstNeeds
+	}
 	second := make(map[string]any, len(first))
 	for key, value := range first {
 		second[key] = value
 	}
-	second["id"] = "theirs"
-	second["outputs"] = []any{map[string]any{"id": "theirs-change-set", "kind": "change_set"}}
-	target := map[string]any{
-		"id": "target", "part": "reader", "needs": []any{"ours", "theirs"}, "grants": []any{"repo_read"},
-		"instruction": "inspect the composed base", "outputs": []any{map[string]any{"id": "target-report", "kind": "artifact"}},
-		"acceptance": map[string]any{"hard": []any{map[string]any{"id": "target-report-present", "artifact": "target-report"}}},
+	second["id"] = secondID
+	delete(second, "needs")
+	second["outputs"] = []any{map[string]any{"id": secondID + "-change-set", "kind": "change_set"}}
+	if withTarget {
+		target := map[string]any{
+			"id": "target", "part": "reader", "needs": []any{firstID, secondID}, "grants": []any{"repo_read"},
+			"instruction": "inspect the composed base", "outputs": []any{map[string]any{"id": "target-report", "kind": "artifact"}},
+			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "target-report-present", "artifact": "target-report"}}},
+		}
+		document["movements"] = []any{first, second, target}
+		if !waived {
+			document["verification"].(map[string]any)["final_movement"] = "target"
+		}
+	} else {
+		document["movements"] = []any{first, second}
 	}
-	document["movements"] = []any{first, second, target}
 	preparation := prepareRunnableFixture(t, document, sliceCast())
 	started, err := workspace.Start(preparation, faultpoint.Nop{})
 	if err != nil {
@@ -1723,12 +1759,20 @@ func fanInFixture(t *testing.T, conflict bool) (*validate.Preparation, *runstore
 	git("add", filepath.Base(theirsPath))
 	git("commit", "-m", "fan-in theirs")
 	theirs := "git-sha1:" + git("rev-parse", "HEAD^{tree}")
+	if noOpWriterTrees {
+		ours = input.BaseTree
+		theirs = input.BaseTree
+	}
 	appendSucceededWriter := func(movementID, attemptID, changeSetID, tree string) {
+		attemptStartedPayload := map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{"**"}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}}
+		if movementID == firstID && len(firstNeeds) != 0 {
+			attemptStartedPayload["base_composition_hash"] = "sha256:base-composition"
+		}
 		for _, event := range []runstate.Event{
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), Type: runstate.EventMovementReady, Payload: testPayload(t, map[string]any{})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), Type: runstate.EventMovementStarted, Payload: testPayload(t, map[string]any{})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "gpt-5.6-sol"})},
-			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAttemptStarted, Payload: testPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{"**"}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAttemptStarted, Payload: testPayload(t, attemptStartedPayload)},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAdapterProbed, Payload: testPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": true, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventPerformerCompleted, Payload: testPayload(t, map[string]any{"session_hint_stored": false})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventChangeSetRecorded, Payload: testPayload(t, map[string]any{"change_set_id": changeSetID, "base_tree": input.BaseTree, "result_tree": tree, "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(started.RunID) + "/attempts/" + attemptID + "/changeset", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
@@ -1747,8 +1791,13 @@ func fanInFixture(t *testing.T, conflict bool) (*validate.Preparation, *runstore
 			}
 		}
 	}
-	appendSucceededWriter("ours", "ours-attempt", "sha256:ours", ours)
-	appendSucceededWriter("theirs", "theirs-attempt", "sha256:theirs", theirs)
+	if len(firstNeeds) != 0 {
+		appendSucceededWriter(secondID, secondID+"-attempt", "sha256:"+secondID, theirs)
+		appendSucceededWriter(firstID, firstID+"-attempt", "sha256:"+firstID, ours)
+	} else {
+		appendSucceededWriter(firstID, firstID+"-attempt", "sha256:"+firstID, ours)
+		appendSucceededWriter(secondID, secondID+"-attempt", "sha256:"+secondID, theirs)
+	}
 	return preparation, store, authority, started, ours, theirs
 }
 

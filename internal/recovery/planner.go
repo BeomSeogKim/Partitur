@@ -416,7 +416,6 @@ const (
 	ActionMaterializeSuccessor       ActionKind = "materialize_selected_successor"
 	ActionRerunComposition           ActionKind = "rerun_deterministic_composition"
 	ActionComposeCandidate           ActionKind = "compose_application_candidate"
-	ActionAppendRunSucceeded         ActionKind = "append_run_succeeded"
 	ActionAppendBudgetFailure        ActionKind = "append_budget_exhaustion"
 )
 
@@ -839,13 +838,13 @@ func PlanBetweenUnit(projection Projection) Decision {
 			return decision
 		}
 	}
-	if !scheduler.GateWaived && state.ApplicationCandidate == nil && candidatePrecondition(state, scheduler) {
-		return action(CaseScheduler, ActionComposeCandidate, true)
-	}
 	if scheduler.GateWaived && waivedCompletion(state, scheduler) {
-		decision := action(CaseScheduler, ActionAppendRunSucceeded, true)
+		decision := action(CaseScheduler, ActionComposeCandidate, true)
 		decision.Action.CandidateCarrying = true
 		return decision
+	}
+	if !scheduler.GateWaived && state.ApplicationCandidate == nil && candidatePrecondition(state, scheduler) {
+		return action(CaseScheduler, ActionComposeCandidate, true)
 	}
 
 	// This invalid decision is an error sentinel for live callers: a compiled

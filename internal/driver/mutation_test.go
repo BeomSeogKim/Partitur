@@ -122,6 +122,36 @@ func TestMutationLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	assertDriverMutationKilled(t, "TestLiveFanInCreatesTargetAtPinnedBaseCommit", goEnvironment, "driver.go", "attempt, err = run.CreateAttemptAtBase(movement.ID, baseCommit)", "attempt, err = run.CreateAttempt(movement.ID)")
 }
 
+func TestMutationCandidateConflictFailsRunAtCandidateScope(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestComposeCandidateConflictFailsRunAtCandidateScope(t)
+	assertDriverMutationKilled(t, "TestComposeCandidateConflictFailsRunAtCandidateScope", goEnvironment, "candidate_composition.go", "return ErrCompositionTerminalized", "return errors.New(\"driver: injected non-terminal candidate composition failure\")")
+}
+
+func TestMutationCandidateCompositionRejectsDeclarationOrder(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestComposeCandidateUsesPinnedTopologicalDeclarationOrder(t)
+	assertDriverMutationKilled(t, "TestComposeCandidateUsesPinnedTopologicalDeclarationOrder", goEnvironment, "candidate_composition.go", `ordered, err := stableTopologicalMovementIDs(movements, included)
+	if err != nil {
+		return nil, err
+	}`, `ordered := make([]runstate.MovementID, 0, len(movements))
+	for _, movement := range movements {
+		ordered = append(ordered, runstate.MovementID(movement.ID))
+	}
+	slices.Sort(ordered)`)
+}
+
+func TestMutationWaivedNoOpWriterPinsCandidateRef(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestComposeCandidateWaivedNoOpWriterPinsBaseCandidate(t)
+	assertDriverMutationKilledAt(t, "TestComposeCandidateWaivedNoOpWriterPinsBaseCandidate", goEnvironment, filepath.Join("internal", "workspace", "recovery.go"), `if _, err := ensureRef(
+			run.git, run.repositoryRoot, candidateRef(run.id), commit, run.id,
+			receiptCandidateRef, refExistingMustMatchObject,
+		); err != nil {
+			return err
+		}`, "_ = commit // mutation: waived candidate ref omitted")
+}
+
 type mutationGoCaches struct {
 	moduleCache string
 	goPath      string
@@ -144,6 +174,11 @@ func mutationGoEnvironment(t *testing.T) mutationGoCaches {
 
 func assertDriverMutationKilled(t *testing.T, testName string, goEnvironment mutationGoCaches, sourceName, before, after string) {
 	t.Helper()
+	assertDriverMutationKilledAt(t, testName, goEnvironment, filepath.Join("internal", "driver", sourceName), before, after)
+}
+
+func assertDriverMutationKilledAt(t *testing.T, testName string, goEnvironment mutationGoCaches, sourceName, before, after string) {
+	t.Helper()
 	lockMutationSource(t)
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -155,7 +190,7 @@ func assertDriverMutationKilled(t *testing.T, testName string, goEnvironment mut
 	if err := copyMutationRepository(copyRoot, repositoryRoot); err != nil {
 		t.Fatal(err)
 	}
-	sourcePath := filepath.Join(copyRoot, "internal", "driver", sourceName)
+	sourcePath := filepath.Join(copyRoot, sourceName)
 	contents, err := os.ReadFile(sourcePath)
 	if err != nil {
 		t.Fatal(err)

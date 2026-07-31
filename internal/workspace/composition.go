@@ -258,6 +258,51 @@ func MovementCompositionHash(
 	})
 }
 
+// CandidateCompositionHash returns the A.4 candidate-composition identity.
+// Its merge input deliberately retains every writer in stable topological
+// order; Compose performs the separate content deduplication that selects the applied
+// change-set sequence for the candidate identity.
+func CandidateCompositionHash(
+	baseTree string,
+	contributors []CompositionContributor,
+	environmentHash string,
+) (string, error) {
+	if baseTree == "" {
+		return "", errors.New("candidate composition identity is incomplete")
+	}
+	if len(contributors) == 0 {
+		if environmentHash != "" {
+			return "", errors.New("identity composition forbids an environment hash")
+		}
+		return canonical.Hash(canonical.DomainCandidateComposition, map[string]any{
+			"composition_mode":              "identity",
+			"base_tree":                     baseTree,
+			"contributors":                  []any{},
+			"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
+		})
+	}
+	if environmentHash == "" {
+		return "", errors.New("merge composition requires an environment hash")
+	}
+	value := make([]any, len(contributors))
+	for index, contributor := range contributors {
+		if contributor.MovementID == "" || contributor.ChangeSetID == "" {
+			return "", errors.New("merge composition contributor is incomplete")
+		}
+		value[index] = map[string]any{
+			"movement_id":   string(contributor.MovementID),
+			"change_set_id": contributor.ChangeSetID,
+		}
+	}
+	return canonical.Hash(canonical.DomainCandidateComposition, map[string]any{
+		"composition_mode":              "merge",
+		"base_tree":                     baseTree,
+		"contributors":                  value,
+		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
+		"composition_environment_hash":  environmentHash,
+	})
+}
+
 func compositionEnvironmentHash(environment CompositionEnvironment) (string, error) {
 	argv := make([]any, len(environment.Argv))
 	for index, invocation := range environment.Argv {

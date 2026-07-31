@@ -1101,9 +1101,8 @@ func TestRCResume019MatchesLiveMovementSuccessPayload(t *testing.T) {
 // shape the projector now accepts, and nothing more. It is deliberately NOT a
 // waived-runtime test: it pre-records application_candidate.recorded, whereas §8
 // gives an active waived run no recorded candidate -- the candidate is folded
-// into run.succeeded. No live or recovery surface reaches a waived score today,
-// because selectSlice refuses one for want of a final movement. Unit 2.2 PR D2
-// owns the real waived path and its ActionAppendRunSucceeded handler.
+// into run.succeeded. The live and recovery scheduler reach waived completion
+// through ActionComposeCandidate; this test does not pin that runtime path.
 func TestProjectorAcceptsRunSucceededAfterNonFinalMovementSucceeded(t *testing.T) {
 	store, driver := handlerStoreWithSeeds(t, true, []runstate.MovementSeed{{
 		ID: "write", Initial: runstate.MovementPending,

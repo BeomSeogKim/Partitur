@@ -32,7 +32,6 @@ import (
 
 var (
 	ErrAttemptSelectionInconsistent = errors.New("attempt selection is inconsistent with the pinned score or resolved cast.")
-	ErrWriterCompositionUnsupported = errors.New("repo_write movements require unsupported candidate composition pending §5")
 	ErrCapability                   = errors.New("capability_unavailable")
 	ErrEnforcement                  = errors.New("enforcement_unavailable")
 )
@@ -114,9 +113,6 @@ func run(
 		dependencies.now == nil || dependencies.newID == nil ||
 		dependencies.workspaceStart == nil {
 		return Result{Err: errors.New("driver: incomplete run")}
-	}
-	if HasWriterMovement(preparation.Score) {
-		return Result{Err: ErrWriterCompositionUnsupported}
 	}
 	startResult, err := dependencies.workspaceStart(preparation, dependencies.probe)
 	if err != nil {
@@ -274,15 +270,21 @@ func liveRunLoop(
 				return attemptResult
 			}
 		case recovery.ActionComposeCandidate:
-			if _, err := run.RecordZeroWriterCandidate(); err != nil {
+			if err := ComposeCandidate(store, authority, input, input.Projection.Scheduler.RemainingTime, dependencies.now, dependencies.newID); err != nil {
+				if errors.Is(err, ErrCompositionCancelled) {
+					if err := control.Execute(ctx); err != nil {
+						if errors.Is(err, runstate.ErrSweepUnverifiable) {
+							return halted(result, "sweep_unverifiable", err)
+						}
+						return stopped(result, err)
+					}
+					return Result{RunID: result.RunID, Outcome: OutcomeCancelled}
+				}
+				if errors.Is(err, ErrCompositionTerminalized) {
+					return Result{RunID: result.RunID, Outcome: OutcomeFailed, Reason: "composition_terminal"}
+				}
 				return stopped(result, err)
 			}
-		case recovery.ActionAppendRunSucceeded:
-			if err := workspace.AppendWaivedRunSucceeded(authority, input, "run.succeeded"); err != nil {
-				return stopped(result, err)
-			}
-			result.Outcome = OutcomeSucceeded
-			return result
 		case recovery.ActionAppendBudgetFailure, recovery.ActionAppendRunFailed:
 			return liveBudgetExhaustion(result, store, authority, input, decision.Action)
 		default:
@@ -958,17 +960,6 @@ func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 		}
 	}
 	return result
-}
-
-// HasWriterMovement reports whether the compiled score requires repository
-// writing, which remains unsupported until §5 candidate composition lands.
-func HasWriterMovement(compiled *score.Score) bool {
-	for _, movement := range compiled.Movements() {
-		if slices.Contains(movement.Grants, "repo_write") {
-			return true
-		}
-	}
-	return false
 }
 
 func effectiveGrants(

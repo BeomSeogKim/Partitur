@@ -22,6 +22,7 @@ var (
 	ErrAttemptIDCollision    = errors.New("attempt id collision")
 	ErrMovementNotFound      = errors.New("movement is not in the pinned score")
 	ErrWriterMovement        = errors.New("zero-writer candidate has a writer movement")
+	ErrCandidateCancelled    = errors.New("candidate composition cancelled before record")
 	ErrReadOnlyRequired      = errors.New("movement grants repo_write")
 	ErrProtectedPathChanged  = errors.New("protected path changed")
 	ErrReadOnlyChanged       = errors.New("read-only worktree changed")
@@ -39,7 +40,7 @@ type StartResult struct {
 	Run     *Run
 }
 
-// Candidate is the recorded zero-writer application candidate.
+// Candidate is the recorded application candidate.
 type Candidate struct {
 	ID                        string
 	BaseTree                  string

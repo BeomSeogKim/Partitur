@@ -19,12 +19,52 @@ import (
 // AppendWaivedRunSucceeded materializes the identity candidate and waiver in
 // the waived terminal event. A waived run never records a candidate first.
 func AppendWaivedRunSucceeded(
+	store *runstore.Store,
 	driver *runstore.Driver,
 	input runstore.RunInput,
 	address faultpoint.ReceiptAddress,
 ) error {
-	if driver == nil {
-		return errors.New("workspace: waived completion requires driver")
+	if input.Score != nil {
+		for _, movement := range input.Score.Movements() {
+			if hasGrant(movement.Grants, "repo_write") {
+				return fmt.Errorf("workspace: waived identity completion cannot compose writer movement %q", movement.ID)
+			}
+		}
+	}
+	return appendWaivedRunSucceeded(store, driver, input, input.BaseTree, nil, nil, "", address)
+}
+
+// AppendWaivedRunSucceededComposed folds a composed candidate into the waived
+// terminal event. It deliberately shares the candidate identity construction
+// with the non-waived recording path while omitting application_candidate.recorded.
+func AppendWaivedRunSucceededComposed(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RunInput,
+	resultTree string,
+	orderedChangeSets []string,
+	contributors []CompositionContributor,
+	environmentHash string,
+	address faultpoint.ReceiptAddress,
+) error {
+	if resultTree == "" || len(contributors) == 0 {
+		return errors.New("workspace: incomplete waived composed candidate")
+	}
+	return appendWaivedRunSucceeded(store, driver, input, resultTree, orderedChangeSets, contributors, environmentHash, address)
+}
+
+func appendWaivedRunSucceeded(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RunInput,
+	resultTree string,
+	orderedChangeSets []string,
+	contributors []CompositionContributor,
+	environmentHash string,
+	address faultpoint.ReceiptAddress,
+) error {
+	if store == nil || driver == nil {
+		return errors.New("workspace: waived completion requires store and driver")
 	}
 	if input.Score == nil {
 		return errors.New("workspace: waived completion requires pinned score")
@@ -40,9 +80,6 @@ func AppendWaivedRunSucceeded(
 		return errors.New("workspace: waived completion requires waiver reason")
 	}
 	for _, movement := range input.Score.Movements() {
-		if hasGrant(movement.Grants, "repo_write") {
-			return fmt.Errorf("workspace: waived completion cannot compose writer movement %q", movement.ID)
-		}
 		state := input.Projection.State.Movements[runstate.MovementID(movement.ID)]
 		if state == runstate.MovementSucceeded {
 			continue
@@ -52,16 +89,7 @@ func AppendWaivedRunSucceeded(
 		}
 		return fmt.Errorf("workspace: waived completion movement %q is incomplete", movement.ID)
 	}
-	candidateID, err := canonical.Hash(canonical.DomainCandidate, map[string]any{
-		"base_tree": input.BaseTree, "result_tree": input.BaseTree, "ordered_change_sets": []any{},
-	})
-	if err != nil {
-		return err
-	}
-	compositionHash, err := canonical.Hash(canonical.DomainCandidateComposition, map[string]any{
-		"composition_mode": "identity", "base_tree": input.BaseTree, "contributors": []any{},
-		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
-	})
+	compositionHash, err := CandidateCompositionHash(input.BaseTree, contributors, environmentHash)
 	if err != nil {
 		return err
 	}
@@ -70,23 +98,59 @@ func AppendWaivedRunSucceeded(
 		return err
 	}
 	versions["composition"] = canonical.CompositionAlgorithmVersion
+	candidate, err := candidatePayload(input.BaseTree, resultTree, orderedChangeSets, contributors, compositionHash)
+	if err != nil {
+		return err
+	}
 	payload, err := json.Marshal(map[string]any{
-		"candidate": map[string]any{
-			"candidate_id": candidateID, "base_tree": input.BaseTree, "result_tree": input.BaseTree,
-			"ordered_change_sets": []any{}, "contributors": []any{},
-			"candidate_composition_dependency_hash": compositionHash,
-		},
+		"candidate":         candidate,
 		"waiver":            map[string]any{"reason": execution.WaiverReason},
 		"identity_versions": versions,
 	})
 	if err != nil {
 		return err
 	}
-	_, err = driver.Append(runstate.Event{
+	event := runstate.Event{
 		RunID: driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
 		Type: runstate.EventRunSucceeded, Payload: payload,
-	}, address)
-	return err
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return err
+	}
+	run := &Run{
+		id: driver.RunID(), repositoryRoot: store.RepositoryRoot(), scoreRevision: input.Projection.State.ScoreHead.Revision,
+		baseCommit: recoveryGitObject(input.BaseCommit), baseTreeQualified: input.BaseTree,
+		movements: input.Score.Movements(), store: store, git: git,
+	}
+	if err := run.BindDriver(driver); err != nil {
+		return err
+	}
+	commit := run.baseCommit
+	if resultTree != input.BaseTree {
+		commit, err = candidateCommit(run.git, run.repositoryRoot, run.baseCommit, resultTree)
+		if err != nil {
+			return err
+		}
+	}
+	return run.mutate(func(transaction *runstore.Txn, state runstate.State, authorized bool) error {
+		if authorized && state.CancelRequested {
+			return ErrCandidateCancelled
+		}
+		if authorized {
+			if _, err := runstate.Apply(state, event); err != nil {
+				return err
+			}
+		}
+		if _, err := ensureRef(
+			run.git, run.repositoryRoot, candidateRef(run.id), commit, run.id,
+			receiptCandidateRef, refExistingMustMatchObject,
+		); err != nil {
+			return err
+		}
+		_, err := transaction.At(address).Append(event)
+		return err
+	})
 }
 
 // RecordRecoveredZeroWriterCandidate records the same identity candidate as
@@ -117,6 +181,36 @@ func RecordRecoveredZeroWriterCandidate(
 		return Candidate{}, err
 	}
 	return run.RecordZeroWriterCandidate()
+}
+
+// RecordRecoveredComposedCandidate records the non-identity candidate from
+// run-owned recovery input after a deterministic candidate composition.
+func RecordRecoveredComposedCandidate(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RunInput,
+	resultTree string,
+	orderedChangeSets []string,
+	contributors []CompositionContributor,
+	environmentHash string,
+) (Candidate, error) {
+	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" || input.BaseTree == "" {
+		return Candidate{}, errors.New("workspace: incomplete composed candidate recovery input")
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return Candidate{}, err
+	}
+	run := &Run{
+		id: driver.RunID(), repositoryRoot: store.RepositoryRoot(),
+		scoreRevision: input.Projection.State.ScoreHead.Revision,
+		baseCommit:    recoveryGitObject(input.BaseCommit), baseTreeQualified: input.BaseTree,
+		movements: input.Score.Movements(), store: store, git: git,
+	}
+	if err := run.BindDriver(driver); err != nil {
+		return Candidate{}, err
+	}
+	return run.RecordComposedCandidate(resultTree, orderedChangeSets, contributors, environmentHash)
 }
 
 // CreateRecoveredAttempt uses the same attempt-workspace construction as the

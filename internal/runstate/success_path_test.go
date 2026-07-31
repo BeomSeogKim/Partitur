@@ -75,8 +75,8 @@ func TestReadOnlySuccessPathProjectsAllSevenEvents(t *testing.T) {
 func TestRunSuccessPathsUseMutuallyExclusiveEvents(t *testing.T) {
 	// This subtest pins the projector's acceptance of the event shape, not a
 	// waived runtime path: it pre-records a candidate, whereas §8 gives an
-	// active waived run none until run.succeeded folds it in. Unit 2.2 PR D2
-	// owns the real waived path.
+	// active waived run none until run.succeeded folds it in. This subtest does
+	// not pin the live or recovery waived scheduler path.
 	t.Run("projector accepts candidate-carrying run success after a non-final movement success", func(t *testing.T) {
 		state := completedAttemptStateWithFinality(t, false)
 		state = applyFixture(t, state, EventMovementSucceeded, movementSucceededPayload(false), attemptEnvelope)
