@@ -5795,7 +5795,7 @@ through production journal appends and carries a `ReceiptAddress`. In production
 points are emitted by the launch trampoline, at the marker-held and gate-released seams for adapter
 and criterion launches, and by the cancellation oracle at the sessions-swept, snapshot-quarantined,
 execution-stopped, fence-decided, run-cancelled, and lease-removed seams;
-no prepare, quiesce, or supersession boundary point is emitted. Production installs only the no-op probe. The E.2 `EdgeID` values are declared in Go and
+no prepare, quiesce, or supersession boundary point is emitted. Production installs a no-op; a `faultprobe` harness process with both inherited descriptor environment variables identifying FIFOs installs a blocking probe. A process with that probe exits at a reached fault point if either control channel breaks. The E.2 `EdgeID` values are declared in Go and
 mechanically cross-checked against the catalog, but no production path carries one yet.
 
 The paragraph above records current implementation status. The obligations below state what must be

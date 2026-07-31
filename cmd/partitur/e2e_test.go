@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,39 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func TestHarnessMarkerRejectsUntaggedBinary(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "partitur")
+	build := exec.Command("go", "build", "-o", output, "./cmd/partitur")
+	build.Dir = root
+	build.Env = os.Environ()
+	if data, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build untagged partitur: %v\n%s", err, data)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, output, "run")
+	command.Env = append(os.Environ(), "PARTITUR_FAULTPOINT_HARNESS=1")
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err = command.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatal("untagged harness binary did not reject the harness marker before timeout")
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 2 {
+		t.Fatalf("untagged harness binary error = %v, want exit 2; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "faultpoint harness requires a binary built with -tags=faultprobe") {
+		t.Fatalf("untagged harness binary stdout=%q stderr=%q, want clear build-tag failure", stdout.String(), stderr.String())
+	}
 }
 
 // The whole chain, end to end: a cancellation that lands while the adapter is genuinely
@@ -954,7 +988,7 @@ func buildE2EBinary(
 ) string {
 	t.Helper()
 	output := filepath.Join(outputDirectory, name)
-	command := exec.Command("go", "build", "-o", output, "./cmd/"+name)
+	command := exec.Command("go", "build", "-tags=faultprobe", "-o", output, "./cmd/"+name)
 	command.Dir = root
 	command.Env = os.Environ()
 	if data, err := command.CombinedOutput(); err != nil {

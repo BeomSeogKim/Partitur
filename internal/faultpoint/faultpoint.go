@@ -2,15 +2,6 @@
 // Appendix E.
 package faultpoint
 
-import (
-	"fmt"
-	"io"
-	"os"
-	"strconv"
-	"sync"
-	"syscall"
-)
-
 // EdgeID identifies an ordered-step edge in DESIGN Appendix E.2.
 type EdgeID string
 
@@ -119,8 +110,7 @@ type Mutation struct {
 	Destination string
 }
 
-// DurabilityReceipt is returned after the mutation's required durability
-// boundary and before the next protocol action, as defined by DESIGN Appendix E.1.
+// DurabilityReceipt is the Appendix E.1 receipt type.
 type DurabilityReceipt struct {
 	Address  ReceiptAddress
 	Mutation Mutation
@@ -131,68 +121,8 @@ type Probe interface {
 	Reached(PointID)
 }
 
-// Nop is the production no-op probe.
+// Nop implements a no-op Probe. See DESIGN Appendix E.
 type Nop struct{}
 
 // Reached implements Probe.
 func (Nop) Reached(PointID) {}
-
-const (
-	probeNotifyFDEnv  = "PARTITUR_FAULTPOINT_NOTIFY_FD"
-	probeReleaseFDEnv = "PARTITUR_FAULTPOINT_RELEASE_FD"
-)
-
-// ProbeFromEnvironment returns the harness probe carried by inherited file
-// descriptors, or Nop when no harness is installed. See DESIGN Appendix E.
-func ProbeFromEnvironment() Probe {
-	notifyFD, notifyOK := probeFDFromEnvironment(probeNotifyFDEnv)
-	releaseFD, releaseOK := probeFDFromEnvironment(probeReleaseFDEnv)
-	if !notifyOK || !releaseOK {
-		return Nop{}
-	}
-	return NewPipeProbe(
-		os.NewFile(uintptr(notifyFD), probeNotifyFDEnv),
-		os.NewFile(uintptr(releaseFD), probeReleaseFDEnv),
-	)
-}
-
-func probeFDFromEnvironment(name string) (int, bool) {
-	value := os.Getenv(name)
-	fd, err := strconv.Atoi(value)
-	if err != nil || fd < 3 {
-		return 0, false
-	}
-	var stat syscall.Stat_t
-	if err := syscall.Fstat(fd, &stat); err != nil || stat.Mode&syscall.S_IFMT != syscall.S_IFIFO {
-		return 0, false
-	}
-	return fd, true
-}
-
-// NewPipeProbe reports each reached boundary then waits for the harness.
-func NewPipeProbe(notify io.Writer, release io.Reader) Probe {
-	if notify == nil || release == nil {
-		return Nop{}
-	}
-	return &pipeProbe{notify: notify, release: release}
-}
-
-type pipeProbe struct {
-	notify  io.Writer
-	release io.Reader
-	mu      sync.Mutex
-}
-
-func (probe *pipeProbe) Reached(point PointID) {
-	probe.mu.Lock()
-	defer probe.mu.Unlock()
-	if _, err := fmt.Fprintln(probe.notify, point, os.Getpid()); err != nil {
-		return
-	}
-	var release [1]byte
-	if _, err := io.ReadFull(probe.release, release[:]); err != nil {
-		// A broken harness control channel must not let a stopped mutator
-		// continue past its fault point.
-		os.Exit(1)
-	}
-}

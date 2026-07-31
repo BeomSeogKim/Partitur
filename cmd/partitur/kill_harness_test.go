@@ -481,6 +481,7 @@ func killAtPoint(
 	command := exec.Command(binary, arguments...)
 	command.Dir = repository
 	command.Env = replaceEnvironment(environment, map[string]string{
+		"PARTITUR_FAULTPOINT_HARNESS":    "1",
 		"PARTITUR_FAULTPOINT_NOTIFY_FD":  "9",
 		"PARTITUR_FAULTPOINT_RELEASE_FD": "10",
 	})
