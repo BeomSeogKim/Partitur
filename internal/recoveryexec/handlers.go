@@ -42,7 +42,6 @@ var namedUnimplementedActionOwners = map[recovery.ActionKind]string{
 	// RC-RESUME-041 must hand decision_resume materialization to C.4.
 	recovery.ActionSelectDecisionResume:      "4.1",
 	recovery.ActionAppendFinalGateFailure:    "4.1",
-	recovery.ActionAppendEvaluationCompleted: "4.1",
 	recovery.ActionAppendHumanGateRequest:    "4.1",
 	recovery.ActionAppendGateRejectedFailure: "4.1",
 }
@@ -73,6 +72,7 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionAppendMovementReady:        appendMovementReady,
 		recovery.ActionAppendMovementStarted:      appendMovementStarted,
 		recovery.ActionAppendAcceptanceStarted:    appendAcceptanceStarted,
+		recovery.ActionAppendEvaluationCompleted:  appendAcceptanceEvaluationCompleted,
 		recovery.ActionSelectInitialPerformer:     selectInitialPerformer,
 		recovery.ActionResumeCriterion:            resumeCriterion,
 		recovery.ActionRealizeRecordedDisposition: realizeRecordedDisposition,
@@ -454,7 +454,7 @@ func resumeCriterion(_ context.Context, execution HandlerContext, action recover
 		if err != nil {
 			return err
 		}
-		_, err = acceptance.EvaluateStarted(plan, acceptance.Evaluation{
+		_, err = acceptance.EvaluateStartedCriterion(plan, acceptance.Evaluation{
 			RunID: execution.Driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
 			MovementID: attempt.MovementID, PartID: movement.PartID, AttemptID: action.AttemptID,
 			SubjectTree:        acceptanceState.SubjectTree,
@@ -470,10 +470,63 @@ func resumeCriterion(_ context.Context, execution HandlerContext, action recover
 			Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
 				return execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.acceptance."+string(event.Type)))
 			},
-		})
+		}, string(action.CriterionID))
 		return err
 	}
 	return fmt.Errorf("recovery criterion movement %q is absent from pinned score", attempt.MovementID)
+}
+
+func appendAcceptanceEvaluationCompleted(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" {
+		return errors.New("recovery acceptance completion requires store, driver, and attempt")
+	}
+	input, err := execution.Store.LoadRunInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	attempt, ok := input.Projection.State.Attempts[action.AttemptID]
+	if !ok {
+		return fmt.Errorf("recovery acceptance completion attempt %q is absent", action.AttemptID)
+	}
+	acceptanceState, ok := input.Projection.State.Acceptances[action.AttemptID]
+	if !ok || !acceptanceState.Started {
+		return fmt.Errorf("recovery acceptance completion for %q is absent", action.AttemptID)
+	}
+	for _, movement := range input.Score.Movements() {
+		if runstate.MovementID(movement.ID) != attempt.MovementID {
+			continue
+		}
+		plan, err := acceptance.Compile(movement)
+		if err != nil {
+			return err
+		}
+		outcomes := make([]acceptance.CriterionOutcome, 0, len(acceptanceState.PlannedCriterionIDs))
+		for _, criterionID := range acceptanceState.PlannedCriterionIDs {
+			criterion, ok := acceptanceState.Criteria[criterionID]
+			if !ok || !criterion.Completed || criterion.Outcome != "PASS" {
+				return fmt.Errorf("recovery acceptance criterion %q is not PASS", criterionID)
+			}
+			outcomes = append(outcomes, acceptance.CriterionOutcome{CriterionID: string(criterionID), Outcome: criterion.Outcome})
+		}
+		_, err = acceptance.CompleteStarted(plan, acceptance.Evaluation{
+			RunID: execution.Driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			MovementID: attempt.MovementID, PartID: movement.PartID, AttemptID: action.AttemptID,
+			SubjectTree: acceptanceState.SubjectTree,
+			LookupArtifact: func(id runstate.ArtifactInstanceID) (runstate.ArtifactRecord, bool, error) {
+				state, err := execution.Driver.State()
+				if err != nil {
+					return runstate.ArtifactRecord{}, false, err
+				}
+				record, exists := state.Artifacts[id]
+				return record, exists, nil
+			},
+			Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
+				return execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.acceptance."+string(event.Type)))
+			},
+		}, outcomes)
+		return err
+	}
+	return fmt.Errorf("recovery acceptance completion movement %q is absent from pinned score", attempt.MovementID)
 }
 
 func realizeRecordedDisposition(_ context.Context, execution HandlerContext, action recovery.Action) error {
