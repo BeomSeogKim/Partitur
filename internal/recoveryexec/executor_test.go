@@ -1110,29 +1110,6 @@ func appendBudgetExhaustedInterval(t *testing.T, store *runstore.Store, driver *
 }
 
 func TestDefaultAcceptanceHandlersAppendToRealStore(t *testing.T) {
-	t.Run("criterion recovery records error then acceptance failure", func(t *testing.T) {
-		store, driver := handlerStore(t, true)
-		advanceHandlerAcceptance(t, driver, true)
-		state, err := driver.State()
-		if err != nil {
-			t.Fatal(err)
-		}
-		input := recovery.Input{Projection: recovery.Projection{State: state, CurrentHeadAttempt: handlerAttempt(state)}}
-		executor := &Executor{Store: store, Driver: driver}
-		_, err = executor.execute(context.Background(), input, recovery.Decision{CaseID: recovery.CaseIncompleteCriterion, Action: &recovery.Action{
-			Kind: recovery.ActionRecoverIncompleteCriterion, AttemptID: "attempt-1", CriterionID: "criterion-1", FailureReason: "criterion_errored",
-			Steps: []recovery.ActionStep{recovery.StepSynthesizeCriterionError, recovery.StepClassifyAcceptanceFailure},
-		}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		replayed, err := driver.State()
-		if err != nil || replayed.Acceptances["attempt-1"].Criteria["criterion-1"].Outcome != "ERROR" || replayed.Attempts["attempt-1"].State != runstate.AttemptFailed {
-			t.Fatalf("state=%+v error=%v", replayed, err)
-		}
-		assertLastEventType(t, store, runstate.EventAcceptanceFailed)
-	})
-
 	t.Run("acceptance completion records attempt then movement", func(t *testing.T) {
 		store, driver := handlerStore(t, true)
 		advanceHandlerAcceptance(t, driver, false)
@@ -1393,10 +1370,16 @@ func TestExecutorRecoversIncompleteCriterionAfterSweep(t *testing.T) {
 				t.Fatalf("acceptance failure payload = %s error=%v", last.Payload, err)
 			}
 			if test.subject == recovery.SubjectMatched {
+				if last.Type != runstate.EventAcceptanceFailed {
+					t.Fatalf("final journal event type = %s, want %s", last.Type, runstate.EventAcceptanceFailed)
+				}
 				criterion := journal.Events[len(journal.Events)-2]
 				var criterionPayload map[string]any
 				if err := json.Unmarshal(criterion.Payload, &criterionPayload); err != nil {
 					t.Fatal(err)
+				}
+				if criterionPayload["outcome"] != "ERROR" {
+					t.Fatalf("criterion completion outcome = %v, want ERROR", criterionPayload["outcome"])
 				}
 				for _, absent := range []string{"exit_code", "duration_ms", "output_ref"} {
 					if _, ok := criterionPayload[absent]; ok {
@@ -1405,6 +1388,31 @@ func TestExecutorRecoversIncompleteCriterionAfterSweep(t *testing.T) {
 				}
 				if criterionPayload["error_detail"] != "recovered_without_observed_completion" {
 					t.Fatalf("criterion completion payload = %s", criterion.Payload)
+				}
+				state, err := driver.State()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state.Attempts["attempt-1"].State != runstate.AttemptFailed {
+					t.Fatalf("replayed attempt state = %s, want %s", state.Attempts["attempt-1"].State, runstate.AttemptFailed)
+				}
+				if state.Acceptances["attempt-1"].Criteria["criterion-1"].Outcome != "ERROR" {
+					t.Fatalf("replayed criterion outcome = %s, want ERROR", state.Acceptances["attempt-1"].Criteria["criterion-1"].Outcome)
+				}
+			}
+			if test.subject == recovery.SubjectMismatched {
+				state, err := driver.State()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state.Attempts["attempt-1"].State != runstate.AttemptFailed {
+					t.Fatalf("replayed attempt state = %s, want %s", state.Attempts["attempt-1"].State, runstate.AttemptFailed)
+				}
+				if last.Type != runstate.EventAcceptanceFailed {
+					t.Fatalf("final journal event type = %s, want %s", last.Type, runstate.EventAcceptanceFailed)
+				}
+				if _, ok := payload["failed_criterion_id"]; ok {
+					t.Fatalf("acceptance failure unexpectedly carries failed_criterion_id: %s", last.Payload)
 				}
 			}
 		})
