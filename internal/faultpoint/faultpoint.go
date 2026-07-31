@@ -190,5 +190,9 @@ func (probe *pipeProbe) Reached(point PointID) {
 		return
 	}
 	var release [1]byte
-	_, _ = io.ReadFull(probe.release, release[:])
+	if _, err := io.ReadFull(probe.release, release[:]); err != nil {
+		// A broken harness control channel must not let a stopped mutator
+		// continue past its fault point.
+		os.Exit(1)
+	}
 }
