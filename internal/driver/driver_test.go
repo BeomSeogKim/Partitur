@@ -206,7 +206,7 @@ func TestCaptureAndRecordChangeSetPinsRefBeforeOneNoOpEvent(t *testing.T) {
 	preparation, store, authority, started, attempt := writerCaptureFixture(t)
 	defer authority.Release()
 	appends := 0
-	first, err := captureAndRecordChangeSet(attempt, authority, func(event runstate.Event) error {
+	first, err := captureAndRecordChangeSet(attempt, authority, faultpoint.Nop{}, func(event runstate.Event) error {
 		journal, err := store.ReadJournal(started.RunID)
 		if err != nil {
 			return err
@@ -236,7 +236,7 @@ func TestCaptureAndRecordChangeSetPinsRefBeforeOneNoOpEvent(t *testing.T) {
 	if first.BaseTree != first.ResultTree {
 		t.Fatalf("no-op change set trees = %q and %q, want equal", first.BaseTree, first.ResultTree)
 	}
-	second, err := CaptureAndRecordChangeSet(attempt, authority)
+	second, err := CaptureAndRecordChangeSet(attempt, authority, faultpoint.Nop{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +280,7 @@ func TestWriterVerificationRejectsProtectedPathWithoutAttestation(t *testing.T) 
 		attempt,
 		true,
 		authority,
+		faultpoint.Nop{},
 		writerVerificationAppender(t, authority, started.RunID, attempt),
 		grantDeniedClassifier(t),
 	)
@@ -332,6 +333,7 @@ func TestWriterVerificationRecordsAttestationAfterProtectedPathCheck(t *testing.
 		attempt,
 		true,
 		authority,
+		faultpoint.Nop{},
 		writerVerificationAppender(t, authority, started.RunID, attempt),
 		grantDeniedClassifier(t),
 	)

@@ -501,17 +501,114 @@ func TestBoundaryPointIDsAreSemanticAndUnique(t *testing.T) {
 		PointExecuteAdapterSwept,
 		PointExecuteIntervalStopped,
 		PointExecuteOutcomeRecorded,
+		PointAcceptanceFailureRecorded,
 		PointLifecycleAttemptCompleted,
 		PointLifecycleMovementSucceeded,
 		PointLifecycleMovementFailed,
 		PointLifecycleRunFailed,
+		PointChangeSetCaptured,
+		PointChangeSetRecorded,
+		PointCompositionMovementEvidence,
+		PointCompositionMovementTerminal,
+		PointCompositionCandidateEvidence,
+		PointCompositionCandidateTerminal,
 	}
-	seen := map[PointID]bool{}
+	declared := make([]string, len(points))
+	for index, point := range points {
+		declared[index] = string(point)
+	}
+	declaredSet := uniquePointIDs(t, "Boundary PointID list", declared)
+	sourceSet := uniquePointIDs(t, "Go PointID constants", pointIDsFromPackageSource(t))
+	requireSamePointIDs(t, "Boundary PointID list", declaredSet, "Go PointID constants", sourceSet)
+}
+
+func pointIDsFromPackageSource(t *testing.T) []string {
+	t.Helper()
+
+	pkg := parsePackageSource(t)
+	var points []string
+	for _, file := range pkg.Files {
+		for _, declaration := range file.Decls {
+			constants, ok := declaration.(*ast.GenDecl)
+			if !ok || constants.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range constants.Specs {
+				values := spec.(*ast.ValueSpec)
+				hasPointName := false
+				for _, name := range values.Names {
+					if strings.HasPrefix(name.Name, "Point") {
+						hasPointName = true
+					}
+				}
+				pointType, ok := values.Type.(*ast.Ident)
+				if !ok || pointType.Name != "PointID" {
+					if hasPointName {
+						t.Fatalf("Point-prefixed const declaration must have explicit type PointID")
+					}
+					continue
+				}
+				if len(values.Names) != len(values.Values) {
+					t.Fatalf("PointID const declaration has %d names and %d values", len(values.Names), len(values.Values))
+				}
+				for index, expression := range values.Values {
+					if !strings.HasPrefix(values.Names[index].Name, "Point") {
+						t.Fatalf("PointID const name %q must start with Point", values.Names[index].Name)
+					}
+					literal, ok := expression.(*ast.BasicLit)
+					if !ok || literal.Kind != token.STRING {
+						t.Fatalf("PointID const value must be a string literal, got %T", expression)
+					}
+					point, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						t.Fatalf("parse PointID const value %q: %v", literal.Value, err)
+					}
+					points = append(points, point)
+				}
+			}
+		}
+	}
+	if len(points) == 0 {
+		t.Fatal("package source contains no typed PointID constants")
+	}
+	return points
+}
+
+func uniquePointIDs(t *testing.T, source string, points []string) map[string]bool {
+	t.Helper()
+
+	seen := make(map[string]bool, len(points))
 	for _, point := range points {
-		if point == "" || seen[point] {
-			t.Fatalf("empty or duplicate point id %q", point)
+		if point == "" {
+			t.Fatalf("%s contains an empty point ID", source)
+		}
+		if seen[point] {
+			t.Fatalf("%s contains duplicate point ID %q", source, point)
 		}
 		seen[point] = true
+	}
+	return seen
+}
+
+func requireSamePointIDs(t *testing.T, leftName string, left map[string]bool, rightName string, right map[string]bool) {
+	t.Helper()
+
+	var onlyInLeft []string
+	for point := range left {
+		if !right[point] {
+			onlyInLeft = append(onlyInLeft, point)
+		}
+	}
+	var onlyInRight []string
+	for point := range right {
+		if !left[point] {
+			onlyInRight = append(onlyInRight, point)
+		}
+	}
+	sort.Strings(onlyInLeft)
+	sort.Strings(onlyInRight)
+	if len(onlyInLeft) != 0 || len(onlyInRight) != 0 {
+		t.Fatalf("point ID catalog mismatch: only in %s: %q; only in %s: %q", leftName, onlyInLeft, rightName, onlyInRight)
 	}
 }
 

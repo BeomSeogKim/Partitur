@@ -181,7 +181,7 @@ func ComposeCandidate(
 			}),
 		}
 		terminal := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, Type: runstate.EventRunFailed, Payload: mustCompositionPayload(map[string]any{"reason": "composition_unresolvable"})}
-		if err := appendCandidateCompositionTerminal(authority, stopped, evidence, terminal, "composition.conflicted", "run.failed.composition_unresolvable"); err != nil {
+		if err := appendCandidateCompositionTerminal(store, authority, stopped, evidence, terminal, "composition.conflicted", "run.failed.composition_unresolvable"); err != nil {
 			return err
 		}
 		return ErrCompositionTerminalized
@@ -199,13 +199,13 @@ func ComposeCandidate(
 	}
 	evidence := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, Type: runstate.EventCompositionFailed, Payload: mustCompositionPayload(payload)}
 	terminal := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, Type: runstate.EventRunFailed, Payload: mustCompositionPayload(map[string]any{"reason": "composition_failed"})}
-	if err := appendCandidateCompositionTerminal(authority, stopped, evidence, terminal, "composition.failed", "run.failed.composition_failed"); err != nil {
+	if err := appendCandidateCompositionTerminal(store, authority, stopped, evidence, terminal, "composition.failed", "run.failed.composition_failed"); err != nil {
 		return err
 	}
 	return ErrCompositionTerminalized
 }
 
-func appendCandidateCompositionTerminal(authority *runstore.Driver, stopped, evidence, terminal runstate.Event, evidenceAddress, terminalAddress faultpoint.ReceiptAddress) error {
+func appendCandidateCompositionTerminal(store *runstore.Store, authority *runstore.Driver, stopped, evidence, terminal runstate.Event, evidenceAddress, terminalAddress faultpoint.ReceiptAddress) error {
 	return authority.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
 		if state.CancelRequested {
 			return ErrCompositionCancelled
@@ -225,11 +225,15 @@ func appendCandidateCompositionTerminal(authority *runstore.Driver, stopped, evi
 		if err != nil {
 			return err
 		}
+		store.Reached(faultpoint.PointCompositionCandidateEvidence)
 		terminal.CausationID = evidenceReceipt.Mutation.EventID
 		if _, err := runstate.Apply(next, terminal); err != nil {
 			return err
 		}
-		_, err = transaction.At(terminalAddress).Append(terminal)
-		return err
+		if _, err := transaction.At(terminalAddress).Append(terminal); err != nil {
+			return err
+		}
+		store.Reached(faultpoint.PointCompositionCandidateTerminal)
+		return nil
 	})
 }

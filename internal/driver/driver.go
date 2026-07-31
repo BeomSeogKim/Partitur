@@ -449,7 +449,6 @@ func ExecuteAttempt(
 	if !filepath.IsAbs(trampoline) {
 		return interrupted(result, errors.New("trampoline path is not absolute"))
 	}
-
 	grants := effectiveGrants(movement, policy)
 	brief, globalInvariants, err := executeBrief(
 		execution.Score.Execution(),
@@ -754,6 +753,7 @@ func ExecuteAttempt(
 		attempt,
 		hasGrant(movement.Grants, "repo_write"),
 		authority,
+		dependencies.probe,
 		appendEvent,
 		classifyFailure,
 	)
@@ -867,11 +867,19 @@ func ExecuteAttempt(
 	if err != nil {
 		return interrupted(result, err)
 	}
-	if _, err := appendEvent(runstate.EventMovementSucceeded, map[string]any{
+	payload := map[string]any{
 		"approved_artifact_instance_ids": artifactIDs,
 		"identity_versions":              movementVersions,
 		"run_succeeded":                  state.FinalMovements[attempt.MovementID],
-	}, "movement.succeeded"); err != nil {
+	}
+	if state.RepoWriteMovements[attempt.MovementID] {
+		changeSet, ok := state.ChangeSets[attempt.AttemptID]
+		if !ok {
+			return interrupted(result, errors.New("driver: repo-write attempt has no recorded change set"))
+		}
+		payload["approved_change_set_id"] = changeSet.ChangeSetID
+	}
+	if _, err := appendEvent(runstate.EventMovementSucceeded, payload, "movement.succeeded"); err != nil {
 		return stopped(result, err)
 	}
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {

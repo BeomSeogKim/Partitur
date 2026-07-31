@@ -21,7 +21,7 @@ import (
 func TestMutationLiveMovementCompositionTerminalSerializesCancellationAfterEvidence(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestLiveMovementCompositionTerminalSerializesCancellationAfterEvidence(t)
-	assertDriverMutationKilled(t, "TestLiveMovementCompositionTerminalSerializesCancellationAfterEvidence", goEnvironment, "movement_composition.go", `func appendMovementCompositionTerminal(authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
+	assertDriverMutationKilled(t, "TestLiveMovementCompositionTerminalSerializesCancellationAfterEvidence", goEnvironment, "movement_composition.go", `func appendMovementCompositionTerminal(store *runstore.Store, authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
 	return authority.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
 		if state.CancelRequested {
 			return ErrCompositionCancelled
@@ -42,6 +42,7 @@ func TestMutationLiveMovementCompositionTerminalSerializesCancellationAfterEvide
 		if err != nil {
 			return err
 		}
+		store.Reached(faultpoint.PointCompositionMovementEvidence)
 		if afterEvidence != nil {
 			afterEvidence()
 		}
@@ -49,11 +50,14 @@ func TestMutationLiveMovementCompositionTerminalSerializesCancellationAfterEvide
 		if _, err := runstate.Apply(next, terminal); err != nil {
 			return err
 		}
-		_, err = transaction.At(terminalAddress).Append(terminal)
-		return err
+		if _, err := transaction.At(terminalAddress).Append(terminal); err != nil {
+			return err
+		}
+		store.Reached(faultpoint.PointCompositionMovementTerminal)
+		return nil
 	})
 }`,
-		`func appendMovementCompositionTerminal(authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
+		`func appendMovementCompositionTerminal(store *runstore.Store, authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
 	state, err := authority.State()
 	if err != nil {
 		return err
@@ -81,6 +85,7 @@ func TestMutationLiveMovementCompositionTerminalSerializesCancellationAfterEvide
 	if err != nil {
 		return err
 	}
+	store.Reached(faultpoint.PointCompositionMovementEvidence)
 	if afterEvidence != nil {
 		afterEvidence()
 	}
@@ -89,8 +94,11 @@ func TestMutationLiveMovementCompositionTerminalSerializesCancellationAfterEvide
 	if _, err := runstate.Apply(state, terminal); err != nil {
 		return err
 	}
-	_, err = authority.Append(terminal, terminalAddress)
-	return err
+	if _, err := authority.Append(terminal, terminalAddress); err != nil {
+		return err
+	}
+	store.Reached(faultpoint.PointCompositionMovementTerminal)
+	return nil
 }`)
 }
 

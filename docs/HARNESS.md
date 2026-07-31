@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches thirteen E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches sixteen E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -177,9 +177,9 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `launch.criterion.recorded_to_gate` | not reached by this gate's cuts | §7 criterion launch; E.2 | No external-criterion launch fixture |
 | `execute.adapter_swept_to_interval_stopped` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `execute.interval_stopped_to_outcome` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
-| `change_set.captured_to_recorded` | not reached by this gate's cuts | §5; B.3; C.2 `RC-RESUME-016`; E.2 | No change-set capture fixture |
-| `composition.movement_evidence_to_terminal` | not reached by this gate's cuts | B.3; C.1 `RC-RESUME-011`; E.2 | No movement-composition terminal fixture for either evidence reason |
-| `composition.candidate_evidence_to_terminal` | not reached by this gate's cuts | B.3; C.1 `RC-RESUME-011`; E.2 | No candidate-composition terminal fixture for either evidence reason |
+| `change_set.captured_to_recorded` | reachable | §5; B.3; C.2 `RC-RESUME-016`; E.2 | `integration/composition` writer-change-set fixture kills the real writer capture at both endpoints |
+| `composition.movement_evidence_to_terminal` | reachable | B.3; C.1 `RC-RESUME-011`; E.2 | `integration/composition` has conflict-verdict and no-verdict Git-failure fan-in fixtures; each kills both sides of the durable movement composition evidence/terminal cut |
+| `composition.candidate_evidence_to_terminal` | reachable | B.3; C.1 `RC-RESUME-011`; E.2 | `integration/composition` has conflict-verdict and no-verdict Git-failure candidate fixtures; each kills both sides of the durable candidate composition evidence/terminal cut |
 | `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |
 | `lifecycle.movement_failed_to_run_failed` | reachable | §7 lifecycle; E.2 | Real `run` subprocess matrix uses a terminal adapter-failure fixture at both endpoints; before `resume`, the crashed journal and projection prove the durable movement-failed/run-failed cut window |
 | `acceptance.criterion_error_to_failed` | not reached by this gate's cuts | §7 acceptance; E.2 | No criterion-error fixture |

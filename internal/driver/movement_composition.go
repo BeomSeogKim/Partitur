@@ -199,7 +199,7 @@ func composeMovementBaseWithAfterEvidence(store *runstore.Store, authority *runs
 	if result.Conflict != nil {
 		evidence := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, MovementID: movementID, Type: runstate.EventCompositionConflicted, Payload: mustCompositionPayload(map[string]any{"scope": "movement", "target_id": string(movementID), "composition_subject_hash": subject, "contributors": contributorsValue, "conflicted_paths": stringsToAny(result.Conflict.Paths), "composition_algorithm_version": fmt.Sprint(canonical.CompositionAlgorithmVersion), "identity_versions": versions})}
 		terminal := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, MovementID: movementID, Type: runstate.EventMovementFailed, Payload: mustCompositionPayload(map[string]any{"reason": "composition_unresolvable", "run_failed": false})}
-		if err := appendMovementCompositionTerminal(authority, stopped, evidence, terminal, "execution.composition.stopped", "composition.conflicted", "movement.failed.composition_unresolvable", afterEvidence); err != nil {
+		if err := appendMovementCompositionTerminal(store, authority, stopped, evidence, terminal, "execution.composition.stopped", "composition.conflicted", "movement.failed.composition_unresolvable", afterEvidence); err != nil {
 			return MovementBase{}, err
 		}
 		return MovementBase{}, ErrCompositionTerminalized
@@ -210,7 +210,7 @@ func composeMovementBaseWithAfterEvidence(store *runstore.Store, authority *runs
 	}
 	evidence := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, MovementID: movementID, Type: runstate.EventCompositionFailed, Payload: mustCompositionPayload(payload)}
 	terminal := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, MovementID: movementID, Type: runstate.EventMovementFailed, Payload: mustCompositionPayload(map[string]any{"reason": "composition_failed", "run_failed": false})}
-	if err := appendMovementCompositionTerminal(authority, stopped, evidence, terminal, "execution.composition.stopped", "composition.failed", "movement.failed.composition_failed", afterEvidence); err != nil {
+	if err := appendMovementCompositionTerminal(store, authority, stopped, evidence, terminal, "execution.composition.stopped", "composition.failed", "movement.failed.composition_failed", afterEvidence); err != nil {
 		return MovementBase{}, err
 	}
 	return MovementBase{}, ErrCompositionTerminalized
@@ -229,7 +229,7 @@ func appendCompositionStopped(authority *runstore.Driver, stopped runstate.Event
 	})
 }
 
-func appendMovementCompositionTerminal(authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
+func appendMovementCompositionTerminal(store *runstore.Store, authority *runstore.Driver, stopped, evidence, terminal runstate.Event, stoppedAddress, evidenceAddress, terminalAddress faultpoint.ReceiptAddress, afterEvidence func()) error {
 	return authority.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
 		if state.CancelRequested {
 			return ErrCompositionCancelled
@@ -250,6 +250,7 @@ func appendMovementCompositionTerminal(authority *runstore.Driver, stopped, evid
 		if err != nil {
 			return err
 		}
+		store.Reached(faultpoint.PointCompositionMovementEvidence)
 		if afterEvidence != nil {
 			afterEvidence()
 		}
@@ -257,8 +258,11 @@ func appendMovementCompositionTerminal(authority *runstore.Driver, stopped, evid
 		if _, err := runstate.Apply(next, terminal); err != nil {
 			return err
 		}
-		_, err = transaction.At(terminalAddress).Append(terminal)
-		return err
+		if _, err := transaction.At(terminalAddress).Append(terminal); err != nil {
+			return err
+		}
+		store.Reached(faultpoint.PointCompositionMovementTerminal)
+		return nil
 	})
 }
 

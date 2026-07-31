@@ -370,7 +370,7 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 		{
 			name:     "composition evidence awaiting terminal",
 			input:    withCompositionTerminal(baseInput()),
-			wantCase: CaseCompositionTerminal, wantKind: ActionAppendCompositionTerminal,
+			wantCase: CaseCompositionTerminal, wantKind: ActionAppendCompositionTerminal, replan: true,
 			adjacent: baseInput(),
 		},
 		{

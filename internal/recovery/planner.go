@@ -557,7 +557,7 @@ func Plan(input Input) Decision {
 		return decision
 	}
 	if terminal, ok := firstCompositionTerminal(input.Projection.CompositionTerminals); ok {
-		decision := action(CaseCompositionTerminal, ActionAppendCompositionTerminal, false)
+		decision := action(CaseCompositionTerminal, ActionAppendCompositionTerminal, true)
 		decision.Action.CompositionTerminal = &terminal
 		return decision
 	}
