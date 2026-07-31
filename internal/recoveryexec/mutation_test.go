@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
 )
 
 func TestMutationRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *testing.T) {
@@ -142,27 +144,16 @@ func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t 
 }`)
 }
 
-type mutationGoCaches struct {
-	moduleCache string
-	goPath      string
-	buildCache  string
-}
-
-func mutationGoEnvironment(t *testing.T) mutationGoCaches {
+func mutationGoEnvironment(t *testing.T) mutationtest.GoEnvironment {
 	t.Helper()
-	command := exec.Command("go", "env", "GOMODCACHE", "GOPATH", "GOCACHE")
-	output, err := command.Output()
+	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := strings.Fields(string(output))
-	if len(values) != 3 {
-		t.Fatalf("go env returned %d cache values, want 3", len(values))
-	}
-	return mutationGoCaches{moduleCache: values[0], goPath: values[1], buildCache: values[2]}
+	return environment
 }
 
-func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment mutationGoCaches, sourceName, before, after string) {
+func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName, before, after string) {
 	t.Helper()
 	lockMutationSource(t)
 	_, currentFile, _, ok := runtime.Caller(0)
@@ -227,15 +218,13 @@ func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment m
 		t.Fatalf("mutation was not applied to %s before the child test ran", sourcePath)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	command := exec.CommandContext(ctx, "go", "test", ".", "-run", "^"+testName+"$", "-count=1")
-	command.Dir = filepath.Join(copyRoot, "internal", "recoveryexec")
-	command.Env = append(os.Environ(),
-		"PARTITUR_MUTATION_CHILD=1",
-		"GOMODCACHE="+goEnvironment.moduleCache,
-		"GOPATH="+goEnvironment.goPath,
-		"GOCACHE="+goEnvironment.buildCache,
-	)
-	output, runErr := command.CombinedOutput()
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         filepath.Join(copyRoot, "internal", "recoveryexec"),
+		Package:     ".",
+		TestPattern: testName,
+		TestNames:   []string{testName},
+		Environment: goEnvironment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1"),
+	})
 	cancel()
 	if err := copyFile(sourcePath, backupPath); err != nil {
 		t.Fatal(err)
@@ -244,20 +233,13 @@ func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment m
 	if output, err := cmp.CombinedOutput(); err != nil {
 		t.Fatalf("mutation restore comparison failed: %v\n%s", err, output)
 	}
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("mutation non-result: child test timed out\n%s", output)
-	}
-	if runErr == nil {
-		t.Fatalf("mutation survived: %s still passed after %q became %q", testName, before, after)
-	}
-	if strings.Contains(string(output), "[build failed]") {
-		t.Fatalf("mutation non-result: child build failed\n%s", output)
-	}
-	if strings.Contains(string(output), "panic:") {
-		t.Fatalf("mutation non-result: child panicked\n%s", output)
-	}
-	if !strings.Contains(string(output), "--- FAIL: "+testName) {
-		t.Fatalf("mutation non-result: child did not fail the targeted assertion: %v\n%s", runErr, output)
+	switch result.Outcome {
+	case mutationtest.Killed:
+		return
+	case mutationtest.Survived:
+		t.Fatalf("mutation survived: %s still passed after %q became %q\n%s", testName, before, after, result.Diagnostic())
+	default:
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
 	}
 }
 

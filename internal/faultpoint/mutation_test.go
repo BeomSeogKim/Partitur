@@ -6,15 +6,20 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
 )
 
 func TestMutationBoundaryPointIDsRequireCompleteRegistry(t *testing.T) {
+	goEnvironment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve faultpoint test source directory")
@@ -40,22 +45,21 @@ func TestMutationBoundaryPointIDsRequireCompleteRegistry(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", ".", "-run", "^TestBoundaryPointIDsAreSemanticAndUnique$", "-count=1")
-	command.Dir = filepath.Join(copyRoot, "internal", "faultpoint")
-	command.Env = os.Environ()
-	output, runErr := command.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("mutation non-result: child test timed out\n%s", output)
-	}
-	if runErr == nil {
-		t.Fatal("mutation survived: unregistered PointID constant did not fail the completeness lock")
-	}
-	if strings.Contains(string(output), "[build failed]") {
-		t.Fatalf("mutation non-result: child build failed\n%s", output)
-	}
-	if !strings.Contains(string(output), "--- FAIL: TestBoundaryPointIDsAreSemanticAndUnique") {
-		t.Fatalf("mutation non-result: child missed the completeness assertion: %v\n%s", runErr, output)
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         filepath.Join(copyRoot, "internal", "faultpoint"),
+		Package:     ".",
+		TestPattern: "TestBoundaryPointIDsAreSemanticAndUnique",
+		TestNames:   []string{"TestBoundaryPointIDsAreSemanticAndUnique"},
+		Environment: goEnvironment.ChildEnvironment(os.Environ()),
+	})
+	cancel()
+	switch result.Outcome {
+	case mutationtest.Killed:
+		return
+	case mutationtest.Survived:
+		t.Fatalf("mutation survived: unregistered PointID constant did not fail the completeness lock\n%s", result.Diagnostic())
+	default:
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
 	}
 }
 
