@@ -85,11 +85,10 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRefuseResume:               refuseResume,
 		recovery.ActionStabilizeUnjournaledLaunch: stabilizeUnjournaledLaunch,
 		recovery.ActionRemoveUnjournaledLaunch:    removeUnjournaledLaunch,
-		recovery.ActionComposeCandidate:           composeZeroWriterCandidate,
+		recovery.ActionComposeCandidate:           composeCandidate,
 		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
 		recovery.ActionCaptureChangeSet:           captureChangeSet,
 		recovery.ActionExecuteCancellation:        executeCancellation,
-		recovery.ActionAppendRunSucceeded:         appendRunSucceeded,
 		recovery.ActionAppendCompositionTerminal:  appendCompositionTerminal,
 		recovery.ActionRerunComposition:           rerunMovementComposition,
 	}
@@ -102,33 +101,22 @@ func executeCancellation(ctx context.Context, execution HandlerContext, _ recove
 	return cancellation.Execute(ctx, execution.Store, execution.RunID)
 }
 
-func composeZeroWriterCandidate(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+func composeCandidate(_ context.Context, execution HandlerContext, _ recovery.Action) error {
 	if execution.Store == nil || execution.Driver == nil || execution.RunID == "" {
-		return errors.New("recovery executor requires store, driver, and run id for zero-writer candidate")
+		return errors.New("recovery executor requires store, driver, and run id for candidate composition")
 	}
 	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
 		return err
 	}
-	_, err = workspace.RecordRecoveredZeroWriterCandidate(execution.Store, execution.Driver, input)
+	err = driver.ComposeCandidate(execution.Store, execution.Driver, input, input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)
+	if errors.Is(err, driver.ErrCompositionTerminalized) {
+		return nil
+	}
+	if errors.Is(err, driver.ErrCompositionCancelled) {
+		return ErrRecoveryReplan
+	}
 	return err
-}
-
-func appendRunSucceeded(_ context.Context, execution HandlerContext, _ recovery.Action) error {
-	if execution.Store == nil {
-		return errors.New("recovery executor requires store for waived completion")
-	}
-	if execution.Driver == nil {
-		return errors.New("recovery executor requires driver for waived completion")
-	}
-	if execution.RunID == "" {
-		return errors.New("recovery executor requires run id for waived completion")
-	}
-	input, err := execution.Store.LoadRunInput(execution.RunID)
-	if err != nil {
-		return err
-	}
-	return workspace.AppendWaivedRunSucceeded(execution.Driver, input, "recovery.run.succeeded")
 }
 
 func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
@@ -186,11 +174,21 @@ func recoveryPayload(value any) json.RawMessage {
 }
 
 func rerunMovementComposition(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.MovementID == "" {
-		return errors.New("recovery movement composition rerun requires store, driver, and movement")
+	if execution.Store == nil || execution.Driver == nil {
+		return errors.New("recovery composition rerun requires store and driver")
 	}
 	input, err := execution.Store.LoadRunInput(execution.RunID)
 	if err != nil {
+		return err
+	}
+	if action.MovementID == "" {
+		err = driver.ComposeCandidate(execution.Store, execution.Driver, input, input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)
+		if errors.Is(err, driver.ErrCompositionTerminalized) {
+			return nil
+		}
+		if errors.Is(err, driver.ErrCompositionCancelled) {
+			return ErrRecoveryReplan
+		}
 		return err
 	}
 	_, err = driver.PrepareMovementBase(execution.Store, execution.Driver, input, action.MovementID, input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)

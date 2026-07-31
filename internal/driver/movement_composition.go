@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -30,10 +29,55 @@ type MovementBase struct {
 	Hash   string
 }
 
+// stableTopologicalMovementIDs orders a score subset with declaration order as
+// the tie breaker. MovementView.Needs is canonicalized and is therefore not an
+// ordering source. Both movement-base and candidate composition use it before
+// handing contributors to workspace.Compose.
+func stableTopologicalMovementIDs(movements []score.MovementView, included map[runstate.MovementID]bool) ([]runstate.MovementID, error) {
+	byID := make(map[runstate.MovementID]score.MovementView, len(movements))
+	for _, movement := range movements {
+		byID[runstate.MovementID(movement.ID)] = movement
+	}
+	indegree := make(map[runstate.MovementID]int, len(included))
+	children := make(map[runstate.MovementID][]runstate.MovementID, len(included))
+	for id := range included {
+		movement, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("driver: dependency movement %q is absent from pinned score", id)
+		}
+		for _, need := range movement.Needs {
+			dependency := runstate.MovementID(need)
+			if included[dependency] {
+				indegree[id]++
+				children[dependency] = append(children[dependency], id)
+			}
+		}
+	}
+	ordered := make([]runstate.MovementID, 0, len(included))
+	emitted := make(map[runstate.MovementID]bool, len(included))
+	for len(ordered) != len(included) {
+		selected := runstate.MovementID("")
+		for _, movement := range movements {
+			id := runstate.MovementID(movement.ID)
+			if included[id] && indegree[id] == 0 && !emitted[id] {
+				selected = id
+				break
+			}
+		}
+		if selected == "" {
+			return nil, errors.New("driver: dependency graph is not acyclic")
+		}
+		ordered = append(ordered, selected)
+		emitted[selected] = true
+		for _, child := range children[selected] {
+			indegree[child]--
+		}
+	}
+	return ordered, nil
+}
+
 // movementCompositionContributors bridges each dependency's approved result
-// through its producing attempt id. The pinned score's declaration order is
-// the tie breaker in this stable topological sort; MovementView.Needs is
-// canonicalized and is therefore not an ordering source.
+// through its producing attempt id.
 func movementCompositionContributors(compiled *score.Score, state runstate.State, target runstate.MovementID) ([]workspace.CompositionContributor, error) {
 	if compiled == nil || target == "" {
 		return nil, errors.New("driver: incomplete movement composition input")
@@ -70,34 +114,9 @@ func movementCompositionContributors(compiled *score.Score, state runstate.State
 			return nil, err
 		}
 	}
-	indegree := make(map[runstate.MovementID]int, len(closure))
-	children := make(map[runstate.MovementID][]runstate.MovementID, len(closure))
-	for id := range closure {
-		for _, need := range byID[id].Needs {
-			dependency := runstate.MovementID(need)
-			if closure[dependency] {
-				indegree[id]++
-				children[dependency] = append(children[dependency], id)
-			}
-		}
-	}
-	ordered := make([]runstate.MovementID, 0, len(closure))
-	for len(ordered) != len(closure) {
-		selected := runstate.MovementID("")
-		for _, movement := range movements {
-			id := runstate.MovementID(movement.ID)
-			if closure[id] && indegree[id] == 0 && !slices.Contains(ordered, id) {
-				selected = id
-				break
-			}
-		}
-		if selected == "" {
-			return nil, errors.New("driver: dependency graph is not acyclic")
-		}
-		ordered = append(ordered, selected)
-		for _, child := range children[selected] {
-			indegree[child]--
-		}
+	ordered, err := stableTopologicalMovementIDs(movements, closure)
+	if err != nil {
+		return nil, err
 	}
 	contributors := make([]workspace.CompositionContributor, 0, len(ordered))
 	for _, movementID := range ordered {

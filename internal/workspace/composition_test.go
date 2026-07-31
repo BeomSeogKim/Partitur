@@ -63,6 +63,39 @@ func TestComposeUsesEachChangeSetRecordedBaseAndDeduplicatesContent(t *testing.T
 	}
 }
 
+func TestCandidateCompositionHashRetainsDuplicateAndNoOpWriters(t *testing.T) {
+	contributors := []CompositionContributor{
+		{MovementID: "write", ChangeSetID: "sha256:one"},
+		{MovementID: "noop", ChangeSetID: "sha256:one"},
+	}
+	got, err := CandidateCompositionHash("git-sha1:base", contributors, "sha256:environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := canonical.Hash(canonical.DomainCandidateComposition, map[string]any{
+		"composition_mode": "merge", "base_tree": "git-sha1:base",
+		"contributors": []any{
+			map[string]any{"movement_id": "write", "change_set_id": "sha256:one"},
+			map[string]any{"movement_id": "noop", "change_set_id": "sha256:one"},
+		},
+		"composition_algorithm_version": float64(canonical.CompositionAlgorithmVersion),
+		"composition_environment_hash":  "sha256:environment",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("candidate composition hash = %q, want full merge preimage %q", got, want)
+	}
+	withoutNoOp, err := CandidateCompositionHash("git-sha1:base", contributors[:1], "sha256:environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == withoutNoOp {
+		t.Fatal("candidate composition hash deduplicated its full contributor sequence")
+	}
+}
+
 func TestComposeConflictPreservesNULDelimitedNewlinePath(t *testing.T) {
 	repository := newCompositionFixture(t)
 	base := compositionFixtureTree(t, repository)

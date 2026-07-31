@@ -267,9 +267,9 @@ func TestPlanC4WaivedCompletionAndC48Boundary(t *testing.T) {
 	}
 	input.Projection.State.Movements = map[runstate.MovementID]runstate.MovementState{"work": runstate.MovementSucceeded}
 	got := PlanScheduler(input)
-	assertDecision(t, got, CaseScheduler, ActionAppendRunSucceeded, "", true)
+	assertDecision(t, got, CaseScheduler, ActionComposeCandidate, "", true)
 	if !got.Action.CandidateCarrying {
-		t.Fatal("waived completion must append the candidate-carrying run.succeeded")
+		t.Fatal("waived completion must compose the candidate-carrying run.succeeded")
 	}
 
 	blocked := c2Input(runstate.AttemptBlocked)

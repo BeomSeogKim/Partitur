@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
+	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -871,28 +873,55 @@ func TestResumeRefusesLiveOwnerWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestResumeRefusesNonterminalWriterScoreWithoutMutation(t *testing.T) {
-	root, _ := resumeFixtureWithInputs(t, "", resumeWriterScore(), resumeWriterCast())
-	journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
-	lease := filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease")
-	before, err := os.ReadFile(journal)
+func TestResumeDispatchesNonterminalWriterScore(t *testing.T) {
+	root, store := resumeFixtureWithInputs(t, "", resumeWriterScore(), resumeWriterCast())
+	before, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(root)
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"repo_write movements require unsupported candidate composition pending §5\"\n" {
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 6 || stdout.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	after, err := os.ReadFile(journal)
+	after, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("writer refusal appended to journal")
+	got := after.Events[len(before.Events):]
+	gotTypes := make([]runstate.EventType, len(got))
+	for index, event := range got {
+		gotTypes[index] = event.Type
 	}
-	if _, err := os.Stat(lease); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("writer refusal acquired lease: %v", err)
+	want := []runstate.EventType{
+		runstate.EventAuthorityGranted,
+		runstate.EventMovementReady,
+		runstate.EventMovementStarted,
+		runstate.EventPerformerSelected,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("writer resume events=%v, want %v; stderr=%q", gotTypes, want, stderr.String())
+	}
+	for index, eventType := range want {
+		if got[index].Type != eventType {
+			t.Fatalf("writer resume events=%v, want %v; stderr=%q", gotTypes, want, stderr.String())
+		}
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Run != runstate.RunRunning ||
+		input.Projection.State.Movements["write"] != runstate.MovementRunning {
+		t.Fatalf("writer resume state: run=%s movement=%s", input.Projection.State.Run, input.Projection.State.Movements["write"])
+	}
+	if len(input.Projection.State.Attempts) != 1 {
+		t.Fatalf("writer resume attempts=%v, want one selected attempt", input.Projection.State.Attempts)
+	}
+	for _, attempt := range input.Projection.State.Attempts {
+		if attempt.MovementID != "write" || attempt.State != runstate.AttemptStarting {
+			t.Fatalf("writer resume attempt=%+v, want write STARTING", attempt)
+		}
 	}
 }
 
@@ -917,7 +946,7 @@ func TestResumeKeepsTerminalWriterScoreIdempotent(t *testing.T) {
 	}
 }
 
-func TestCancelRefusesNonterminalWriterScoreWithoutMutation(t *testing.T) {
+func TestCancelTerminalizesNonterminalWriterScore(t *testing.T) {
 	root, _ := resumeFixtureWithInputs(t, "", resumeWriterScore(), resumeWriterCast())
 	journal := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
 	before, err := os.ReadFile(journal)
@@ -926,15 +955,18 @@ func TestCancelRefusesNonterminalWriterScoreWithoutMutation(t *testing.T) {
 	}
 	t.Chdir(root)
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"cancel", "run-1"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"repo_write movements require unsupported candidate composition pending §5\"\n" {
+	if code := run([]string{"cancel", "run-1"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	after, err := os.ReadFile(journal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("writer cancellation refusal appended to journal")
+	if bytes.Equal(before, after) {
+		t.Fatal("writer cancellation did not append its terminal path")
+	}
+	if !bytes.Contains(after, []byte(`"type":"run.cancelled"`)) {
+		t.Fatalf("writer cancellation journal lacks run.cancelled: %s", after)
 	}
 }
 
@@ -1292,6 +1324,7 @@ func resumeAttemptFixture(t *testing.T) (string, *runstore.Store) {
 func resumeFixtureWithInputs(t *testing.T, terminal string, snapshot, resolvedCast []byte) (string, *runstore.Store) {
 	t.Helper()
 	root := t.TempDir()
+	baseCommit, baseTree := resumeFixtureRepository(t, root)
 	store, err := runstore.New(root, faultpoint.Nop{})
 	if err != nil {
 		t.Fatal(err)
@@ -1319,17 +1352,37 @@ func resumeFixtureWithInputs(t *testing.T, terminal string, snapshot, resolvedCa
 		if _, err := tx.At("fixture.cast").PublishImmutable("resolved-cast.yaml", resolvedCast, runstore.Hash(resumeHash(resolvedCast))); err != nil {
 			return err
 		}
-		if _, err := tx.At("fixture.start").Append(resumeEvent("run-1", runstate.EventRunStarted, map[string]any{"base_commit": "base", "base_tree": "tree", "score_hash": scoreHash, "score_file_hash": resumeHash(snapshot), "resolved_cast_hash": castHash, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})); err != nil {
+		if _, err := tx.At("fixture.start").Append(resumeEvent("run-1", runstate.EventRunStarted, map[string]any{"base_commit": baseCommit, "base_tree": baseTree, "score_hash": scoreHash, "score_file_hash": resumeHash(snapshot), "resolved_cast_hash": castHash, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})); err != nil {
 			return err
 		}
 		if terminal != "" {
-			return appendFixtureTerminal(tx, terminal)
+			return appendFixtureTerminal(t, tx, root, baseCommit, baseTree, terminal)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return root, store
+}
+
+func resumeFixtureRepository(t *testing.T, root string) (string, string) {
+	t.Helper()
+	git := func(arguments ...string) string {
+		t.Helper()
+		command := exec.Command("git", arguments...)
+		command.Dir = root
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", arguments, err)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("init", "--quiet")
+	git("config", "user.name", "Partitur Test")
+	git("config", "user.email", "partitur@example.invalid")
+	git("commit", "--allow-empty", "--quiet", "-m", "fixture")
+	format := git("rev-parse", "--show-object-format")
+	return "git-" + format + ":" + git("rev-parse", "HEAD"), "git-" + format + ":" + git("rev-parse", "HEAD^{tree}")
 }
 
 func appendResumeAttempt(t *testing.T, store *runstore.Store, started bool) {
@@ -1472,7 +1525,8 @@ func appendResumeApprovedSnapshot(t *testing.T, store *runstore.Store) {
 	}
 }
 
-func appendFixtureTerminal(tx *runstore.Txn, terminal string) error {
+func appendFixtureTerminal(t *testing.T, tx *runstore.Txn, root, baseCommit, baseTree, terminal string) error {
+	t.Helper()
 	switch terminal {
 	case "FAILED":
 		_, err := tx.At("fixture.failed").Append(resumeEvent("run-1", runstate.EventRunFailed, map[string]any{"reason": "fixture"}))
@@ -1481,11 +1535,45 @@ func appendFixtureTerminal(tx *runstore.Txn, terminal string) error {
 		_, err := tx.At("fixture.cancelled").Append(resumeEvent("run-1", runstate.EventRunCancelled, map[string]any{"cancelled_movement_ids": []any{}, "cancelled_attempt_ids": []any{}, "obsoleted_decision_ids": []any{}}))
 		return err
 	case "SUCCEEDED":
-		_, err := tx.At("fixture.succeeded").Append(resumeEvent("run-1", runstate.EventRunSucceeded, map[string]any{"candidate": map[string]any{"candidate_id": "candidate", "base_tree": "base", "result_tree": "result", "ordered_change_sets": []any{}, "contributors": []any{}, "candidate_composition_dependency_hash": "hash"}, "waiver": map[string]any{"reason": "fixture"}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}}))
+		candidate, err := fixtureSucceededCandidate(root, baseCommit, baseTree)
+		if err != nil {
+			return err
+		}
+		_, err = tx.At("fixture.succeeded").Append(resumeEvent("run-1", runstate.EventRunSucceeded, map[string]any{"candidate": candidate, "waiver": map[string]any{"reason": "fixture"}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}}))
 		return err
 	default:
 		return fmt.Errorf("unknown terminal %q", terminal)
 	}
+}
+
+func fixtureSucceededCandidate(root, baseCommit, baseTree string) (map[string]any, error) {
+	compositionHash, err := workspace.CandidateCompositionHash(baseTree, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	candidateID, err := canonical.Hash(canonical.DomainCandidate, map[string]any{
+		"base_tree": baseTree, "result_tree": baseTree, "ordered_change_sets": []any{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	_, commit, ok := strings.Cut(baseCommit, ":")
+	if !ok || commit == "" {
+		return nil, fmt.Errorf("fixture base commit %q is not qualified", baseCommit)
+	}
+	command := exec.Command("git", "update-ref", "refs/partitur/runs/run-1/candidate", commit)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("pin fixture candidate ref: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return map[string]any{
+		"candidate_id":                          candidateID,
+		"base_tree":                             baseTree,
+		"result_tree":                           baseTree,
+		"ordered_change_sets":                   []any{},
+		"contributors":                          []any{},
+		"candidate_composition_dependency_hash": compositionHash,
+	}, nil
 }
 
 func resumeEvent(runID string, eventType runstate.EventType, payload any) runstate.Event {
@@ -1514,7 +1602,7 @@ func resumeAttemptScore() []byte {
 }
 
 func resumeWriterScore() []byte {
-	return []byte("score: \"0.2\"\nname: resume-writer-fixture\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts:\n  writer:\n    capabilities: [repo_read, repo_write]\nmovements:\n  - id: write\n    part: writer\n    grants: [repo_read, repo_write]\n    instruction: write\n    outputs:\n      - id: change-set\n        kind: change_set\n    acceptance:\n      hard:\n        - id: tests\n          run: [\"true\"]\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n")
+	return []byte("score: \"0.2\"\nname: resume-writer-fixture\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts:\n  writer:\n    capabilities: [repo_read, repo_write]\nmovements:\n  - id: write\n    part: writer\n    grants: [repo_read, repo_write]\n    instruction: write\n    outputs:\n      - id: change-set\n        kind: change_set\n      - id: proof\n        kind: document\n    acceptance:\n      hard:\n        - id: proof-recorded\n          artifact: proof\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n")
 }
 
 func resumeWriterCast() []byte {
