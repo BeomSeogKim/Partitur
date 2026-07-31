@@ -14,13 +14,14 @@ import (
 )
 
 var stepDispatchedActionKinds = map[recovery.ActionKind]struct{}{
-	recovery.ActionAppendAcceptanceFailure:  {},
-	recovery.ActionAppendAcceptanceSuccess:  {},
-	recovery.ActionVerifyAcceptanceSubject:  {},
-	recovery.ActionFailWorktreeLost:         {},
-	recovery.ActionRecoverUnstartedAttempt:  {},
-	recovery.ActionRecoverUnprobedAttempt:   {},
-	recovery.ActionRecoverIncompleteAttempt: {},
+	recovery.ActionAppendAcceptanceFailure:    {},
+	recovery.ActionAppendAcceptanceSuccess:    {},
+	recovery.ActionRecoverIncompleteCriterion: {},
+	recovery.ActionVerifyAcceptanceSubject:    {},
+	recovery.ActionFailWorktreeLost:           {},
+	recovery.ActionRecoverUnstartedAttempt:    {},
+	recovery.ActionRecoverUnprobedAttempt:     {},
+	recovery.ActionRecoverIncompleteAttempt:   {},
 }
 
 var continuationActionKinds = map[recovery.ActionKind]recovery.Continuation{
@@ -41,16 +42,16 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 		t.Fatalf("planner ActionKind count = %d, want 45", len(declared))
 	}
 
-	if len(namedUnimplementedActionOwners) != 10 {
-		t.Fatalf("named unimplemented action count = %d, want 10", len(namedUnimplementedActionOwners))
+	if len(namedUnimplementedActionOwners) != 9 {
+		t.Fatalf("named unimplemented action count = %d, want 9", len(namedUnimplementedActionOwners))
 	}
 	for kind, unit := range namedUnimplementedActionOwners {
 		if !unitIdentifier.MatchString(unit) {
 			t.Fatalf("named unimplemented action %q owner = %q, want unit identifier such as 3.1", kind, unit)
 		}
 	}
-	if len(stepDispatchedActionKinds) != 7 {
-		t.Fatalf("step-dispatched action count = %d, want 7", len(stepDispatchedActionKinds))
+	if len(stepDispatchedActionKinds) != 8 {
+		t.Fatalf("step-dispatched action count = %d, want 8", len(stepDispatchedActionKinds))
 	}
 	if len(continuationActionKinds) != 3 {
 		t.Fatalf("continuation action count = %d, want 3", len(continuationActionKinds))
@@ -93,8 +94,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 			t.Fatalf("ActionKind %q has multiple classification buckets: %v", kind, buckets)
 		}
 	}
-	if bucketCounts["defaultKinds"] != 24 || bucketCounts["Steps"] != 7 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 10 {
-		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 24, 7, 3, 1, 10", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
+	if bucketCounts["defaultKinds"] != 24 || bucketCounts["Steps"] != 8 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 9 {
+		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 24, 8, 3, 1, 9", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
 	}
 }
 

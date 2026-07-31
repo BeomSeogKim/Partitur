@@ -40,12 +40,11 @@ var namedUnimplementedActionOwners = map[recovery.ActionKind]string{
 	recovery.ActionAppendQuestionRequest:    "4.1",
 	// Temporary executor/planner mismatch, not a 4.1 handler requirement:
 	// RC-RESUME-041 must hand decision_resume materialization to C.4.
-	recovery.ActionSelectDecisionResume:       "4.1",
-	recovery.ActionAppendFinalGateFailure:     "4.1",
-	recovery.ActionAppendEvaluationCompleted:  "4.1",
-	recovery.ActionAppendHumanGateRequest:     "4.1",
-	recovery.ActionAppendGateRejectedFailure:  "4.1",
-	recovery.ActionRecoverIncompleteCriterion: "3.2",
+	recovery.ActionSelectDecisionResume:      "4.1",
+	recovery.ActionAppendFinalGateFailure:    "4.1",
+	recovery.ActionAppendEvaluationCompleted: "4.1",
+	recovery.ActionAppendHumanGateRequest:    "4.1",
+	recovery.ActionAppendGateRejectedFailure: "4.1",
 }
 
 func defaultSteps() map[recovery.ActionStep]StepHandler {

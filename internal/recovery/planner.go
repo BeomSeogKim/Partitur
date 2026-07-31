@@ -721,7 +721,7 @@ func PlanAcceptance(input Input) Decision {
 		// RC-RESUME-024 always sweeps before the subject verdict. The supplied
 		// subject observation may have been collected while the criterion still
 		// held the worktree, so it cannot choose the post-sweep consequence.
-		decision := verifyAcceptanceSubject(CaseIncompleteCriterion, attempt.AttemptID, []ActionStep{StepSweepCriterionSession})
+		decision := verifyAcceptanceSubject(CaseIncompleteCriterion, ActionRecoverIncompleteCriterion, attempt.AttemptID, []ActionStep{StepSweepCriterionSession})
 		decision.Action.CriterionID = criterionID
 		return decision
 	}
@@ -738,7 +738,7 @@ func PlanAcceptance(input Input) Decision {
 			decision.Action.SubjectTree = acceptance.SubjectTree
 			return decision
 		default:
-			return verifyAcceptanceSubject(CaseCriteriaPassed, attempt.AttemptID, nil)
+			return verifyAcceptanceSubject(CaseCriteriaPassed, ActionVerifyAcceptanceSubject, attempt.AttemptID, nil)
 		}
 	}
 	if input.Observations.UnjournaledLaunch != UnjournaledLaunchAbsent {
@@ -760,7 +760,7 @@ func PlanAcceptance(input Input) Decision {
 			return decision
 		}
 	default:
-		return verifyAcceptanceSubject(caseID, attempt.AttemptID, nil)
+		return verifyAcceptanceSubject(caseID, ActionVerifyAcceptanceSubject, attempt.AttemptID, nil)
 	}
 	return proceedScheduler()
 }
@@ -937,7 +937,7 @@ func planEvaluatedAcceptance(input Input, attempt *AttemptRecovery, acceptance r
 		decision.Action.Steps = []ActionStep{StepAppendAttemptCompleted, StepAppendMovementSucceeded}
 		return decision
 	default:
-		return verifyAcceptanceSubject(caseID, attempt.AttemptID, nil)
+		return verifyAcceptanceSubject(caseID, ActionVerifyAcceptanceSubject, attempt.AttemptID, nil)
 	}
 }
 
@@ -968,8 +968,8 @@ func acceptanceFailureAction(caseID CaseID, attemptID runstate.AttemptID, criter
 	return decision
 }
 
-func verifyAcceptanceSubject(caseID CaseID, attemptID runstate.AttemptID, prefix []ActionStep) Decision {
-	decision := action(caseID, ActionVerifyAcceptanceSubject, true)
+func verifyAcceptanceSubject(caseID CaseID, kind ActionKind, attemptID runstate.AttemptID, prefix []ActionStep) Decision {
+	decision := action(caseID, kind, true)
 	decision.Action.AttemptID = attemptID
 	decision.Action.Steps = append(prefix, StepVerifyAcceptanceSubject)
 	return decision

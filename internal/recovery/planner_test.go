@@ -811,7 +811,7 @@ func TestPlanC3RowsAndAdjacentStates(t *testing.T) {
 		{
 			name:     "in flight criterion always sweeps then verifies the post-sweep subject",
 			input:    withSubject(withCriterion(c3Input("c1"), "c1", false, ""), SubjectMatched),
-			wantCase: CaseIncompleteCriterion, wantKind: ActionVerifyAcceptanceSubject, replan: true,
+			wantCase: CaseIncompleteCriterion, wantKind: ActionRecoverIncompleteCriterion, replan: true,
 			adjacent: withSubject(withCriterion(c3Input("c1"), "c1", true, "PASS"), SubjectMatched),
 		},
 		{
@@ -971,10 +971,13 @@ func TestPlanC3FullInvariantGate(t *testing.T) {
 	t.Run("in-flight criterion defers every subject verdict until after its sweep", func(t *testing.T) {
 		for _, observation := range []SubjectVerification{SubjectUnverified, SubjectMatched, SubjectMismatched} {
 			got := PlanAcceptance(withSubject(withCriterion(c3Input("c1"), "c1", false, ""), observation))
-			assertDecision(t, got, CaseIncompleteCriterion, ActionVerifyAcceptanceSubject, "", true)
+			assertDecision(t, got, CaseIncompleteCriterion, ActionRecoverIncompleteCriterion, "", true)
 			want := []ActionStep{StepSweepCriterionSession, StepVerifyAcceptanceSubject}
 			if !slices.Equal(got.Action.Steps, want) {
 				t.Fatalf("observation %q steps = %v, want %v", observation, got.Action.Steps, want)
+			}
+			if got.Action.CriterionID == "" {
+				t.Fatalf("observation %q criterion ID is empty", observation)
 			}
 		}
 	})
