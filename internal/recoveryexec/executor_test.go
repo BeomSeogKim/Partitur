@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
@@ -1134,6 +1135,108 @@ func TestDefaultAcceptanceHandlersAppendToRealStore(t *testing.T) {
 	})
 }
 
+func TestRCResume033ExecutorResumesOnlySelectedCriterion(t *testing.T) {
+	fixture := resumeCriterionFixture(t)
+	defer fixture.driver.Release()
+
+	loaded, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := recovery.Input{
+		Projection: loaded.Projection,
+		Observations: recovery.Observations{
+			AcceptanceSubject: recovery.SubjectMatched,
+			Lease: recovery.LeaseObservation{
+				Exists: true, Readable: true,
+				Epoch: loaded.Projection.State.Authority.Epoch, Owner: recovery.OwnerCurrentDriver,
+			},
+		},
+	}
+	selection := recovery.PlanAcceptance(input)
+	if selection.CaseID != recovery.CaseNextCriterion || selection.Action == nil ||
+		selection.Action.Kind != recovery.ActionResumeCriterion ||
+		selection.Action.CriterionID != "second" {
+		t.Fatalf("acceptance decision=%+v, want RC-RESUME-033 resuming second", selection)
+	}
+	decision := recovery.Plan(input)
+
+	stopAfterResume := errors.New("stop after selected criterion resume")
+	executor := &Executor{
+		Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID,
+		Load: func(context.Context) (recovery.Input, error) {
+			return recovery.Input{}, stopAfterResume
+		},
+	}
+	if _, err := executor.execute(context.Background(), input, decision); !errors.Is(err, stopAfterResume) {
+		t.Fatalf("resume error = %v, want reload stop after selected criterion", err)
+	}
+
+	state, err := fixture.driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptance := state.Acceptances[fixture.attemptID]
+	if !acceptance.Criteria["first"].Completed ||
+		!acceptance.Criteria["second"].Completed ||
+		acceptance.EvaluationCompleted {
+		t.Fatalf("acceptance after selected resume = %+v", acceptance)
+	}
+
+	journal, err := fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := journal.Events[len(journal.Events)-2:]; got[0].Type != runstate.EventCriterionStarted ||
+		got[1].Type != runstate.EventCriterionCompleted ||
+		!bytes.Contains(got[0].Payload, []byte(`"criterion_id":"second"`)) ||
+		!bytes.Contains(got[1].Payload, []byte(`"criterion_id":"second"`)) {
+		t.Fatalf("resume events = %+v, want second criterion start then completion", got)
+	}
+}
+
+func TestRCResume033ReachesAcceptanceEvaluationCompletedAfterSelectedCriterion(t *testing.T) {
+	fixture := resumeCriterionFixture(t)
+	defer fixture.driver.Release()
+	stopAfterCompletion := errors.New("stop after acceptance evaluation completion")
+	loads := 0
+	load := func(context.Context) (recovery.Input, error) {
+		loads++
+		if loads == 3 {
+			return recovery.Input{}, stopAfterCompletion
+		}
+		loaded, err := fixture.store.LoadRunInput(fixture.runID)
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		return recovery.Input{
+			Projection: loaded.Projection,
+			Observations: recovery.Observations{
+				AcceptanceSubject: recovery.SubjectMatched,
+				Lease: recovery.LeaseObservation{
+					Exists: true, Readable: true,
+					Epoch: loaded.Projection.State.Authority.Epoch, Owner: recovery.OwnerCurrentDriver,
+				},
+			},
+		}, nil
+	}
+	executor := &Executor{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID, Load: load}
+	if _, err := executor.Execute(context.Background()); !errors.Is(err, stopAfterCompletion) {
+		t.Fatalf("resume error = %v, want stop after acceptance completion", err)
+	}
+
+	journal, err := fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAcceptanceEvaluationCompleted {
+			return
+		}
+	}
+	t.Fatalf("journal has no %s: %+v", runstate.EventAcceptanceEvaluationCompleted, journal.Events)
+}
+
 func TestRCResume019MatchesLiveMovementSuccessPayload(t *testing.T) {
 	for _, final := range []bool{false, true} {
 		t.Run(fmt.Sprintf("final=%t", final), func(t *testing.T) {
@@ -1691,6 +1794,143 @@ func handlerStore(t *testing.T, selectAttempt bool) (*runstore.Store, *runstore.
 		{ID: "write", Initial: runstate.MovementPending},
 		{ID: "read", Initial: runstate.MovementPending},
 	})
+}
+
+type resumeCriterionFixtureState struct {
+	store     *runstore.Store
+	driver    *runstore.Driver
+	runID     runstate.RunID
+	attemptID runstate.AttemptID
+}
+
+func resumeCriterionFixture(t *testing.T) resumeCriterionFixtureState {
+	t.Helper()
+	root := t.TempDir()
+	scoreDocument := map[string]any{
+		"score": "0.2", "name": "resume-criterion", "revision": 1, "status": "finalized", "goal": "fixture",
+		"verification": map[string]any{"expectation": map[string]any{"intent": "pass-existing-tests", "apply_gate": map[string]any{"require": []any{"verified"}}}, "final_movement": "write"},
+		"parts":        map[string]any{"writer": map[string]any{"capabilities": []any{"repo_read"}, "read_only": true}},
+		"movements": []any{map[string]any{
+			"id": "write", "part": "writer", "grants": []any{"repo_read"}, "instruction": "fixture",
+			"outputs":    []any{map[string]any{"id": "first", "kind": "artifact"}, map[string]any{"id": "second", "kind": "artifact"}},
+			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "first", "artifact": "first"}, map[string]any{"id": "second", "artifact": "second"}}},
+		}},
+		"policy": map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10}},
+	}
+	castDocument := map[string]any{
+		"cast": "0.1", "performers": map[string]any{"worker": map[string]any{"adapter": "fixture", "model": "fixture"}},
+		"bindings": map[string]any{"writer": map[string]any{"performer": "worker"}},
+	}
+	writeFixtureJSON(t, filepath.Join(root, "partitur.yaml"), scoreDocument)
+	if err := os.Mkdir(filepath.Join(root, ".partitur"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureJSON(t, filepath.Join(root, ".partitur", "cast.yaml"), castDocument)
+	for _, arguments := range [][]string{{"init"}, {"config", "user.name", "Partitur Test"}, {"config", "user.email", "partitur@example.invalid"}, {"add", "partitur.yaml", ".partitur/cast.yaml"}, {"commit", "-m", "fixture"}} {
+		command := exec.Command("git", arguments...)
+		command.Dir = root
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", arguments, err, output)
+		}
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	preparation, validation := validate.Prepare()
+	if validation.Refusal != nil || validation.HasDiagnostics() || preparation == nil {
+		t.Fatalf("preparation=%+v validation=%+v", preparation, validation)
+	}
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, []runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := started.Run.BindDriver(authority); err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("write")
+	if err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	appendEvent := func(eventType runstate.EventType, payload any) {
+		t.Helper()
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID,
+			Type: eventType, Payload: handlerPayload(t, payload),
+		}, faultpoint.ReceiptAddress("test.rc_resume_033."+string(eventType))); err != nil {
+			authority.Release()
+			t.Fatal(err)
+		}
+	}
+	appendEvent(runstate.EventMovementReady, map[string]any{})
+	appendEvent(runstate.EventMovementStarted, map[string]any{})
+	appendEvent(runstate.EventPerformerSelected, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "fixture", "model": "fixture"})
+	appendEvent(runstate.EventAttemptStarted, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": versions})
+	appendEvent(runstate.EventAdapterProbed, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})
+	appendEvent(runstate.EventArtifactRecorded, map[string]any{"logical_output_id": "first", "kind": "artifact", "content_hash": "sha256:first", "size_bytes": 1, "source_path": "first"})
+	appendEvent(runstate.EventArtifactRecorded, map[string]any{"logical_output_id": "second", "kind": "artifact", "content_hash": "sha256:second", "size_bytes": 1, "source_path": "second"})
+	appendEvent(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false})
+	appendEvent(runstate.EventVerificationPassed, map[string]any{})
+	loaded, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	plan, err := acceptance.Compile(loaded.Score.Movements()[0])
+	if err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	acceptanceStarted, err := plan.StartEvent(runstate.Event{
+		RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID,
+	}, "git-sha1:subject")
+	if err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	appendEvent(runstate.EventAcceptanceStarted, acceptanceStarted.Payload)
+	var firstEvents []runstate.Event
+	_, err = acceptance.EvaluateStartedCriterion(plan, acceptance.Evaluation{
+		RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID,
+		SubjectTree: "git-sha1:subject",
+		LookupArtifact: func(id runstate.ArtifactInstanceID) (runstate.ArtifactRecord, bool, error) {
+			record, ok := map[runstate.ArtifactInstanceID]runstate.ArtifactRecord{
+				"first@" + runstate.ArtifactInstanceID(attempt.AttemptID):  {AttemptID: attempt.AttemptID, LogicalOutputID: "first", Kind: "artifact"},
+				"second@" + runstate.ArtifactInstanceID(attempt.AttemptID): {AttemptID: attempt.AttemptID, LogicalOutputID: "second", Kind: "artifact"},
+			}[id]
+			return record, ok, nil
+		},
+		Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
+			firstEvents = append(firstEvents, event)
+			return faultpoint.DurabilityReceipt{Mutation: faultpoint.Mutation{
+				Kind: faultpoint.JournalAppend, EventType: string(event.Type), EventID: "event", Sequence: uint64(len(firstEvents)),
+				Timestamp: "2026-08-01T00:00:00.000Z", Path: "journal.jsonl",
+			}}, nil
+		},
+	}, "first")
+	if err != nil {
+		authority.Release()
+		t.Fatal(err)
+	}
+	for _, event := range firstEvents {
+		appendEvent(event.Type, event.Payload)
+	}
+	return resumeCriterionFixtureState{store: store, driver: authority, runID: started.RunID, attemptID: attempt.AttemptID}
 }
 
 func handlerStoreWithSeeds(t *testing.T, selectAttempt bool, seed []runstate.MovementSeed) (*runstore.Store, *runstore.Driver) {

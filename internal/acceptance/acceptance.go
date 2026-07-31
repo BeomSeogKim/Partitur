@@ -54,6 +54,13 @@ type Result struct {
 	Receipts            []faultpoint.DurabilityReceipt
 }
 
+// CriterionOutcome is one PASS result used to close an already-started
+// acceptance after recovery has replayed every planned criterion.
+type CriterionOutcome struct {
+	CriterionID string
+	Outcome     string
+}
+
 // Plan is an immutable effective acceptance plan.
 type Plan struct {
 	criteria           []criterion
@@ -213,6 +220,18 @@ func EvaluateStarted(plan *Plan, evaluation Evaluation) (Result, error) {
 	return evaluateStarted(plan, evaluation, evaluationDependencies{now: time.Now})
 }
 
+// EvaluateStartedCriterion runs one named criterion after acceptance.started
+// is already durable. It does not declare the whole acceptance complete.
+func EvaluateStartedCriterion(plan *Plan, evaluation Evaluation, criterionID string) (Result, error) {
+	return evaluateStartedCriterion(plan, evaluation, criterionID, evaluationDependencies{now: time.Now})
+}
+
+// CompleteStarted records completion for an already-started acceptance whose
+// full planned criterion sequence is durably PASS.
+func CompleteStarted(plan *Plan, evaluation Evaluation, outcomes []CriterionOutcome) (Result, error) {
+	return completeStarted(plan, evaluation, outcomes)
+}
+
 type evaluationDependencies struct {
 	now func() time.Time
 }
@@ -244,6 +263,33 @@ func evaluate(
 }
 
 func evaluateStarted(plan *Plan, evaluation Evaluation, dependencies evaluationDependencies) (Result, error) {
+	return evaluateStartedCriteria(plan, evaluation, plan.criteria, true, dependencies)
+}
+
+func evaluateStartedCriterion(
+	plan *Plan,
+	evaluation Evaluation,
+	criterionID string,
+	dependencies evaluationDependencies,
+) (Result, error) {
+	if !validEvaluation(plan, evaluation) || criterionID == "" {
+		return Result{}, ErrInvalidEvaluation
+	}
+	for _, selected := range plan.criteria {
+		if selected.id == criterionID {
+			return evaluateStartedCriteria(plan, evaluation, []criterion{selected}, false, dependencies)
+		}
+	}
+	return Result{}, ErrInvalidEvaluation
+}
+
+func evaluateStartedCriteria(
+	plan *Plan,
+	evaluation Evaluation,
+	criteria []criterion,
+	completeEvaluation bool,
+	dependencies evaluationDependencies,
+) (Result, error) {
 	result := Result{}
 	if !validEvaluation(plan, evaluation) {
 		return result, ErrInvalidEvaluation
@@ -256,8 +302,8 @@ func evaluateStarted(plan *Plan, evaluation Evaluation, dependencies evaluationD
 		PartID:        evaluation.PartID,
 		AttemptID:     evaluation.AttemptID,
 	}
-	outcomes := make([]any, 0, len(plan.criteria))
-	for _, criterion := range plan.criteria {
+	outcomes := make([]CriterionOutcome, 0, len(criteria))
+	for _, criterion := range criteria {
 		startedAt := dependencies.now()
 		criterionStarted, err := eventWithPayload(base, runstate.EventCriterionStarted, map[string]any{
 			"criterion_id":        criterion.id,
@@ -299,11 +345,7 @@ func evaluateStarted(plan *Plan, evaluation Evaluation, dependencies evaluationD
 		if err := appendEvent(evaluation.Append, criterionCompleted, &result); err != nil {
 			return result, err
 		}
-		outcomes = append(outcomes, map[string]any{
-			"criterion_id":        criterion.id,
-			"criterion_spec_hash": criterion.specHash,
-			"outcome":             outcome,
-		})
+		outcomes = append(outcomes, CriterionOutcome{CriterionID: criterion.id, Outcome: outcome})
 		if outcome == "PASS" {
 			continue
 		}
@@ -324,17 +366,41 @@ func evaluateStarted(plan *Plan, evaluation Evaluation, dependencies evaluationD
 		result.FailureReason = reason
 		return result, nil
 	}
+	if !completeEvaluation {
+		return result, nil
+	}
 
-	completed, err := eventWithPayload(
-		base,
-		runstate.EventAcceptanceEvaluationCompleted,
-		map[string]any{
-			"subject_tree":         evaluation.SubjectTree,
-			"acceptance_spec_hash": plan.specHash,
-			"criterion_outcomes":   outcomes,
-			"identity_versions":    plan.acceptanceVersions,
-		},
-	)
+	completed, err := completeStarted(plan, evaluation, outcomes)
+	result.Receipts = append(result.Receipts, completed.Receipts...)
+	result.EvaluationCompleted = completed.EvaluationCompleted
+	result.Verified = completed.Verified
+	return result, err
+}
+
+func completeStarted(plan *Plan, evaluation Evaluation, outcomes []CriterionOutcome) (Result, error) {
+	result := Result{}
+	if !validEvaluation(plan, evaluation) || !allCriteriaPass(plan, outcomes) {
+		return result, ErrInvalidEvaluation
+	}
+	result.AcceptanceSpecHash = plan.specHash
+	criterionOutcomes := make([]any, len(outcomes))
+	for index, outcome := range outcomes {
+		criterionOutcomes[index] = map[string]any{
+			"criterion_id":        outcome.CriterionID,
+			"criterion_spec_hash": plan.criteria[index].specHash,
+			"outcome":             outcome.Outcome,
+		}
+	}
+	base := runstate.Event{
+		RunID: evaluation.RunID, ScoreRevision: evaluation.ScoreRevision,
+		MovementID: evaluation.MovementID, PartID: evaluation.PartID, AttemptID: evaluation.AttemptID,
+	}
+	completed, err := eventWithPayload(base, runstate.EventAcceptanceEvaluationCompleted, map[string]any{
+		"subject_tree":         evaluation.SubjectTree,
+		"acceptance_spec_hash": plan.specHash,
+		"criterion_outcomes":   criterionOutcomes,
+		"identity_versions":    plan.acceptanceVersions,
+	})
 	if err != nil {
 		return result, err
 	}
@@ -344,6 +410,18 @@ func evaluateStarted(plan *Plan, evaluation Evaluation, dependencies evaluationD
 	result.EvaluationCompleted = true
 	result.Verified = plan.declaredHard > 0
 	return result, nil
+}
+
+func allCriteriaPass(plan *Plan, outcomes []CriterionOutcome) bool {
+	if len(outcomes) != len(plan.criteria) {
+		return false
+	}
+	for index, outcome := range outcomes {
+		if outcome.CriterionID != plan.criteria[index].id || outcome.Outcome != "PASS" {
+			return false
+		}
+	}
+	return true
 }
 
 func validEvaluation(plan *Plan, evaluation Evaluation) bool {

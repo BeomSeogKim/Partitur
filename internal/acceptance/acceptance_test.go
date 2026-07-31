@@ -292,6 +292,90 @@ func TestEvaluateShortCircuitsOnFirstFailOrError(t *testing.T) {
 	}
 }
 
+func TestEvaluateStartedCriterionEmitsFirstTimeCriterionEventsWithoutCompletingAcceptance(t *testing.T) {
+	movement := movementFixture()
+	movement.Outputs = append(movement.Outputs, score.OutputView{ArtifactID: "second", Kind: "artifact"})
+	movement.Acceptance.ArtifactCriteria = []score.ArtifactCriterionView{
+		{ID: "first", ArtifactID: "report"},
+		{ID: "second", ArtifactID: "second"},
+	}
+	plan := compileFixture(t, movement)
+	artifacts := map[runstate.ArtifactInstanceID]runstate.ArtifactRecord{
+		"report@" + runstate.ArtifactInstanceID(testAttemptID): artifactFixture(),
+		"second@" + runstate.ArtifactInstanceID(testAttemptID): {
+			AttemptID: testAttemptID, LogicalOutputID: "second", Kind: "artifact", ContentHash: "sha256:second",
+		},
+	}
+
+	wholeRecorder := newAcceptanceRecorder()
+	if _, err := evaluate(plan, evaluationFixture(wholeRecorder, artifactLookupMap(artifacts)), clockFixture()); err != nil {
+		t.Fatal(err)
+	}
+
+	selectedRecorder := newAcceptanceRecorder()
+	started, err := plan.StartEvent(runstate.Event{
+		RunID: testRunID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: testAttemptID,
+	}, "git-sha1:subject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectedRecorder.append(started); err != nil {
+		t.Fatal(err)
+	}
+	selectedRecorder.events = nil
+	selected, err := evaluateStartedCriterion(
+		plan,
+		evaluationFixture(selectedRecorder, artifactLookupMap(artifacts)),
+		"second",
+		evaluationDependencies{now: advancingClock(time.Unix(0, 2*int64(time.Millisecond)), time.Millisecond)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.EvaluationCompleted || selected.Verified {
+		t.Fatalf("selected result = %#v", selected)
+	}
+	if !reflect.DeepEqual(selectedRecorder.events, wholeRecorder.events[3:5]) {
+		t.Fatalf("selected events = %#v, want first-time events %#v", selectedRecorder.events, wholeRecorder.events[3:5])
+	}
+}
+
+func TestEvaluateStartedCriterionShortCircuitsWithAcceptanceFailure(t *testing.T) {
+	movement := movementFixture()
+	movement.Acceptance.ArtifactCriteria = []score.ArtifactCriterionView{{
+		ID: "report", ArtifactID: "report", ExpectedHash: "sha256:wrong",
+	}}
+	plan := compileFixture(t, movement)
+	recorder := newAcceptanceRecorder()
+	started, err := plan.StartEvent(runstate.Event{
+		RunID: testRunID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: testAttemptID,
+	}, "git-sha1:subject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.append(started); err != nil {
+		t.Fatal(err)
+	}
+	recorder.events = nil
+	result, err := evaluateStartedCriterion(
+		plan, evaluationFixture(recorder, artifactLookup(artifactFixture())), "report", clockFixture(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.EvaluationCompleted || result.FailedCriterionID != "report" ||
+		result.FailureReason != "artifact_hash_mismatch" {
+		t.Fatalf("result = %#v", result)
+	}
+	if got, want := eventTypes(recorder.events), []runstate.EventType{
+		runstate.EventCriterionStarted,
+		runstate.EventCriterionCompleted,
+		runstate.EventAcceptanceFailed,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("event order = %#v, want %#v", got, want)
+	}
+}
+
 func TestArtifactCriterionRejectsEachEvidenceMismatch(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -620,12 +704,15 @@ func validReceipt(
 }
 
 func clockFixture() evaluationDependencies {
-	current := time.Unix(0, 0)
+	return evaluationDependencies{now: advancingClock(time.Unix(0, 0), time.Millisecond)}
+}
+
+func advancingClock(current time.Time, step time.Duration) func() time.Time {
 	return evaluationDependencies{now: func() time.Time {
 		value := current
-		current = current.Add(time.Millisecond)
+		current = current.Add(step)
 		return value
-	}}
+	}}.now
 }
 
 func eventTypes(events []runstate.Event) []runstate.EventType {
