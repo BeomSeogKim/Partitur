@@ -6,12 +6,13 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
 )
 
 func TestMutationCompositionKillCutsRejectMisplacedProbes(t *testing.T) {
@@ -82,27 +83,16 @@ func TestMutationCompositionKillCutsRejectMisplacedProbes(t *testing.T) {
 	}
 }
 
-type compositionMutationGoCaches struct {
-	moduleCache string
-	goPath      string
-	buildCache  string
-}
-
-func compositionMutationGoEnvironment(t *testing.T) compositionMutationGoCaches {
+func compositionMutationGoEnvironment(t *testing.T) mutationtest.GoEnvironment {
 	t.Helper()
-	command := exec.Command("go", "env", "GOMODCACHE", "GOPATH", "GOCACHE")
-	output, err := command.Output()
+	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := strings.Fields(string(output))
-	if len(values) != 3 {
-		t.Fatalf("go env returned %d cache values, want 3", len(values))
-	}
-	return compositionMutationGoCaches{moduleCache: values[0], goPath: values[1], buildCache: values[2]}
+	return environment
 }
 
-func assertCompositionMutationKilled(t *testing.T, goEnvironment compositionMutationGoCaches, source, before, after, testPattern string, testNames []string) {
+func assertCompositionMutationKilled(t *testing.T, goEnvironment mutationtest.GoEnvironment, source, before, after, testPattern string, testNames []string) {
 	t.Helper()
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -125,39 +115,21 @@ func assertCompositionMutationKilled(t *testing.T, goEnvironment compositionMuta
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, "go", "test", "-v", "./integration/composition", "-run", "^"+testPattern+"$", "-count=1")
-	command.Dir = copyRoot
-	command.Env = append(os.Environ(),
-		"GOMODCACHE="+goEnvironment.moduleCache,
-		"GOPATH="+goEnvironment.goPath,
-		"GOCACHE="+goEnvironment.buildCache,
-	)
-	output, runErr := command.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("mutation non-result: child test timed out\n%s", output)
-	}
-	if strings.Contains(string(output), "[no tests to run]") {
-		t.Fatalf("mutation non-result: child ran no targeted tests\n%s", output)
-	}
-	for _, testName := range testNames {
-		if !strings.Contains(string(output), "=== RUN   "+testName) {
-			t.Fatalf("mutation non-result: child did not run targeted test %s\n%s", testName, output)
-		}
-	}
-	if runErr == nil {
-		t.Fatalf("mutation survived: %s still passed after moving its probe\n%s", strings.Join(testNames, ", "), output)
-	}
-	if strings.Contains(string(output), "[build failed]") {
-		t.Fatalf("mutation non-result: child build failed\n%s", output)
-	}
-	if strings.Contains(string(output), "panic:") {
-		t.Fatalf("mutation non-result: child panicked\n%s", output)
-	}
-	for _, testName := range testNames {
-		if !strings.Contains(string(output), "--- FAIL: "+testName) {
-			t.Fatalf("mutation non-result: child did not fail the targeted assertion %s: %v\n%s", testName, runErr, output)
-		}
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         copyRoot,
+		Package:     "./integration/composition",
+		TestPattern: testPattern,
+		TestNames:   testNames,
+		Environment: goEnvironment.ChildEnvironment(os.Environ()),
+	})
+	cancel()
+	switch result.Outcome {
+	case mutationtest.Killed:
+		return
+	case mutationtest.Survived:
+		t.Fatalf("mutation survived: %s still passed after moving its probe\n%s", strings.Join(testNames, ", "), result.Diagnostic())
+	default:
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
 	}
 }
 
