@@ -55,7 +55,6 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 		recovery.StepClassifyAndAppendFailure:    appendAttemptFailure,
 		recovery.StepSweepCriterionSession:       sweepCriterionSession,
 		recovery.StepVerifyAcceptanceSubject:     verifyAcceptanceSubject,
-		recovery.StepSynthesizeCriterionError:    synthesizeCriterionError,
 		recovery.StepClassifyAcceptanceFailure:   appendAcceptanceFailure,
 		recovery.StepAppendAttemptCompleted:      appendAttemptCompleted,
 		recovery.StepAppendMovementSucceeded:     appendMovementSucceeded,

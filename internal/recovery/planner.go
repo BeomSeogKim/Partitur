@@ -440,7 +440,6 @@ const (
 	StepClassifyAndAppendFailure    ActionStep = "classify_and_append_attempt_failure"
 	StepSweepCriterionSession       ActionStep = "sweep_criterion_session"
 	StepVerifyAcceptanceSubject     ActionStep = "verify_acceptance_subject"
-	StepSynthesizeCriterionError    ActionStep = "synthesize_criterion_error"
 	StepClassifyAcceptanceFailure   ActionStep = "classify_and_append_acceptance_failure"
 	StepAppendAttemptCompleted      ActionStep = "append_attempt_completed"
 	StepAppendMovementSucceeded     ActionStep = "append_movement_succeeded"
