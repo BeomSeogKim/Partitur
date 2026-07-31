@@ -83,9 +83,17 @@ func (plan *Plan) Hash() runstate.Hash {
 // Compile builds the effective artifact-only plan. Declared criteria retain
 // declaration order; generated checks retain output declaration order.
 func Compile(movement score.MovementView) (*Plan, error) {
-	if movement.Acceptance.HasRunCriteria ||
-		movement.Acceptance.HasReviewCriteria {
-		return nil, ErrUnsupportedCriteria
+	if movement.Acceptance.HasRunCriteria {
+		return nil, fmt.Errorf(
+			"%w: run criteria require unit 3.2",
+			ErrUnsupportedCriteria,
+		)
+	}
+	if movement.Acceptance.HasReviewCriteria {
+		return nil, fmt.Errorf(
+			"%w: review criteria require unit 4.1",
+			ErrUnsupportedCriteria,
+		)
 	}
 	if movement.Acceptance.HumanGate == "always" ||
 		movement.Acceptance.HumanGate == "on_contested" {

@@ -386,28 +386,45 @@ func TestArtifactExpectedHashUsesHexadecimalCaseEquivalence(t *testing.T) {
 
 func TestCompileRejectsUnsupportedAcceptanceShapes(t *testing.T) {
 	tests := []struct {
-		name   string
-		mutate func(*score.MovementView)
+		name        string
+		mutate      func(*score.MovementView)
+		wantMessage string
+		absentUnit  string
 	}{
 		{
 			name: "run",
 			mutate: func(movement *score.MovementView) {
 				movement.Acceptance.HasRunCriteria = true
 			},
+			wantMessage: "unit 3.2",
+			absentUnit:  "unit 4.1",
 		},
 		{
 			name: "review",
 			mutate: func(movement *score.MovementView) {
 				movement.Acceptance.HasReviewCriteria = true
 			},
+			wantMessage: "unit 4.1",
+			absentUnit:  "unit 3.2",
+		},
+		{
+			name: "run and review",
+			mutate: func(movement *score.MovementView) {
+				movement.Acceptance.HasRunCriteria = true
+				movement.Acceptance.HasReviewCriteria = true
+			},
+			wantMessage: "acceptance contains unsupported criteria: run criteria require unit 3.2",
+			absentUnit:  "unit 4.1",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			movement := movementFixture()
 			test.mutate(&movement)
-			if _, err := Compile(movement); !errors.Is(err, ErrUnsupportedCriteria) {
-				t.Fatalf("error = %v, want ErrUnsupportedCriteria", err)
+			if _, err := Compile(movement); !errors.Is(err, ErrUnsupportedCriteria) ||
+				!strings.Contains(err.Error(), test.wantMessage) ||
+				strings.Contains(err.Error(), test.absentUnit) {
+				t.Fatalf("error = %v, want unsupported criteria naming %q but not %q", err, test.wantMessage, test.absentUnit)
 			}
 		})
 	}
