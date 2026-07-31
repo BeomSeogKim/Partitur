@@ -62,6 +62,10 @@ type logsStreamer func(
 ) error
 
 func main() {
+	if err := faultpoint.RequireHarnessBuild(); err != nil {
+		fmt.Fprintf(os.Stderr, "partitur: %v\n", err)
+		os.Exit(2)
+	}
 	// A recovery process has no SIGUSR1 relay. Ignore the optional wake before
 	// command dispatch, which is before any command can make a lease durable.
 	signal.Ignore(syscall.SIGUSR1)

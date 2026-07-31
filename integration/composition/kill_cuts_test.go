@@ -192,7 +192,11 @@ func killAtPoint(t *testing.T, binary, repository string, environment []string, 
 	var stdout, stderr bytes.Buffer
 	command := exec.Command(binary, "run")
 	command.Dir, command.ExtraFiles, command.Stdout, command.Stderr = repository, files, &stdout, &stderr
-	command.Env = replaceEnvironment(environment, map[string]string{"PARTITUR_FAULTPOINT_NOTIFY_FD": "9", "PARTITUR_FAULTPOINT_RELEASE_FD": "10"})
+	command.Env = replaceEnvironment(environment, map[string]string{
+		"PARTITUR_FAULTPOINT_HARNESS":    "1",
+		"PARTITUR_FAULTPOINT_NOTIFY_FD":  "9",
+		"PARTITUR_FAULTPOINT_RELEASE_FD": "10",
+	})
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +467,7 @@ func noVerdictGitDirectory(t *testing.T) string {
 func buildBinary(t *testing.T, root, bin, name string) string {
 	t.Helper()
 	output := filepath.Join(bin, name)
-	command := exec.Command("go", "build", "-o", output, "./cmd/"+name)
+	command := exec.Command("go", "build", "-tags=faultprobe", "-o", output, "./cmd/"+name)
 	command.Dir = root
 	command.Env = os.Environ()
 	if data, err := command.CombinedOutput(); err != nil {

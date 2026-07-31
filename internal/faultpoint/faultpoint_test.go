@@ -1,3 +1,5 @@
+//go:build faultprobe
+
 package faultpoint
 
 import (
@@ -53,12 +55,28 @@ func TestProbeFromEnvironmentGuardsDescriptors(t *testing.T) {
 		}
 		probe.Reached("test.closed_release")
 		os.Exit(0)
+	case "closed_notify":
+		probe := ProbeFromEnvironment()
+		if _, ok := probe.(*pipeProbe); !ok {
+			fmt.Fprintf(os.Stderr, "probe type = %T, want *pipeProbe\n", probe)
+			os.Exit(2)
+		}
+		probe.Reached("test.closed_notify")
+		os.Exit(0)
 	}
 
 	t.Run("rejects standard descriptors without stdout or block", testProbeRejectsStandardDescriptors)
 	t.Run("rejects non-pipe descriptor", testProbeRejectsNonPipeDescriptor)
 	t.Run("accepts pipe at fd 3", testProbeAcceptsPipeAtFirstInheritedFD)
 	t.Run("exits when release pipe closes", testProbeExitsWhenReleaseCloses)
+	t.Run("exits when notify pipe closes", testProbeExitsWhenNotifyCloses)
+}
+
+func TestRequireHarnessBuildAcceptsFaultProbeBuild(t *testing.T) {
+	t.Setenv(probeHarnessRequiredEnv, "1")
+	if err := RequireHarnessBuild(); err != nil {
+		t.Fatalf("RequireHarnessBuild() error = %v", err)
+	}
 }
 
 func TestProbeFromEnvironmentRejectsDescriptorsWithoutTakingOwnership(t *testing.T) {
@@ -318,6 +336,52 @@ func testProbeExitsWhenReleaseCloses(t *testing.T) {
 	exitError, ok := err.(*exec.ExitError)
 	if !ok || exitError.ExitCode() != 1 {
 		t.Fatalf("closed release helper error=%v, want exit 1", err)
+	}
+}
+
+func testProbeExitsWhenNotifyCloses(t *testing.T) {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRead.Close()
+	defer releaseWrite.Close()
+
+	if err := notifyRead.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeEnvironmentHelperTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestProbeFromEnvironmentGuardsDescriptors$")
+	command.Env = append(os.Environ(),
+		probeEnvironmentHelper+"=closed_notify",
+		probeNotifyFDEnv+"=3",
+		probeReleaseFDEnv+"=4",
+	)
+	command.ExtraFiles = []*os.File{notifyWrite, releaseRead}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := notifyWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseRead.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = command.Wait()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("closed notify helper blocked for %s", probeEnvironmentHelperTimeout)
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 1 {
+		t.Fatalf("closed notify helper error=%v, want exit 1", err)
 	}
 }
 
