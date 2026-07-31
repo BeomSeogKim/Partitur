@@ -45,11 +45,20 @@ func TestProbeFromEnvironmentGuardsDescriptors(t *testing.T) {
 		}
 		probe.Reached("test.pipe")
 		os.Exit(0)
+	case "closed_release":
+		probe := ProbeFromEnvironment()
+		if _, ok := probe.(*pipeProbe); !ok {
+			fmt.Fprintf(os.Stderr, "probe type = %T, want *pipeProbe\n", probe)
+			os.Exit(2)
+		}
+		probe.Reached("test.closed_release")
+		os.Exit(0)
 	}
 
 	t.Run("rejects standard descriptors without stdout or block", testProbeRejectsStandardDescriptors)
 	t.Run("rejects non-pipe descriptor", testProbeRejectsNonPipeDescriptor)
 	t.Run("accepts pipe at fd 3", testProbeAcceptsPipeAtFirstInheritedFD)
+	t.Run("exits when release pipe closes", testProbeExitsWhenReleaseCloses)
 }
 
 func TestProbeFromEnvironmentRejectsDescriptorsWithoutTakingOwnership(t *testing.T) {
@@ -263,6 +272,52 @@ func testProbeAcceptsPipeAtFirstInheritedFD(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("helper stdout=%q stderr=%q, want empty", stdout.String(), stderr.String())
+	}
+}
+
+func testProbeExitsWhenReleaseCloses(t *testing.T) {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRead.Close()
+	defer releaseWrite.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeEnvironmentHelperTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestProbeFromEnvironmentGuardsDescriptors$")
+	command.Env = append(os.Environ(),
+		probeEnvironmentHelper+"=closed_release",
+		probeNotifyFDEnv+"=3",
+		probeReleaseFDEnv+"=4",
+	)
+	command.ExtraFiles = []*os.File{notifyWrite, releaseRead}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := notifyWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseRead.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = command.Wait()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("closed release helper blocked for %s", probeEnvironmentHelperTimeout)
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 1 {
+		t.Fatalf("closed release helper error=%v, want exit 1", err)
 	}
 }
 
