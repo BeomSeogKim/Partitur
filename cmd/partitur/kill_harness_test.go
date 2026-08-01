@@ -53,8 +53,9 @@ func TestSubprocessKillHarness(t *testing.T) {
 	for _, edge := range nonCancellationKillHarnessEdges() {
 		edge := edge
 		if edge.fixture == nil {
-			// Composition kill cuts run in integration/composition so this
-			// already-saturated command package retains its measured runtime.
+			// Composition and criterion-launch kill cuts run in their integration
+			// packages so this already-saturated command package retains its
+			// measured runtime.
 			continue
 		}
 		t.Run(string(edge.id), func(t *testing.T) {
@@ -226,6 +227,9 @@ func nonCancellationKillHarnessEdges() []killEdge {
 		{faultpoint.EdgeChangeSetCapturedToRecorded, faultpoint.PointChangeSetCaptured, faultpoint.PointChangeSetRecorded, nil},
 		{faultpoint.EdgeCompositionMovementEvidenceToTerminal, faultpoint.PointCompositionMovementEvidence, faultpoint.PointCompositionMovementTerminal, nil},
 		{faultpoint.EdgeCompositionCandidateEvidenceToTerminal, faultpoint.PointCompositionCandidateEvidence, faultpoint.PointCompositionCandidateTerminal, nil},
+		{faultpoint.EdgeLaunchCriterionMarkerHeldToIdentity, faultpoint.PointLaunchCriterionMarkerHeld, faultpoint.PointLaunchCriterionIdentityPublished, nil},
+		{faultpoint.EdgeLaunchCriterionIdentityToRecorded, faultpoint.PointLaunchCriterionIdentityPublished, faultpoint.PointLaunchCriterionIdentityRecorded, nil},
+		{faultpoint.EdgeLaunchCriterionRecordedToGate, faultpoint.PointLaunchCriterionIdentityRecorded, faultpoint.PointLaunchCriterionGateReleased, nil},
 	}
 }
 
@@ -254,8 +258,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 		}
 		reachable[id] = true
 	}
-	if len(reachable) != 16 {
-		t.Fatalf("reachable edge count=%d, want sixteen", len(reachable))
+	if len(reachable) != 19 {
+		t.Fatalf("reachable edge count=%d, want nineteen", len(reachable))
 	}
 	if len(retryCoveragePoints()) != 2 || retryCoveragePoints()[0] == retryCoveragePoints()[1] {
 		t.Fatalf("retry coverage must name two distinct cut sides: %v", retryCoveragePoints())

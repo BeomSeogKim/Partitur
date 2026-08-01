@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches sixteen E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches nineteen E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -178,9 +178,9 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `launch.adapter.marker_held_to_identity_published` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
 | `launch.adapter.identity_published_to_recorded` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
 | `launch.adapter.recorded_to_gate` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
-| `launch.criterion.marker_held_to_identity_published` | not reached by this gate's cuts | §7 criterion launch; E.2 | No external-criterion launch fixture |
-| `launch.criterion.identity_published_to_recorded` | not reached by this gate's cuts | §7 criterion launch; E.2 | No external-criterion launch fixture |
-| `launch.criterion.recorded_to_gate` | not reached by this gate's cuts | §7 criterion launch; E.2 | No external-criterion launch fixture |
+| `launch.criterion.marker_held_to_identity_published` | reachable | §7 criterion launch; E.2 | `integration/criterionexec` criterion trampoline crash fixture |
+| `launch.criterion.identity_published_to_recorded` | reachable | §7 criterion launch; E.2 | `integration/criterionexec` criterion trampoline crash fixture |
+| `launch.criterion.recorded_to_gate` | reachable | §7 criterion launch; E.2 | `integration/criterionexec` criterion trampoline crash fixture |
 | `execute.adapter_swept_to_interval_stopped` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `execute.interval_stopped_to_outcome` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `change_set.captured_to_recorded` | reachable | §5; B.3; C.2 `RC-RESUME-016`; E.2 | `integration/composition` writer-change-set fixture kills the real writer capture at both endpoints |
