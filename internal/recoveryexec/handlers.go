@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -1368,22 +1369,50 @@ func attemptLaunchDirectory(execution HandlerContext, attemptID runstate.Attempt
 }
 
 func unjournaledLaunchDirectory(execution HandlerContext, attemptID runstate.AttemptID) (string, error) {
-	directory, err := attemptLaunchDirectory(execution, attemptID)
-	if err != nil || directory == "" {
-		return directory, err
+	if execution.Store == nil || execution.Driver == nil {
+		return "", errors.New("recovery executor requires store access for handoff stabilization")
 	}
 	state, err := execution.Driver.State()
 	if err != nil {
 		return "", err
 	}
-	observation, err := launch.ObserveHandoff(directory)
-	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrHandoffUnverifiable, err)
-	}
-	if adapterLaunch, ok := state.AdapterLaunches[attemptID]; ok && observation.HasIdentity && adapterLaunch.Process == observation.Identity {
+	root := filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.Driver.RunID()), string(attemptID))
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
-	return directory, nil
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "worktree" || entry.Name() == "output" {
+			continue
+		}
+		directory := filepath.Join(root, entry.Name())
+		observation, err := launch.ObserveHandoff(directory)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrHandoffUnverifiable, err)
+		}
+		if observation.HasIdentity && journaledLaunchIdentity(state, observation.Identity) {
+			continue
+		}
+		return directory, nil
+	}
+	return "", nil
+}
+
+func journaledLaunchIdentity(state runstate.State, identity runstate.ProcessIdentity) bool {
+	for _, adapterLaunch := range state.AdapterLaunches {
+		if reflect.DeepEqual(adapterLaunch.Process, identity) {
+			return true
+		}
+	}
+	for _, launch := range state.CriterionLaunches {
+		if spawned, ok := launch.(runstate.SpawnedCriterionLaunch); ok && reflect.DeepEqual(spawned.Process, identity) {
+			return true
+		}
+	}
+	return false
 }
 
 func stabilizeLaunchDirectory(ctx context.Context, directory string) error {

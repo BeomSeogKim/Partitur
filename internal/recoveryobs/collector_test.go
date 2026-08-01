@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
@@ -380,6 +381,49 @@ func TestCollectTreatsLiveSessionAsObservedAndInspectionFailureAsUnverifiable(t 
 	}
 	if observations.AdapterSweep != recovery.SweepUnverifiable {
 		t.Fatalf("incomplete session identity = %q, want unverifiable", observations.AdapterSweep)
+	}
+}
+
+func TestCollectLiveUnjournaledLaunchRequiresStabilizationBeforeRemoval(t *testing.T) {
+	command := exec.Command("sh", "-c", "exec sleep 5")
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	})
+	start, err := procid.Read(command.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := runstate.ProcessIdentity{PID: command.Process.Pid, SessionID: command.Process.Pid, Start: start}
+	store := collectorStore(t)
+	attemptRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "work", "run-1", "attempt-1")
+	launchDir := filepath.Join(attemptRoot, "launch")
+	writeHandoff(t, launchDir, live)
+	state := runstate.NewState(nil)
+	state.Run = runstate.RunRunning
+	state.Acceptances["attempt-1"] = runstate.Acceptance{Started: true}
+	projection := recovery.Projection{
+		State:              state,
+		CurrentHeadAttempt: &recovery.AttemptRecovery{AttemptID: "attempt-1", ScoreRevision: 1, State: runstate.AttemptVerifying, AcceptanceStarted: true},
+	}
+
+	observations, err := Collect(store, "run-1", projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observations.UnjournaledLaunch != recovery.UnjournaledLaunchUnstabilized {
+		t.Fatalf("live unjournaled launch = %q, want stabilization", observations.UnjournaledLaunch)
+	}
+	if _, err := os.Stat(launchDir); err != nil {
+		t.Fatalf("live launch directory was removed without a sweep: %v", err)
+	}
+	empty, err := adapter.SessionEmpty(live)
+	if err != nil || empty {
+		t.Fatalf("live launch session before stabilization: empty=%t err=%v", empty, err)
 	}
 }
 

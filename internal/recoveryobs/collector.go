@@ -396,14 +396,27 @@ func observeUnjournaledLaunch(attemptRoot string, state runstate.State, attemptI
 			if observeErr != nil {
 				return recovery.UnjournaledLaunchHandoffUnverifiable
 			}
-			if adapterLaunch, ok := state.AdapterLaunches[attemptID]; ok &&
-				observation.HasIdentity && reflect.DeepEqual(observation.Identity, adapterLaunch.Process) {
+			if observation.HasIdentity && journaledLaunchIdentity(state, observation.Identity) {
 				continue
 			}
 			return stabilizeUnjournaledLaunch(launchDir)
 		}
 	}
 	return recovery.UnjournaledLaunchAbsent
+}
+
+func journaledLaunchIdentity(state runstate.State, identity runstate.ProcessIdentity) bool {
+	for _, adapterLaunch := range state.AdapterLaunches {
+		if reflect.DeepEqual(adapterLaunch.Process, identity) {
+			return true
+		}
+	}
+	for _, launch := range state.CriterionLaunches {
+		if spawned, ok := launch.(runstate.SpawnedCriterionLaunch); ok && reflect.DeepEqual(spawned.Process, identity) {
+			return true
+		}
+	}
+	return false
 }
 
 func stabilizeUnjournaledLaunch(launchDir string) recovery.UnjournaledLaunchState {
@@ -414,10 +427,14 @@ func stabilizeUnjournaledLaunch(launchDir string) recovery.UnjournaledLaunchStat
 			return recovery.UnjournaledLaunchHandoffUnverifiable
 		}
 		if observation.HasIdentity {
-			if observeSession(observation.Identity) == recovery.SweepSafe {
+			empty, err := adapter.SessionEmpty(observation.Identity)
+			if err != nil {
+				return recovery.UnjournaledLaunchSweepUnverifiable
+			}
+			if empty {
 				return recovery.UnjournaledLaunchSessionEmpty
 			}
-			return recovery.UnjournaledLaunchSweepUnverifiable
+			return recovery.UnjournaledLaunchUnstabilized
 		}
 		if observation.MarkerFree {
 			return recovery.UnjournaledLaunchMarkerFree
