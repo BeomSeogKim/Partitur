@@ -31,6 +31,7 @@ const (
 	EdgeExecuteAdapterSweptToIntervalStopped             EdgeID = "execute.adapter_swept_to_interval_stopped"
 	EdgeExecuteIntervalStoppedToOutcome                  EdgeID = "execute.interval_stopped_to_outcome"
 	EdgeChangeSetCapturedToRecorded                      EdgeID = "change_set.captured_to_recorded"
+	EdgeAcceptanceSubjectPinnedToStarted                 EdgeID = "acceptance.subject_pinned_to_started"
 	EdgeCompositionMovementEvidenceToTerminal            EdgeID = "composition.movement_evidence_to_terminal"
 	EdgeCompositionCandidateEvidenceToTerminal           EdgeID = "composition.candidate_evidence_to_terminal"
 	EdgeLifecycleAttemptCompletedToMovementSucceeded     EdgeID = "lifecycle.attempt_completed_to_movement_succeeded"
