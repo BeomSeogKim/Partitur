@@ -1134,32 +1134,7 @@ func executeLiveReaderAttempt(
 			t.Fatal(err)
 		}
 	}
-
-	adapterDirectory := t.TempDir()
-	adapterPath := filepath.Join(adapterDirectory, "partitur-adapter-codex")
-	const fakeAdapter = `#!/bin/sh
-IFS= read -r ignored
-printf '%s\n' '{"jsonrpc":"2.0","id":"probe","result":{"protocol":2,"adapter":{"id":"codex","version":"fixture"},"capabilities":{"repo_read":true,"repo_write":true,"shell":false,"network":false,"resumable_sessions":false,"models":[{"id":"gpt-5.6-sol","aliases":[]}]},"enforcement":{"path_grants":true,"read_only":true,"network_grants":true,"shell_grants":true,"read_grants":true}}}'
-IFS= read -r ignored
-printf 'fixture report\n' > "$PARTITUR_TEST_OUTPUT/target-report"
-printf '%s\n' '{"jsonrpc":"2.0","method":"event","params":{"type":"artifact","artifact_id":"target-report","path":"target-report"}}'
-printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}'
-`
-	if err := os.WriteFile(adapterPath, []byte(fakeAdapter), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", adapterDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("PARTITUR_TEST_OUTPUT", attempt.OutputDir)
-	trampoline := filepath.Join(adapterDirectory, "partitur-trampoline")
-	command := exec.Command("go", "build", "-o", trampoline, "./cmd/partitur-trampoline")
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate driver test source")
-	}
-	command.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build trampoline: %v\n%s", err, output)
-	}
+	dependencies := readerSuccessDependencies(t)
 
 	result := ExecuteAttempt(context.Background(), AttemptExecution{
 		RepositoryRoot:      repositoryRoot,
@@ -1174,13 +1149,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 		PerformerID:         "worker",
 		SelectionReason:     "initial",
 		RemainingMS:         input.Projection.Scheduler.RemainingTime,
-	}, ExecutionDependencies{
-		Probe:             faultpoint.Nop{},
-		Client:            adapter.NewClient(),
-		ResolveTrampoline: func() (string, error) { return trampoline, nil },
-		Now:               time.Now,
-		NewID:             workspace.NewID,
-	})
+	}, executionDependenciesFrom(dependencies))
 	if result.Outcome != OutcomeSucceeded || result.Err != nil {
 		t.Fatalf("live ExecuteAttempt result = %+v", result)
 	}
@@ -1189,6 +1158,104 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 		t.Fatal(err)
 	}
 	return state
+}
+
+func readerSuccessDependencies(t *testing.T) dependencies {
+	t.Helper()
+	adapterDirectory := t.TempDir()
+	adapterPath := filepath.Join(adapterDirectory, "partitur-adapter-codex")
+	const fakeAdapter = `#!/bin/sh
+IFS= read -r ignored
+printf '%s\n' '{"jsonrpc":"2.0","id":"probe","result":{"protocol":2,"adapter":{"id":"codex","version":"fixture"},"capabilities":{"repo_read":true,"repo_write":true,"shell":false,"network":false,"resumable_sessions":false,"models":[{"id":"gpt-5.6-sol","aliases":[]}]},"enforcement":{"path_grants":true,"read_only":true,"network_grants":true,"shell_grants":true,"read_grants":true}}}'
+IFS= read -r request
+output=$(printf '%s' "$request" | sed -n 's/.*"output_dir":"\([^"]*\)".*/\1/p')
+if [ -z "$output" ]; then exit 1; fi
+printf 'fixture report\n' > "$output/target-report"
+printf '%s\n' '{"jsonrpc":"2.0","method":"event","params":{"type":"artifact","artifact_id":"target-report","path":"target-report"}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}'
+`
+	if err := os.WriteFile(adapterPath, []byte(fakeAdapter), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", adapterDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	trampoline := filepath.Join(adapterDirectory, "partitur-trampoline")
+	command := exec.Command("go", "build", "-o", trampoline, "./cmd/partitur-trampoline")
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate driver test source")
+	}
+	command.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build trampoline: %v\n%s", err, output)
+	}
+	return dependencies{
+		probe:             faultpoint.Nop{},
+		client:            adapter.NewClient(),
+		resolveTrampoline: func() (string, error) { return trampoline, nil },
+		now:               time.Now,
+		newID:             workspace.NewID,
+		workspaceStart:    workspace.Start,
+	}
+}
+
+func appendLiveSuccessorFailure(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID, input runstore.RunInput, movementID, base string) {
+	t.Helper()
+	attempt, err := workspace.CreateRecoveredAttemptAtBase(store, authority, input, movementID, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []runstate.Event{
+		{RunID: runID, ScoreRevision: input.Score.Revision(), MovementID: runstate.MovementID(movementID), Type: runstate.EventMovementReady, Payload: testPayload(t, map[string]any{})},
+		{RunID: runID, ScoreRevision: input.Score.Revision(), MovementID: runstate.MovementID(movementID), Type: runstate.EventMovementStarted, Payload: testPayload(t, map[string]any{})},
+		{RunID: runID, ScoreRevision: input.Score.Revision(), MovementID: runstate.MovementID(movementID), AttemptID: attempt.AttemptID, Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "gpt-5.6-sol"})},
+		{RunID: runID, ScoreRevision: input.Score.Revision(), MovementID: runstate.MovementID(movementID), AttemptID: attempt.AttemptID, Type: runstate.EventAttemptFailed, Payload: testPayload(t, map[string]any{"kind": "task_failed", "disposition": map[string]any{"charged": "quality_retry", "movement_terminal": false}})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test.successor."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertSuccessorMovementBase(t *testing.T, repositoryRoot string, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID, movementID, ref, wantTree, forbiddenHash string) {
+	t.Helper()
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started runstate.Event
+	for index := len(journal.Events) - 1; index >= 0; index-- {
+		event := journal.Events[index]
+		if event.MovementID == runstate.MovementID(movementID) && event.Type == runstate.EventAttemptStarted {
+			started = event
+			break
+		}
+	}
+	if started.AttemptID == "" {
+		t.Fatal("successor attempt.started is absent")
+	}
+	payload := decodeDriverPayload(t, started)
+	hash, _ := payload["base_composition_hash"].(string)
+	if hash == "" || (forbiddenHash != "" && hash == forbiddenHash) {
+		t.Fatalf("successor base composition hash = %q, candidate composition hash = %q", hash, forbiddenHash)
+	}
+	worktree := filepath.Join(repositoryRoot, ".partitur", "work", string(runID), string(started.AttemptID), "worktree")
+	if got := testRevision(t, worktree, "HEAD"); got != testRevision(t, repositoryRoot, ref) {
+		t.Fatalf("successor worktree HEAD = %q, want pinned base %q", got, ref)
+	}
+	if got := "git-sha1:" + testRevision(t, worktree, "HEAD^{tree}"); got != wantTree {
+		t.Fatalf("successor execution base tree = %q, want %q", got, wantTree)
+	}
+	state, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Acceptances[started.AttemptID].SubjectTree; got != wantTree {
+		t.Fatalf("successor recorded subject = %q, want execution base %q", got, wantTree)
+	}
+}
+
+func candidateBaseRef(runID runstate.RunID) string {
+	return "refs/partitur/runs/" + string(runID) + "/candidate"
 }
 
 func testRevision(t *testing.T, directory, revision string) string {
@@ -1336,6 +1403,79 @@ func TestLiveMaterializesRecordedSuccessorByRecordedDisposition(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLiveSuccessorMaterializesAtMovementBase(t *testing.T) {
+	t.Run("final movement uses pinned candidate", func(t *testing.T) {
+		preparation, store, authority, started, _, _ := candidateFanInCleanFixture(t)
+		defer authority.Release()
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ComposeCandidate(store, authority, input, 1, time.Now, workspace.NewID); err != nil {
+			t.Fatal(err)
+		}
+		input, err = store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate := input.Projection.State.ApplicationCandidate
+		if candidate == nil || candidate.ResultTree == input.BaseTree {
+			t.Fatalf("candidate = %#v, base = %q", candidate, input.BaseTree)
+		}
+		appendLiveSuccessorFailure(t, store, authority, started.RunID, input, "target", candidateBaseRef(started.RunID))
+		input, err = store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := liveMaterializeSuccessor(context.Background(), Result{RunID: started.RunID}, store, authority, nil, readerSuccessDependencies(t), input)
+		if result.Outcome != OutcomeSucceeded || result.Err != nil {
+			t.Fatalf("final successor result = %+v", result)
+		}
+		assertSuccessorMovementBase(t, preparation.RepositoryRoot, store, authority, started.RunID, "target", candidateBaseRef(started.RunID), candidate.ResultTree, string(candidate.CompositionDependencyHash))
+	})
+
+	t.Run("fan-in reader uses pinned movement base", func(t *testing.T) {
+		preparation, store, authority, started, _, _ := fanInCleanFixture(t)
+		defer authority.Release()
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		appendLiveSuccessorFailure(t, store, authority, started.RunID, input, "target", testRevision(t, preparation.RepositoryRoot, "refs/partitur/runs/"+string(started.RunID)+"/base"))
+		input, err = store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := liveMaterializeSuccessor(context.Background(), Result{RunID: started.RunID}, store, authority, nil, readerSuccessDependencies(t), input)
+		if result.Outcome != OutcomeSucceeded || result.Err != nil {
+			t.Fatalf("fan-in successor result = %+v", result)
+		}
+		baseRef := "refs/partitur/runs/" + string(started.RunID) + "/movements/target/base"
+		assertSuccessorMovementBase(t, preparation.RepositoryRoot, store, authority, started.RunID, "target", baseRef, "git-sha1:"+testRevision(t, preparation.RepositoryRoot, baseRef+"^{tree}"), "")
+	})
+
+	t.Run("independent reader omits movement hash", func(t *testing.T) {
+		store, authority, runID, input, _ := liveChargedSuccessorFixture(t, "quality_retry")
+		defer authority.Release()
+		_ = liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, readerSuccessDependencies(t), input)
+		journal, err := store.ReadJournal(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := len(journal.Events) - 1; index >= 0; index-- {
+			event := journal.Events[index]
+			if event.MovementID != "inspect" || event.Type != runstate.EventAttemptStarted {
+				continue
+			}
+			if _, present := decodeDriverPayload(t, event)["base_composition_hash"]; present {
+				t.Fatal("independent successor attempt.started includes base_composition_hash")
+			}
+			return
+		}
+		t.Fatal("independent successor attempt.started is absent")
+	})
 }
 
 func TestLiveFallbackChainNeverRevisitsEarlierPerformer(t *testing.T) {

@@ -623,7 +623,17 @@ func executeRecoveredAttempt(
 	input runstore.RunInput,
 	movementID, performerID, reason, causationID string,
 ) error {
-	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performerID, reason, causationID, "", input.BaseTree, "")
+	base, err := driver.PrepareSuccessorBase(execution.Store, execution.Driver, input, runstate.MovementID(movementID), input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)
+	if err != nil {
+		if errors.Is(err, driver.ErrCompositionTerminalized) {
+			return errMovementCompositionTerminalized
+		}
+		if errors.Is(err, driver.ErrCompositionCancelled) {
+			return ErrRecoveryReplan
+		}
+		return err
+	}
+	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performerID, reason, causationID, base.Commit, base.Tree, base.Hash)
 }
 
 func executeRecoveredAttemptAtBase(

@@ -26,10 +26,10 @@ func TestMutationRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *
 	assertRecoveryMutationKilled(t, "TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt", goEnvironment, filepath.Join("internal", "driver", "movement_composition.go"), "return MovementBase{}, ErrCompositionTerminalized", "return MovementBase{}, errors.New(\"driver: injected non-terminal composition failure\")")
 }
 
-func TestMutationRecoveryFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
+func TestMutationRecoveryFanInSuccessorMaterializesAtComposedBase(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
-	TestRecoveryFanInCreatesTargetAtPinnedBaseCommit(t)
-	assertRecoveryMutationKilled(t, "TestRecoveryFanInCreatesTargetAtPinnedBaseCommit", goEnvironment, filepath.Join("internal", "recoveryexec", "handlers.go"), "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)", "workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)")
+	TestRecoveryFanInSuccessorMaterializesAtComposedBase(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryFanInSuccessorMaterializesAtComposedBase", goEnvironment, filepath.Join("internal", "recoveryexec", "handlers.go"), "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)", "workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)")
 }
 
 func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t *testing.T) {
