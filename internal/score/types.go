@@ -73,17 +73,24 @@ type OutputView struct {
 
 // ArtifactCriterionView is one declared hard.artifact criterion.
 type ArtifactCriterionView struct {
+	SourceIndex  int
 	ID           string
 	ArtifactID   string
 	ExpectedHash string
 }
 
-// AcceptanceView exposes the artifact-only acceptance surface. The presence
-// flags prevent a caller from silently treating an unsupported criterion kind
-// as absent.
+// RunCriterionView is one declared hard.run criterion.
+type RunCriterionView struct {
+	SourceIndex int
+	ID          string
+	Argv        []string
+	TimeoutMin  int64
+}
+
+// AcceptanceView exposes the compiled hard-criterion surface.
 type AcceptanceView struct {
 	ArtifactCriteria  []ArtifactCriterionView
-	HasRunCriteria    bool
+	RunCriteria       []RunCriterionView
 	HasReviewCriteria bool
 	HumanGate         string
 }

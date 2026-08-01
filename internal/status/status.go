@@ -379,7 +379,7 @@ func attemptsFor(state runstate.State, movementID runstate.MovementID) []Attempt
 }
 
 func marksFor(state runstate.State, movementID runstate.MovementID, view score.MovementView) []Mark {
-	if len(view.Acceptance.ArtifactCriteria) == 0 {
+	if len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria) == 0 {
 		return []Mark{}
 	}
 	failedAttempts := 0

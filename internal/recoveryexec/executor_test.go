@@ -1552,6 +1552,65 @@ func TestRCResume033ReachesAcceptanceEvaluationCompletedAfterSelectedCriterion(t
 	t.Fatalf("journal has no %s: %+v", runstate.EventAcceptanceEvaluationCompleted, journal.Events)
 }
 
+func TestRCResume033BudgetExhaustionUsesSharedAcceptanceTerminal(t *testing.T) {
+	installRecoverySuccessAdapter(t)
+	fixture := resumeCriterionFixture(t, true)
+	defer fixture.driver.Release()
+	input, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.Scheduler.RemainingTime != 0 {
+		t.Fatalf("recovery budget fixture remaining=%d, want 0", input.Projection.Scheduler.RemainingTime)
+	}
+
+	if err := resumeCriterion(context.Background(), HandlerContext{
+		Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID,
+	}, recovery.Action{Kind: recovery.ActionResumeCriterion, AttemptID: fixture.attemptID, CriterionID: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := -1
+	for index, event := range journal.Events {
+		if event.Type == runstate.EventCriterionStarted && bytes.Contains(event.Payload, []byte(`"criterion_id":"second"`)) {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatal("resumed run criterion did not start")
+	}
+	got := make([]runstate.EventType, 0, len(journal.Events)-start)
+	for _, event := range journal.Events[start:] {
+		got = append(got, event.Type)
+	}
+	want := []runstate.EventType{
+		runstate.EventCriterionStarted, runstate.EventCriterionCompleted, runstate.EventExecutionStopped,
+		runstate.EventAttemptFailed, runstate.EventMovementFailed, runstate.EventRunFailed,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("recovered budget terminal events = %v, want %v", got, want)
+	}
+	for _, event := range journal.Events[start:] {
+		if event.Type != runstate.EventExecutionStopped && event.Type != runstate.EventAttemptFailed {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == runstate.EventExecutionStopped && payload["reason"] != "budget_exhausted" {
+			t.Fatalf("recovered budget execution.stop = %#v", payload)
+		}
+		if event.Type == runstate.EventAttemptFailed && payload["kind"] != "budget_exhausted" {
+			t.Fatalf("recovered budget attempt.failed = %#v", payload)
+		}
+	}
+}
+
 func TestRCResume019MatchesLiveMovementSuccessPayload(t *testing.T) {
 	for _, final := range []bool{false, true} {
 		t.Run(fmt.Sprintf("final=%t", final), func(t *testing.T) {
@@ -2118,8 +2177,12 @@ type resumeCriterionFixtureState struct {
 	attemptID runstate.AttemptID
 }
 
-func resumeCriterionFixture(t *testing.T) resumeCriterionFixtureState {
+func resumeCriterionFixture(t *testing.T, budgetSecondRun ...bool) resumeCriterionFixtureState {
 	t.Helper()
+	secondCriterion := map[string]any{"id": "second", "artifact": "second"}
+	if len(budgetSecondRun) != 0 && budgetSecondRun[0] {
+		secondCriterion = map[string]any{"id": "second", "run": []any{"true"}}
+	}
 	root := t.TempDir()
 	scoreDocument := map[string]any{
 		"score": "0.2", "name": "resume-criterion", "revision": 1, "status": "finalized", "goal": "fixture",
@@ -2128,7 +2191,7 @@ func resumeCriterionFixture(t *testing.T) resumeCriterionFixtureState {
 		"movements": []any{map[string]any{
 			"id": "write", "part": "writer", "grants": []any{"repo_read"}, "instruction": "fixture",
 			"outputs":    []any{map[string]any{"id": "first", "kind": "artifact"}, map[string]any{"id": "second", "kind": "artifact"}},
-			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "first", "artifact": "first"}, map[string]any{"id": "second", "artifact": "second"}}},
+			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "first", "artifact": "first"}, secondCriterion}},
 		}},
 		"policy": map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10}},
 	}
@@ -2201,6 +2264,11 @@ func resumeCriterionFixture(t *testing.T) resumeCriterionFixtureState {
 	appendEvent(runstate.EventArtifactRecorded, map[string]any{"logical_output_id": "second", "kind": "artifact", "content_hash": "sha256:second", "size_bytes": 1, "source_path": "second"})
 	appendEvent(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false})
 	appendEvent(runstate.EventVerificationPassed, map[string]any{})
+	if len(budgetSecondRun) != 0 && budgetSecondRun[0] {
+		appendEvent(runstate.EventExecutionStarted, map[string]any{"interval_id": "spent", "phase": "adapter", "wall_start": "2026-08-01T00:00:00.000Z", "remaining_at_start": 600000})
+		appendEvent(runstate.EventExecutionStopped, map[string]any{"interval_id": "spent", "reason": "normal", "charging": "measured", "charged_duration": 600000})
+		appendEvent(runstate.EventExecutionStarted, map[string]any{"interval_id": "acceptance", "phase": "acceptance", "wall_start": "2026-08-01T00:00:00.000Z", "remaining_at_start": 0})
+	}
 	loaded, err := store.LoadRunInput(started.RunID)
 	if err != nil {
 		authority.Release()
@@ -2211,9 +2279,10 @@ func resumeCriterionFixture(t *testing.T) resumeCriterionFixtureState {
 		authority.Release()
 		t.Fatal(err)
 	}
+	subjectTree := "git-sha1:" + recoveryGitText(t, root, "rev-parse", "HEAD^{tree}")
 	acceptanceStarted, err := plan.StartEvent(runstate.Event{
 		RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID,
-	}, "git-sha1:subject")
+	}, subjectTree)
 	if err != nil {
 		authority.Release()
 		t.Fatal(err)
@@ -2222,7 +2291,7 @@ func resumeCriterionFixture(t *testing.T) resumeCriterionFixtureState {
 	var firstEvents []runstate.Event
 	_, err = acceptance.EvaluateStartedCriterion(plan, acceptance.Evaluation{
 		RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID,
-		SubjectTree: "git-sha1:subject",
+		SubjectTree: subjectTree,
 		LookupArtifact: func(id runstate.ArtifactInstanceID) (runstate.ArtifactRecord, bool, error) {
 			record, ok := map[runstate.ArtifactInstanceID]runstate.ArtifactRecord{
 				"first@" + runstate.ArtifactInstanceID(attempt.AttemptID):  {AttemptID: attempt.AttemptID, LogicalOutputID: "first", Kind: "artifact"},

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
+	"github.com/BeomSeogKim/Partitur/internal/criterionexec"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/launch"
@@ -440,7 +442,7 @@ func selectInitialPerformer(ctx context.Context, execution HandlerContext, actio
 	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performer.ID, "initial", "", baseCommit, baseTree, baseHash)
 }
 
-func resumeCriterion(_ context.Context, execution HandlerContext, action recovery.Action) error {
+func resumeCriterion(ctx context.Context, execution HandlerContext, action recovery.Action) error {
 	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" || action.CriterionID == "" {
 		return errors.New("recovery criterion resume requires store, driver, attempt, and criterion")
 	}
@@ -472,7 +474,7 @@ func resumeCriterion(_ context.Context, execution HandlerContext, action recover
 		if err != nil {
 			return err
 		}
-		_, err = acceptance.EvaluateStartedCriterion(plan, acceptance.Evaluation{
+		evaluation, err := acceptance.EvaluateStartedCriterion(plan, acceptance.Evaluation{
 			RunID: execution.Driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
 			MovementID: attempt.MovementID, PartID: movement.PartID, AttemptID: action.AttemptID,
 			SubjectTree:        acceptanceState.SubjectTree,
@@ -488,10 +490,70 @@ func resumeCriterion(_ context.Context, execution HandlerContext, action recover
 			Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
 				return execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.acceptance."+string(event.Type)))
 			},
+			RunCriterion: func(request acceptance.RunCriterionRequest) acceptance.RunCriterionResult {
+				trampoline, resolveErr := exec.LookPath("partitur-trampoline")
+				if resolveErr != nil {
+					return acceptance.RunCriterionResult{Err: fmt.Errorf("resolve partitur-trampoline: %w", resolveErr)}
+				}
+				trampoline, resolveErr = filepath.Abs(trampoline)
+				if resolveErr != nil {
+					return acceptance.RunCriterionResult{Err: resolveErr}
+				}
+				attemptRoot := filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID), string(action.AttemptID))
+				return criterionexec.Run(criterionexec.Config{
+					RunID: execution.RunID, AttemptID: action.AttemptID, AttemptRoot: attemptRoot,
+					Worktree: filepath.Join(attemptRoot, "worktree"), RepositoryRoot: execution.Store.RepositoryRoot(),
+					SubjectTree: acceptanceState.SubjectTree, TrampolinePath: trampoline,
+					RemainingMS: input.Projection.Scheduler.RemainingTime, Probe: faultpoint.ProbeFromEnvironment(),
+				}, request)
+			},
 		}, string(action.CriterionID))
-		return err
+		if err != nil {
+			return err
+		}
+		if evaluation.BudgetExhausted {
+			terminal := driver.TerminalizeAcceptanceBudget(ctx, driver.AcceptanceBudgetTerminalization{
+				RepositoryRoot: execution.Store.RepositoryRoot(),
+				RunID:          execution.RunID,
+				AttemptID:      action.AttemptID,
+				Authority:      execution.Driver,
+				Probe:          faultpoint.ProbeFromEnvironment(),
+				Close: func() error {
+					return closeRecoveredAcceptanceBudgetInterval(execution, action)
+				},
+			})
+			return terminal.Err
+		}
+		return nil
 	}
 	return fmt.Errorf("recovery criterion movement %q is absent from pinned score", attempt.MovementID)
+}
+
+func closeRecoveredAcceptanceBudgetInterval(execution HandlerContext, action recovery.Action) error {
+	state, err := execution.Driver.State()
+	if err != nil {
+		return err
+	}
+	interval := state.OpenExecution
+	if interval == nil || interval.Phase != "acceptance" {
+		return errors.New("recovery acceptance budget has no open acceptance interval")
+	}
+	observed := time.Now().UTC()
+	started, err := time.Parse(time.RFC3339Nano, interval.WallStart)
+	if err != nil {
+		return fmt.Errorf("parse interval wall_start: %w", err)
+	}
+	duration := observed.Sub(started).Milliseconds()
+	if duration < 0 {
+		duration = 0
+	}
+	if duration > interval.RemainingAtStart {
+		duration = interval.RemainingAtStart
+	}
+	return appendEvent(execution, state, action, runstate.EventExecutionStopped, map[string]any{
+		"interval_id": interval.ID, "reason": "budget_exhausted", "charging": "clamped",
+		"charged_duration": duration, "observed_at": observed.Format("2006-01-02T15:04:05.000Z"),
+	})
 }
 
 func appendAcceptanceEvaluationCompleted(_ context.Context, execution HandlerContext, action recovery.Action) error {

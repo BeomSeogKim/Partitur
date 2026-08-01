@@ -30,17 +30,54 @@ type ArtifactLookup func(
 // AppendEvent durably appends one runner-owned event.
 type AppendEvent func(runstate.Event) (faultpoint.DurabilityReceipt, error)
 
+// RunCriterionExecutor performs the external, process-owning portion of one
+// hard.run criterion. Acceptance retains the durable lifecycle and verdict.
+type RunCriterionExecutor func(RunCriterionRequest) RunCriterionResult
+
+type RunCriterionRequest struct {
+	ID            string
+	Argv          []string
+	TimeoutMin    int64
+	RecordStarted func(runstate.ProcessIdentity) (faultpoint.DurabilityReceipt, error)
+}
+
+type RunCriterionResult struct {
+	Err         error
+	SpawnFailed bool
+	// Cancelled reports that the owning driver observed durable control while
+	// this criterion was in flight and swept its recorded session. Cancellation
+	// owns the attempt terminal projection, so evaluation records no criterion
+	// outcome after this boundary.
+	Cancelled bool
+	// BudgetExhausted reports that the run budget, rather than the
+	// criterion timeout, ended this command. The driver owns the resulting
+	// attempt and run terminal sequence.
+	BudgetExhausted bool
+	// DeadlineTied reports that the criterion timeout and remaining run budget
+	// were equal. It remains a criterion timeout, but no retry is fundable.
+	DeadlineTied     bool
+	Outcome          string
+	Reason           string
+	ErrorDetail      string
+	ExitCode         *int64
+	DurationMS       int64
+	OutputRef        string
+	TruncatedStreams []string
+}
+
 // Evaluation binds one compiled plan to one verified attempt and subject.
 type Evaluation struct {
-	RunID              runstate.RunID
-	ScoreRevision      uint64
-	MovementID         runstate.MovementID
-	PartID             string
-	AttemptID          runstate.AttemptID
-	SubjectTree        string
-	FailureDisposition runstate.Disposition
-	LookupArtifact     ArtifactLookup
-	Append             AppendEvent
+	RunID                 runstate.RunID
+	ScoreRevision         uint64
+	MovementID            runstate.MovementID
+	PartID                string
+	AttemptID             runstate.AttemptID
+	SubjectTree           string
+	FailureDisposition    runstate.Disposition
+	FailureDispositionFor func(RunCriterionResult) (runstate.Disposition, error)
+	LookupArtifact        ArtifactLookup
+	RunCriterion          RunCriterionExecutor
+	Append                AppendEvent
 }
 
 // Result reports the durable evaluation boundary and the derived VERIFIED
@@ -48,6 +85,8 @@ type Evaluation struct {
 type Result struct {
 	EvaluationCompleted bool
 	Verified            bool
+	BudgetExhausted     bool
+	Cancelled           bool
 	AcceptanceSpecHash  runstate.Hash
 	FailedCriterionID   string
 	FailureReason       string
@@ -72,6 +111,8 @@ type Plan struct {
 
 type criterion struct {
 	id           string
+	run          []string
+	timeoutMin   int64
 	artifactID   string
 	outputKind   string
 	expectedHash string
@@ -87,15 +128,9 @@ func (plan *Plan) Hash() runstate.Hash {
 	return plan.specHash
 }
 
-// Compile builds the effective artifact-only plan. Declared criteria retain
+// Compile builds the effective acceptance plan. Declared criteria retain
 // declaration order; generated checks retain output declaration order.
 func Compile(movement score.MovementView) (*Plan, error) {
-	if movement.Acceptance.HasRunCriteria {
-		return nil, fmt.Errorf(
-			"%w: run criteria require unit 3.2",
-			ErrUnsupportedCriteria,
-		)
-	}
 	if movement.Acceptance.HasReviewCriteria {
 		return nil, fmt.Errorf(
 			"%w: review criteria require unit 4.1",
@@ -116,26 +151,43 @@ func Compile(movement score.MovementView) (*Plan, error) {
 		outputKinds[output.ArtifactID] = output.Kind
 	}
 	replaced := make(map[string]bool, len(movement.Acceptance.ArtifactCriteria))
-	criteria := make([]criterion, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Outputs))
-	for _, declared := range movement.Acceptance.ArtifactCriteria {
-		compiled, err := compileCriterion(
-			declared.ID,
-			declared.ArtifactID,
-			outputKinds[declared.ArtifactID],
-			declared.ExpectedHash,
-			false,
-		)
+	criteria := make([]criterion, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Acceptance.RunCriteria)+len(movement.Outputs))
+	type declaredCriterion struct {
+		source   int
+		artifact *score.ArtifactCriterionView
+		run      *score.RunCriterionView
+	}
+	declared := make([]declaredCriterion, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Acceptance.RunCriteria))
+	for index := range movement.Acceptance.ArtifactCriteria {
+		declared = append(declared, declaredCriterion{source: movement.Acceptance.ArtifactCriteria[index].SourceIndex, artifact: &movement.Acceptance.ArtifactCriteria[index]})
+	}
+	for index := range movement.Acceptance.RunCriteria {
+		declared = append(declared, declaredCriterion{source: movement.Acceptance.RunCriteria[index].SourceIndex, run: &movement.Acceptance.RunCriteria[index]})
+	}
+	for index := 1; index < len(declared); index++ {
+		for previous := index; previous > 0 && declared[previous].source < declared[previous-1].source; previous-- {
+			declared[previous], declared[previous-1] = declared[previous-1], declared[previous]
+		}
+	}
+	for _, item := range declared {
+		var compiled criterion
+		var err error
+		if item.artifact != nil {
+			compiled, err = compileArtifactCriterion(item.artifact.ID, item.artifact.ArtifactID, outputKinds[item.artifact.ArtifactID], item.artifact.ExpectedHash, false)
+			replaced[item.artifact.ArtifactID] = true
+		} else {
+			compiled, err = compileRunCriterion(item.run.ID, item.run.Argv, item.run.TimeoutMin)
+		}
 		if err != nil {
 			return nil, err
 		}
 		criteria = append(criteria, compiled)
-		replaced[declared.ArtifactID] = true
 	}
 	for _, output := range movement.Outputs {
 		if output.Kind == "change_set" || replaced[output.ArtifactID] {
 			continue
 		}
-		compiled, err := compileCriterion(
+		compiled, err := compileArtifactCriterion(
 			generatedArtifactPrefix+output.ArtifactID,
 			output.ArtifactID,
 			output.Kind,
@@ -177,13 +229,13 @@ func Compile(movement score.MovementView) (*Plan, error) {
 	return &Plan{
 		criteria:           criteria,
 		specHash:           runstate.Hash(specHash),
-		declaredHard:       len(movement.Acceptance.ArtifactCriteria),
+		declaredHard:       len(movement.Acceptance.ArtifactCriteria) + len(movement.Acceptance.RunCriteria),
 		acceptanceVersions: acceptanceVersions,
 		criterionVersions:  criterionVersions,
 	}, nil
 }
 
-func compileCriterion(
+func compileArtifactCriterion(
 	id, artifactID, outputKind, expectedHash string,
 	generated bool,
 ) (criterion, error) {
@@ -207,6 +259,18 @@ func compileCriterion(
 		specHash:     runstate.Hash(hash),
 		generated:    generated,
 	}, nil
+}
+
+func compileRunCriterion(id string, argv []string, timeoutMin int64) (criterion, error) {
+	projection := map[string]any{"kind": "hard.run", "id": id, "run": stringsToAny(argv)}
+	if timeoutMin != 0 {
+		projection["timeout_min"] = float64(timeoutMin)
+	}
+	hash, err := canonical.Hash(canonical.DomainCriterionSpec, projection)
+	if err != nil {
+		return criterion{}, err
+	}
+	return criterion{id: id, run: append([]string(nil), argv...), timeoutMin: timeoutMin, specHash: runstate.Hash(hash)}, nil
 }
 
 // Evaluate runs every in-process artifact criterion in plan order.
@@ -241,7 +305,7 @@ func evaluate(
 	evaluation Evaluation,
 	dependencies evaluationDependencies,
 ) (Result, error) {
-	if !validEvaluation(plan, evaluation) {
+	if plan == nil || !validCriteriaEvaluation(plan, evaluation, plan.criteria) {
 		return Result{}, ErrInvalidEvaluation
 	}
 	base := runstate.Event{
@@ -263,6 +327,9 @@ func evaluate(
 }
 
 func evaluateStarted(plan *Plan, evaluation Evaluation, dependencies evaluationDependencies) (Result, error) {
+	if plan == nil {
+		return Result{}, ErrInvalidEvaluation
+	}
 	return evaluateStartedCriteria(plan, evaluation, plan.criteria, true, dependencies)
 }
 
@@ -277,6 +344,9 @@ func evaluateStartedCriterion(
 	}
 	for _, selected := range plan.criteria {
 		if selected.id == criterionID {
+			if !validCriteriaEvaluation(plan, evaluation, []criterion{selected}) {
+				return Result{}, ErrInvalidEvaluation
+			}
 			return evaluateStartedCriteria(plan, evaluation, []criterion{selected}, false, dependencies)
 		}
 	}
@@ -291,7 +361,7 @@ func evaluateStartedCriteria(
 	dependencies evaluationDependencies,
 ) (Result, error) {
 	result := Result{}
-	if !validEvaluation(plan, evaluation) {
+	if !validCriteriaEvaluation(plan, evaluation, criteria) {
 		return result, ErrInvalidEvaluation
 	}
 	result.AcceptanceSpecHash = plan.specHash
@@ -305,20 +375,57 @@ func evaluateStartedCriteria(
 	outcomes := make([]CriterionOutcome, 0, len(criteria))
 	for _, criterion := range criteria {
 		startedAt := dependencies.now()
-		criterionStarted, err := eventWithPayload(base, runstate.EventCriterionStarted, map[string]any{
-			"criterion_id":        criterion.id,
-			"criterion_spec_hash": criterion.specHash,
-			"subject_tree":        evaluation.SubjectTree,
-			"identity_versions":   plan.criterionVersions,
-		})
-		if err != nil {
-			return result, err
+		appendStarted := func(identity *runstate.ProcessIdentity, spawnFailed bool) error {
+			payload := map[string]any{
+				"criterion_id":        criterion.id,
+				"criterion_spec_hash": criterion.specHash,
+				"subject_tree":        evaluation.SubjectTree,
+				"identity_versions":   plan.criterionVersions,
+			}
+			if identity != nil {
+				payload["criterion_process"] = processPayload(*identity)
+			}
+			if spawnFailed {
+				payload["spawn_failed"] = true
+			}
+			criterionStarted, err := eventWithPayload(base, runstate.EventCriterionStarted, payload)
+			if err != nil {
+				return err
+			}
+			return appendEvent(evaluation.Append, criterionStarted, &result)
 		}
-		if err := appendEvent(evaluation.Append, criterionStarted, &result); err != nil {
-			return result, err
+		var outcome, reason, detail string
+		var runResult RunCriterionResult
+		if len(criterion.run) != 0 {
+			runResult = evaluation.RunCriterion(RunCriterionRequest{
+				ID: criterion.id, Argv: append([]string(nil), criterion.run...), TimeoutMin: criterion.timeoutMin,
+				RecordStarted: func(identity runstate.ProcessIdentity) (faultpoint.DurabilityReceipt, error) {
+					before := len(result.Receipts)
+					if err := appendStarted(&identity, false); err != nil {
+						return faultpoint.DurabilityReceipt{}, err
+					}
+					return result.Receipts[before], nil
+				},
+			})
+			if runResult.Err != nil {
+				return result, runResult.Err
+			}
+			if runResult.SpawnFailed {
+				if err := appendStarted(nil, true); err != nil {
+					return result, err
+				}
+			}
+			if runResult.Cancelled {
+				result.Cancelled = true
+				return result, nil
+			}
+			outcome, reason, detail = runResult.Outcome, runResult.Reason, runResult.ErrorDetail
+		} else {
+			if err := appendStarted(nil, false); err != nil {
+				return result, err
+			}
+			outcome, reason, detail = evaluateCriterion(criterion, evaluation)
 		}
-
-		outcome, reason, detail := evaluateCriterion(criterion, evaluation)
 		duration := dependencies.now().Sub(startedAt).Milliseconds()
 		if duration < 0 {
 			duration = 0
@@ -330,6 +437,18 @@ func evaluateStartedCriteria(
 			"outcome":             outcome,
 			"duration_ms":         duration,
 			"identity_versions":   plan.criterionVersions,
+		}
+		if len(criterion.run) != 0 {
+			completedPayload["duration_ms"] = runResult.DurationMS
+			if runResult.ExitCode != nil {
+				completedPayload["exit_code"] = *runResult.ExitCode
+			}
+			if runResult.OutputRef != "" {
+				completedPayload["output_ref"] = runResult.OutputRef
+			}
+			if len(runResult.TruncatedStreams) != 0 {
+				completedPayload["truncated_streams"] = stringsToAny(runResult.TruncatedStreams)
+			}
 		}
 		if outcome == "ERROR" {
 			completedPayload["error_detail"] = detail
@@ -346,15 +465,26 @@ func evaluateStartedCriteria(
 			return result, err
 		}
 		outcomes = append(outcomes, CriterionOutcome{CriterionID: criterion.id, Outcome: outcome})
+		if runResult.BudgetExhausted {
+			result.BudgetExhausted = true
+			return result, nil
+		}
 		if outcome == "PASS" {
 			continue
 		}
 
+		disposition := evaluation.FailureDisposition
+		if len(criterion.run) != 0 && evaluation.FailureDispositionFor != nil {
+			disposition, err = evaluation.FailureDispositionFor(runResult)
+			if err != nil {
+				return result, err
+			}
+		}
 		failed, err := eventWithPayload(base, runstate.EventAcceptanceFailed, map[string]any{
 			"reason":              reason,
 			"failed_criterion_id": criterion.id,
 			"subject_tree":        evaluation.SubjectTree,
-			"disposition":         evaluation.FailureDisposition,
+			"disposition":         disposition,
 		})
 		if err != nil {
 			return result, err
@@ -429,7 +559,22 @@ func validEvaluation(plan *Plan, evaluation Evaluation) bool {
 		evaluation.RunID != "" && evaluation.ScoreRevision != 0 &&
 		evaluation.MovementID != "" && evaluation.PartID != "" &&
 		evaluation.AttemptID != "" && evaluation.SubjectTree != "" &&
-		evaluation.LookupArtifact != nil && evaluation.Append != nil
+		evaluation.Append != nil
+}
+
+func validCriteriaEvaluation(plan *Plan, evaluation Evaluation, criteria []criterion) bool {
+	if !validEvaluation(plan, evaluation) {
+		return false
+	}
+	for _, value := range criteria {
+		if value.artifactID != "" && evaluation.LookupArtifact == nil {
+			return false
+		}
+		if len(value.run) != 0 && evaluation.RunCriterion == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // StartEvent builds the durable acceptance boundary from the compiled plan.
@@ -527,4 +672,23 @@ func identityVersions(domains ...canonical.Domain) (map[string]any, error) {
 		"canonical_encoding": canonical.CanonicalEncodingVersion,
 		"projections":        projections,
 	}, nil
+}
+
+func stringsToAny(values []string) []any {
+	result := make([]any, len(values))
+	for index := range values {
+		result[index] = values[index]
+	}
+	return result
+}
+
+func processPayload(identity runstate.ProcessIdentity) map[string]any {
+	start := map[string]any{}
+	switch value := identity.Start.(type) {
+	case runstate.LinuxStartIdentity:
+		start = map[string]any{"platform": "linux", "boot_id": value.BootID, "start_ticks": value.StartTicks}
+	case runstate.DarwinStartIdentity:
+		start = map[string]any{"platform": "darwin", "start_tvsec": value.StartTVSec, "start_tvusec": value.StartTVUsec}
+	}
+	return map[string]any{"pid": identity.PID, "session_id": identity.SessionID, "start_identity": start}
 }

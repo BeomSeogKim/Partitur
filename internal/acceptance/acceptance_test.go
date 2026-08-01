@@ -56,6 +56,168 @@ func TestGeneratedCheckCompletesButCannotEarnVerified(t *testing.T) {
 	}
 }
 
+func TestRunCriterionCompilesInDeclarationOrderAndEarnsVerified(t *testing.T) {
+	movement := movementFixture()
+	movement.Outputs = nil
+	movement.Acceptance.RunCriteria = []score.RunCriterionView{{
+		SourceIndex: 0, ID: "argv", Argv: []string{"criterion-helper", "pass"}, TimeoutMin: 2,
+	}}
+	plan := compileFixture(t, movement)
+	if len(plan.criteria) != 1 || plan.criteria[0].id != "argv" || len(plan.criteria[0].run) != 2 {
+		t.Fatalf("compiled run plan = %#v", plan.criteria)
+	}
+	recorder := newAcceptanceRecorder()
+	evaluation := evaluationFixture(recorder, nil)
+	evaluation.RunCriterion = func(request RunCriterionRequest) RunCriterionResult {
+		if request.ID != "argv" || request.TimeoutMin != 2 || len(request.Argv) != 2 {
+			t.Fatalf("run request = %#v", request)
+		}
+		if _, err := request.RecordStarted(runstate.ProcessIdentity{
+			PID: 123, SessionID: 123,
+			Start: runstate.LinuxStartIdentity{BootID: "boot", StartTicks: "1"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		code := int64(0)
+		return RunCriterionResult{Outcome: "PASS", ExitCode: &code, DurationMS: 4, OutputRef: "attempts/test/criteria/argv"}
+	}
+	result, err := evaluate(plan, evaluation, clockFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.EvaluationCompleted || !result.Verified {
+		t.Fatalf("run result = %#v", result)
+	}
+	if len(recorder.events) != 4 || recorder.events[1].Type != runstate.EventCriterionStarted || recorder.events[2].Type != runstate.EventCriterionCompleted {
+		t.Fatalf("run lifecycle = %#v", recorder.events)
+	}
+}
+
+func TestRunCriterionBudgetExhaustionReportsForDriverTerminalization(t *testing.T) {
+	movement := movementFixture()
+	movement.Outputs = nil
+	movement.Acceptance.RunCriteria = []score.RunCriterionView{{
+		SourceIndex: 0, ID: "argv", Argv: []string{"criterion-helper"},
+	}}
+	plan := compileFixture(t, movement)
+	recorder := newAcceptanceRecorder()
+	evaluation := evaluationFixture(recorder, nil)
+	evaluation.RunCriterion = func(request RunCriterionRequest) RunCriterionResult {
+		if _, err := request.RecordStarted(runstate.ProcessIdentity{
+			PID: 123, SessionID: 123,
+			Start: runstate.LinuxStartIdentity{BootID: "boot", StartTicks: "1"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return RunCriterionResult{
+			BudgetExhausted: true,
+			Outcome:         "ERROR",
+			Reason:          "criterion_errored",
+			ErrorDetail:     "acceptance_budget_exhausted",
+			OutputRef:       "attempts/test/criteria/argv",
+		}
+	}
+	result, err := evaluate(plan, evaluation, clockFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.BudgetExhausted || result.EvaluationCompleted || result.FailedCriterionID != "" {
+		t.Fatalf("budget result = %#v", result)
+	}
+	if len(recorder.events) != 3 || recorder.events[2].Type != runstate.EventCriterionCompleted {
+		t.Fatalf("budget lifecycle = %#v, want criterion completion without acceptance.failed", recorder.events)
+	}
+}
+
+func TestCompleteStartedWithRunCriterionNeedsNoRunExecutor(t *testing.T) {
+	movement := movementFixture()
+	movement.Outputs = nil
+	movement.Acceptance.RunCriteria = []score.RunCriterionView{{
+		SourceIndex: 0, ID: "argv", Argv: []string{"criterion-helper", "pass"},
+	}}
+	plan := compileFixture(t, movement)
+	recorder := newAcceptanceRecorder()
+	evaluation := evaluationFixture(recorder, nil)
+	started, err := plan.StartEvent(runstate.Event{
+		RunID: evaluation.RunID, ScoreRevision: evaluation.ScoreRevision,
+		MovementID: evaluation.MovementID, PartID: evaluation.PartID, AttemptID: evaluation.AttemptID,
+	}, evaluation.SubjectTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.append(started); err != nil {
+		t.Fatal(err)
+	}
+	criterion := plan.criteria[0]
+	criterionStarted, err := eventWithPayload(runstate.Event{
+		RunID: evaluation.RunID, ScoreRevision: evaluation.ScoreRevision,
+		MovementID: evaluation.MovementID, PartID: evaluation.PartID, AttemptID: evaluation.AttemptID,
+	}, runstate.EventCriterionStarted, map[string]any{
+		"criterion_id":        criterion.id,
+		"criterion_spec_hash": criterion.specHash,
+		"subject_tree":        evaluation.SubjectTree,
+		"identity_versions":   plan.criterionVersions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.append(criterionStarted); err != nil {
+		t.Fatal(err)
+	}
+	criterionCompleted, err := eventWithPayload(runstate.Event{
+		RunID: evaluation.RunID, ScoreRevision: evaluation.ScoreRevision,
+		MovementID: evaluation.MovementID, PartID: evaluation.PartID, AttemptID: evaluation.AttemptID,
+	}, runstate.EventCriterionCompleted, map[string]any{
+		"criterion_id":        criterion.id,
+		"criterion_spec_hash": criterion.specHash,
+		"subject_tree":        evaluation.SubjectTree,
+		"outcome":             "PASS",
+		"duration_ms":         int64(0),
+		"identity_versions":   plan.criterionVersions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.append(criterionCompleted); err != nil {
+		t.Fatal(err)
+	}
+	result, err := CompleteStarted(plan, evaluation, []CriterionOutcome{{
+		CriterionID: "argv", Outcome: "PASS",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.EvaluationCompleted || !result.Verified {
+		t.Fatalf("completion result = %#v", result)
+	}
+	if len(recorder.events) != 4 || recorder.events[3].Type != runstate.EventAcceptanceEvaluationCompleted {
+		t.Fatalf("completion lifecycle = %#v", recorder.events)
+	}
+}
+
+func TestRunCriterionHashCoversIDArgvAndTimeoutWithoutChangingArtifactHash(t *testing.T) {
+	artifact := movementFixture()
+	artifact.Acceptance.ArtifactCriteria = []score.ArtifactCriterionView{{ID: "artifact", ArtifactID: "report"}}
+	artifactBefore := compileFixture(t, artifact).criteria[0].specHash
+	artifactAfter := compileFixture(t, artifact).criteria[0].specHash
+	if artifactBefore != artifactAfter {
+		t.Fatalf("artifact hash changed: %s != %s", artifactBefore, artifactAfter)
+	}
+	newRun := func(id string, argv []string, timeout int64) score.MovementView {
+		value := movementFixture()
+		value.Outputs = nil
+		value.Acceptance.RunCriteria = []score.RunCriterionView{{ID: id, Argv: argv, TimeoutMin: timeout}}
+		return value
+	}
+	base := newRun("run", []string{"tool", "one"}, 1)
+	hash := compileFixture(t, base).criteria[0].specHash
+	for _, value := range []score.MovementView{newRun("other", []string{"tool", "one"}, 1), newRun("run", []string{"tool", "two"}, 1), newRun("run", []string{"tool", "one"}, 2)} {
+		if got := compileFixture(t, value).criteria[0].specHash; got == hash {
+			t.Fatalf("run hash did not cover mutation: %s", got)
+		}
+	}
+}
+
 func TestCompileOrdersDeclaredThenGeneratedAndSuppressesByOutput(t *testing.T) {
 	movement := movementFixture()
 	movement.Outputs = []score.OutputView{
@@ -476,29 +638,12 @@ func TestCompileRejectsUnsupportedAcceptanceShapes(t *testing.T) {
 		absentUnit  string
 	}{
 		{
-			name: "run",
-			mutate: func(movement *score.MovementView) {
-				movement.Acceptance.HasRunCriteria = true
-			},
-			wantMessage: "unit 3.2",
-			absentUnit:  "unit 4.1",
-		},
-		{
 			name: "review",
 			mutate: func(movement *score.MovementView) {
 				movement.Acceptance.HasReviewCriteria = true
 			},
 			wantMessage: "unit 4.1",
 			absentUnit:  "unit 3.2",
-		},
-		{
-			name: "run and review",
-			mutate: func(movement *score.MovementView) {
-				movement.Acceptance.HasRunCriteria = true
-				movement.Acceptance.HasReviewCriteria = true
-			},
-			wantMessage: "acceptance contains unsupported criteria: run criteria require unit 3.2",
-			absentUnit:  "unit 4.1",
 		},
 	}
 	for _, test := range tests {

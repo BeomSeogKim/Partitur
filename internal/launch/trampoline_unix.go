@@ -22,11 +22,12 @@ const (
 )
 
 type trampolineConfiguration struct {
-	Kind       Kind     `json:"kind"`
-	LaunchDir  string   `json:"launch_dir"`
-	Nonce      string   `json:"nonce"`
-	Executable string   `json:"executable"`
-	Arguments  []string `json:"arguments"`
+	Kind        Kind     `json:"kind"`
+	LaunchDir   string   `json:"launch_dir"`
+	Nonce       string   `json:"nonce"`
+	Executable  string   `json:"executable"`
+	Arguments   []string `json:"arguments"`
+	Environment []string `json:"environment"`
 }
 
 func encodeTrampolineArguments(
@@ -63,7 +64,7 @@ func decodeTrampolineArguments(
 		)
 	}
 	if configuration.LaunchDir == "" || configuration.Nonce == "" ||
-		configuration.Executable == "" || configuration.Arguments == nil {
+		configuration.Executable == "" || configuration.Arguments == nil || configuration.Environment == nil {
 		return trampolineConfiguration{}, fmt.Errorf(
 			"%w: trampoline field absent",
 			ErrInvalidRequest,
@@ -159,7 +160,7 @@ func RunTrampoline(arguments []string, probe faultpoint.Probe) error {
 	argv := make([]string, 1, len(configuration.Arguments)+1)
 	argv[0] = configuration.Executable
 	argv = append(argv, configuration.Arguments...)
-	return syscall.Exec(configuration.Executable, argv, os.Environ())
+	return syscall.Exec(configuration.Executable, argv, configuration.Environment)
 }
 
 func acquireMarker(launchDir, nonce string) (*os.File, error) {
