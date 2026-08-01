@@ -100,7 +100,8 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 	}
 	process, err := launch.LaunchContext(launchContext, launch.Request{
 		Kind: launch.Criterion, TrampolinePath: config.TrampolinePath, AttemptRoot: config.AttemptRoot, LaunchID: launchID,
-		Executable: command, Arguments: request.Argv[1:], Environment: environment, Directory: config.Worktree,
+		Executable: command, Arguments: request.Argv[1:], CommandEnvironment: launch.CommandEnvironment(environment),
+		TrampolineEnvironment: launch.TrampolineEnvironment(slices.Clone(os.Environ())), Directory: config.Worktree,
 		Stdout: stdoutWrite, Stderr: stderrWrite, Probe: config.Probe,
 		RecordIdentity: func(identity runstate.ProcessIdentity) (faultpoint.DurabilityReceipt, error) {
 			receipt, recordErr := request.RecordStarted(identity)

@@ -524,19 +524,20 @@ func (c *Client) startExecute(ctx context.Context, plan ExecutePlan) (*runningEx
 		_ = childStderr.Close()
 	}
 	process, err := c.launch(ctx, launch.Request{
-		Kind:           launch.Adapter,
-		TrampolinePath: plan.TrampolinePath,
-		AttemptRoot:    plan.AttemptRoot,
-		LaunchID:       plan.LaunchID,
-		Executable:     plan.AdapterPath,
-		Arguments:      []string{},
-		Environment:    slices.Clone(c.environment),
-		Directory:      plan.Directory,
-		Stdin:          childStdin,
-		Stdout:         childStdout,
-		Stderr:         childStderr,
-		RecordIdentity: plan.RecordIdentity,
-		Probe:          plan.Probe,
+		Kind:                  launch.Adapter,
+		TrampolinePath:        plan.TrampolinePath,
+		AttemptRoot:           plan.AttemptRoot,
+		LaunchID:              plan.LaunchID,
+		Executable:            plan.AdapterPath,
+		Arguments:             []string{},
+		CommandEnvironment:    launch.CommandEnvironment(slices.Clone(c.environment)),
+		TrampolineEnvironment: launch.TrampolineEnvironment(slices.Clone(c.environment)),
+		Directory:             plan.Directory,
+		Stdin:                 childStdin,
+		Stdout:                childStdout,
+		Stderr:                childStderr,
+		RecordIdentity:        plan.RecordIdentity,
+		Probe:                 plan.Probe,
 	})
 	if err != nil {
 		closeAll()

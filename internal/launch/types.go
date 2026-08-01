@@ -31,23 +31,31 @@ type RecordIdentity func(
 	runstate.ProcessIdentity,
 ) (faultpoint.DurabilityReceipt, error)
 
+// CommandEnvironment is passed by the trampoline to the launched command.
+type CommandEnvironment []string
+
+// TrampolineEnvironment is the core infrastructure environment used while
+// the trampoline publishes identity and waits at the launch gate.
+type TrampolineEnvironment []string
+
 // Request contains only the inputs needed to launch one adapter or external
 // criterion. AttemptRoot is the attempt staging directory; LaunchID selects
 // its per-launch child directory.
 type Request struct {
-	Kind           Kind
-	TrampolinePath string
-	AttemptRoot    string
-	LaunchID       string
-	Executable     string
-	Arguments      []string
-	Environment    []string
-	Directory      string
-	Stdin          *os.File
-	Stdout         *os.File
-	Stderr         *os.File
-	RecordIdentity RecordIdentity
-	Probe          faultpoint.Probe
+	Kind                  Kind
+	TrampolinePath        string
+	AttemptRoot           string
+	LaunchID              string
+	Executable            string
+	Arguments             []string
+	CommandEnvironment    CommandEnvironment
+	TrampolineEnvironment TrampolineEnvironment
+	Directory             string
+	Stdin                 *os.File
+	Stdout                *os.File
+	Stderr                *os.File
+	RecordIdentity        RecordIdentity
+	Probe                 faultpoint.Probe
 }
 
 // Process is a released trampoline that has exec'd, or is about to exec, the

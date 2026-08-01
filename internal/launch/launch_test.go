@@ -53,12 +53,12 @@ func TestMarkerIsHeldBeforeIdentityPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			configuration := trampolineConfiguration{
-				Kind:        test.kind,
-				LaunchDir:   launchDir,
-				Nonce:       "nonce",
-				Executable:  os.Args[0],
-				Arguments:   []string{"-test.run=^TestAdapterHelper$", "--", "exit"},
-				Environment: os.Environ(),
+				Kind:               test.kind,
+				LaunchDir:          launchDir,
+				Nonce:              "nonce",
+				Executable:         os.Args[0],
+				Arguments:          []string{"-test.run=^TestAdapterHelper$", "--", "exit"},
+				CommandEnvironment: os.Environ(),
 			}
 			arguments, err := encodeTrampolineArguments(configuration)
 			if err != nil {
@@ -276,7 +276,8 @@ func TestLaunchControlDoesNotReachProgramEnvironmentOrArguments(t *testing.T) {
 		"PARTITUR_OPERATOR_SENTINEL=unchanged",
 	)
 	request := validRequest(t, Adapter, t.TempDir(), "launch")
-	request.Environment = environment
+	request.CommandEnvironment = CommandEnvironment(environment)
+	request.TrampolineEnvironment = TrampolineEnvironment(slices.Clone(environment))
 	request.Stdout = outputWrite
 	request.Arguments = []string{
 		"-test.run=^TestAdapterHelper$",
@@ -386,7 +387,8 @@ func TestInvalidRequestsAreRejectedIndependently(t *testing.T) {
 		{"executable", func(request *Request) { request.Executable = "" }},
 		{"executable_relative", func(request *Request) { request.Executable = "adapter" }},
 		{"arguments", func(request *Request) { request.Arguments = nil }},
-		{"environment", func(request *Request) { request.Environment = nil }},
+		{"command_environment", func(request *Request) { request.CommandEnvironment = nil }},
+		{"trampoline_environment", func(request *Request) { request.TrampolineEnvironment = nil }},
 		{"record", func(request *Request) { request.RecordIdentity = nil }},
 	}
 	for _, test := range tests {
@@ -535,14 +537,15 @@ func validRequest(
 		t.Fatal(err)
 	}
 	return Request{
-		Kind:           kind,
-		TrampolinePath: executable,
-		AttemptRoot:    attemptRoot,
-		LaunchID:       launchID,
-		Executable:     executable,
-		Arguments:      []string{},
-		Environment:    slices.Clone(os.Environ()),
-		Directory:      root,
+		Kind:                  kind,
+		TrampolinePath:        executable,
+		AttemptRoot:           attemptRoot,
+		LaunchID:              launchID,
+		Executable:            executable,
+		Arguments:             []string{},
+		CommandEnvironment:    CommandEnvironment(slices.Clone(os.Environ())),
+		TrampolineEnvironment: TrampolineEnvironment(slices.Clone(os.Environ())),
+		Directory:             root,
 		RecordIdentity: func(runstate.ProcessIdentity) (faultpoint.DurabilityReceipt, error) {
 			return validReceipt(kind), nil
 		},

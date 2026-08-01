@@ -90,12 +90,12 @@ func launch(
 	}
 
 	configuration := trampolineConfiguration{
-		Kind:        request.Kind,
-		LaunchDir:   launchDir,
-		Nonce:       nonce,
-		Executable:  request.Executable,
-		Arguments:   slices.Clone(request.Arguments),
-		Environment: slices.Clone(request.Environment),
+		Kind:               request.Kind,
+		LaunchDir:          launchDir,
+		Nonce:              nonce,
+		Executable:         request.Executable,
+		Arguments:          slices.Clone(request.Arguments),
+		CommandEnvironment: slices.Clone([]string(request.CommandEnvironment)),
 	}
 	arguments, err := encodeTrampolineArguments(configuration)
 	if err != nil {
@@ -103,7 +103,7 @@ func launch(
 		return nil, err
 	}
 	command := dependencies.newCommand(request.TrampolinePath, arguments...)
-	command.Env = slices.Clone(request.Environment)
+	command.Env = slices.Clone([]string(request.TrampolineEnvironment))
 	command.Dir = request.Directory
 	command.Stdin = request.Stdin
 	command.Stdout = request.Stdout
@@ -243,7 +243,8 @@ func validateRequest(request Request) error {
 	}
 	if request.TrampolinePath == "" || request.AttemptRoot == "" ||
 		request.LaunchID == "" || request.Executable == "" ||
-		request.Arguments == nil || request.Environment == nil ||
+		request.Arguments == nil || request.CommandEnvironment == nil ||
+		request.TrampolineEnvironment == nil ||
 		request.RecordIdentity == nil {
 		return fmt.Errorf("%w: required field absent", ErrInvalidRequest)
 	}
