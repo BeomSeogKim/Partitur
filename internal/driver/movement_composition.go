@@ -151,6 +151,34 @@ func PrepareMovementBase(store *runstore.Store, authority *runstore.Driver, inpu
 	return composeMovementBase(store, authority, input, movementID, contributors, remainingMS, now, newID)
 }
 
+// PrepareSuccessorBase derives the same movement base for live and recovered
+// successors. Final verification attempts keep the candidate's pinned commit,
+// while their execution dependency remains bound to the movement composition.
+func PrepareSuccessorBase(store *runstore.Store, authority *runstore.Driver, input runstore.RunInput, movementID runstate.MovementID, remainingMS int64, now func() time.Time, newID func() (string, error)) (MovementBase, error) {
+	base, err := PrepareMovementBase(store, authority, input, movementID, remainingMS, now, newID)
+	if err != nil {
+		return MovementBase{}, err
+	}
+	for _, movement := range input.Score.Movements() {
+		if movement.ID == string(movementID) && len(movement.Needs) == 0 {
+			base.Hash = ""
+			break
+		}
+	}
+	if input.Score.Execution().FinalMovementID != string(movementID) {
+		return base, nil
+	}
+	candidate := input.Projection.State.ApplicationCandidate
+	if candidate == nil {
+		return MovementBase{}, errors.New("driver: final successor has no recorded candidate")
+	}
+	if base.Tree != candidate.ResultTree {
+		return MovementBase{}, errors.New("driver: final successor movement base differs from recorded candidate")
+	}
+	base.Commit = "refs/partitur/runs/" + string(authority.RunID()) + "/candidate"
+	return base, nil
+}
+
 func composeMovementBase(store *runstore.Store, authority *runstore.Driver, input runstore.RunInput, movementID runstate.MovementID, contributors []workspace.CompositionContributor, remainingMS int64, now func() time.Time, newID func() (string, error)) (MovementBase, error) {
 	return composeMovementBaseWithAfterEvidence(store, authority, input, movementID, contributors, remainingMS, now, newID, nil)
 }

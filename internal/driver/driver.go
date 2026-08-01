@@ -1456,7 +1456,23 @@ func liveMaterializeSuccessor(
 	if err != nil {
 		return interrupted(result, err)
 	}
-	attempt, err := workspace.CreateRecoveredAttempt(store, authority, input, string(pending.MovementID))
+	base, err := PrepareSuccessorBase(store, authority, input, pending.MovementID, input.Projection.Scheduler.RemainingTime, dependencies.now, dependencies.newID)
+	if err != nil {
+		if errors.Is(err, ErrCompositionCancelled) {
+			if err := control.Execute(ctx); err != nil {
+				if errors.Is(err, runstate.ErrSweepUnverifiable) {
+					return halted(result, "sweep_unverifiable", err)
+				}
+				return stopped(result, err)
+			}
+			return Result{RunID: result.RunID, Outcome: OutcomeCancelled}
+		}
+		if errors.Is(err, ErrCompositionTerminalized) {
+			return Result{RunID: result.RunID, Outcome: OutcomeFailed, Reason: "composition_terminal"}
+		}
+		return stopped(result, err)
+	}
+	attempt, err := workspace.CreateRecoveredAttemptAtBase(store, authority, input, string(pending.MovementID), base.Commit)
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -1500,7 +1516,8 @@ func liveMaterializeSuccessor(
 		Cast:                 next.Cast,
 		RunID:                result.RunID,
 		Attempt:              attempt,
-		BaseTree:             next.BaseTree,
+		BaseTree:             base.Tree,
+		BaseCompositionHash:  base.Hash,
 		CandidateTree:        liveCandidateTree(next),
 		Authority:            authority,
 		PerformerID:          performer.ID,
