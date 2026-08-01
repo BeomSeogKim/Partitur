@@ -16,6 +16,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
 func TestCompositionKillCuts(t *testing.T) {
@@ -77,6 +78,64 @@ func TestCompositionKillCuts(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestWriterAcceptanceSubjectMatchesWorktree(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildBinary(t, root, bin, "partitur")
+	buildBinary(t, root, bin, "partitur-adapter-codex")
+	buildBinary(t, root, bin, "partitur-trampoline")
+	vendor := buildVendor(t, root, bin)
+	repository, environment := compositionRepository(t, bin, vendor, writerScore(), false)
+	exit, _, stderr := runCommand(t, partitur, repository, environment, "run")
+	if exit != 0 {
+		t.Fatalf("writer subject run exit=%d stderr=%s", exit, stderr)
+	}
+	entries, err := os.ReadDir(filepath.Join(repository, ".partitur", "runs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := ""
+	for _, entry := range entries {
+		if _, err := os.Stat(filepath.Join(repository, ".partitur", "runs", entry.Name(), "journal.jsonl")); err == nil {
+			if runID != "" {
+				t.Fatalf("multiple run journals under .partitur/runs: %q and %q", runID, entry.Name())
+			}
+			runID = entry.Name()
+		}
+	}
+	if runID == "" {
+		t.Fatalf("run directories contain no journal: %#v", entries)
+	}
+	journal := readJournal(t, repository, runID)
+	started := scopedEvents(t, journal, func(event runstate.Event, _ map[string]any) bool {
+		return event.Type == runstate.EventAcceptanceStarted && event.MovementID == "writer-one"
+	})
+	if len(started) != 1 {
+		t.Fatalf("writer acceptance.started events = %#v, want one", started)
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(started[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	subjectTree, ok := payload["subject_tree"].(string)
+	if !ok || subjectTree == "" {
+		t.Fatalf("writer acceptance.started subject_tree = %#v", payload["subject_tree"])
+	}
+	worktree := filepath.Join(repository, ".partitur", "work", runID, string(started[0].AttemptID), "worktree")
+	matched, err := workspace.VerifyRecoverySubject(repository, worktree, subjectTree)
+	if err != nil || !matched {
+		t.Fatalf("writer acceptance recovery recorded %v recovery_subject_mismatch: VerifyRecoverySubject() = (%v, %v)", matched, matched, err)
+	}
+	ref := "refs/partitur/runs/" + runID + "/attempts/" + string(started[0].AttemptID) + "/subject"
+	output, err := exec.Command("git", "-C", repository, "rev-parse", ref+"^{tree}").Output()
+	if err != nil || strings.TrimSpace(string(output)) != strings.TrimPrefix(subjectTree, "git-sha1:") {
+		t.Fatalf("writer subject ref = %q, err=%v, want recorded tree %q", output, err, subjectTree)
 	}
 }
 

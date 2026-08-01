@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
@@ -27,6 +29,94 @@ type ChangeSet struct {
 	Ref              string
 	IdentityVersions map[string]any
 	Receipt          faultpoint.DurabilityReceipt
+}
+
+// AcceptanceSubject is the writer worktree tree that acceptance evaluates.
+// Its ref is an attempt-scoped durable wrapper, distinct from the shippable
+// change set.
+type AcceptanceSubject struct {
+	Tree    string
+	Commit  string
+	Ref     string
+	Receipt faultpoint.DurabilityReceipt
+}
+
+// CaptureAcceptanceSubject captures the complete writer worktree after
+// post-hoc verification. Unlike a change set, it force-adds protected paths
+// so ignored authoritative content remains part of the acceptance subject.
+func (attempt *AttemptWorkspace) CaptureAcceptanceSubject() (AcceptanceSubject, error) {
+	if attempt == nil || attempt.run == nil {
+		return AcceptanceSubject{}, errors.New("workspace: incomplete acceptance subject")
+	}
+	if attempt.readOnly {
+		return AcceptanceSubject{}, ErrReadOnlyRequired
+	}
+	if _, err := gitOutput(attempt.run.git, attempt.Worktree, nil, "read-tree", "HEAD"); err != nil {
+		return AcceptanceSubject{}, fmt.Errorf("reset acceptance subject index: %w", err)
+	}
+	if _, err := gitOutput(attempt.run.git, attempt.Worktree, nil, "add", "--all", "--", "."); err != nil {
+		return AcceptanceSubject{}, fmt.Errorf("stage acceptance subject worktree: %w", err)
+	}
+	protected, err := protectedPathsPresent(attempt.Worktree)
+	if err != nil {
+		return AcceptanceSubject{}, err
+	}
+	if len(protected) != 0 {
+		args := append([]string{"add", "--force", "--"}, protected...)
+		if _, err := gitOutput(attempt.run.git, attempt.Worktree, nil, args...); err != nil {
+			return AcceptanceSubject{}, fmt.Errorf("force stage protected acceptance subject paths: %w", err)
+		}
+	}
+	tree, err := writeTree(attempt.run.git, attempt.Worktree)
+	if err != nil {
+		return AcceptanceSubject{}, err
+	}
+	commit, err := gitOutputWithEnvironment(
+		attempt.run.git,
+		attempt.Worktree,
+		[]string{
+			"GIT_AUTHOR_NAME=" + changeSetAuthorName,
+			"GIT_AUTHOR_EMAIL=" + changeSetAuthorEmail,
+			"GIT_AUTHOR_DATE=" + changeSetDate,
+			"GIT_COMMITTER_NAME=" + changeSetAuthorName,
+			"GIT_COMMITTER_EMAIL=" + changeSetAuthorEmail,
+			"GIT_COMMITTER_DATE=" + changeSetDate,
+		},
+		"commit-tree", recoveryGitObject(tree), "-m", "partitur: acceptance subject",
+	)
+	if err != nil {
+		return AcceptanceSubject{}, fmt.Errorf("create acceptance subject wrapper: %w", err)
+	}
+	commitID := strings.TrimSpace(string(commit))
+	ref := subjectRef(attempt.RunID, attempt.AttemptID)
+	receipt, err := ensureRef(
+		attempt.run.git,
+		attempt.run.repositoryRoot,
+		ref,
+		commitID,
+		attempt.RunID,
+		faultpoint.ReceiptAddress("attempt."+string(attempt.AttemptID)+".subject.ref"),
+		refExistingMustMatchTree,
+	)
+	if err != nil {
+		return AcceptanceSubject{}, err
+	}
+	return AcceptanceSubject{Tree: tree, Commit: commitID, Ref: ref, Receipt: receipt}, nil
+}
+
+func protectedPathsPresent(worktree string) ([]string, error) {
+	paths := make([]string, 0, 2)
+	for _, path := range []string{"partitur.yaml", ".partitur"} {
+		_, err := os.Lstat(worktree + "/" + path)
+		switch {
+		case err == nil:
+			paths = append(paths, path)
+		case errors.Is(err, fs.ErrNotExist):
+		default:
+			return nil, err
+		}
+	}
+	return paths, nil
 }
 
 // CaptureChangeSet stages the complete non-ignored worktree content, writes a
@@ -207,6 +297,10 @@ func writeTree(git gitCommand, root string) (string, error) {
 
 func changesetRef(runID runstate.RunID, attemptID runstate.AttemptID) string {
 	return "refs/partitur/runs/" + string(runID) + "/attempts/" + string(attemptID) + "/changeset"
+}
+
+func subjectRef(runID runstate.RunID, attemptID runstate.AttemptID) string {
+	return "refs/partitur/runs/" + string(runID) + "/attempts/" + string(attemptID) + "/subject"
 }
 
 func gitOutputWithEnvironment(

@@ -1062,6 +1062,146 @@ func TestLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	}
 }
 
+func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
+	t.Run("final movement uses recorded candidate", func(t *testing.T) {
+		preparation, store, authority, started, _, _ := candidateFanInCleanFixture(t)
+		defer authority.Release()
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ComposeCandidate(store, authority, input, 1, time.Now, workspace.NewID); err != nil {
+			t.Fatal(err)
+		}
+		input, err = store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate := input.Projection.State.ApplicationCandidate
+		if candidate == nil || candidate.ResultTree == input.BaseTree {
+			t.Fatalf("candidate = %#v, base = %q", candidate, input.BaseTree)
+		}
+		candidateCommit := testRevision(t, preparation.RepositoryRoot, "refs/partitur/runs/"+string(started.RunID)+"/candidate")
+		attempt, err := started.Run.CreateAttemptAtBase("target", candidateCommit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := executeLiveReaderAttempt(t, preparation.RepositoryRoot, authority, started.RunID, input, attempt, input.BaseTree, candidate.ResultTree, "")
+		if got := state.Acceptances[attempt.AttemptID].SubjectTree; got != candidate.ResultTree {
+			t.Fatalf("final live acceptance subject = %q, want candidate result %q", got, candidate.ResultTree)
+		}
+	})
+
+	t.Run("ordinary fan-in uses composed movement base", func(t *testing.T) {
+		preparation, store, authority, started, _, _ := fanInCleanFixture(t)
+		defer authority.Release()
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		composed, err := PrepareMovementBase(store, authority, input, "target", 1, time.Now, workspace.NewID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if composed.Tree == input.BaseTree {
+			t.Fatalf("composed movement base = %q, want non-base tree", composed.Tree)
+		}
+		attempt, err := started.Run.CreateAttemptAtBase("target", composed.Commit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := executeLiveReaderAttempt(t, preparation.RepositoryRoot, authority, started.RunID, input, attempt, composed.Tree, input.BaseTree, composed.Hash)
+		if got := state.Acceptances[attempt.AttemptID].SubjectTree; got != composed.Tree {
+			t.Fatalf("fan-in live acceptance subject = %q, want composed base %q", got, composed.Tree)
+		}
+	})
+}
+
+func executeLiveReaderAttempt(
+	t *testing.T,
+	repositoryRoot string,
+	authority *runstore.Driver,
+	runID runstate.RunID,
+	input runstore.RunInput,
+	attempt *workspace.AttemptWorkspace,
+	baseTree, candidateTree, baseCompositionHash string,
+) runstate.State {
+	t.Helper()
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: runID, ScoreRevision: input.Score.Revision(), MovementID: attempt.MovementID, Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.live_reader."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	adapterDirectory := t.TempDir()
+	adapterPath := filepath.Join(adapterDirectory, "partitur-adapter-codex")
+	const fakeAdapter = `#!/bin/sh
+IFS= read -r ignored
+printf '%s\n' '{"jsonrpc":"2.0","id":"probe","result":{"protocol":2,"adapter":{"id":"codex","version":"fixture"},"capabilities":{"repo_read":true,"repo_write":true,"shell":false,"network":false,"resumable_sessions":false,"models":[{"id":"gpt-5.6-sol","aliases":[]}]},"enforcement":{"path_grants":true,"read_only":true,"network_grants":true,"shell_grants":true,"read_grants":true}}}'
+IFS= read -r ignored
+printf 'fixture report\n' > "$PARTITUR_TEST_OUTPUT/target-report"
+printf '%s\n' '{"jsonrpc":"2.0","method":"event","params":{"type":"artifact","artifact_id":"target-report","path":"target-report"}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}'
+`
+	if err := os.WriteFile(adapterPath, []byte(fakeAdapter), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", adapterDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PARTITUR_TEST_OUTPUT", attempt.OutputDir)
+	trampoline := filepath.Join(adapterDirectory, "partitur-trampoline")
+	command := exec.Command("go", "build", "-o", trampoline, "./cmd/partitur-trampoline")
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate driver test source")
+	}
+	command.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build trampoline: %v\n%s", err, output)
+	}
+
+	result := ExecuteAttempt(context.Background(), AttemptExecution{
+		RepositoryRoot:      repositoryRoot,
+		Score:               input.Score,
+		Cast:                input.Cast,
+		RunID:               runID,
+		Attempt:             attempt,
+		BaseTree:            baseTree,
+		BaseCompositionHash: baseCompositionHash,
+		CandidateTree:       candidateTree,
+		Authority:           authority,
+		PerformerID:         "worker",
+		SelectionReason:     "initial",
+		RemainingMS:         input.Projection.Scheduler.RemainingTime,
+	}, ExecutionDependencies{
+		Probe:             faultpoint.Nop{},
+		Client:            adapter.NewClient(),
+		ResolveTrampoline: func() (string, error) { return trampoline, nil },
+		Now:               time.Now,
+		NewID:             workspace.NewID,
+	})
+	if result.Outcome != OutcomeSucceeded || result.Err != nil {
+		t.Fatalf("live ExecuteAttempt result = %+v", result)
+	}
+	state, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func testRevision(t *testing.T, directory, revision string) string {
+	t.Helper()
+	command := exec.Command("git", "rev-parse", revision)
+	command.Dir = directory
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("resolve %q: %v", revision, err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
 func TestLiveBetweenUnitEntryRejectsFreshHeadAttempt(t *testing.T) {
 	_, store, authority, start := liveEntryFixture(t)
 	defer authority.Release()
