@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
 // This paired lock requires an executor handler for every ActionKind
@@ -70,6 +72,238 @@ func TestPlanBetweenUnitActionKindsHaveRecoveryExecutor(t *testing.T) {
 		sort.Strings(missingSteps)
 		t.Fatalf("PlanBetweenUnit action steps missing recovery executor handlers: %v", missingSteps)
 	}
+}
+
+// TestPlannerWitnessesSelectRegisteredSteps pairs the source-derived step
+// coverage with concrete planner inputs. The source scan catches a step added
+// to C.2/C.3 without a handler; the witnesses catch a handler registered with
+// no planner path that can select it.
+func TestPlannerWitnessesSelectRegisteredSteps(t *testing.T) {
+	sourceSteps := make(map[recovery.ActionStep]bool)
+	for _, planner := range []string{"PlanBetweenUnit", "PlanAttempt", "PlanAcceptance"} {
+		_, steps := plannerActionCoverage(t, planner)
+		for step := range steps {
+			sourceSteps[step] = true
+		}
+	}
+	if len(sourceSteps) == 0 {
+		t.Fatal("derived planner action step set is empty")
+	}
+
+	type witness struct {
+		name     string
+		plan     func(recovery.Input) recovery.Decision
+		input    recovery.Input
+		wantKind recovery.ActionKind
+		want     []recovery.ActionStep
+	}
+	witnesses := []witness{
+		{
+			name:     "C2 unstarted attempt",
+			plan:     recovery.PlanAttempt,
+			input:    recoveryC2Witness(runstate.AttemptStarting),
+			wantKind: recovery.ActionRecoverUnstartedAttempt,
+			want: []recovery.ActionStep{
+				recovery.StepStabilizeHandoff,
+				recovery.StepCloseAdapterInterval,
+				recovery.StepClassifyAndAppendFailure,
+			},
+		},
+		{
+			name:     "C2 unprobed attempt",
+			plan:     recovery.PlanAttempt,
+			input:    recoveryC2Witness(runstate.AttemptRunning),
+			wantKind: recovery.ActionRecoverUnprobedAttempt,
+			want: []recovery.ActionStep{
+				recovery.StepSweepRecordedSession,
+				recovery.StepCloseAdapterInterval,
+				recovery.StepClassifyAndAppendFailure,
+			},
+		},
+		{
+			name:     "C2 incomplete attempt",
+			plan:     recovery.PlanAttempt,
+			input:    recoveryC2WitnessWithProbe(),
+			wantKind: recovery.ActionRecoverIncompleteAttempt,
+			want: []recovery.ActionStep{
+				recovery.StepSweepRecordedSession,
+				recovery.StepCloseAdapterInterval,
+				recovery.StepClassifyAndAppendFailure,
+			},
+		},
+		{
+			name:     "C2 lost worktree",
+			plan:     recovery.PlanAttempt,
+			input:    recoveryC2LostWorktreeWitness(),
+			wantKind: recovery.ActionFailWorktreeLost,
+			want:     []recovery.ActionStep{recovery.StepClassifyAndAppendFailure},
+		},
+		{
+			name:     "C3 incomplete criterion",
+			plan:     recovery.PlanAcceptance,
+			input:    recoveryC3IncompleteCriterionWitness(),
+			wantKind: recovery.ActionRecoverIncompleteCriterion,
+			want: []recovery.ActionStep{
+				recovery.StepSweepCriterionSession,
+				recovery.StepVerifyAcceptanceSubject,
+			},
+		},
+		{
+			name:     "C3 unverified subject",
+			plan:     recovery.PlanAcceptance,
+			input:    recoveryC3BaseWitness(),
+			wantKind: recovery.ActionVerifyAcceptanceSubject,
+			want:     []recovery.ActionStep{recovery.StepVerifyAcceptanceSubject},
+		},
+		{
+			name:     "C3 failed criterion",
+			plan:     recovery.PlanAcceptance,
+			input:    recoveryC3FailedCriterionWitness(),
+			wantKind: recovery.ActionAppendAcceptanceFailure,
+			want:     []recovery.ActionStep{recovery.StepClassifyAcceptanceFailure},
+		},
+		{
+			name:     "C3 accepted evaluation",
+			plan:     recovery.PlanAcceptance,
+			input:    recoveryC3AcceptedEvaluationWitness(),
+			wantKind: recovery.ActionAppendAcceptanceSuccess,
+			want: []recovery.ActionStep{
+				recovery.StepAppendAttemptCompleted,
+				recovery.StepAppendMovementSucceeded,
+			},
+		},
+		{
+			name:     "C4 budget exhaustion during movement",
+			plan:     recovery.PlanScheduler,
+			input:    recoveryC4BudgetWitness(),
+			wantKind: recovery.ActionAppendBudgetFailure,
+			want: []recovery.ActionStep{
+				recovery.StepAppendMovementBudgetFailure,
+				recovery.StepAppendRunFailed,
+			},
+		},
+	}
+
+	handlers := defaultSteps()
+	witnessedSteps := make(map[recovery.ActionStep]bool)
+	witnessedKinds := make(map[recovery.ActionKind]bool)
+	for _, witness := range witnesses {
+		t.Run(witness.name, func(t *testing.T) {
+			decision := witness.plan(witness.input)
+			if decision.Action == nil {
+				t.Fatalf("planner returned halt %q, want action %q", decision.Halt, witness.wantKind)
+			}
+			if decision.Action.Kind != witness.wantKind {
+				t.Fatalf("action kind = %q, want %q", decision.Action.Kind, witness.wantKind)
+			}
+			if !slices.Equal(decision.Action.Steps, witness.want) {
+				t.Fatalf("action steps = %v, want %v", decision.Action.Steps, witness.want)
+			}
+			for _, step := range decision.Action.Steps {
+				if handler, ok := handlers[step]; !ok || handler == nil {
+					t.Fatalf("planner action step %q has no registered handler", step)
+				}
+				witnessedSteps[step] = true
+			}
+			witnessedKinds[decision.Action.Kind] = true
+		})
+	}
+
+	for step := range sourceSteps {
+		if handler, ok := handlers[step]; !ok || handler == nil {
+			t.Fatalf("planner-source action step %q has no registered handler", step)
+		}
+	}
+	missingWitnesses := make([]string, 0)
+	for step, handler := range handlers {
+		if handler == nil || !witnessedSteps[step] {
+			missingWitnesses = append(missingWitnesses, string(step))
+		}
+	}
+	if len(missingWitnesses) != 0 {
+		sort.Strings(missingWitnesses)
+		t.Fatalf("registered defaultSteps without planner witness: %v", missingWitnesses)
+	}
+
+	missingKinds := make([]string, 0)
+	for kind := range stepDispatchedActionKinds {
+		if !witnessedKinds[kind] {
+			missingKinds = append(missingKinds, string(kind))
+		}
+	}
+	if len(missingKinds) != 0 {
+		sort.Strings(missingKinds)
+		t.Fatalf("step-dispatched ActionKinds without planner witness: %v", missingKinds)
+	}
+}
+
+func recoveryC2Witness(state runstate.AttemptState) recovery.Input {
+	input := recovery.Input{Projection: recovery.Projection{State: runstate.NewState([]runstate.MovementSeed{{ID: "movement", Initial: runstate.MovementPending}})}}
+	input.Projection.State.Run = runstate.RunRunning
+	input.Projection.State.ScoreHead.Revision = 1
+	input.Projection.CurrentHeadAttempt = &recovery.AttemptRecovery{
+		AttemptID: "attempt", MovementID: "movement", ScoreRevision: 1, State: state,
+	}
+	return input
+}
+
+func recoveryC2WitnessWithProbe() recovery.Input {
+	input := recoveryC2Witness(runstate.AttemptRunning)
+	input.Projection.State.AdapterObservations["attempt"] = runstate.AdapterObservation{}
+	return input
+}
+
+func recoveryC2LostWorktreeWitness() recovery.Input {
+	input := recoveryC2Witness(runstate.AttemptVerifying)
+	input.Projection.State.RepoWriteMovements["movement"] = true
+	input.Observations.Worktree = recovery.WorktreeMissing
+	return input
+}
+
+func recoveryC3BaseWitness() recovery.Input {
+	input := recoveryC2Witness(runstate.AttemptVerifying)
+	input.Projection.CurrentHeadAttempt.AcceptanceStarted = true
+	input.Projection.State.Acceptances["attempt"] = runstate.Acceptance{
+		Started: true, SubjectTree: "tree", PlannedCriterionIDs: []runstate.CriterionID{"criterion"},
+		Criteria: map[runstate.CriterionID]runstate.CriterionRecord{},
+	}
+	input.Projection.Acceptance = &recovery.AcceptanceRecovery{}
+	return input
+}
+
+func recoveryC3IncompleteCriterionWitness() recovery.Input {
+	input := recoveryC3BaseWitness()
+	acceptance := input.Projection.State.Acceptances["attempt"]
+	acceptance.Criteria["criterion"] = runstate.CriterionRecord{Started: true}
+	input.Projection.State.Acceptances["attempt"] = acceptance
+	return input
+}
+
+func recoveryC3FailedCriterionWitness() recovery.Input {
+	input := recoveryC3BaseWitness()
+	acceptance := input.Projection.State.Acceptances["attempt"]
+	acceptance.Criteria["criterion"] = runstate.CriterionRecord{Started: true, Completed: true, Outcome: "FAIL"}
+	input.Projection.State.Acceptances["attempt"] = acceptance
+	return input
+}
+
+func recoveryC3AcceptedEvaluationWitness() recovery.Input {
+	input := recoveryC3BaseWitness()
+	acceptance := input.Projection.State.Acceptances["attempt"]
+	acceptance.EvaluationCompleted = true
+	input.Projection.State.Acceptances["attempt"] = acceptance
+	input.Observations.AcceptanceSubject = recovery.SubjectMatched
+	return input
+}
+
+func recoveryC4BudgetWitness() recovery.Input {
+	input := recovery.Input{Projection: recovery.Projection{State: runstate.NewState([]runstate.MovementSeed{{ID: "movement", Initial: runstate.MovementPending}})}}
+	input.Projection.State.Run = runstate.RunRunning
+	input.Projection.State.Movements["movement"] = runstate.MovementRunning
+	input.Projection.Scheduler = recovery.Scheduler{
+		Movements: []recovery.ScheduledMovement{{ID: "movement"}},
+	}
+	return input
 }
 
 func assertCoverageVacuityGuards(t *testing.T) {
@@ -149,6 +383,15 @@ func fatalGuardBody(body *ast.BlockStmt) bool {
 // calls. The AST is the selector's source authority; this intentionally has
 // no hand-maintained ActionKind list.
 func planBetweenUnitActionCoverage(t *testing.T) (map[recovery.ActionKind]bool, map[recovery.ActionStep]bool) {
+	return plannerActionCoverage(t, "PlanBetweenUnit")
+}
+
+// plannerActionCoverage derives the action kinds and explicit ActionStep
+// values returned by one recovery planner, including same-package Decision
+// helpers. It recognizes ActionStep slice literals and append calls that add a
+// declared ActionStep, and otherwise retains the fail-closed return-shape
+// rules used by the PlanBetweenUnit lock.
+func plannerActionCoverage(t *testing.T, planner string) (map[recovery.ActionKind]bool, map[recovery.ActionStep]bool) {
 	t.Helper()
 	parsed := parseRecoveryPackage(t)
 
@@ -165,6 +408,7 @@ func planBetweenUnitActionCoverage(t *testing.T) (map[recovery.ActionKind]bool, 
 		if function == nil {
 			t.Fatalf("PlanBetweenUnit helper %q is absent", name)
 		}
+		helpers := make([]string, 0)
 		ast.Inspect(function.Body, func(node ast.Node) bool {
 			literal, ok := node.(*ast.CompositeLit)
 			if ok && isActionStepSlice(literal) {
@@ -180,13 +424,41 @@ func planBetweenUnitActionCoverage(t *testing.T) (map[recovery.ActionKind]bool, 
 					selectedSteps[recovery.ActionStep(value)] = true
 				}
 			}
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if callee, ok := call.Fun.(*ast.Ident); ok && parsed.functions[callee.Name] != nil && callee.Name != name {
+				helpers = append(helpers, callee.Name)
+			}
+			arguments := actionStepAppendArguments(parsed, call)
+			if len(arguments) == 0 {
+				return true
+			}
+			for _, argument := range arguments {
+				step, ok := argument.(*ast.Ident)
+				if !ok {
+					t.Fatalf("%s appended action step is %T, want identifier", planner, argument)
+				}
+				value, ok := parsed.actionSteps[step.Name]
+				if !ok {
+					t.Fatalf("%s appended action step %q has no declared value", planner, step.Name)
+				}
+				selectedSteps[recovery.ActionStep(value)] = true
+			}
 			return true
 		})
+		if planner != "PlanBetweenUnit" {
+			for _, helper := range helpers {
+				visit(helper)
+			}
+			return
+		}
 		for _, result := range decisionReturns(function) {
 			resolveDecisionExpression(t, parsed, function, result, selected, visit)
 		}
 	}
-	visit("PlanBetweenUnit")
+	visit(planner)
 	return selected, selectedSteps
 }
 
@@ -197,6 +469,24 @@ func isActionStepSlice(literal *ast.CompositeLit) bool {
 	}
 	element, ok := array.Elt.(*ast.Ident)
 	return ok && element.Name == "ActionStep"
+}
+
+func actionStepAppendArguments(parsed recoveryPackage, call *ast.CallExpr) []ast.Expr {
+	appendName, ok := call.Fun.(*ast.Ident)
+	if !ok || appendName.Name != "append" || len(call.Args) <= 1 {
+		return nil
+	}
+	for _, argument := range call.Args[1:] {
+		step, ok := argument.(*ast.Ident)
+		if !ok || !strings.HasPrefix(step.Name, "Step") {
+			continue
+		}
+		if _, ok := parsed.actionSteps[step.Name]; !ok {
+			return []ast.Expr{argument}
+		}
+		return call.Args[1:]
+	}
+	return nil
 }
 
 type recoveryPackage struct {
