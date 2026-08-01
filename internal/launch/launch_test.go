@@ -53,11 +53,12 @@ func TestMarkerIsHeldBeforeIdentityPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			configuration := trampolineConfiguration{
-				Kind:       test.kind,
-				LaunchDir:  launchDir,
-				Nonce:      "nonce",
-				Executable: os.Args[0],
-				Arguments:  []string{"-test.run=^TestAdapterHelper$", "--", "exit"},
+				Kind:        test.kind,
+				LaunchDir:   launchDir,
+				Nonce:       "nonce",
+				Executable:  os.Args[0],
+				Arguments:   []string{"-test.run=^TestAdapterHelper$", "--", "exit"},
+				Environment: os.Environ(),
 			}
 			arguments, err := encodeTrampolineArguments(configuration)
 			if err != nil {

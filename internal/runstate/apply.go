@@ -1319,7 +1319,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventCriterionStarted:
 		return []string{"criterion_id", "criterion_spec_hash", "subject_tree", "identity_versions"}, []string{"criterion_process", "spawn_failed"}, true
 	case EventCriterionCompleted:
-		return []string{"criterion_id", "criterion_spec_hash", "subject_tree", "outcome", "identity_versions"}, []string{"exit_code", "duration_ms", "output_ref", "error_detail"}, true
+		return []string{"criterion_id", "criterion_spec_hash", "subject_tree", "outcome", "identity_versions"}, []string{"exit_code", "duration_ms", "output_ref", "truncated_streams", "error_detail"}, true
 	case EventAcceptanceFailed:
 		return []string{"reason", "subject_tree", "disposition"}, []string{"failed_criterion_id"}, true
 	case EventAcceptanceEvaluationCompleted:
@@ -1815,6 +1815,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 	case EventCriterionCompleted:
 		strings = append([]string{"criterion_id", "criterion_spec_hash", "subject_tree", "outcome"}, optionalNames(payload, "output_ref", "error_detail")...)
 		objects = []string{"identity_versions"}
+		arrays = optionalNames(payload, "truncated_streams")
 		integers = optionalNames(payload, "exit_code", "duration_ms")
 	case EventAcceptanceFailed:
 		strings = append([]string{"reason", "subject_tree"}, optionalNames(payload, "failed_criterion_id")...)
@@ -2132,6 +2133,20 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		_, detail := payload["error_detail"]
 		if (outcome == "ERROR") != detail {
 			return errors.New("error_detail is required iff outcome is ERROR")
+		}
+		if streams, present := payload["truncated_streams"]; present {
+			values, ok := streams.([]any)
+			if !ok || len(values) == 0 {
+				return errors.New("truncated_streams must be a non-empty array")
+			}
+			previous := ""
+			for _, raw := range values {
+				stream, ok := raw.(string)
+				if !ok || (stream != "stdout" && stream != "stderr") || stream <= previous {
+					return errors.New("truncated_streams must be sorted unique stdout/stderr")
+				}
+				previous = stream
+			}
 		}
 	case EventCancelRequested:
 		if mustString(payload, "requested_by") != "cli" {

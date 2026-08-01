@@ -2,6 +2,7 @@
 package driver
 
 import (
+	"context"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
@@ -60,15 +61,36 @@ type AttemptExecution struct {
 	Control           *cancellation.Watcher
 }
 
+// AcceptanceBudgetTerminalization supplies the already-open acceptance
+// interval close to the shared budget terminal sequence. Live execution owns a
+// measured close; recovery supplies its authoritative clamped close.
+type AcceptanceBudgetTerminalization struct {
+	RepositoryRoot string
+	RunID          runstate.RunID
+	AttemptID      runstate.AttemptID
+	Authority      *runstore.Driver
+	Control        *cancellation.Watcher
+	Probe          faultpoint.Probe
+	Close          func() error
+}
+
 // ExecutionDependencies are the process-facing dependencies of an attempt.
 // They are separate from live-run creation so recovery can reuse execution
 // without validating current inputs or starting a new run.
 type ExecutionDependencies struct {
 	Probe             faultpoint.Probe
-	Client            *adapter.Client
+	Client            AdapterExecutor
 	ResolveTrampoline func() (string, error)
 	Now               func() time.Time
 	NewID             func() (string, error)
 	// afterMovementFailed is a test-only interleaving hook. Production leaves it nil.
 	afterMovementFailed func()
+}
+
+// AdapterExecutor is the process-facing adapter boundary for one attempt.
+// The production adapter client implements it; tests may provide a
+// deterministic completed execution.
+type AdapterExecutor interface {
+	Resolve(adapterID string) (string, error)
+	Execute(context.Context, adapter.ExecutePlan) (adapter.ExecuteReport, error)
 }

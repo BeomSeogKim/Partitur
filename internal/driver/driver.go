@@ -19,6 +19,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
+	"github.com/BeomSeogKim/Partitur/internal/criterionexec"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
@@ -38,7 +39,7 @@ var (
 
 type dependencies struct {
 	probe             faultpoint.Probe
-	client            *adapter.Client
+	client            AdapterExecutor
 	resolveTrampoline func() (string, error)
 	now               func() time.Time
 	newID             func() (string, error)
@@ -571,7 +572,7 @@ func ExecuteAttempt(
 	}
 	var observationErr error
 	adapterChargedMS := int64(0)
-	classifyFailure := func(failure successor.FailureCase) (runstate.Disposition, error) {
+	classifyFailureWithRemaining := func(failure successor.FailureCase, remainingOverride int64) (runstate.Disposition, error) {
 		input, err := store.LoadRunInput(execution.RunID)
 		if err != nil {
 			return runstate.Disposition{}, err
@@ -593,13 +594,20 @@ func ExecuteAttempt(
 				break
 			}
 		}
+		remaining := facts.RemainingTimeMS
+		if remainingOverride >= 0 {
+			remaining = remainingOverride
+		}
 		return successor.Classify(successor.ClassificationInput{
 			Failure:              failure,
 			HasUnvisitedFallback: hasUnvisitedFallback,
 			RetriesConsumed:      facts.RetriesConsumed,
 			RetriesPerMovement:   facts.RetriesPerMovement,
-			RemainingTimeMS:      facts.RemainingTimeMS,
+			RemainingTimeMS:      remaining,
 		})
+	}
+	classifyFailure := func(failure successor.FailureCase) (runstate.Disposition, error) {
+		return classifyFailureWithRemaining(failure, -1)
 	}
 	logCount := 0
 	progressCount := 0
@@ -825,6 +833,22 @@ func ExecuteAttempt(
 				),
 			)
 		},
+		RunCriterion: func(request acceptance.RunCriterionRequest) acceptance.RunCriterionResult {
+			remaining := remainingAfter(remainingMS, dependencies.now().Sub(acceptanceOpened).Milliseconds())
+			return criterionexec.Run(criterionexec.Config{
+				RunID: execution.RunID, AttemptID: attempt.AttemptID, AttemptRoot: filepath.Dir(attempt.Worktree),
+				Worktree: attempt.Worktree, RepositoryRoot: execution.RepositoryRoot, SubjectTree: subjectTree,
+				TrampolinePath: trampoline, RemainingMS: remaining, Probe: dependencies.probe,
+				Cancel: control.Cancelled(),
+			}, request)
+		},
+		FailureDispositionFor: func(runResult acceptance.RunCriterionResult) (runstate.Disposition, error) {
+			remaining := remainingAfter(remainingMS, dependencies.now().Sub(acceptanceOpened).Milliseconds())
+			if runResult.DeadlineTied {
+				remaining = 0
+			}
+			return classifyFailureWithRemaining(successor.FailureCase{AcceptanceReason: "acceptance_failed"}, remaining)
+		},
 	}
 	acceptanceStarted, err := plan.StartEvent(base, subjectTree)
 	if err != nil {
@@ -840,8 +864,34 @@ func ExecuteAttempt(
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
-	if !evaluation.EvaluationCompleted {
+	if evaluation.Cancelled {
+		return interrupted(result, errors.New("driver: criterion returned cancellation without durable control"))
+	}
+	if !evaluation.EvaluationCompleted && !evaluation.BudgetExhausted {
 		dependencies.probe.Reached(faultpoint.PointAcceptanceFailureRecorded)
+	}
+	if evaluation.BudgetExhausted {
+		return TerminalizeAcceptanceBudget(ctx, AcceptanceBudgetTerminalization{
+			RepositoryRoot: execution.RepositoryRoot,
+			RunID:          execution.RunID,
+			AttemptID:      attempt.AttemptID,
+			Authority:      authority,
+			Control:        control,
+			Probe:          dependencies.probe,
+			Close: func() error {
+				acceptanceDuration := dependencies.now().Sub(acceptanceOpened).Milliseconds()
+				if acceptanceDuration < 0 {
+					acceptanceDuration = 0
+				}
+				_, err := appendEvent(runstate.EventExecutionStopped, map[string]any{
+					"interval_id":      acceptanceInterval,
+					"reason":           "budget_exhausted",
+					"charging":         "measured",
+					"charged_duration": acceptanceDuration,
+				}, "execution.acceptance.stopped")
+				return err
+			},
+		})
 	}
 	acceptanceStopped := dependencies.now()
 	acceptanceDuration := acceptanceStopped.Sub(acceptanceOpened).Milliseconds()
@@ -1035,8 +1085,8 @@ func executeBrief(
 	if err != nil {
 		return protocol.Brief{}, nil, err
 	}
-	hard := make([]any, len(movement.Acceptance.ArtifactCriteria))
-	for index, criterion := range movement.Acceptance.ArtifactCriteria {
+	hard := make([]any, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Acceptance.RunCriteria))
+	for _, criterion := range movement.Acceptance.ArtifactCriteria {
 		value := map[string]any{
 			"id":       criterion.ID,
 			"artifact": criterion.ArtifactID,
@@ -1044,7 +1094,14 @@ func executeBrief(
 		if criterion.ExpectedHash != "" {
 			value["expected_hash"] = criterion.ExpectedHash
 		}
-		hard[index] = value
+		hard = append(hard, value)
+	}
+	for _, criterion := range movement.Acceptance.RunCriteria {
+		value := map[string]any{"id": criterion.ID, "run": criterion.Argv}
+		if criterion.TimeoutMin != 0 {
+			value["timeout_min"] = criterion.TimeoutMin
+		}
+		hard = append(hard, value)
 	}
 	acceptanceBytes, err := json.Marshal(map[string]any{
 		"hard":       hard,
@@ -1390,7 +1447,11 @@ func realizeRecordedNoneDisposition(
 		result.Outcome = OutcomeCancelled
 		return result, true
 	}
-	payload, err = json.Marshal(map[string]any{"reason": "movement_failed"})
+	runFailureReason := "movement_failed"
+	if realization.TerminalReason == successor.KindBudgetExhausted {
+		runFailureReason = successor.KindBudgetExhausted
+	}
+	payload, err = json.Marshal(map[string]any{"reason": runFailureReason})
 	if err != nil {
 		return interrupted(result, err), true
 	}
@@ -1409,7 +1470,7 @@ func realizeRecordedNoneDisposition(
 		return interrupted(result, errors.New("driver: durable failed terminal projection is absent")), true
 	}
 	result.Outcome = OutcomeFailed
-	result.Reason = "movement_failed"
+	result.Reason = runFailureReason
 	result.Err = nil
 	return result, true
 }

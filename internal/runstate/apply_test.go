@@ -1102,6 +1102,33 @@ func TestStartIdentityRejectsMixedPlatformFields(t *testing.T) {
 	}
 }
 
+func TestCriterionCompletionValidatesTruncatedStreamsStrictly(t *testing.T) {
+	base := verifiedAttemptState(t)
+	base, err := Apply(base, fixtureEvent(EventAcceptanceStarted, map[string]any{
+		"subject_tree": "git-sha1:tree", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{"c1"}, "identity_versions": testIdentityVersions(),
+	}, func(event *Event) { event.AttemptID = "a1" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err = Apply(base, fixtureEvent(EventCriterionStarted, map[string]any{
+		"criterion_id": "c1", "criterion_spec_hash": "sha256:criterion", "subject_tree": "git-sha1:tree", "spawn_failed": true, "identity_versions": testIdentityVersions(),
+	}, func(event *Event) { event.AttemptID = "a1" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streams := range []any{[]any{}, []any{"stdout", "stdout"}, []any{"stdout", "stderr"}, []any{"other"}} {
+		payload := map[string]any{"criterion_id": "c1", "criterion_spec_hash": "sha256:criterion", "subject_tree": "git-sha1:tree", "outcome": "ERROR", "error_detail": "spawn_failed", "truncated_streams": streams, "identity_versions": testIdentityVersions()}
+		_, err := Apply(base, fixtureEvent(EventCriterionCompleted, payload, func(event *Event) { event.AttemptID = "a1" }))
+		if err == nil {
+			t.Fatalf("truncated_streams %v was accepted", streams)
+		}
+	}
+	valid := map[string]any{"criterion_id": "c1", "criterion_spec_hash": "sha256:criterion", "subject_tree": "git-sha1:tree", "outcome": "ERROR", "error_detail": "spawn_failed", "truncated_streams": []any{"stderr", "stdout"}, "identity_versions": testIdentityVersions()}
+	if _, err := Apply(base, fixtureEvent(EventCriterionCompleted, valid, func(event *Event) { event.AttemptID = "a1" })); err != nil {
+		t.Fatalf("valid truncated streams rejected: %v", err)
+	}
+}
+
 func TestShippingRecoveryProjectionUsesJournalTransactions(t *testing.T) {
 	state := NewState(nil)
 	state.Run = RunSucceeded

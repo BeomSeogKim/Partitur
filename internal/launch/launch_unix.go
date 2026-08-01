@@ -90,11 +90,12 @@ func launch(
 	}
 
 	configuration := trampolineConfiguration{
-		Kind:       request.Kind,
-		LaunchDir:  launchDir,
-		Nonce:      nonce,
-		Executable: request.Executable,
-		Arguments:  slices.Clone(request.Arguments),
+		Kind:        request.Kind,
+		LaunchDir:   launchDir,
+		Nonce:       nonce,
+		Executable:  request.Executable,
+		Arguments:   slices.Clone(request.Arguments),
+		Environment: slices.Clone(request.Environment),
 	}
 	arguments, err := encodeTrampolineArguments(configuration)
 	if err != nil {

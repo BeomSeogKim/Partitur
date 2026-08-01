@@ -326,6 +326,8 @@ func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
 		"acceptance.started",
 		"criterion.started",
 		"criterion.completed",
+		"criterion.started",
+		"criterion.completed",
 		"acceptance.evaluation_completed",
 		"execution.stopped",
 		"attempt.completed",
@@ -1396,6 +1398,10 @@ func runScore() map[string]any {
 						map[string]any{
 							"id":       "report-present",
 							"artifact": "report",
+						},
+						map[string]any{
+							"id":  "command-passes",
+							"run": []any{"true"},
 						},
 					},
 				},

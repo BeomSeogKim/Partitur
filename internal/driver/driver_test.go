@@ -21,6 +21,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -1117,6 +1118,105 @@ func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
 	})
 }
 
+func TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement(t *testing.T) {
+	scoreDocument := sliceScore()
+	movement := scoreDocument["movements"].([]any)[0].(map[string]any)
+	movement["outputs"] = []any{map[string]any{"id": "target-report", "kind": "artifact"}}
+	movement["acceptance"] = map[string]any{"hard": []any{
+		map[string]any{"id": "budget-check", "run": []any{"true"}},
+	}}
+	preparation := prepareRunnableFixture(t, scoreDocument, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Score.Revision(), MovementID: attempt.MovementID, Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.budget."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dependencies := readerSuccessDependencies(t)
+	dependencies.client = &completedAdapterFixture{t: t}
+	opened := time.Unix(0, 0)
+	calls := 0
+	dependencies.now = func() time.Time {
+		calls++
+		if calls <= 2 {
+			return opened
+		}
+		return opened.Add(time.Second)
+	}
+	result := ExecuteAttempt(context.Background(), AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
+		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
+		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: 1_000,
+	}, executionDependenciesFrom(dependencies))
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != OutcomeFailed || result.Reason != successor.KindBudgetExhausted || result.Err != nil {
+		t.Fatalf("budget result = %+v", result)
+	}
+	start := -1
+	for index, event := range journal.Events {
+		if event.Type == runstate.EventAcceptanceStarted {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatal("acceptance.started is absent")
+	}
+	got := make([]runstate.EventType, 0, 7)
+	for _, event := range journal.Events[start:] {
+		got = append(got, event.Type)
+	}
+	want := []runstate.EventType{
+		runstate.EventAcceptanceStarted, runstate.EventCriterionStarted, runstate.EventCriterionCompleted,
+		runstate.EventExecutionStopped, runstate.EventAttemptFailed, runstate.EventMovementFailed, runstate.EventRunFailed,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("budget terminal events = %v, want %v", got, want)
+	}
+	for _, event := range journal.Events[start:] {
+		payload := decodeDriverPayload(t, event)
+		switch event.Type {
+		case runstate.EventExecutionStopped:
+			if payload["reason"] != successor.KindBudgetExhausted {
+				t.Fatalf("budget execution.stop = %#v", payload)
+			}
+		case runstate.EventAttemptFailed:
+			if payload["kind"] != successor.KindBudgetExhausted {
+				t.Fatalf("budget attempt.failed = %#v", payload)
+			}
+		case runstate.EventMovementFailed, runstate.EventRunFailed:
+			if payload["reason"] != successor.KindBudgetExhausted {
+				t.Fatalf("budget terminal event %s = %#v", event.Type, payload)
+			}
+		}
+	}
+}
+
 func executeLiveReaderAttempt(
 	t *testing.T,
 	repositoryRoot string,
@@ -1196,6 +1296,61 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 		newID:             workspace.NewID,
 		workspaceStart:    workspace.Start,
 	}
+}
+
+// completedAdapterFixture reaches the durable post-adapter boundary without
+// spending the test's synthetic acceptance budget on wall-clock scheduling.
+type completedAdapterFixture struct {
+	t *testing.T
+}
+
+func (fixture *completedAdapterFixture) Resolve(adapterID string) (string, error) {
+	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+func (fixture *completedAdapterFixture) Execute(_ context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	fixture.t.Helper()
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	if _, err := plan.RecordIdentity(runstate.ProcessIdentity{PID: os.Getpid(), SessionID: os.Getpid(), Start: start}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	probe := protocol.ProbeResult{
+		Protocol: protocol.ProtocolVersion,
+		Adapter:  protocol.AdapterIdentity{ID: plan.AdapterID, Version: "fixture"},
+		Capabilities: protocol.Capabilities{
+			RepoRead: true, RepoWrite: true,
+			Models: []protocol.Model{{ID: "gpt-5.6-sol"}},
+		},
+		Enforcement: protocol.Enforcement{
+			PathGrants: true, ReadOnly: true, NetworkGrants: true, ShellGrants: true, ReadGrants: true,
+		},
+	}
+	if _, err := plan.Recorder.RecordProbe(probe); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	artifactPath := filepath.Join(plan.Request.OutputDir, "target-report")
+	if err := os.WriteFile(artifactPath, []byte("fixture report\n"), 0o600); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	artifact := adapter.ArtifactObservation{ArtifactID: "target-report", Kind: "artifact", Path: artifactPath, SourcePath: "target-report"}
+	if _, err := plan.Recorder.RecordArtifact(artifact); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	if _, err := plan.Recorder.RecordExecutionStopped(adapter.ExecutionStop{
+		IntervalID: plan.IntervalID, Reason: "normal", Charging: "measured", ObservedAt: plan.IntervalOpened,
+	}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	result := protocol.ExecuteResult{Outcome: protocol.OutcomeCompleted}
+	if _, err := plan.Recorder.RecordOutcome(adapter.OutcomeObservation{
+		EventType: string(runstate.EventPerformerCompleted), Result: result,
+	}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	return adapter.ExecuteReport{Probe: probe, Result: &result, Artifacts: []adapter.ArtifactObservation{artifact}}, nil
 }
 
 func appendLiveSuccessorFailure(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID, input runstore.RunInput, movementID, base string) {

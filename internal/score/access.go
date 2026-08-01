@@ -120,7 +120,13 @@ func movementView(value movement) MovementView {
 	}
 	for _, criterion := range value.Acceptance.Hard {
 		if criterion.Artifact == nil {
-			acceptance.HasRunCriteria = true
+			timeoutMin := int64(0)
+			if criterion.TimeoutMin != nil {
+				timeoutMin = int64(*criterion.TimeoutMin)
+			}
+			acceptance.RunCriteria = append(acceptance.RunCriteria, RunCriterionView{
+				SourceIndex: criterion.SourceIndex, ID: criterion.ID, Argv: append([]string(nil), criterion.Run...), TimeoutMin: timeoutMin,
+			})
 			continue
 		}
 		expectedHash := ""
@@ -130,6 +136,7 @@ func movementView(value movement) MovementView {
 		acceptance.ArtifactCriteria = append(
 			acceptance.ArtifactCriteria,
 			ArtifactCriterionView{
+				SourceIndex:  criterion.SourceIndex,
 				ID:           criterion.ID,
 				ArtifactID:   *criterion.Artifact,
 				ExpectedHash: expectedHash,

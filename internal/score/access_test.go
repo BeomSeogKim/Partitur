@@ -80,7 +80,7 @@ func TestExecutionReadSurfaceDoesNotHideUnsupportedAcceptance(t *testing.T) {
 	t.Parallel()
 	compiled := assertCompiles(t, finalizedFixture())
 	final := compiled.Movements()[2]
-	if !final.Acceptance.HasRunCriteria {
+	if len(final.Acceptance.RunCriteria) != 1 {
 		t.Fatal("hard.run criterion was hidden from the execution view")
 	}
 	if !final.Acceptance.HasReviewCriteria {
