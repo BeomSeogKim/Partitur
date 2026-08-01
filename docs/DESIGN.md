@@ -169,17 +169,19 @@ the run exists:
 ```text
 refs/partitur/runs/<run-id>/base                              # the run's base commit (§5)
 refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset   # storage handle (§5)
-refs/partitur/runs/<run-id>/movements/<movement-id>/base      # a fan-in composed base (§5)
+refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject     # writer acceptance subject (§7)
+refs/partitur/runs/<run-id>/movements/<movement-id>/base      # a composed base when one or more writers contribute (§5)
 refs/partitur/runs/<run-id>/candidate                         # the candidate result tree (§8)
 ```
 
 **Everything the run will need later is pinned, not just change sets.** A tree or commit reachable
 from nothing is Git-GC-eligible, and the run needs its base to resume, its composed movement bases
-to re-run a movement, and its candidate result tree for final verification and `apply` — potentially
-long after the run ended. Pinning only per-attempt change sets would let a `git gc` between a run
-and its `apply` make the candidate unrecoverable. Composed bases and the candidate tree are pinned
-as commits wrapping the tree, since a ref must point at a commit or tag to survive ordinary
-reachability rules.
+to re-run a movement, every writer acceptance subject for recovery, and its candidate result tree
+for final verification and `apply` — potentially long after the run ended. Pinning only per-attempt
+change sets would let a `git gc` between a run and its `apply` make the candidate unrecoverable, or
+between `acceptance.started` and recovery make its recorded subject unverifiable. Composed bases,
+writer subjects, and the candidate tree are pinned as commits wrapping the tree, since a ref must
+point at a commit or tag to survive ordinary reachability rules.
 
 **Identifier grammar.** Run ids, attempt ids, and score-declared ids are interpolated into
 filesystem paths, Git ref names, and semantic selectors (§9), so an unconstrained string
@@ -2601,8 +2603,34 @@ core-generated integrity checks, in the deterministic order below, plus `human_g
 the raw acceptance block as written. A mark must bind to what actually ran. Both hashes are
 recorded with the evidence so a mark says exactly which specification it proved (Appendix A).
 
-**Subject binding.** `acceptance.started` records the `subject_tree` — the tree hash the
-acceptance runs against — before any criterion runs, and every criterion event repeats it.
+**Subject binding.** `acceptance.started` records the `subject_tree` before any criterion runs,
+and every criterion event repeats it. Its subject is determined by the attempt's effective grants:
+
+- For a `repo_write` attempt, it is a core-created Git tree of the completed worktree after the
+  §5 post-hoc verification boundary. It contains every tracked worktree entry, every
+  non-ignored untracked entry, and every protected path present in the worktree even when that
+  path is ignored; symlink targets and modes are preserved. It omits only ignored,
+  non-protected content that the full invariant permits. The core creates
+  `refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject`, pointing at a commit wrapping that
+  tree, before appending `acceptance.started`. §1 retains that ref for the run; v0.2 therefore has
+  no earlier removal point.
+- For an attempt without `repo_write`, it is the tree from which the core built that attempt's
+  worktree: its movement base. For an ordinary movement with one or more contributing writer
+  dependencies, §5 pins that composed base at
+  `refs/partitur/runs/<run-id>/movements/<movement-id>/base`; with no contributing writer, the
+  movement base is the run base pinned at `refs/partitur/runs/<run-id>/base`. The final
+  verification movement's build-from tree is the recorded candidate `result_tree` (§8), pinned at
+  `refs/partitur/runs/<run-id>/candidate`. The distinction is by attempt kind: a reader never
+  creates a per-attempt subject ref.
+
+The run base is pre-attempt, a change set is the shippable delta and cannot carry harness
+configuration, and the candidate is the composed result that does not yet exist for a writer
+attempt. None is its acceptance subject. The per-attempt subject ref is a fixed function of the
+event envelope's run and attempt ids, so the existing `subject_tree` is sufficient to bind and
+validate it; `acceptance.started` does **not** add a `subject_ref` storage field. This leaves its
+Appendix B payload unchanged: `change_set.recorded`'s `ref` is event data, whereas the subject ref
+is rigidly derivable from the event envelope and must resolve to the recorded `subject_tree`.
+
 Marks are therefore bound to at least
 `(run, movement, attempt, score_revision, subject_tree, acceptance_spec_hash)`. Grades are
 derived **only** from attempts carrying `acceptance.evaluation_completed`; evidence from
@@ -2742,9 +2770,9 @@ mistake blind.
 **Recovery.** Acceptance is interruptible at every step, so its resumption is governed by
 **Appendix C.3**, under the run- and attempt-level precedence of C.1 and C.2, evaluated top-down with the first matching row
 winning. It is fail-closed: before resuming any criterion the core re-verifies the worktree against the
-**full invariant** — tracked content equal to the `subject_tree` recorded in
-`acceptance.started`, plus non-ignored untracked files, symlink targets, modes, and
-protected-path integrity — and on any mismatch records
+**full invariant** — equality to the attempt-kind-specific `subject_tree` defined above, including
+tracked content, non-ignored untracked files, symlink targets, modes, and protected-path integrity
+— and on any mismatch records
 `acceptance.failed {reason: recovery_subject_mismatch}`.
 
 **Command authority.** Exactly one process drives attempts. The distinction is between
@@ -5165,7 +5193,7 @@ Its source/request and intentional-wait cuts are closed below.
 | `RC-RESUME-015` | `adapter.probed`, **no** `performer.completed` | Sweep the recorded adapter session to verified empty before any failure or retry. Inspection failure is `sweep_unverifiable`. Then close any open `adapter` interval `recovered`/`clamped` and append `attempt.failed {kind: task_failed, reason: attempt_terminated_incomplete, disposition}`. The `performer.completed` exclusion matters: that event attests both verified-empty cleanup and the prior interval close, so recovery may enter verification without repeating either; without the exclusion this row would turn every normal completion into an incomplete attempt |
 | `RC-RESUME-016` | `performer.completed`, movement holds `repo_write`, no `change_set.recorded` | The worktree still exists and its tree is authoritative: capture the change set idempotently, then continue at the next row. If the worktree is gone, the candidate cannot be reconstructed — append `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}` |
 | `RC-RESUME-017` | `performer.completed`, no `verification.passed` | Re-run the **full** §5 post-hoc verification — protected paths for every movement, plus the read-only invariant where the movement holds no `repo_write` — against the surviving worktree; if it is gone, `attempt.failed {kind: task_failed, reason: worktree_lost, disposition}`. A durable `verification.passed` event marks the boundary, because without one a crash after `change_set.recorded` but before the check would let recovery start acceptance having verified nothing |
-| `RC-RESUME-018` | `change_set.recorded` or `verification.passed`, no `acceptance.started` | Begin acceptance: append `acceptance.started` and proceed to C.3 |
+| `RC-RESUME-018` | `change_set.recorded` or `verification.passed`, no `acceptance.started` | Begin acceptance: for a writer attempt, create or verify the §7 subject ref from the surviving verified worktree; then append `acceptance.started` and proceed to C.3. For a reader, bind its worktree's build-from tree: the final movement uses the recorded candidate `result_tree` at `refs/partitur/runs/<run-id>/candidate`; another movement uses its composed-base ref at `refs/partitur/runs/<run-id>/movements/<movement-id>/base` when it has a contributing writer, or the run base ref at `refs/partitur/runs/<run-id>/base` otherwise |
 | `RC-RESUME-019` | `attempt.completed`, no `movement.succeeded` | Append `movement.succeeded` idempotently — including, for the final movement, the run's `SUCCEEDED` transition (§8). Without this row a crash between the two appends left the movement, and possibly the run, nonterminal forever |
 | `RC-RESUME-020` | `movement.failed`, run not terminal | Append `run.failed {reason: movement_failed}` idempotently. The movement's own reason is **not** propagated: most `movement.failed` reasons are not valid `run.failed` values (Appendix D), and `movement_failed` is the run-level reason that exists for exactly this. The movement's reason stays readable on its own event |
 | `RC-RESUME-021` | Gate resolved reject on the **final** movement, no terminal event | Append `movement.failed {reason: human_gate_rejected, run_failed: true, decision_id, subject_tree}` — one atomic transition (§8), so no separate `run.failed` follows |
@@ -5185,9 +5213,9 @@ inventing an unreachable alternative.
 
 Before resuming any criterion **or synthesizing any event that claims acceptance succeeded** —
 `acceptance.evaluation_completed`, `attempt.completed`, or a post-gate `movement.succeeded` — the core
-re-verifies the worktree against the **full invariant** —
-tracked content equal to the `subject_tree` recorded in `acceptance.started`, plus non-ignored
-untracked files, symlink targets, modes, and protected-path integrity; on any mismatch it records
+re-verifies the worktree against the **full invariant** — equality to the attempt-kind-specific
+`subject_tree` of §7, including tracked content, non-ignored untracked files, symlink targets,
+modes, and protected-path integrity; on any mismatch it records
 `acceptance.failed {reason: recovery_subject_mismatch, disposition}`. The event is keyed on
 `attempt_id` (Appendix B); the causation id is evidence, not the key.
 
@@ -5330,7 +5358,7 @@ win at least one cut.
 | `RA-025` | 80 | `RC-RESUME-015` | resume | active | valid | clear | none | none | attempt | probed | none | available | safe | Sweep, then record incomplete execution |
 | `RA-026` | 80 | `RC-RESUME-016` | resume | active | valid | clear | none | none | attempt | performed | none | available | safe | Capture the change set or record worktree loss |
 | `RA-027` | 80 | `RC-RESUME-017` | resume | active | valid | clear | none | none | attempt | verified | none | available | safe | Re-run post-hoc verification |
-| `RA-028` | 80 | `RC-RESUME-018` | resume | active | valid | clear | none | none | attempt | acceptance_ready | none | available | safe | Append `acceptance.started` |
+| `RA-028` | 80 | `RC-RESUME-018` | resume | active | valid | clear | none | none | attempt | acceptance_ready | none | available | safe | Bind the reader's build-from tree or create/verify the writer's subject ref, then append `acceptance.started` |
 | `RA-029` | 80 | `RC-RESUME-031` | resume | active | valid | clear | none | none | acceptance | criterion_pending | none | available | safe | Stabilize and remove the unjournaled launch |
 | `RA-030` | 80 | `RC-RESUME-024` | resume | active | valid | clear | none | none | acceptance | criterion_running | none | available | safe | Sweep and record only the observed recovery result |
 | `RA-031` | 80 | `RC-RESUME-023` | resume | active | valid | clear | none | none | acceptance | criterion_failed | none | available | safe | Append `acceptance.failed` |
@@ -5736,6 +5764,7 @@ one sequence (§4).
 | Edge | Left | Right | Owning clause | Assertion across a crash |
 |---|---|---|---|---|
 | `change_set.captured_to_recorded` | checkpoint commit pinned at `refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset` `R` | `change_set.recorded` appended `R` | §5; B.3; C.2 `RC-RESUME-016` | A pinned checkpoint with no `change_set.recorded` authorizes neither composition nor acceptance. Recovery treats the surviving worktree tree as authoritative and captures the change set idempotently; if that worktree is gone, it records `attempt.failed {reason: worktree_lost}` instead. This does **not** make the checkpoint commit OID a semantic change-set identity or let the ref substitute for the event |
+| `acceptance.subject_pinned_to_started` | writer subject commit pinned at `refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject` `R` | `acceptance.started` appended `R` | §7; C.2 `RC-RESUME-018` | A subject ref without `acceptance.started` binds no acceptance. Recovery creates or verifies it from the surviving verified worktree before the event; once that event is durable, the ref makes its `subject_tree` recoverable. If the worktree is gone before the event, recovery records `attempt.failed {reason: worktree_lost}` rather than inventing a subject |
 | `composition.movement_evidence_to_terminal` | `composition.conflicted` or `composition.failed` for `scope: movement` appended `R` | matching `movement.failed` appended `R` | B.3; C.1 `RC-RESUME-011` | Durable movement-scoped composition evidence cannot leave that movement nonterminal after recovery reaches its fixed point: C.1 first lets a durable `cancel.requested` win, otherwise `RC-RESUME-011` appends the matching `movement.failed` reason. This does **not** claim that the evidence itself projects state or collapse a no-verdict failure into a conflict |
 | `composition.candidate_evidence_to_terminal` | `composition.conflicted` or `composition.failed` for `scope: candidate` appended `R` | matching `run.failed` appended `R` | B.3; C.1 `RC-RESUME-011` | Durable candidate-scoped composition evidence cannot leave the run nonterminal after recovery reaches its fixed point: C.1 first lets a durable `cancel.requested` win, otherwise `RC-RESUME-011` appends the matching `run.failed` reason. This does **not** claim that a candidate exists or collapse a no-verdict failure into a conflict |
 

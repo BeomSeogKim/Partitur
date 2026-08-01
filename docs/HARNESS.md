@@ -136,6 +136,12 @@ required; the criterion set is not implied by the adapter set.
 | `composition.movement_evidence_to_terminal` | R → R | core | a movement-scoped `composition.conflicted` and a movement-scoped `composition.failed` fixture, each with its matching `movement.failed` absent |
 | `composition.candidate_evidence_to_terminal` | R → R | core | a candidate-scoped `composition.conflicted` and a candidate-scoped `composition.failed` fixture, each with its matching `run.failed` absent |
 
+### Acceptance subject pinning
+
+| Edge | Selection | Driven by | Reason |
+|---|---|---|---|
+| `acceptance.subject_pinned_to_started` | not reached by this gate's cuts | — | No subject-pinning production capture fixture |
+
 ### Evidence and lifecycle consequences
 
 | Edge | Blocks on | Driven by | Precondition to reach |
@@ -178,6 +184,7 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `execute.adapter_swept_to_interval_stopped` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `execute.interval_stopped_to_outcome` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `change_set.captured_to_recorded` | reachable | §5; B.3; C.2 `RC-RESUME-016`; E.2 | `integration/composition` writer-change-set fixture kills the real writer capture at both endpoints |
+| `acceptance.subject_pinned_to_started` | not reached by this gate's cuts | §7; C.2 `RC-RESUME-018`; E.2 | No subject-pinning production capture fixture |
 | `composition.movement_evidence_to_terminal` | reachable | B.3; C.1 `RC-RESUME-011`; E.2 | `integration/composition` has conflict-verdict and no-verdict Git-failure fan-in fixtures; each kills both sides of the durable movement composition evidence/terminal cut |
 | `composition.candidate_evidence_to_terminal` | reachable | B.3; C.1 `RC-RESUME-011`; E.2 | `integration/composition` has conflict-verdict and no-verdict Git-failure candidate fixtures; each kills both sides of the durable candidate composition evidence/terminal cut |
 | `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |
