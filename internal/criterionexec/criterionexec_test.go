@@ -1,10 +1,14 @@
 package criterionexec
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +29,10 @@ func TestCriterionHelperProcess(t *testing.T) {
 	switch mode {
 	case "pass":
 		fmt.Fprintln(os.Stdout, "criterion-pass")
+	case "report-environment":
+		if err := json.NewEncoder(os.Stdout).Encode(os.Environ()); err != nil {
+			t.Fatal(err)
+		}
 	case "mutate":
 		if err := os.WriteFile("mutated", []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
@@ -37,6 +45,136 @@ func TestCriterionHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stdout, child.Process.Pid)
 	case "sleep":
 		select {}
+	}
+}
+
+func TestRunGivesCriterionAllowlistAndTrampolineHarnessEnvironment(t *testing.T) {
+	root, worktree, trampoline := criterionFixture(t)
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRead.Close()
+	defer releaseWrite.Close()
+	files := make([]*os.File, 0, 8)
+	for range 6 {
+		file, err := os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+		defer file.Close()
+	}
+	files = append(files, notifyWrite, releaseRead)
+	var stdout, stderr bytes.Buffer
+	command := exec.Command(os.Args[0], "-test.run=^TestCriterionEnvironmentHelperProcess$")
+	command.Env = append(os.Environ(),
+		"PARTITUR_CRITERION_ENV_HELPER=1",
+		"PARTITUR_CRITERION_ROOT="+root,
+		"PARTITUR_CRITERION_WORKTREE="+worktree,
+		"PARTITUR_CRITERION_TRAMPOLINE="+trampoline,
+		"PARTITUR_FAULTPOINT_NOTIFY_FD=9",
+		"PARTITUR_FAULTPOINT_RELEASE_FD=10",
+	)
+	command.ExtraFiles = files
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = notifyWrite.Close()
+	_ = releaseRead.Close()
+	defer func() { _ = command.Process.Kill() }()
+
+	scanner := bufio.NewScanner(notifyRead)
+	for _, want := range []faultpoint.PointID{
+		faultpoint.PointLaunchCriterionMarkerHeld,
+		faultpoint.PointLaunchCriterionIdentityPublished,
+		faultpoint.PointLaunchCriterionGateReleased,
+	} {
+		if got := readCriterionTrampolinePoint(t, scanner); got != want {
+			t.Fatalf("criterion trampoline faultpoint = %q, want %q", got, want)
+		}
+		if _, err := releaseWrite.Write([]byte{1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- command.Wait() }()
+	select {
+	case err := <-wait:
+		if err != nil {
+			t.Fatalf("criterion environment helper: %v\nstdout=%q\nstderr=%q", err, stdout.String(), stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("criterion environment helper did not complete after releasing trampoline probes")
+	}
+}
+
+func TestCriterionEnvironmentHelperProcess(t *testing.T) {
+	if os.Getenv("PARTITUR_CRITERION_ENV_HELPER") != "1" {
+		return
+	}
+	root := os.Getenv("PARTITUR_CRITERION_ROOT")
+	worktree := os.Getenv("PARTITUR_CRITERION_WORKTREE")
+	trampoline := os.Getenv("PARTITUR_CRITERION_TRAMPOLINE")
+	config := criterionConfig(root, worktree, trampoline)
+	result := Run(config, criterionRequest(t, "report-environment"))
+	if result.Outcome != "PASS" {
+		t.Fatalf("criterion result = %#v", result)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", "run", "attempts", "attempt", "criteria", "criterion", "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	environmentJSON, _, _ := bytes.Cut(contents, []byte("\n"))
+	if err := json.Unmarshal(environmentJSON, &got); err != nil {
+		t.Fatalf("decode criterion environment %q: %v", contents, err)
+	}
+	temporary := filepath.Join(config.AttemptRoot, "tmp")
+	want := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"PWD=" + worktree,
+		"TMPDIR=" + temporary,
+		"TMP=" + temporary,
+		"TEMP=" + temporary,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("criterion command environment has %d entries, want the exact six-entry allowlist", len(got))
+	}
+}
+
+func readCriterionTrampolinePoint(t *testing.T, scanner *bufio.Scanner) faultpoint.PointID {
+	t.Helper()
+	type scannedPoint struct {
+		point string
+		ok    bool
+	}
+	result := make(chan scannedPoint, 1)
+	go func() {
+		if !scanner.Scan() {
+			result <- scannedPoint{}
+			return
+		}
+		result <- scannedPoint{point: strings.Fields(scanner.Text())[0], ok: true}
+	}()
+	select {
+	case got := <-result:
+		if !got.ok {
+			t.Fatal("criterion trampoline did not reach its harness probe")
+		}
+		return faultpoint.PointID(got.point)
+	case <-time.After(10 * time.Second):
+		t.Fatal("criterion trampoline did not reach its harness probe")
+		return ""
 	}
 }
 
