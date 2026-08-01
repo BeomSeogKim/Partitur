@@ -614,6 +614,36 @@ func TestCaptureChangeSetRecordsNoOpAndExcludesProtectedPartiturContent(t *testi
 	})
 }
 
+func TestCaptureAcceptanceSubjectIncludesIgnoredProtectedContentAndMatchesWorktree(t *testing.T) {
+	repository, preparation := prepareRepositoryWithScore(t, writerScore())
+	started := startFixture(t, preparation, newRecordingGit(t), testRunID)
+	started.Run.newID = idSequence(testAttemptID)
+	attempt, err := started.Run.CreateAttempt(preparation.Score.Movements()[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(attempt.Worktree, "subject.txt"), []byte("subject\n"), 0o600)
+	writeFile(t, filepath.Join(attempt.Worktree, ".partitur", "runs", "x"), []byte("ignored but protected\n"), 0o600)
+
+	subject, err := attempt.CaptureAcceptanceSubject()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitText(t, repository, "rev-parse", subject.Ref+"^{tree}"); got != recoveryGitObject(subject.Tree) {
+		t.Fatalf("subject ref tree = %q, want %q", got, subject.Tree)
+	}
+	if got := gitText(t, attempt.Worktree, "show", recoveryGitObject(subject.Tree)+":.partitur/runs/x"); got != "ignored but protected" {
+		t.Fatalf("subject tree omitted ignored protected file: %q", got)
+	}
+	if got := gitText(t, attempt.Worktree, "show", recoveryGitObject(subject.Tree)+":subject.txt"); got != "subject" {
+		t.Fatalf("subject tree omitted non-ignored untracked file: %q", got)
+	}
+	matched, err := VerifyRecoverySubject(repository, attempt.Worktree, subject.Tree)
+	if err != nil || !matched {
+		t.Fatalf("VerifyRecoverySubject(recorded subject) = (%v, %v), want (true, nil)", matched, err)
+	}
+}
+
 func TestVerifyRecoverySubjectChecksCompleteInvariant(t *testing.T) {
 	t.Run("matching linked worktree", func(t *testing.T) {
 		repository, worktree, subjectTree := recoverySubjectFixture(t)

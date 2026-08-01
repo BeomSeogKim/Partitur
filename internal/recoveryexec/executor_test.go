@@ -130,6 +130,10 @@ func TestRecoveryFinalMovementAcceptanceStartsAtCandidateResultTree(t *testing.T
 	if got := state.Acceptances[attemptID].SubjectTree; got != candidateTree {
 		t.Fatalf("final acceptance subject tree = %q, want candidate result %q", got, candidateTree)
 	}
+	ref := "refs/partitur/runs/" + string(fixture.runID) + "/attempts/" + string(attemptID) + "/subject"
+	if output, err := exec.Command("git", "-C", fixture.store.RepositoryRoot(), "rev-parse", "--verify", ref).CombinedOutput(); err == nil {
+		t.Fatalf("reader unexpectedly created subject ref %q: %s", ref, output)
+	}
 }
 
 func TestCaptureChangeSetRecoveryHandlerRecordsOnce(t *testing.T) {
@@ -166,6 +170,62 @@ func TestCaptureChangeSetRecoveryHandlerRecordsOnce(t *testing.T) {
 	recorded, ok := state.ChangeSets[fixture.attemptID]
 	if !ok || recorded.ChangeSetID == "" || recorded.BaseTree != recorded.ResultTree {
 		t.Fatalf("recorded recovery change set = %#v", recorded)
+	}
+}
+
+func TestRecoveryWriterAcceptanceCreatesDurableSubjectRefForIgnoredProtectedFile(t *testing.T) {
+	fixture := recoveryChangeSetFixture(t)
+	defer fixture.driver.Release()
+	worktree := filepath.Join(fixture.store.RepositoryRoot(), ".partitur", "work", string(fixture.runID), string(fixture.attemptID), "worktree")
+	if err := os.MkdirAll(filepath.Join(worktree, ".partitur", "runs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".partitur", "runs", "x"), []byte("ignored but protected\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	action := recovery.Action{Kind: recovery.ActionCaptureChangeSet, AttemptID: fixture.attemptID}
+	handlerContext := HandlerContext{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID}
+	if err := captureChangeSet(context.Background(), handlerContext, action); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.driver.Append(runstate.Event{
+		RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: fixture.attemptID,
+		Type: runstate.EventVerificationPassed, Payload: []byte(`{}`),
+	}, "test.recovery_writer_subject.verification"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendAcceptanceStarted(context.Background(), handlerContext, recovery.Action{Kind: recovery.ActionAppendAcceptanceStarted, AttemptID: fixture.attemptID}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectTree := state.Acceptances[fixture.attemptID].SubjectTree
+	ref := "refs/partitur/runs/" + string(fixture.runID) + "/attempts/" + string(fixture.attemptID) + "/subject"
+	output, err := exec.Command("git", "-C", fixture.store.RepositoryRoot(), "rev-parse", ref+"^{tree}").Output()
+	if err != nil {
+		t.Fatalf("resolve recovery subject ref: %v", err)
+	}
+	if got := strings.TrimSpace(string(output)); got != strings.TrimPrefix(subjectTree, "git-sha1:") {
+		t.Fatalf("recovery subject ref tree = %q, want recorded %q", got, subjectTree)
+	}
+	output, err = exec.Command("git", "-C", worktree, "show", strings.TrimPrefix(subjectTree, "git-sha1:")+":.partitur/runs/x").Output()
+	if err != nil || string(output) != "ignored but protected\n" {
+		t.Fatalf("recovery subject tree omitted ignored protected file: output=%q err=%v", output, err)
+	}
+	matched, err := workspace.VerifyRecoverySubject(fixture.store.RepositoryRoot(), worktree, subjectTree)
+	if err != nil || !matched {
+		t.Fatalf("VerifyRecoverySubject(recorded recovery subject) = (%v, %v), want (true, nil)", matched, err)
+	}
+	input, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := workspace.CaptureRecoveredAcceptanceSubject(fixture.store, fixture.driver, input, fixture.attemptID)
+	if err != nil || verified.Tree != subjectTree || verified.Ref != ref {
+		t.Fatalf("recovery subject ref verification = (%#v, %v), want tree %q and ref %q", verified, err, subjectTree, ref)
 	}
 }
 
@@ -351,7 +411,7 @@ func recoveryChangeSetFixture(t *testing.T) recoveryChangeSetFixtureState {
 		"verification": map[string]any{"expectation": map[string]any{"intent": "pass-existing-tests", "apply_gate": map[string]any{"waived": true, "reason": "fixture"}}},
 		"parts":        map[string]any{"writer": map[string]any{"capabilities": []any{"repo_read", "repo_write"}}},
 		"movements": []any{
-			map[string]any{"id": "write", "part": "writer", "grants": []any{"repo_read", "repo_write"}, "instruction": "fixture", "outputs": []any{map[string]any{"id": "change-set", "kind": "change_set"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "tests", "run": []any{"true"}}}}},
+			map[string]any{"id": "write", "part": "writer", "grants": []any{"repo_read", "repo_write"}, "instruction": "fixture", "outputs": []any{map[string]any{"id": "change-set", "kind": "change_set"}, map[string]any{"id": "writer-report", "kind": "artifact"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "writer-report-present", "artifact": "writer-report"}}}},
 			map[string]any{"id": "target", "part": "writer", "needs": []any{"write"}, "grants": []any{"repo_read"}, "instruction": "fixture", "outputs": []any{map[string]any{"id": "report", "kind": "artifact"}}, "acceptance": map[string]any{"hard": []any{map[string]any{"id": "report-present", "artifact": "report"}}}},
 		},
 		"policy": map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10}},
@@ -362,7 +422,10 @@ func recoveryChangeSetFixture(t *testing.T) recoveryChangeSetFixtureState {
 		t.Fatal(err)
 	}
 	writeFixtureJSON(t, filepath.Join(root, ".partitur", "cast.yaml"), castDocument)
-	for _, arguments := range [][]string{{"init"}, {"config", "user.name", "Partitur Test"}, {"config", "user.email", "partitur@example.invalid"}, {"add", "partitur.yaml", ".partitur/cast.yaml"}, {"commit", "-m", "fixture"}} {
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".partitur/runs/\n.partitur/work/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, arguments := range [][]string{{"init"}, {"config", "user.name", "Partitur Test"}, {"config", "user.email", "partitur@example.invalid"}, {"add", "partitur.yaml", ".partitur/cast.yaml", ".gitignore"}, {"commit", "-m", "fixture"}} {
 		command := exec.Command("git", arguments...)
 		command.Dir = root
 		if output, err := command.CombinedOutput(); err != nil {

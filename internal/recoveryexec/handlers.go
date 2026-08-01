@@ -345,9 +345,27 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 		if err != nil {
 			return err
 		}
-		subjectTree := input.BaseTree
-		if candidate := input.Projection.State.ApplicationCandidate; candidate != nil {
-			subjectTree = candidate.ResultTree
+		subject, err := workspace.CaptureRecoveredAcceptanceSubject(
+			execution.Store,
+			execution.Driver,
+			input,
+			action.AttemptID,
+		)
+		if err != nil {
+			return err
+		}
+		if subject.Ref != "" {
+			matched, err := workspace.VerifyRecoverySubject(
+				execution.Store.RepositoryRoot(),
+				filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.Driver.RunID()), string(action.AttemptID), "worktree"),
+				subject.Tree,
+			)
+			if err != nil {
+				return err
+			}
+			if !matched {
+				return errors.New("recovery acceptance subject does not match surviving worktree")
+			}
 		}
 		event, err := plan.StartEvent(runstate.Event{
 			RunID:         execution.Driver.RunID(),
@@ -355,7 +373,7 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 			MovementID:    attempt.MovementID,
 			PartID:        movement.PartID,
 			AttemptID:     action.AttemptID,
-		}, subjectTree)
+		}, subject.Tree)
 		if err != nil {
 			return err
 		}

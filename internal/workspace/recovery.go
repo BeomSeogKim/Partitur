@@ -319,6 +319,81 @@ func CaptureRecoveredChangeSet(
 	return attempt.CaptureChangeSet()
 }
 
+// CaptureRecoveredAcceptanceSubject creates or verifies the writer subject
+// ref at RC-RESUME-018. Readers return the tree their existing worktree was
+// built from and never create an attempt-scoped subject ref.
+func CaptureRecoveredAcceptanceSubject(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RunInput,
+	attemptID runstate.AttemptID,
+) (AcceptanceSubject, error) {
+	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" || attemptID == "" {
+		return AcceptanceSubject{}, errors.New("workspace: incomplete recovery acceptance subject input")
+	}
+	state, err := driver.State()
+	if err != nil {
+		return AcceptanceSubject{}, err
+	}
+	attemptState, ok := state.Attempts[attemptID]
+	if !ok {
+		return AcceptanceSubject{}, fmt.Errorf("workspace: recovery attempt %q is absent", attemptID)
+	}
+	var movement score.MovementView
+	found := false
+	for _, candidate := range input.Score.Movements() {
+		if candidate.ID == string(attemptState.MovementID) {
+			movement, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return AcceptanceSubject{}, fmt.Errorf("%w: %s", ErrMovementNotFound, attemptState.MovementID)
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return AcceptanceSubject{}, err
+	}
+	worktree := filepath.Join(store.RepositoryRoot(), ".partitur", "work", string(driver.RunID()), string(attemptID), "worktree")
+	if !hasGrant(movement.Grants, "repo_write") {
+		for _, scheduled := range input.Projection.Scheduler.Movements {
+			if scheduled.ID == attemptState.MovementID && scheduled.Final {
+				if state.ApplicationCandidate == nil {
+					return AcceptanceSubject{}, errors.New("workspace: final recovery acceptance subject has no candidate")
+				}
+				return AcceptanceSubject{Tree: state.ApplicationCandidate.ResultTree}, nil
+			}
+		}
+		tree, err := qualifiedTree(git, worktree, "HEAD^{tree}")
+		if err != nil {
+			return AcceptanceSubject{}, err
+		}
+		return AcceptanceSubject{Tree: tree}, nil
+	}
+	run := &Run{
+		id:                driver.RunID(),
+		repositoryRoot:    store.RepositoryRoot(),
+		scoreRevision:     state.ScoreHead.Revision,
+		baseCommit:        recoveryGitObject(input.BaseCommit),
+		baseTreeQualified: input.BaseTree,
+		movements:         input.Score.Movements(),
+		store:             store,
+		git:               git,
+	}
+	if err := run.BindDriver(driver); err != nil {
+		return AcceptanceSubject{}, err
+	}
+	attempt := &AttemptWorkspace{
+		RunID:      driver.RunID(),
+		AttemptID:  attemptID,
+		MovementID: attemptState.MovementID,
+		PartID:     movement.PartID,
+		Worktree:   worktree,
+		run:        run,
+	}
+	return attempt.CaptureAcceptanceSubject()
+}
+
 // InitialPerformerSelectedEvent builds the shared durable initial-selection
 // event used by live execution and recovery.
 func InitialPerformerSelectedEvent(

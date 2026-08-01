@@ -360,7 +360,6 @@ func ExecuteAttempt(
 	}
 	startResult := workspace.StartResult{RunID: execution.RunID}
 	attempt := execution.Attempt
-	candidate := workspace.Candidate{ResultTree: execution.CandidateTree}
 	authority := execution.Authority
 	remainingMS := execution.RemainingMS
 	dependencies := dependencies{
@@ -769,6 +768,16 @@ func ExecuteAttempt(
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
+	subjectTree := execution.BaseTree
+	if hasGrant(movement.Grants, "repo_write") {
+		subject, err := attempt.CaptureAcceptanceSubject()
+		if err != nil {
+			return stopped(result, err)
+		}
+		subjectTree = subject.Tree
+	} else if movement.ID == execution.Score.Execution().FinalMovementID {
+		subjectTree = execution.CandidateTree
+	}
 	acceptanceInterval, err := dependencies.newID()
 	if err != nil {
 		return interrupted(result, err)
@@ -790,13 +799,13 @@ func ExecuteAttempt(
 	if err != nil {
 		return stopped(result, err)
 	}
-	evaluation, err := acceptance.Evaluate(plan, acceptance.Evaluation{
+	evaluationInput := acceptance.Evaluation{
 		RunID:              startResult.RunID,
 		ScoreRevision:      execution.Score.Revision(),
 		MovementID:         base.MovementID,
 		PartID:             base.PartID,
 		AttemptID:          base.AttemptID,
-		SubjectTree:        candidate.ResultTree,
+		SubjectTree:        subjectTree,
 		FailureDisposition: acceptanceDisposition,
 		LookupArtifact: func(
 			id runstate.ArtifactInstanceID,
@@ -816,7 +825,15 @@ func ExecuteAttempt(
 				),
 			)
 		},
-	})
+	}
+	acceptanceStarted, err := plan.StartEvent(base, subjectTree)
+	if err != nil {
+		return stopped(result, err)
+	}
+	if _, err := authority.Append(acceptanceStarted, faultpoint.ReceiptAddress("acceptance.acceptance.started")); err != nil {
+		return stopped(result, err)
+	}
+	evaluation, err := acceptance.EvaluateStarted(plan, evaluationInput)
 	if err != nil {
 		return stopped(result, err)
 	}
