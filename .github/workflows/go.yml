@@ -41,6 +41,11 @@ jobs:
       - name: Race
         run: go test -race -count=1 ./...
 
+      # Keep this in the OS matrix: beyond catalogue parity, the kill harness
+      # probes the session-sweeping and fencing assumptions on each runner.
+      - name: Fault-probe catalogue locks
+        run: go test -tags=faultprobe -count=1 ./...
+
   # This job always runs for every pull request and push to main, and its
   # `mutation` status check is required to merge. That requirement lives in the
   # repository's branch protection, not here: workflow YAML cannot express merge
