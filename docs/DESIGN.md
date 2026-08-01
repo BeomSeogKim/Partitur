@@ -155,10 +155,14 @@ corrupt evidence by writing where evidence lives:
       attempts/<attempt-id>/
         stderr                 # sanitized vendor/adapter diagnostics (§4 privacy)
         trace.jsonl            # protocol trace
+        criteria/<criterion-id>/
+          stdout               # bounded criterion stdout capture (§7)
+          stderr               # bounded criterion stderr capture (§7)
 
     work/<run-id>/<attempt-id>/   # NON-AUTHORITATIVE staging — agent-writable
       output/                  # the attempt's output_dir (§5); artifacts are copied out
                                # of here into runs/.../artifacts/ and only the copy counts
+      tmp/                     # default temporary-file directory for criterion commands (§7)
 
 ~/.config/partitur/cast.yaml   # user-global cast override
 ```
@@ -2642,8 +2646,9 @@ though it remains in the journal as history.
 - `run: [argv...]` — executed as an argv array (no shell interpretation) inside the
   attempt worktree with the candidate changes present. Exit 0 passes. Per-criterion
   `timeout_min` is optional; the effective timeout is
-  `min(criterion timeout, remaining active budget)`. Output is captured with bounded
-  streaming into the attempt directory and the event log. A failing criterion records
+  `min(criterion timeout, remaining active budget)`. Output is captured by the §7
+  bounded-streaming rule into the attempt directory; the event records its path and any
+  truncation, never output bytes. A failing criterion records
   `acceptance.failed` — it is the core's judgment, never the adapter's `task_failed`.
   If an acceptance command mutates the worktree — measured by the **full invariant**: tracked
   content, non-ignored untracked files, symlink targets, file modes, and protected-path
@@ -2699,9 +2704,42 @@ cannot deliver: toolchain versions, filesystem contents, and external services a
 outside Partitur's control.
 
 - **Fixed by the core:** working directory is the attempt worktree; the argv array is executed
-  directly with **no shell interpretation**; the environment is a core-defined allowlist;
-  temporary files default under the attempt's staging directory; output is bounded; the
-  timeout is `min(criterion timeout, remaining active budget)`.
+  directly with **no shell interpretation**; the environment and output capture are the rules
+  below; the timeout is `min(criterion timeout, remaining active budget)`.
+
+  The environment is an **allowlist, not the inherited environment**, to give every criterion
+  the same declared invocation shape without claiming that its execution is reproducible or
+  contained. The exact environment is:
+
+  ```text
+  PATH=<PATH inherited by the core>
+  HOME=<HOME inherited by the core>
+  PWD=<attempt worktree>
+  TMPDIR=<attempt staging directory>/tmp
+  TMP=<attempt staging directory>/tmp
+  TEMP=<attempt staging directory>/tmp
+  ```
+
+  No other inherited variable is passed. `PATH` is retained so an argv command may name an
+  ordinary tool rather than an absolute executable; `HOME` is retained because language tools
+  commonly find their configuration and default caches there. `PWD` reports the specified
+  working directory even to commands that inspect the environment rather than the process
+  directory. The three temporary-directory spellings are core-set to the attempt staging
+  directory, so the usual platform conventions do not place default temporary files elsewhere.
+  These are invocation inputs fixed by the core, not score-selectable inputs and not an
+  isolation boundary.
+
+  For each spawned external command, the core captures `stdout` and `stderr` separately at
+  `attempts/<attempt-id>/criteria/<criterion-id>/stdout` and `stderr`. Each stream is bounded
+  independently to **4 MiB (4194304 bytes)**. On a stream that exceeds its bound, the core
+  retains its first 4 MiB, drains and discards the remainder until EOF, and records that stream
+  as truncated; the command is not failed merely for producing excess output. Thus the capture
+  preserves which stream produced each retained byte, but not their cross-stream interleaving.
+  `criterion.completed.output_ref` names that criterion capture directory, and
+  `criterion.completed.truncated_streams`, when present, is the sorted non-empty subset of
+  `[stdout, stderr]` whose output exceeded the bound. The output itself is never inlined in an
+  event.
+
 - **Advisory only:** filesystem and network restrictions. The core neither claims nor
   attempts physical confinement of an acceptance command.
 - **Post-hoc detection is the control, and its reach is limited.** After the command runs, the
@@ -4602,8 +4640,10 @@ criterion.completed {
   duration_ms?,                   # present for an OBSERVED completion; absent only when recovery
                                   #   synthesized the completion without observing process exit
                                   #   (Appendix C.3) — a fabricated duration would be evidence
-  output_ref?,                    # attempt-directory path to the bounded captured output;
-                                  #   the output itself is never inlined (§7)
+  output_ref?,                    # attempt-directory criterion capture directory containing
+                                  #   separately bounded stdout and stderr (§7); never inlined
+  truncated_streams?,             # sorted non-empty subset of [stdout, stderr], present IFF
+                                  #   that stream exceeded §7's per-stream 4 MiB bound
   error_detail?,                  # required iff outcome = ERROR — what produced no verdict
   identity_versions
 }
