@@ -149,7 +149,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, cancel, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, cancel, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -310,7 +310,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, cancel, status, logs\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, cancel, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
@@ -319,6 +319,25 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestParseAnswerArgs(t *testing.T) {
+	for _, test := range []struct {
+		args             []string
+		wantID, wantText string
+		want             bool
+	}{
+		{args: []string{"answer", "question-1", "--answer", "yes"}, wantID: "question-1", wantText: "yes", want: true},
+		{args: []string{"answer", "question-1", "--answer", ""}, wantID: "question-1", want: true},
+		{args: []string{"answer", "question-1", "yes"}},
+		{args: []string{"answer", "--answer", "yes"}},
+		{args: []string{"answer", "question-1", "--answer"}},
+	} {
+		id, text, ok := parseAnswerArgs(test.args)
+		if id != test.wantID || text != test.wantText || ok != test.want {
+			t.Fatalf("parseAnswerArgs(%v) = (%q, %q, %t), want (%q, %q, %t)", test.args, id, text, ok, test.wantID, test.wantText, test.want)
+		}
 	}
 }
 
@@ -335,6 +354,11 @@ func TestRunPrintsDurableIDOnceBeforeTerminalOutcome(t *testing.T) {
 			name:    "succeeded ignores lease cleanup error",
 			outcome: driver.OutcomeSucceeded,
 			err:     errors.New("lease cleanup failed"),
+			code:    0,
+		},
+		{
+			name:    "waiting human is a successful quiescent command outcome",
+			outcome: driver.OutcomeWaitingHuman,
 			code:    0,
 		},
 		{

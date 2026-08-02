@@ -720,6 +720,17 @@ func TestPlanC2ScopeHaltsAndPrecedence(t *testing.T) {
 		input := withQuestionRequests(c2Input(runstate.AttemptBlocked), false, true)
 		assertDecision(t, PlanAttempt(input), CaseAppendQuestionRequest, ActionAppendQuestionRequest, "", true)
 	})
+	t.Run("released question preserves its performer for C4 materialization", func(t *testing.T) {
+		input := withQuestionRequests(c2Input(runstate.AttemptBlocked), true, false)
+		input.Projection.CurrentHeadAttempt.FailureClassification.CurrentPerformer = "writer"
+		got := PlanAttempt(input)
+		assertDecision(t, got, CaseDecisionResume, ActionSelectDecisionResume, "", false)
+		if got.Action.PendingSuccessor == nil || got.Action.PendingSuccessor.MovementID != "movement" ||
+			got.Action.PendingSuccessor.AttemptID != "attempt" || got.Action.PendingSuccessor.Performer != "writer" ||
+			got.Action.PendingSuccessor.Reason != "decision_resume" {
+			t.Fatalf("decision resume successor = %+v", got.Action.PendingSuccessor)
+		}
+	})
 	t.Run("recorded disposition is carried unchanged to Arm 2", func(t *testing.T) {
 		input := withFailedAttempt(c2Input(runstate.AttemptFailed), false)
 		got := PlanAttempt(input)

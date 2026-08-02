@@ -42,10 +42,11 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 		t.Fatalf("planner ActionKind count = %d, want 45", len(declared))
 	}
 
-	if len(namedUnimplementedActionOwners) != 8 {
-		t.Fatalf("named unimplemented action count = %d, want 8", len(namedUnimplementedActionOwners))
+	owners := recovery.UnimplementedActionOwners()
+	if len(owners) != 6 {
+		t.Fatalf("named unimplemented action count = %d, want 6", len(owners))
 	}
-	for kind, unit := range namedUnimplementedActionOwners {
+	for kind, unit := range owners {
 		if !unitIdentifier.MatchString(unit) {
 			t.Fatalf("named unimplemented action %q owner = %q, want unit identifier such as 3.1", kind, unit)
 		}
@@ -61,14 +62,14 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 	}
 
 	handlers := defaultKinds()
-	if len(handlers) != 25 {
-		t.Fatalf("implemented defaultKinds count = %d, want 25", len(handlers))
+	if len(handlers) != 27 {
+		t.Fatalf("implemented defaultKinds count = %d, want 27", len(handlers))
 	}
 
 	bucketCounts := map[string]int{}
 	for kind := range declared {
 		buckets := make([]string, 0, 5)
-		if _, ok := namedUnimplementedActionOwners[kind]; ok {
+		if _, ok := owners[kind]; ok {
 			buckets = append(buckets, "named owner")
 		} else if _, ok := handlers[kind]; ok {
 			buckets = append(buckets, "defaultKinds")
@@ -94,8 +95,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 			t.Fatalf("ActionKind %q has multiple classification buckets: %v", kind, buckets)
 		}
 	}
-	if bucketCounts["defaultKinds"] != 25 || bucketCounts["Steps"] != 8 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 8 {
-		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 25, 8, 3, 1, 8", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
+	if bucketCounts["defaultKinds"] != 27 || bucketCounts["Steps"] != 8 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 6 {
+		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 27, 8, 3, 1, 6", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
 	}
 }
 

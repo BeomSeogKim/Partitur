@@ -607,6 +607,11 @@ func runFakeAdapter(mode string) {
 			_, _ = os.Stderr.WriteString("BEYOND-CAP")
 			os.Exit(7)
 		}
+	case "execute_waiting_human_without_blocking":
+		writeValid(adapterID)
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":"execute","result":{"outcome":"waiting_human"}}` + "\n")
+		waitEOF()
 	case "execute_cancelled", "execute_cancelled_duplicate_ack", "execute_cancelled_extra_after_response", "execute_completed_after_cancel", "execute_cancelled_nonzero", "execute_cancel_timeout", "execute_cancelled_without_ack_hang", "execute_cancelled_after_response_hang", "execute_cancelled_eof_stderr_hang", "execute_cancelled_eof_process_hang":
 		writeValid(adapterID)
 		reader := bufio.NewReader(os.Stdin)

@@ -66,6 +66,40 @@ func TestReclaimDeadRecoveryDriverAllowsOnlyOneConcurrentWinner(t *testing.T) {
 	}
 }
 
+func TestResolveQuestionAppendsExactlyOneResolutionAndRefusesStaleRequests(t *testing.T) {
+	store := recoveryStore(t)
+	appendPendingDecision(t, store)
+
+	if err := store.ResolveQuestion("run-1", "question-1", "yes"); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := journal.Events[len(journal.Events)-1]; got.Type != runstate.EventDecisionResolved || got.AttemptID != "attempt-1" {
+		t.Fatalf("resolution event = %+v", got)
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Run != runstate.RunRunning || input.Projection.State.Movements["write"] != runstate.MovementRunning || len(input.Projection.State.PendingDecisions) != 0 {
+		t.Fatalf("resolved projection = %+v", input.Projection.State)
+	}
+	count := len(journal.Events)
+	if err := store.ResolveQuestion("run-1", "question-1", "different"); !errors.Is(err, ErrDecisionResolutionNotAllowed) {
+		t.Fatalf("second resolution error = %v, want refusal", err)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) != count {
+		t.Fatalf("refused resolution appended %d events", len(journal.Events)-count)
+	}
+}
+
 func TestReclaimDeadRecoveryDriverKeepsReusedLivePIDLease(t *testing.T) {
 	store := recoveryStore(t)
 	start, err := procid.Read(os.Getpid())

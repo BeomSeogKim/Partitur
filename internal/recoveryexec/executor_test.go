@@ -88,6 +88,75 @@ func TestLiveAndResumeSuccessorSelectionJournalIdentity(t *testing.T) {
 	}
 }
 
+func TestAppendQuestionRequestDerivesOnlyFromBlockedSource(t *testing.T) {
+	store, authority := handlerStoreWithSeeds(t, true, []runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	appendEvent := func(eventType runstate.EventType, payload map[string]any) {
+		t.Helper()
+		if _, err := authority.Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: eventType,
+			Payload: handlerPayload(t, payload),
+		}, faultpoint.ReceiptAddress("test.question."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent(runstate.EventAttemptStarted, map[string]any{
+		"attempt_number":    1,
+		"adapter_process":   map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}},
+		"granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false},
+		"identity_versions": versions,
+	})
+	appendEvent(runstate.EventAdapterProbed, map[string]any{
+		"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false},
+		"enforcement":         map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true},
+		"negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions,
+	})
+	appendEvent(runstate.EventAttemptBlocked, map[string]any{
+		"raised":               []any{map[string]any{"decision_id": "question-1", "emitted_id": "emitted-1", "kind": "question", "question": "Continue?", "blocking": true}},
+		"pending_decision_ids": []any{"question-1"},
+	})
+
+	action := recovery.Action{Kind: recovery.ActionAppendQuestionRequest, AttemptID: "attempt-1", QuestionDecisionID: "question-1"}
+	if err := appendQuestionRequest(context.Background(), HandlerContext{Store: store, Driver: authority, RunID: "run-1"}, action); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := journal.Events[len(journal.Events)-1]
+	if last.Type != runstate.EventDecisionRequested || last.AttemptID != "attempt-1" {
+		t.Fatalf("derived request = %+v", last)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["decision_id"] != "question-1" || payload["emitted_id"] != "emitted-1" || payload["question"] != "Continue?" {
+		t.Fatalf("derived request payload = %#v", payload)
+	}
+}
+
+func TestExecutorReturnsQuiescentForDurableUnresolvedBlockedQuestion(t *testing.T) {
+	state := runstate.NewState([]runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+	state.Run = runstate.RunWaitingHuman
+	state.ScoreHead.Revision = 1
+	state.Attempts["attempt-1"] = runstate.Attempt{MovementID: "write", State: runstate.AttemptBlocked}
+	state.PendingDecisions["question-1"] = runstate.PendingDecision{ID: "question-1", Type: "question", MovementID: "write", AttemptID: "attempt-1", Blocking: true, ScoreRevision: 1}
+	input := recovery.Input{Projection: recovery.Projection{
+		State: state,
+		CurrentHeadAttempt: &recovery.AttemptRecovery{
+			AttemptID: "attempt-1", MovementID: "write", ScoreRevision: 1, State: runstate.AttemptBlocked,
+			QuestionRequests: []recovery.QuestionRequest{{DecisionID: "question-1", Durable: true}},
+		},
+	}}
+	executor := &Executor{Load: func(context.Context) (recovery.Input, error) { return input, nil }}
+	result, err := executor.execute(context.Background(), input, recovery.PlanAttempt(input))
+	if err != nil || result.Outcome != OutcomeQuiescent || result.Decision.CaseID != recovery.CaseWaitingHuman || result.Decision.Action == nil || result.Decision.Action.Kind != recovery.ActionReturnWaitingHuman {
+		t.Fatalf("quiescent result = %+v error=%v", result, err)
+	}
+}
+
 func TestRecoveryFinalMovementAcceptanceStartsAtCandidateResultTree(t *testing.T) {
 	const candidateTree = "git-sha1:final-candidate-result"
 	fixture := successorIdentityFixture(t, "quality_retry", "task_failed", candidateTree)
@@ -2604,7 +2673,7 @@ func TestExecutorRequiresAuthorityBeforeEffect(t *testing.T) {
 }
 
 func TestExecutorRejectsNamedUnimplementedActionsBeforeAuthority(t *testing.T) {
-	for action, unit := range namedUnimplementedActionOwners {
+	for action, unit := range recovery.UnimplementedActionOwners() {
 		t.Run(string(action), func(t *testing.T) {
 			store := acquirableRecoveryStore(t)
 			journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")

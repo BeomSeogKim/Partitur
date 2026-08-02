@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -1223,6 +1224,301 @@ func TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement(t *test
 	}
 }
 
+func TestExecuteAttemptRecordsWaitingHumanAsBlockedTerminal(t *testing.T) {
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Score.Revision(), MovementID: attempt.MovementID, Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.waiting."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dependencies := testDependencies()
+	dependencies.client = &waitingAdapterFixture{t: t}
+	result := ExecuteAttempt(context.Background(), AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
+		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
+		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+	}, executionDependenciesFrom(dependencies))
+	if result.Outcome != OutcomeWaitingHuman || result.Err != nil {
+		t.Fatalf("waiting result = %+v", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := journal.Events[len(journal.Events)-1]
+	if last.Type != runstate.EventAttemptBlocked || last.AttemptID != attempt.AttemptID {
+		t.Fatalf("terminal event = %+v", last)
+	}
+	payload := decodeDriverPayload(t, last)
+	decisionID, err := adapterDecisionID(attempt.AttemptID, "question-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["pending_decision_ids"]; !reflect.DeepEqual(got, []any{decisionID}) {
+		t.Fatalf("blocked decision ids = %#v", got)
+	}
+	raised := payload["raised"].([]any)[0].(map[string]any)
+	if raised["decision_id"] != decisionID || raised["emitted_id"] != "question-1" {
+		t.Fatalf("raised question = %#v", raised)
+	}
+}
+
+func TestExecuteAttemptRefusesProposalWaitingHumanUntilRoutedRequestExists(t *testing.T) {
+	scoreDocument := sliceScore()
+	scoreDocument["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	preparation := prepareRunnableFixture(t, scoreDocument, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Score.Revision(), MovementID: attempt.MovementID, Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.proposal."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dependencies := testDependencies()
+	dependencies.client = &waitingAdapterFixture{t: t, proposal: &protocol.ProposalEvent{
+		Type: protocol.EventProposal, ID: "proposal-1", Amendment: json.RawMessage(`{}`), RequiresDecision: true,
+	}}
+	result := ExecuteAttempt(context.Background(), AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
+		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
+		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+	}, executionDependenciesFrom(dependencies))
+	if result.Outcome != OutcomeInterrupted || result.Err == nil || !strings.Contains(result.Err.Error(), "unit 4.2") {
+		t.Fatalf("proposal waiting result = %+v", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAttemptBlocked {
+			t.Fatalf("proposal waiting human recorded durable blocked state: %+v", event)
+		}
+	}
+}
+
+func TestExecuteAttemptPreservesRaisedWireOrderAndAllowsNonBlockingProposal(t *testing.T) {
+	scoreDocument := sliceScore()
+	scoreDocument["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	preparation := prepareRunnableFixture(t, scoreDocument, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Score.Revision(), MovementID: attempt.MovementID, Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.raised_order."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	questionOne := protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "question-2", Question: "First?"}
+	proposal := protocol.ProposalEvent{Type: protocol.EventProposal, ID: "proposal-1", Amendment: json.RawMessage(`{}`), RequiresDecision: false}
+	questionTwo := protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "question-1", Question: "Second?"}
+	dependencies := testDependencies()
+	dependencies.client = &waitingAdapterFixture{t: t, raised: []adapter.RaisedDecision{
+		{Kind: protocol.EventQuestion, Question: &questionOne},
+		{Kind: protocol.EventProposal, Proposal: &proposal},
+		{Kind: protocol.EventQuestion, Question: &questionTwo},
+	}, pending: []string{"question-2", "question-1"}}
+	result := ExecuteAttempt(context.Background(), AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
+		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
+		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+	}, executionDependenciesFrom(dependencies))
+	if result.Outcome != OutcomeWaitingHuman || result.Err != nil {
+		t.Fatalf("waiting result = %+v", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := decodeDriverPayload(t, journal.Events[len(journal.Events)-1])
+	raised := payload["raised"].([]any)
+	if got := []string{
+		raised[0].(map[string]any)["emitted_id"].(string),
+		raised[1].(map[string]any)["emitted_id"].(string),
+		raised[2].(map[string]any)["emitted_id"].(string),
+	}; !reflect.DeepEqual(got, []string{"question-2", "proposal-1", "question-1"}) {
+		t.Fatalf("raised wire order = %#v", got)
+	}
+	if raised[1].(map[string]any)["blocking"] != false {
+		t.Fatalf("non-blocking proposal = %#v", raised[1])
+	}
+}
+
+func TestQuestionDecisionIDsStayDistinctAcrossResumedAttempts(t *testing.T) {
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Score.Revision(), MovementID: "inspect", Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.duplicate_emitted."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executeWaitingQuestion := func() (*workspace.AttemptWorkspace, runstate.Event) {
+		t.Helper()
+		attempt, err := started.Run.CreateAttempt("inspect")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dependencies := testDependencies()
+		dependencies.client = &waitingAdapterFixture{t: t}
+		result := ExecuteAttempt(context.Background(), AttemptExecution{
+			RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
+			RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
+			Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+		}, executionDependenciesFrom(dependencies))
+		if result.Outcome != OutcomeWaitingHuman || result.Err != nil {
+			t.Fatalf("waiting result = %+v", result)
+		}
+		journal, err := store.ReadJournal(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return attempt, journal.Events[len(journal.Events)-1]
+	}
+	appendQuestionRequest := func(event runstate.Event) string {
+		t.Helper()
+		payload := decodeDriverPayload(t, event)
+		raised := payload["raised"].([]any)[0].(map[string]any)
+		decisionID := raised["decision_id"].(string)
+		requestPayload, err := json.Marshal(map[string]any{
+			"decision_id": decisionID, "decision_type": "question", "emitted_id": raised["emitted_id"], "question": raised["question"],
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: event.ScoreRevision, MovementID: event.MovementID, PartID: event.PartID,
+			AttemptID: event.AttemptID, Type: runstate.EventDecisionRequested, Payload: requestPayload,
+		}, faultpoint.ReceiptAddress("test.duplicate_emitted.request")); err != nil {
+			t.Fatal(err)
+		}
+		return decisionID
+	}
+	firstAttempt, firstBlocked := executeWaitingQuestion()
+	firstRaised := decodeDriverPayload(t, firstBlocked)["raised"].([]any)[0].(map[string]any)
+	firstDecisionID := appendQuestionRequest(firstBlocked)
+	if err := store.ResolveQuestion(started.RunID, firstDecisionID, "yes"); err != nil {
+		t.Fatal(err)
+	}
+	secondAttempt, secondBlocked := executeWaitingQuestion()
+	secondRaised := decodeDriverPayload(t, secondBlocked)["raised"].([]any)[0].(map[string]any)
+	secondDecisionID := appendQuestionRequest(secondBlocked)
+	if firstRaised["emitted_id"] != "question-1" || secondRaised["emitted_id"] != "question-1" {
+		t.Fatalf("same emitted id fixture drifted: %#v, %#v", firstRaised, secondRaised)
+	}
+	if firstAttempt.AttemptID == secondAttempt.AttemptID || firstDecisionID == secondDecisionID {
+		t.Fatalf("attempts/decision ids = %q/%q, %q/%q", firstAttempt.AttemptID, secondAttempt.AttemptID, firstDecisionID, secondDecisionID)
+	}
+	state, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Run != runstate.RunWaitingHuman || len(state.PendingDecisions) != 1 {
+		t.Fatalf("state after second request = run %s, pending %#v", state.Run, state.PendingDecisions)
+	}
+	if _, ok := state.PendingDecisions[secondDecisionID]; !ok {
+		t.Fatalf("second decision %q was not pending after same emitted id", secondDecisionID)
+	}
+}
+
+func TestAdapterScopedIDsMatchA43(t *testing.T) {
+	decisionID, err := adapterDecisionID("attempt-1", "q-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decisionID != "dec-db625ad56badb452919ad46a8faf00d6010bbb3cd7f480d6fed673157fa3e9ac" {
+		t.Fatalf("decision id = %q", decisionID)
+	}
+	proposalID, err := adapterProposalID("attempt-1", "p-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposalID != "prp-4ff4b86962365413a7a174ef05dfd8f732768c4963bf59d199b94e7d99fd0a44" {
+		t.Fatalf("proposal id = %q", proposalID)
+	}
+}
+
 func executeLiveReaderAttempt(
 	t *testing.T,
 	repositoryRoot string,
@@ -1308,6 +1604,62 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 // spending the test's synthetic acceptance budget on wall-clock scheduling.
 type completedAdapterFixture struct {
 	t *testing.T
+}
+
+type waitingAdapterFixture struct {
+	t        *testing.T
+	proposal *protocol.ProposalEvent
+	raised   []adapter.RaisedDecision
+	pending  []string
+}
+
+func (fixture *waitingAdapterFixture) Resolve(adapterID string) (string, error) {
+	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+func (fixture *waitingAdapterFixture) Execute(_ context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	fixture.t.Helper()
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	if _, err := plan.RecordIdentity(runstate.ProcessIdentity{PID: os.Getpid(), SessionID: os.Getpid(), Start: start}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	probe := protocol.ProbeResult{
+		Protocol: protocol.ProtocolVersion, Adapter: protocol.AdapterIdentity{ID: plan.AdapterID, Version: "fixture"},
+		Capabilities: protocol.Capabilities{RepoRead: true, Models: []protocol.Model{{ID: "gpt-5.6-sol"}}},
+		Enforcement:  protocol.Enforcement{PathGrants: true, ReadOnly: true, NetworkGrants: true, ShellGrants: true, ReadGrants: true},
+	}
+	if _, err := plan.Recorder.RecordProbe(probe); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	if _, err := plan.Recorder.RecordExecutionStopped(adapter.ExecutionStop{IntervalID: plan.IntervalID, Reason: "normal", Charging: "measured", ObservedAt: plan.IntervalOpened}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	result := protocol.ExecuteResult{Outcome: protocol.OutcomeWaitingHuman, PendingDecisionIDs: []string{"question-1"}}
+	question := protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "question-1", Question: "Continue?"}
+	raised := []adapter.RaisedDecision{{Kind: protocol.EventQuestion, Question: &question}}
+	if fixture.raised != nil {
+		raised = fixture.raised
+		result.PendingDecisionIDs = fixture.pending
+	}
+	if fixture.proposal != nil {
+		result.PendingDecisionIDs = []string{fixture.proposal.ID}
+		raised = []adapter.RaisedDecision{{Kind: protocol.EventProposal, Proposal: fixture.proposal}}
+	}
+	if _, err := plan.Recorder.RecordOutcome(adapter.OutcomeObservation{
+		EventType: string(runstate.EventAttemptBlocked), Result: result,
+		Raised: raised,
+	}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	report := adapter.ExecuteReport{Probe: probe, Result: &result, Questions: []protocol.QuestionEvent{question}}
+	if fixture.proposal != nil {
+		report.Questions = nil
+		report.Proposals = []protocol.ProposalEvent{*fixture.proposal}
+	}
+	return report, nil
 }
 
 func (fixture *completedAdapterFixture) Resolve(adapterID string) (string, error) {

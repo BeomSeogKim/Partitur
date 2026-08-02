@@ -597,6 +597,12 @@ func PlanAttempt(input Input) Decision {
 		}
 		decision := action(CaseDecisionResume, ActionSelectDecisionResume, false)
 		decision.Action.AttemptID = attempt.AttemptID
+		decision.Action.PendingSuccessor = &PendingSuccessor{
+			MovementID: attempt.MovementID,
+			AttemptID:  attempt.AttemptID,
+			Performer:  attempt.FailureClassification.CurrentPerformer,
+			Reason:     "decision_resume",
+		}
 		decision.Action.Continuation = ContinuationC4
 		return decision
 	}

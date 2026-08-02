@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -696,6 +697,68 @@ func ExecuteAttempt(
 					payload,
 					"attempt.failed",
 				)
+			case string(runstate.EventAttemptBlocked):
+				for _, decision := range observation.Raised {
+					if decision.Kind != protocol.EventProposal || decision.Proposal == nil || !decision.Proposal.RequiresDecision {
+						continue
+					}
+					unit, ok := recovery.UnimplementedActionOwner(recovery.ActionAppendRoutedRequest)
+					if !ok {
+						return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal has no routed-request owner")
+					}
+					return faultpoint.DurabilityReceipt{}, fmt.Errorf("waiting_human proposal requires unit %s", unit)
+				}
+				raised := make([]any, 0, len(observation.Raised))
+				pending := make([]string, 0, len(observation.Raised))
+				for _, decision := range observation.Raised {
+					switch decision.Kind {
+					case protocol.EventQuestion:
+						if decision.Question == nil {
+							return faultpoint.DurabilityReceipt{}, errors.New("waiting_human question is absent")
+						}
+						decisionID, err := adapterDecisionID(attempt.AttemptID, decision.Question.ID)
+						if err != nil {
+							return faultpoint.DurabilityReceipt{}, err
+						}
+						raised = append(raised, map[string]any{
+							"decision_id": decisionID,
+							"emitted_id":  decision.Question.ID,
+							"kind":        "question",
+							"question":    decision.Question.Question,
+							"blocking":    true,
+						})
+						pending = append(pending, decisionID)
+					case protocol.EventProposal:
+						if decision.Proposal == nil {
+							return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal is absent")
+						}
+						decisionID, err := adapterDecisionID(attempt.AttemptID, decision.Proposal.ID)
+						if err != nil {
+							return faultpoint.DurabilityReceipt{}, err
+						}
+						proposalID, err := adapterProposalID(attempt.AttemptID, decision.Proposal.ID)
+						if err != nil {
+							return faultpoint.DurabilityReceipt{}, err
+						}
+						raised = append(raised, map[string]any{
+							"decision_id": decisionID,
+							"emitted_id":  decision.Proposal.ID,
+							"kind":        "proposal",
+							"proposal_id": proposalID,
+							"blocking":    decision.Proposal.RequiresDecision,
+						})
+						if decision.Proposal.RequiresDecision {
+							pending = append(pending, decisionID)
+						}
+					default:
+						return faultpoint.DurabilityReceipt{}, fmt.Errorf("unsupported raised decision %q", decision.Kind)
+					}
+				}
+				slices.Sort(pending)
+				return appendEvent(runstate.EventAttemptBlocked, map[string]any{
+					"raised":               raised,
+					"pending_decision_ids": pending,
+				}, "attempt.blocked")
 			default:
 				return faultpoint.DurabilityReceipt{}, fmt.Errorf(
 					"unsupported execute outcome %q",
@@ -757,6 +820,10 @@ func ExecuteAttempt(
 	}
 	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
 		return terminal
+	}
+	if report.Result != nil && report.Result.Outcome == protocol.OutcomeWaitingHuman {
+		result.Outcome = OutcomeWaitingHuman
+		return result
 	}
 	if report.Result == nil || report.Result.Outcome != protocol.OutcomeCompleted {
 		return interrupted(result, errors.New("adapter did not complete"))
@@ -960,6 +1027,28 @@ func ExecuteAttempt(
 	}
 	result.Outcome = OutcomeSucceeded
 	return result
+}
+
+func adapterDecisionID(attemptID runstate.AttemptID, emittedID string) (string, error) {
+	return scopedAdapterID("dec-", "partitur/decision-id", attemptID, emittedID)
+}
+
+func adapterProposalID(attemptID runstate.AttemptID, emittedID string) (string, error) {
+	return scopedAdapterID("prp-", "partitur/proposal-id", attemptID, emittedID)
+}
+
+func scopedAdapterID(prefix, domain string, attemptID runstate.AttemptID, emittedID string) (string, error) {
+	encoded, err := canonical.Encode(map[string]any{
+		"attempt_id": string(attemptID), "emitted_id": emittedID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode adapter-scoped id: %w", err)
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(domain))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(encoded)
+	return fmt.Sprintf("%s%x", prefix, digest.Sum(nil)), nil
 }
 
 func admitProbe(

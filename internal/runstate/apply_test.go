@@ -309,6 +309,24 @@ func TestFailureAndBlockingEventContracts(t *testing.T) {
 	}
 }
 
+func TestAttemptBlockedRaisedSequenceAcceptsWireOrderButRejectsDuplicateID(t *testing.T) {
+	payload := map[string]any{
+		"raised": []any{
+			map[string]any{"decision_id": "dec-2", "emitted_id": "q-2", "kind": "question", "question": "First?", "blocking": true},
+			map[string]any{"decision_id": "dec-1", "emitted_id": "q-1", "kind": "question", "question": "Second?", "blocking": true},
+		},
+		"pending_decision_ids": []any{"dec-1", "dec-2"},
+	}
+	if err := ValidateEvent(fixtureEvent(EventAttemptBlocked, payload, attemptEnvelope)); err != nil {
+		t.Fatalf("wire-ordered raised sequence rejected: %v", err)
+	}
+	payload["raised"].([]any)[1].(map[string]any)["decision_id"] = "dec-2"
+	payload["pending_decision_ids"] = []any{"dec-2", "dec-2"}
+	if err := ValidateEvent(fixtureEvent(EventAttemptBlocked, payload, attemptEnvelope)); err == nil {
+		t.Fatal("duplicate raised decision id accepted")
+	}
+}
+
 func TestMovementFailedHumanGateAtomicallyFailsWaitingFinalMovement(t *testing.T) {
 	state := verifyingAttemptState(t)
 	state.Run = RunWaitingHuman

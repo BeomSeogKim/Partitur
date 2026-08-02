@@ -621,6 +621,8 @@ func (state *executeState) consumeEvent(value any) error {
 		if event.RequiresDecision {
 			state.blockingIDs[event.ID] = true
 		}
+		proposal := *event
+		state.report.Raised = append(state.report.Raised, RaisedDecision{Kind: protocol.EventProposal, Proposal: &proposal})
 		state.report.Proposals = append(state.report.Proposals, *event)
 	case *protocol.QuestionEvent:
 		if strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.Question) == "" {
@@ -631,6 +633,8 @@ func (state *executeState) consumeEvent(value any) error {
 		}
 		state.emittedIDs[event.ID] = true
 		state.blockingIDs[event.ID] = true
+		question := *event
+		state.report.Raised = append(state.report.Raised, RaisedDecision{Kind: protocol.EventQuestion, Question: &question})
 		state.report.Questions = append(state.report.Questions, *event)
 	default:
 		return &executeProtocolFailure{reason: "strict_decode_failed", detail: "unknown event"}
@@ -735,6 +739,9 @@ func (state *executeState) validateBlocking(result protocol.ExecuteResult) *exec
 	if len(state.blockingIDs) != 0 && result.Outcome != protocol.OutcomeWaitingHuman {
 		return &executeProtocolFailure{reason: "blocking_set_mismatch", detail: "blocking events require waiting_human"}
 	}
+	if len(state.blockingIDs) == 0 && result.Outcome == protocol.OutcomeWaitingHuman {
+		return &executeProtocolFailure{reason: "blocking_set_mismatch", detail: "waiting_human requires blocking events"}
+	}
 	return nil
 }
 
@@ -817,7 +824,7 @@ func (c *Client) recordResult(state *executeState) error {
 	case protocol.OutcomeFailed:
 		eventType = string(runstate.EventAttemptFailed)
 	case protocol.OutcomeWaitingHuman:
-		eventType = "attempt.blocked"
+		eventType = string(runstate.EventAttemptBlocked)
 	case protocol.OutcomeCancelled:
 		eventType = string(runstate.EventAttemptFailed)
 		result.Failure = &protocol.Failure{Kind: protocol.FailureTaskFailed}
@@ -845,18 +852,9 @@ func (state *executeState) recordOutcome(eventType string, result protocol.Execu
 	if state.terminalRecordingSuppressed() {
 		return nil
 	}
-	raised := make([]RaisedDecision, 0, len(state.report.Questions)+len(state.report.Proposals))
-	for index := range state.report.Questions {
-		question := state.report.Questions[index]
-		raised = append(raised, RaisedDecision{Kind: protocol.EventQuestion, Question: &question})
-	}
-	for index := range state.report.Proposals {
-		proposal := state.report.Proposals[index]
-		raised = append(raised, RaisedDecision{Kind: protocol.EventProposal, Proposal: &proposal})
-	}
 	receipt, err := state.plan.Recorder.RecordOutcome(OutcomeObservation{
 		EventType: eventType, Result: result, FailureReason: reason,
-		Raised: raised, Stderr: adapterkit.SanitizeDiagnostic(state.report.Stderr),
+		Raised: slices.Clone(state.report.Raised), Stderr: adapterkit.SanitizeDiagnostic(state.report.Stderr),
 	})
 	if err != nil {
 		return err
