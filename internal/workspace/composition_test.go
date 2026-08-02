@@ -300,9 +300,11 @@ func TestComposeMergeDeadlineIsUnverifiableAndDoesNotRecordAVerdict(t *testing.T
 	gitRun(t, repository, "commit", "-m", "change")
 	changed := compositionFixtureTree(t, repository)
 
-	deadline := time.Now().Add(time.Second)
 	wrapper, mergeTreeInvocations := compositionHangWrapper(t)
-	result := compose(systemGit{path: wrapper, env: gitEnvironment(), activeDeadline: deadline}, CompositionInput{
+	result := compose(mergeDeadlineGit{
+		delegate: systemGit{path: wrapper, env: gitEnvironment()},
+		timeout:  time.Second,
+	}, CompositionInput{
 		RepositoryRoot: repository,
 		BaseTree:       base,
 		Contributors: []CompositionContributor{{
@@ -635,6 +637,24 @@ func (git *compositionRecordingGit) mergeTreeCalls() int {
 		}
 	}
 	return count
+}
+
+type mergeDeadlineGit struct {
+	delegate systemGit
+	timeout  time.Duration
+}
+
+func (git mergeDeadlineGit) Run(root string, stdin []byte, args ...string) (gitResult, error) {
+	return git.delegate.Run(root, stdin, args...)
+}
+
+func (git mergeDeadlineGit) RunWithEnvironment(root string, stdin []byte, environment []string, args ...string) (gitResult, error) {
+	return git.delegate.RunWithEnvironment(root, stdin, environment, args...)
+}
+
+func (git mergeDeadlineGit) RunComposition(workingDirectory string, stdin []byte, environment []string, args ...string) (gitResult, error) {
+	git.delegate.activeDeadline = time.Now().Add(git.timeout)
+	return git.delegate.RunComposition(workingDirectory, stdin, environment, args...)
 }
 
 func (git *compositionMergeOutcomeGit) Run(root string, stdin []byte, args ...string) (gitResult, error) {
