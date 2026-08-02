@@ -79,6 +79,9 @@ type ExecuteReport struct {
 	Probe     protocol.ProbeResult
 	Result    *protocol.ExecuteResult
 	Artifacts []ArtifactObservation
+	// Raised retains question and proposal notifications in wire order. The
+	// blocked-attempt payload binds that order.
+	Raised    []RaisedDecision
 	Proposals []protocol.ProposalEvent
 	Questions []protocol.QuestionEvent
 	Stderr    string

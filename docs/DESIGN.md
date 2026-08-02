@@ -4546,7 +4546,7 @@ attempt.completed {}              # acceptance and any gate already recorded the
 attempt.blocked {                 # the SOURCE event for the whole handshake (§4). Every
                                   #   decision.requested below is DERIVED from it, so a crash
                                   #   between appends can never lose a question's text
-  raised: [                       # sorted by decision_id; the complete set, content included
+  raised: [                       # wire-arrival order; decision_id values unique; complete set, content included
       {decision_id, emitted_id, kind: "question",  question, blocking: true}
     | {decision_id, emitted_id, kind: "proposal",  proposal_id, blocking}
                                   #   A proposal entry records that the attempt BLOCKED on it —

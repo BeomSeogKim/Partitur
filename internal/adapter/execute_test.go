@@ -291,6 +291,45 @@ func TestFrameAfterExecuteResponseIsProtocolFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsWaitingHumanWithoutBlockingDecision(t *testing.T) {
+	directory := t.TempDir()
+	installFake(t, directory, "fake")
+	var order []string
+	client := newClient([]string{
+		fakeModeEnv + "=execute_waiting_human_without_blocking",
+	}, incidentalTestDeadline, 20*time.Millisecond)
+	client.sessions = &observingSessionController{}
+	recorder := successfulRecorder(&order)
+	var outcome OutcomeObservation
+	recorder.RecordOutcome = func(observation OutcomeObservation) (faultpoint.DurabilityReceipt, error) {
+		outcome = observation
+		order = append(order, observation.EventType)
+		return receipt(observation.EventType), nil
+	}
+	report, err := client.Execute(context.Background(), executePlan(
+		"fake",
+		filepath.Join(directory, "partitur-adapter-fake"),
+		buildTrampoline(t, directory),
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		recorder,
+		&order,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Result != nil || outcome.EventType != "attempt.failed" ||
+		outcome.Result.Failure == nil || outcome.Result.Failure.Kind != protocol.FailureProtocolError ||
+		outcome.FailureReason != "blocking_set_mismatch" {
+		t.Fatalf("report = %#v, outcome = %#v", report, outcome)
+	}
+	want := []string{"attempt.started", "adapter.probed", "execution.stopped", "attempt.failed"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+}
+
 func TestExecuteCancelAwaitsResponseAndRecordsNoOutcome(t *testing.T) {
 	directory := t.TempDir()
 	installFake(t, directory, "fake")
@@ -1417,6 +1456,39 @@ func TestBlockingSetMustExactlyMatchRaisedDecisions(t *testing.T) {
 	}
 }
 
+func TestRecordOutcomePreservesQuestionProposalWireOrder(t *testing.T) {
+	var observation OutcomeObservation
+	state := executeState{
+		plan: ExecutePlan{MayPropose: true, Recorder: ExecuteRecorder{
+			RecordOutcome: func(value OutcomeObservation) (faultpoint.DurabilityReceipt, error) {
+				observation = value
+				return receipt(value.EventType), nil
+			},
+		}},
+		emittedIDs:  map[string]bool{},
+		blockingIDs: map[string]bool{},
+	}
+	questionOne := &protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "q-2", Question: "First?"}
+	proposal := &protocol.ProposalEvent{Type: protocol.EventProposal, ID: "p-1", Amendment: json.RawMessage(`{}`), RequiresDecision: false}
+	questionTwo := &protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "q-1", Question: "Second?"}
+	for _, event := range []any{questionOne, proposal, questionTwo} {
+		if err := state.consumeEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := protocol.ExecuteResult{Outcome: protocol.OutcomeWaitingHuman, PendingDecisionIDs: []string{"q-2", "q-1"}}
+	if err := state.recordOutcome(string(runstate.EventAttemptBlocked), result, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{
+		observation.Raised[0].Question.ID,
+		observation.Raised[1].Proposal.ID,
+		observation.Raised[2].Question.ID,
+	}; !reflect.DeepEqual(got, []string{"q-2", "p-1", "q-1"}) {
+		t.Fatalf("raised wire order = %#v", got)
+	}
+}
+
 func TestExecuteOutcomeMappingIsOneToOne(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1470,13 +1542,12 @@ func TestExecuteOutcomeMappingIsOneToOne(t *testing.T) {
 				report: ExecuteReport{Result: &test.result},
 			}
 			if test.raised != 0 {
-				state.report.Questions = []protocol.QuestionEvent{{
-					Type: protocol.EventQuestion, ID: "q1", Question: "question?",
-				}}
-				state.report.Proposals = []protocol.ProposalEvent{{
-					Type: protocol.EventProposal, ID: "p1",
-					Amendment: json.RawMessage(`{}`), RequiresDecision: true,
-				}}
+				question := protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "q1", Question: "question?"}
+				proposal := protocol.ProposalEvent{Type: protocol.EventProposal, ID: "p1", Amendment: json.RawMessage(`{}`), RequiresDecision: true}
+				state.report.Raised = []RaisedDecision{
+					{Kind: protocol.EventQuestion, Question: &question},
+					{Kind: protocol.EventProposal, Proposal: &proposal},
+				}
 			}
 			if err := newClient(nil, incidentalTestDeadline, time.Second).recordResult(&state); err != nil {
 				t.Fatal(err)

@@ -2165,7 +2165,7 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 }
 
 func validateRaisedDecisions(values []any) error {
-	var previous string
+	seen := make(map[string]bool, len(values))
 	for index, raw := range values {
 		decision, ok := raw.(map[string]any)
 		if !ok {
@@ -2197,10 +2197,10 @@ func validateRaisedDecisions(values []any) error {
 			return fmt.Errorf("raised[%d]: %w", index, err)
 		}
 		decisionID := mustString(decision, "decision_id")
-		if index > 0 && decisionID <= previous {
-			return errors.New("raised must be sorted by unique decision_id")
+		if seen[decisionID] {
+			return errors.New("raised decision_id must be unique")
 		}
-		previous = decisionID
+		seen[decisionID] = true
 	}
 	return nil
 }
@@ -2216,6 +2216,7 @@ func validatePendingDecisionIDs(payload map[string]any) error {
 			expected = append(expected, mustString(decision, "decision_id"))
 		}
 	}
+	slices.Sort(expected)
 	if !slices.Equal(mustStrings(payload, "pending_decision_ids"), expected) {
 		return errors.New("pending_decision_ids must equal blocking raised decision ids")
 	}

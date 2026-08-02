@@ -136,7 +136,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		// effect. It must not acquire a driver or append an authority event.
 		// Nonempty Steps select step dispatch before kind handling below.
 		if len(action.Steps) == 0 {
-			if unit, ok := namedUnimplementedActionOwners[action.Kind]; ok {
+			if unit, ok := recovery.UnimplementedActionOwner(action.Kind); ok {
 				return result, fmt.Errorf("%w: %s is owned by unit %s", ErrUnreachableAction, action.Kind, unit)
 			}
 		}

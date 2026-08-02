@@ -18,11 +18,12 @@ import (
 type Outcome string
 
 const (
-	OutcomeSucceeded   Outcome = "SUCCEEDED"
-	OutcomeFailed      Outcome = "FAILED"
-	OutcomeCancelled   Outcome = "CANCELLED"
-	OutcomeHalted      Outcome = "HALTED"
-	OutcomeInterrupted Outcome = "INTERRUPTED"
+	OutcomeSucceeded    Outcome = "SUCCEEDED"
+	OutcomeFailed       Outcome = "FAILED"
+	OutcomeCancelled    Outcome = "CANCELLED"
+	OutcomeWaitingHuman Outcome = "WAITING_HUMAN"
+	OutcomeHalted       Outcome = "HALTED"
+	OutcomeInterrupted  Outcome = "INTERRUPTED"
 )
 
 // Result is the operator-visible terminal projection of one driver episode.

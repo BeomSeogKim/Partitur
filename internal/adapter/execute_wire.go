@@ -200,8 +200,8 @@ func validateExecuteResult(result protocol.ExecuteResult) error {
 			return protocolFailure("strict_decode_failed", "failed result has invalid failure or pending decisions")
 		}
 	case protocol.OutcomeWaitingHuman:
-		if result.Failure != nil || len(result.PendingDecisionIDs) == 0 {
-			return protocolFailure("strict_decode_failed", "waiting_human result requires pending decisions")
+		if result.Failure != nil {
+			return protocolFailure("strict_decode_failed", "waiting_human result has failure")
 		}
 	case protocol.OutcomeCancelled:
 		if result.Failure != nil || len(result.PendingDecisionIDs) != 0 {

@@ -31,24 +31,6 @@ import (
 
 const recoverySweepGrace = 30 * time.Second
 
-// namedUnimplementedActionOwners is the single owner assignment for recovery
-// actions whose implementation belongs to a later unit. The unit assignments
-// are documentation whose authority is the project roadmap; no test validates
-// their values, only their presence, uniqueness of bucket, and propagation
-// into the refusal message.
-var namedUnimplementedActionOwners = map[recovery.ActionKind]string{
-	recovery.ActionCompleteOrAbandonPrepare: "4.2",
-	recovery.ActionAppendRoutedRequest:      "4.2",
-	recovery.ActionSelectRevisionRestart:    "4.2",
-	recovery.ActionAppendQuestionRequest:    "4.1",
-	// Temporary executor/planner mismatch, not a 4.1 handler requirement:
-	// RC-RESUME-041 must hand decision_resume materialization to C.4.
-	recovery.ActionSelectDecisionResume:      "4.1",
-	recovery.ActionAppendFinalGateFailure:    "4.1",
-	recovery.ActionAppendHumanGateRequest:    "4.1",
-	recovery.ActionAppendGateRejectedFailure: "4.1",
-}
-
 func defaultSteps() map[recovery.ActionStep]StepHandler {
 	return map[recovery.ActionStep]StepHandler{
 		recovery.StepStabilizeHandoff:            stabilizeHandoff,
@@ -80,6 +62,8 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionResumeCriterion:            resumeCriterion,
 		recovery.ActionRealizeRecordedDisposition: realizeRecordedDisposition,
 		recovery.ActionMaterializeSuccessor:       materializeSuccessor,
+		recovery.ActionAppendQuestionRequest:      appendQuestionRequest,
+		recovery.ActionSelectDecisionResume:       selectDecisionResume,
 		recovery.ActionAppendRunFailed:            appendRunFailed,
 		recovery.ActionAppendBudgetFailure:        appendMovementBudgetFailure,
 		recovery.ActionReturnWaitingHuman:         returnWaitingHuman,
@@ -677,9 +661,18 @@ func materializeSuccessor(ctx context.Context, execution HandlerContext, action 
 	if err != nil {
 		return err
 	}
+	causationType := runstate.EventAttemptFailed
+	if pending.Reason == "decision_resume" {
+		causationType = runstate.EventDecisionResolved
+	}
 	causationID, err := latestEventID(journal.Events, func(previous runstate.Event) bool {
-		return previous.AttemptID == pending.AttemptID &&
-			(previous.Type == runstate.EventAttemptFailed || previous.Type == runstate.EventAcceptanceFailed)
+		if previous.AttemptID != pending.AttemptID {
+			return false
+		}
+		if causationType == runstate.EventDecisionResolved {
+			return previous.Type == causationType
+		}
+		return previous.Type == runstate.EventAttemptFailed || previous.Type == runstate.EventAcceptanceFailed
 	})
 	if err != nil {
 		return err
@@ -687,6 +680,58 @@ func materializeSuccessor(ctx context.Context, execution HandlerContext, action 
 	return executeRecoveredAttempt(
 		ctx, execution, input, string(pending.MovementID), performer.ID, pending.Reason, causationID,
 	)
+}
+
+func appendQuestionRequest(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" || action.QuestionDecisionID == "" {
+		return errors.New("recovery question request requires store, driver, attempt, and decision")
+	}
+	journal, err := execution.Store.ReadJournal(execution.RunID)
+	if err != nil {
+		return err
+	}
+	for _, source := range journal.Events {
+		if source.Type != runstate.EventAttemptBlocked || source.AttemptID != action.AttemptID {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(source.Payload, &payload); err != nil {
+			return err
+		}
+		raisedValues, ok := payload["raised"].([]any)
+		if !ok {
+			return fmt.Errorf("blocked attempt %q has invalid raised decisions", action.AttemptID)
+		}
+		for _, raw := range raisedValues {
+			raised, ok := raw.(map[string]any)
+			kind, _ := raised["kind"].(string)
+			decisionID, _ := raised["decision_id"].(string)
+			if !ok || kind != "question" || decisionID != action.QuestionDecisionID {
+				continue
+			}
+			emittedID, _ := raised["emitted_id"].(string)
+			question, _ := raised["question"].(string)
+			event := runstate.Event{
+				RunID: execution.RunID, ScoreRevision: source.ScoreRevision, MovementID: source.MovementID,
+				PartID: source.PartID, AttemptID: source.AttemptID, Type: runstate.EventDecisionRequested,
+				Payload: recoveryPayload(map[string]any{
+					"decision_id": action.QuestionDecisionID, "decision_type": "question",
+					"emitted_id": emittedID,
+					"question":   question,
+				}),
+			}
+			_, err := execution.Driver.Append(event, "recovery.decision.requested.question")
+			return err
+		}
+	}
+	return fmt.Errorf("recovery question %q is absent from blocked attempt %q", action.QuestionDecisionID, action.AttemptID)
+}
+
+func selectDecisionResume(_ context.Context, _ HandlerContext, action recovery.Action) error {
+	if action.PendingSuccessor == nil || action.PendingSuccessor.AttemptID != action.AttemptID || action.PendingSuccessor.Performer == "" || action.PendingSuccessor.Reason != "decision_resume" {
+		return errors.New("recovery decision resume selection is incomplete")
+	}
+	return nil
 }
 
 // executeRecoveredAttempt is deliberately only an input assembler. The

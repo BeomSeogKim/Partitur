@@ -197,6 +197,9 @@ func runWithReaders(
 	if requestedID, ok := parseCancelArgs(args); ok {
 		return runCancel(requestedID, stdout, stderr, cancel)
 	}
+	if decisionID, answerText, ok := parseAnswerArgs(args); ok {
+		return runAnswer(decisionID, answerText, stderr)
+	}
 	if len(args) == 1 && args[0] == "run" {
 		preparation, preparationResult := prepare()
 		if preparationResult.Refusal != nil {
@@ -230,7 +233,7 @@ func runWithReaders(
 			}
 		}
 		switch result.Outcome {
-		case driver.OutcomeSucceeded:
+		case driver.OutcomeSucceeded, driver.OutcomeWaitingHuman:
 			return 0
 		case driver.OutcomeFailed, driver.OutcomeCancelled:
 			fmt.Fprintf(
@@ -254,7 +257,57 @@ func runWithReaders(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate, run, resume, cancel, status, logs")
+	fmt.Fprintln(w, "commands: version, validate, run, resume, answer, cancel, status, logs")
+}
+
+func parseAnswerArgs(args []string) (decisionID, answer string, ok bool) {
+	if len(args) != 4 || args[0] != "answer" || args[1] == "" || strings.HasPrefix(args[1], "-") || args[2] != "--answer" {
+		return "", "", false
+	}
+	return args[1], args[3], true
+}
+
+func runAnswer(decisionID, answer string, stderr io.Writer) int {
+	if err := answerQuestion(decisionID, answer); err != nil {
+		if errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+		var selectionErr answerSelectionError
+		if errors.As(err, &selectionErr) {
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
+		}
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	return 0
+}
+
+type answerSelectionError struct{ err error }
+
+func (err answerSelectionError) Error() string { return err.err.Error() }
+func (err answerSelectionError) Unwrap() error { return err.err }
+
+func answerQuestion(decisionID, answer string) error {
+	root, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve invocation directory: %w", err)
+	}
+	report, err := statusprojection.Read(root, "")
+	if err != nil {
+		return answerSelectionError{err: err}
+	}
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment())
+	if err != nil {
+		return err
+	}
+	runID := runstate.RunID(report.Run.ID)
+	if err := store.ResolveQuestion(runID, decisionID, answer); err != nil {
+		return err
+	}
+	store.WakeLeaseOwner(runID)
+	return nil
 }
 
 func parseCancelArgs(args []string) (string, bool) {
