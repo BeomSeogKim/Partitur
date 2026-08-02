@@ -427,6 +427,8 @@ func ExecuteAttempt(
 			dependencies.probe.Reached(faultpoint.PointLifecycleAttemptCompleted)
 		case runstate.EventMovementSucceeded:
 			dependencies.probe.Reached(faultpoint.PointLifecycleMovementSucceeded)
+		case runstate.EventAcceptanceEvaluationCompleted:
+			dependencies.probe.Reached(faultpoint.PointAcceptanceEvaluationCompleted)
 		}
 		return receipt, nil
 	}
@@ -934,6 +936,9 @@ func ExecuteAttempt(
 	if err != nil {
 		return stopped(result, err)
 	}
+	if evaluation.EvaluationCompleted {
+		dependencies.probe.Reached(faultpoint.PointAcceptanceEvaluationCompleted)
+	}
 	if cancelled, handled := cancellationResult(ctx, result, control); handled {
 		return cancelled
 	}
@@ -988,6 +993,25 @@ func ExecuteAttempt(
 	if !evaluation.EvaluationCompleted || !evaluation.Verified {
 		return interrupted(result, errors.New("attempt did not earn VERIFIED"))
 	}
+	if movement.Acceptance.HumanGate == "always" {
+		gateID, err := humanGateID(attempt.AttemptID)
+		if err != nil {
+			return interrupted(result, err)
+		}
+		decisionID, err := dependencies.newID()
+		if err != nil {
+			return interrupted(result, fmt.Errorf("allocate human gate decision id: %w", err))
+		}
+		if _, err := appendEvent(runstate.EventDecisionRequested, map[string]any{
+			"decision_id": decisionID, "decision_type": "human_gate", "gate_id": gateID,
+			"gate_mode": "always", "subject_tree": subjectTree, "blocking_findings": []any{},
+		}, "acceptance.decision.requested.human_gate"); err != nil {
+			return stopped(result, err)
+		}
+		dependencies.probe.Reached(faultpoint.PointHumanGateDecisionRequested)
+		result.Outcome = OutcomeWaitingHuman
+		return result
+	}
 	if _, err := appendEvent(
 		runstate.EventAttemptCompleted,
 		map[string]any{},
@@ -1035,6 +1059,18 @@ func adapterDecisionID(attemptID runstate.AttemptID, emittedID string) (string, 
 
 func adapterProposalID(attemptID runstate.AttemptID, emittedID string) (string, error) {
 	return scopedAdapterID("prp-", "partitur/proposal-id", attemptID, emittedID)
+}
+
+func humanGateID(attemptID runstate.AttemptID) (string, error) {
+	encoded, err := canonical.Encode(map[string]any{"attempt_id": string(attemptID)})
+	if err != nil {
+		return "", fmt.Errorf("encode human gate id: %w", err)
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("partitur/gate-id"))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(encoded)
+	return fmt.Sprintf("gat-%x", digest.Sum(nil)), nil
 }
 
 func scopedAdapterID(prefix, domain string, attemptID runstate.AttemptID, emittedID string) (string, error) {

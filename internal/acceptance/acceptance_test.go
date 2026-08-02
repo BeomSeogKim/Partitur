@@ -305,13 +305,16 @@ func TestGeneratedChecksParticipateInAcceptanceSpecHash(t *testing.T) {
 		t.Fatalf("acceptance hash = %s, want %s", onePlan.Hash(), want)
 	}
 
-	for _, gate := range []string{"always", "on_contested"} {
-		withGate := movementFixture()
-		withGate.Acceptance.HumanGate = gate
-		if _, err := Compile(withGate); !errors.Is(err, ErrUnsupportedCriteria) ||
-			!strings.Contains(err.Error(), "unit 4.1") {
-			t.Fatalf("human gate %q error = %v, want unsupported criteria naming unit 4.1", gate, err)
-		}
+	withAlwaysGate := movementFixture()
+	withAlwaysGate.Acceptance.HumanGate = "always"
+	if _, err := Compile(withAlwaysGate); err != nil {
+		t.Fatalf("human_gate always compile error = %v", err)
+	}
+	withContestedGate := movementFixture()
+	withContestedGate.Acceptance.HumanGate = "on_contested"
+	if _, err := Compile(withContestedGate); !errors.Is(err, ErrUnsupportedCriteria) ||
+		!strings.Contains(err.Error(), "unit 4.1") {
+		t.Fatalf("human_gate on_contested error = %v, want unsupported criteria naming unit 4.1", err)
 	}
 }
 

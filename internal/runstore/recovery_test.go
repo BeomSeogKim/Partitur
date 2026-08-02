@@ -100,6 +100,48 @@ func TestResolveQuestionAppendsExactlyOneResolutionAndRefusesStaleRequests(t *te
 	}
 }
 
+func TestResolveHumanGateAppendsExactlyOneResolutionAndRefusesWrongType(t *testing.T) {
+	store := recoveryStore(t)
+	appendPendingDecision(t, store)
+	appendRecoveryEvent(t, store, runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventDecisionRequested,
+		Payload: recoveryPayload(t, map[string]any{
+			"decision_id": "gate-1", "decision_type": "human_gate", "gate_id": "gat-attempt-1",
+			"gate_mode": "always", "subject_tree": "git-sha1:tree", "blocking_findings": []any{},
+		}),
+	})
+
+	if err := store.ResolveHumanGate("run-1", "gate-1", false, "not ready"); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := journal.Events[len(journal.Events)-1]
+	if last.Type != runstate.EventDecisionResolved || last.AttemptID != "attempt-1" {
+		t.Fatalf("resolution event = %+v", last)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["disposition"] != "rejected" || payload["gate_id"] != "gat-attempt-1" || payload["reason"] != "not ready" {
+		t.Fatalf("human gate resolution payload = %#v", payload)
+	}
+	count := len(journal.Events)
+	if err := store.ResolveHumanGate("run-1", "question-1", true, ""); !errors.Is(err, ErrDecisionResolutionNotAllowed) {
+		t.Fatalf("wrong-type resolution error = %v, want refusal", err)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) != count {
+		t.Fatalf("refused human gate resolution appended %d events", len(journal.Events)-count)
+	}
+}
+
 func TestReclaimDeadRecoveryDriverKeepsReusedLivePIDLease(t *testing.T) {
 	store := recoveryStore(t)
 	start, err := procid.Read(os.Getpid())

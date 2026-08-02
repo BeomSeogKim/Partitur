@@ -149,7 +149,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, cancel, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, approve, cancel, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -310,7 +310,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, cancel, status, logs\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, approve, cancel, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
@@ -337,6 +337,26 @@ func TestParseAnswerArgs(t *testing.T) {
 		id, text, ok := parseAnswerArgs(test.args)
 		if id != test.wantID || text != test.wantText || ok != test.want {
 			t.Fatalf("parseAnswerArgs(%v) = (%q, %q, %t), want (%q, %q, %t)", test.args, id, text, ok, test.wantID, test.wantText, test.want)
+		}
+	}
+}
+
+func TestParseApproveArgs(t *testing.T) {
+	for _, test := range []struct {
+		args                    []string
+		wantID, wantReason      string
+		wantApproved, wantValid bool
+	}{
+		{args: []string{"approve", "gate-1", "--approve"}, wantID: "gate-1", wantApproved: true, wantValid: true},
+		{args: []string{"approve", "gate-1", "--reject"}, wantID: "gate-1", wantValid: true},
+		{args: []string{"approve", "gate-1", "--reject", "--reason", "not ready"}, wantID: "gate-1", wantReason: "not ready", wantValid: true},
+		{args: []string{"approve", "gate-1", "--approve", "--reason", "no"}},
+		{args: []string{"approve", "gate-1", "--reject", "--reason", ""}},
+		{args: []string{"approve", "gate-1"}},
+	} {
+		id, approved, reason, ok := parseApproveArgs(test.args)
+		if id != test.wantID || approved != test.wantApproved || reason != test.wantReason || ok != test.wantValid {
+			t.Fatalf("parseApproveArgs(%v) = (%q, %t, %q, %t)", test.args, id, approved, reason, ok)
 		}
 	}
 }

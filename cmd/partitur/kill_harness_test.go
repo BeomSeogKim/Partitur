@@ -224,6 +224,7 @@ func nonCancellationKillHarnessEdges() []killEdge {
 		{faultpoint.EdgeExecuteIntervalStoppedToOutcome, faultpoint.PointExecuteIntervalStopped, faultpoint.PointExecuteOutcomeRecorded, killHarnessRepository},
 		{faultpoint.EdgeLifecycleAttemptCompletedToMovementSucceeded, faultpoint.PointLifecycleAttemptCompleted, faultpoint.PointLifecycleMovementSucceeded, killHarnessRepository},
 		{faultpoint.EdgeLifecycleMovementFailedToRunFailed, faultpoint.PointLifecycleMovementFailed, faultpoint.PointLifecycleRunFailed, movementFailureKillHarnessRepository},
+		{faultpoint.EdgeAcceptanceEvaluationCompletedToDecisionRequested, faultpoint.PointAcceptanceEvaluationCompleted, faultpoint.PointHumanGateDecisionRequested, humanGateKillHarnessRepository},
 		{faultpoint.EdgeChangeSetCapturedToRecorded, faultpoint.PointChangeSetCaptured, faultpoint.PointChangeSetRecorded, nil},
 		{faultpoint.EdgeCompositionMovementEvidenceToTerminal, faultpoint.PointCompositionMovementEvidence, faultpoint.PointCompositionMovementTerminal, nil},
 		{faultpoint.EdgeCompositionCandidateEvidenceToTerminal, faultpoint.PointCompositionCandidateEvidence, faultpoint.PointCompositionCandidateTerminal, nil},
@@ -258,8 +259,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 		}
 		reachable[id] = true
 	}
-	if len(reachable) != 19 {
-		t.Fatalf("reachable edge count=%d, want nineteen", len(reachable))
+	if len(reachable) != 20 {
+		t.Fatalf("reachable edge count=%d, want twenty", len(reachable))
 	}
 	if len(retryCoveragePoints()) != 2 || retryCoveragePoints()[0] == retryCoveragePoints()[1] {
 		t.Fatalf("retry coverage must name two distinct cut sides: %v", retryCoveragePoints())
@@ -446,6 +447,12 @@ func hashMismatchScore() map[string]any {
 	return score
 }
 
+func humanGateKillHarnessRepository(t *testing.T, bin, vendor string) (string, []string) {
+	score := runScore()
+	score["movements"].([]any)[0].(map[string]any)["acceptance"].(map[string]any)["human_gate"] = "always"
+	return killHarnessRepositoryWithInputs(t, bin, vendor, score, runCast())
+}
+
 func killAtPoint(
 	t *testing.T,
 	binary, repository string,
@@ -581,6 +588,8 @@ func expectedFailureFor(point faultpoint.PointID) *expectedFailure {
 		return nil
 	case faultpoint.PointLifecycleMovementFailed, faultpoint.PointLifecycleRunFailed:
 		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", terminalReason: "retries_exhausted", runReason: "movement_failed"}
+	case faultpoint.PointAcceptanceEvaluationCompleted, faultpoint.PointHumanGateDecisionRequested:
+		return nil
 	default:
 		panic(fmt.Sprintf("no fixed-point failure expectation declared for point %q", point))
 	}
@@ -622,6 +631,8 @@ func crashedStateExpectationFor(point faultpoint.PointID) crashedStateExpectatio
 		return crashedStateMovementFailed
 	case faultpoint.PointLifecycleRunFailed:
 		return crashedStateRunFailed
+	case faultpoint.PointAcceptanceEvaluationCompleted, faultpoint.PointHumanGateDecisionRequested:
+		return crashedStateProjectionOnly
 	default:
 		panic(fmt.Sprintf("no crashed-state expectation declared for point %q", point))
 	}
@@ -750,8 +761,31 @@ func assertFixedPointReplayResult(
 		t.Fatalf("driver lease after fixed-point recovery = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repository, ".partitur", "work", runID)); !os.IsNotExist(err) {
-		t.Fatalf("attempt worktree after fixed-point recovery = %v", err)
+		if !runWaitingForHumanGate(t, repository, runID) {
+			t.Fatalf("attempt worktree after fixed-point recovery = %v", err)
+		}
 	}
+}
+
+func runWaitingForHumanGate(t *testing.T, repository, runID string) bool {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Run != runstate.RunWaitingHuman {
+		return false
+	}
+	for _, decision := range input.Projection.State.PendingDecisions {
+		if decision.Type == "human_gate" && decision.Blocking {
+			return true
+		}
+	}
+	return false
 }
 
 // assertSettledFixedPointState derives fixed-point checks from DESIGN §6's
@@ -814,10 +848,25 @@ func assertSettledLifecycle(t *testing.T, state runstate.State) {
 	for attemptID, attempt := range state.Attempts {
 		switch attempt.State {
 		case runstate.AttemptCompleted, runstate.AttemptBlocked, runstate.AttemptFailed, runstate.AttemptCancelled, runstate.AttemptSuperseded:
+		case runstate.AttemptVerifying:
+			if state.Run == runstate.RunWaitingHuman && state.Movements[attempt.MovementID] == runstate.MovementWaitingHuman &&
+				hasPendingHumanGate(state, attemptID) {
+				continue
+			}
+			fallthrough
 		default:
 			t.Fatalf("unsettled attempt %q after fixed-point recovery = %q", attemptID, attempt.State)
 		}
 	}
+}
+
+func hasPendingHumanGate(state runstate.State, attemptID runstate.AttemptID) bool {
+	for _, decision := range state.PendingDecisions {
+		if decision.AttemptID == attemptID && decision.Type == "human_gate" && decision.Blocking {
+			return true
+		}
+	}
+	return false
 }
 
 func assertRecordedSessionsEmpty(t *testing.T, state runstate.State) {

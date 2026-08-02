@@ -94,7 +94,6 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 			func(input spec) spec { input.completion = 3; return input },
 			func(input spec) spec { input.completion = 4; return input },
 			func(input spec) spec { input.completion = 5; return input },
-			func(input spec) spec { input.completion = 6; return input },
 		)},
 		{name: "handoff observation", values: forSurface(surfaceC2,
 			func(input spec) spec { input.handoff = HandoffUnverifiable; return input },
@@ -283,8 +282,6 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 			input = withMovementSucceeded(input)
 		case 5:
 			input = withMovementFailed(input)
-		case 6:
-			input = withFinalGateRejected(input)
 		}
 		input.Observations.Handoff = spec.handoff
 		input.Observations.AdapterSweep = spec.adapterSweep
@@ -326,8 +323,8 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		}
 	}
 	expand(0, spec{})
-	if count < 32000 {
-		t.Fatalf("declared recovery combinations = %d, want at least 32000", count)
+	if count < 28000 {
+		t.Fatalf("declared recovery combinations = %d, want at least 28000", count)
 	}
 	for _, caseID := range []CaseID{
 		CaseOpenExecution, CaseTerminal, CaseStaleLease,

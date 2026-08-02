@@ -32,6 +32,22 @@ func TestMutationRecoveryFanInSuccessorMaterializesAtComposedBase(t *testing.T) 
 	assertRecoveryMutationKilled(t, "TestRecoveryFanInSuccessorMaterializesAtComposedBase", goEnvironment, filepath.Join("internal", "recoveryexec", "handlers.go"), "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)", "workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)")
 }
 
+func TestMutationRecoveryFinalGateRejectionEndsAtomically(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestRecoveryFinalGateRejectionEndsAtomically(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryFinalGateRejectionEndsAtomically", goEnvironment,
+		"internal/recoveryexec/handlers.go", "\"subject_tree\": action.SubjectTree, \"run_failed\": state.FinalMovements[movementID]",
+		"\"subject_tree\": action.SubjectTree, \"run_failed\": false")
+}
+
+func TestMutationRecoveryNonFinalGateRejectionCascades(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestRecoveryNonFinalGateRejectionCascades(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryNonFinalGateRejectionCascades", goEnvironment,
+		"internal/recoveryexec/handlers.go", "\"subject_tree\": action.SubjectTree, \"run_failed\": state.FinalMovements[movementID]",
+		"\"subject_tree\": action.SubjectTree, \"run_failed\": true")
+}
+
 func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestAppendCompositionTerminalSerializesCancellationAfterEvidence(t)

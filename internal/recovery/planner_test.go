@@ -669,12 +669,6 @@ func TestPlanC2RowsAndAdjacentStates(t *testing.T) {
 			wantCase: CaseRunFailed, wantKind: ActionAppendRunFailed, replan: true,
 			adjacent: withTerminal(withMovementFailed(withFailedAttempt(c2Input(runstate.AttemptFailed), true))),
 		},
-		{
-			name:     "final gate rejection is an atomic movement failure",
-			input:    withFinalGateRejected(withFailedAttempt(c2Input(runstate.AttemptFailed), true)),
-			wantCase: CaseFinalGateRejected, wantKind: ActionAppendFinalGateFailure, replan: true,
-			adjacent: withMovementFailed(withFinalGateRejected(withFailedAttempt(c2Input(runstate.AttemptFailed), true))),
-		},
 	}
 
 	seen := map[CaseID]bool{}
@@ -696,7 +690,6 @@ func TestPlanC2RowsAndAdjacentStates(t *testing.T) {
 		CaseRealizeDisposition, CaseAppendQuestionRequest, CaseDecisionResume, CaseWaitingHuman,
 		CaseUnstartedAttempt, CaseUnprobedAttempt, CaseIncompleteAttempt, CaseCaptureChangeSet,
 		CasePostHocVerification, CaseStartAcceptance, CaseMovementSucceeded, CaseRunFailed,
-		CaseFinalGateRejected,
 	} {
 		if !seen[caseID] {
 			t.Fatalf("C.2 case %s has no direct selection test", caseID)
@@ -1267,10 +1260,5 @@ func withMovementSucceeded(input Input) Input {
 
 func withMovementFailed(input Input) Input {
 	input.Projection.CurrentHeadAttempt.MovementFailed = true
-	return input
-}
-
-func withFinalGateRejected(input Input) Input {
-	input.Projection.CurrentHeadAttempt.FinalGateRejected = true
 	return input
 }

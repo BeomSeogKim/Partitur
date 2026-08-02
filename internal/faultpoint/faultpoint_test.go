@@ -621,6 +621,8 @@ func TestBoundaryPointIDsAreSemanticAndUnique(t *testing.T) {
 		PointExecuteIntervalStopped,
 		PointExecuteOutcomeRecorded,
 		PointAcceptanceFailureRecorded,
+		PointAcceptanceEvaluationCompleted,
+		PointHumanGateDecisionRequested,
 		PointLifecycleAttemptCompleted,
 		PointLifecycleMovementSucceeded,
 		PointLifecycleMovementFailed,
