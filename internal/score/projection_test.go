@@ -332,14 +332,6 @@ func TestProjectionOrderingSemantics(t *testing.T) {
 		"no_unresolved_blocking_findings",
 		"no_blocking_findings",
 	}
-	acceptanceAt(base, 2)["review"] = append(
-		arrayAt(acceptanceAt(base, 2), "review"),
-		map[string]any{
-			"id":       "risk-review",
-			"findings": "review-findings",
-			"rubric":   []any{"risk"},
-		},
-	)
 	reorderedSets := cloneFixture(base)
 	objectAtKey(reorderedSets, "parts", "write")["capabilities"] =
 		[]any{"shell", "repo_write", "repo_read"}
@@ -413,16 +405,6 @@ func TestProjectionOrderingSemantics(t *testing.T) {
 		t.Fatal("output declaration order was erased")
 	}
 
-	reorderedReviews := cloneFixture(base)
-	reviews := arrayAt(acceptanceAt(reorderedReviews, 2), "review")
-	reviews[0], reviews[1] = reviews[1], reviews[0]
-	reviewBytes, err := assertCompiles(t, reorderedReviews).ProjectionBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(baseBytes, reviewBytes) {
-		t.Fatal("review declaration order was erased")
-	}
 }
 
 func TestHashUsesScoreDomainProjection(t *testing.T) {

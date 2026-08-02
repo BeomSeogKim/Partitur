@@ -28,6 +28,7 @@ const fakeAdapterEnvironment = "PARTITUR_VALIDATE_FAKE_ADAPTER"
 const runVendorEnvironment = "PARTITUR_RUN_VENDOR_FIXTURE"
 const runVendorOutcomeEnvironment = "PARTITUR_RUN_VENDOR_OUTCOME"
 const runVendorMarkerEnvironment = "PARTITUR_RUN_VENDOR_MARKER"
+const runVendorContestedEnvironment = "PARTITUR_RUN_VENDOR_CONTESTED"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runVendorEnvironment) == "1" {
@@ -1329,14 +1330,21 @@ func runVendorFixture() {
 	); err != nil {
 		os.Exit(93)
 	}
+	artifacts := []any{map[string]any{"artifact_id": "report", "path": "report.txt"}}
+	if os.Getenv(runVendorContestedEnvironment) == "1" {
+		tree, err := exec.Command("git", "rev-parse", "HEAD^{tree}").Output()
+		if err != nil {
+			os.Exit(93)
+		}
+		findings := fmt.Sprintf(`{"schema":"partitur/findings+json;v=1","subject_tree":"git-sha1:%s","coverage":[{"rubric":"coverage","conclusion":"findings_raised"}],"findings":[{"id":"fixture-blocker","rubric":"coverage","summary":"fixture blocker","blocking":true,"evidence":[{"path":"partitur.yaml"}]}]}`, strings.TrimSpace(string(tree)))
+		if err := os.WriteFile(filepath.Join(outputDir, "findings.json"), []byte(findings), 0o600); err != nil {
+			os.Exit(93)
+		}
+		artifacts = append(artifacts, map[string]any{"artifact_id": "findings", "path": "findings.json"})
+	}
 	result := map[string]any{
-		"version": float64(1),
-		"artifacts": []any{
-			map[string]any{
-				"artifact_id": "report",
-				"path":        "report.txt",
-			},
-		},
+		"version":   float64(1),
+		"artifacts": artifacts,
 		"questions": []any{},
 		"proposal":  nil,
 		"summary":   "completed",

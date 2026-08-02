@@ -232,6 +232,20 @@ func validateRule04(document *document, diagnostics *[]Diagnostic) {
 func validateRule07(document *document, diagnostics *[]Diagnostic) {
 	for _, movement := range document.Movements {
 		base := movementPointer(movement)
+		if len(movement.Acceptance.Review) > 1 {
+			for _, review := range movement.Acceptance.Review[1:] {
+				addDiagnostic(diagnostics, Rule07,
+					indexPointer(base+"/acceptance/review", review.SourceIndex),
+					"multiple_review_criteria")
+			}
+		}
+		if len(movement.Acceptance.Review) != 0 {
+			for index, grant := range movement.Grants {
+				if grant == "repo_write" && !schemaInvalid(document, indexPointer(base+"/grants", index)) {
+					addDiagnostic(diagnostics, Rule07, indexPointer(base+"/grants", index), "review_repo_write")
+				}
+			}
+		}
 		outputs := make(map[string]string, len(movement.Outputs))
 		for _, output := range movement.Outputs {
 			outputBase := indexPointer(base+"/outputs", output.SourceIndex)

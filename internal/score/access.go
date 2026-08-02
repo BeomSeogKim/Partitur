@@ -143,6 +143,17 @@ func movementView(value movement) MovementView {
 			},
 		)
 	}
+	if len(value.Acceptance.Review) != 0 {
+		acceptance.ReviewCriteria = make([]ReviewCriterionView, 0, len(value.Acceptance.Review))
+	}
+	for _, criterion := range value.Acceptance.Review {
+		acceptance.ReviewCriteria = append(acceptance.ReviewCriteria, ReviewCriterionView{
+			SourceIndex: criterion.SourceIndex,
+			ID:          criterion.ID,
+			Findings:    criterion.Findings,
+			Rubrics:     sortedStrings(criterion.Rubric),
+		})
+	}
 	return MovementView{
 		ID:          value.ID,
 		PartID:      value.PartID,

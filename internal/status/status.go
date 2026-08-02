@@ -2,16 +2,19 @@
 package status
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
+	"strings"
 
+	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
@@ -28,7 +31,6 @@ var (
 )
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
-var snapshotPattern = regexp.MustCompile(`^revision-([1-9][0-9]*)\.yaml$`)
 
 // Report is the versioned, interface-neutral status projection.
 type Report struct {
@@ -199,49 +201,43 @@ func readRun(store *runstore.Store, runID runstate.RunID) (Report, error) {
 	if replay.State.Run == runstate.RunNotStarted {
 		return Report{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
 	}
-	return project(runID, compiled, replay), nil
+	snapshots, err := loadAttemptSnapshots(store, runID, compiled, replay.State)
+	if err != nil {
+		return Report{}, err
+	}
+	if err := validateReviewArtifacts(storeRoot(store), runID, snapshots, replay.State); err != nil {
+		return Report{}, err
+	}
+	return projectAt(runID, compiled, snapshots, replay, storeRoot(store)), nil
 }
 
 func loadInitialScore(store *runstore.Store, runID runstate.RunID) (*score.Score, error) {
-	root := filepath.Join(storeRoot(store), ".partitur", "runs", string(runID), "scores")
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrSnapshot
-	}
+	compiled, err := store.LoadInitialScore(runID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read run score snapshots: %v", ErrSnapshot, err)
-	}
-
-	var selected string
-	var revision uint64
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+		if errors.Is(err, runstore.ErrJournalCorrupt) {
+			return nil, err
 		}
-		match := snapshotPattern.FindStringSubmatch(entry.Name())
-		if match == nil {
-			continue
-		}
-		value, err := strconv.ParseUint(match[1], 10, 64)
-		if err != nil {
-			continue
-		}
-		if selected == "" || value < revision {
-			selected, revision = entry.Name(), value
-		}
-	}
-	if selected == "" {
-		return nil, ErrSnapshot
-	}
-	source, err := os.ReadFile(filepath.Join(root, selected))
-	if err != nil {
-		return nil, fmt.Errorf("%w: read run score snapshot: %v", ErrSnapshot, err)
-	}
-	compiled, diagnostics := score.Compile(source)
-	if compiled == nil || len(diagnostics) != 0 {
-		return nil, ErrSnapshotInvalid
+		return nil, fmt.Errorf("%w: %v", ErrSnapshot, err)
 	}
 	return compiled, nil
+}
+
+func loadAttemptSnapshots(store *runstore.Store, runID runstate.RunID, initial *score.Score, state runstate.State) (map[uint64]*score.Score, error) {
+	snapshots := map[uint64]*score.Score{initial.Revision(): initial}
+	for _, attempt := range state.Attempts {
+		if attempt.ScoreRevision == 0 {
+			return nil, fmt.Errorf("%w: attempt %q has no score revision", ErrSnapshot, attempt.MovementID)
+		}
+		if _, ok := snapshots[attempt.ScoreRevision]; ok {
+			continue
+		}
+		compiled, err := store.LoadScoreSnapshot(runID, attempt.ScoreRevision)
+		if err != nil {
+			return nil, fmt.Errorf("%w: score snapshot revision %d: %v", ErrSnapshot, attempt.ScoreRevision, err)
+		}
+		snapshots[attempt.ScoreRevision] = compiled
+	}
+	return snapshots, nil
 }
 
 // storeRoot is intentionally kept here until runstore exposes a read-only
@@ -268,6 +264,10 @@ func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 }
 
 func project(runID runstate.RunID, compiled *score.Score, replay runstore.ReadReplayResult) Report {
+	return projectAt(runID, compiled, map[uint64]*score.Score{compiled.Revision(): compiled}, replay, "")
+}
+
+func projectAt(runID runstate.RunID, compiled *score.Score, snapshots map[uint64]*score.Score, replay runstore.ReadReplayResult, repositoryRoot string) Report {
 	state := replay.State
 	report := Report{
 		Schema: "partitur/status+json;v=1",
@@ -279,7 +279,7 @@ func project(runID runstate.RunID, compiled *score.Score, replay runstore.ReadRe
 				SemanticHash: string(state.ScoreHead.SemanticHash),
 				FileHash:     string(state.ScoreHead.FileHash),
 			},
-			Movements:        movementProjection(compiled, state),
+			Movements:        movementProjection(compiled, snapshots, state, repositoryRoot, runID),
 			PendingDecisions: pendingDecisions(state),
 		},
 		Application:           Application{State: string(state.Application.State)},
@@ -342,7 +342,7 @@ func pendingDecisions(state runstate.State) []PendingDecision {
 	return decisions
 }
 
-func movementProjection(compiled *score.Score, state runstate.State) []Movement {
+func movementProjection(compiled *score.Score, snapshots map[uint64]*score.Score, state runstate.State, repositoryRoot string, runID runstate.RunID) []Movement {
 	views := compiled.Movements()
 	result := make([]Movement, 0, len(views))
 	for _, view := range views {
@@ -351,7 +351,7 @@ func movementProjection(compiled *score.Score, state runstate.State) []Movement 
 			ID:       view.ID,
 			State:    string(state.Movements[id]),
 			Attempts: attemptsFor(state, id),
-			Marks:    marksFor(state, id, view),
+			Marks:    marksFor(state, id, snapshots, repositoryRoot, runID),
 		}
 		result = append(result, movement)
 	}
@@ -378,10 +378,7 @@ func attemptsFor(state runstate.State, movementID runstate.MovementID) []Attempt
 	return result
 }
 
-func marksFor(state runstate.State, movementID runstate.MovementID, view score.MovementView) []Mark {
-	if len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria) == 0 {
-		return []Mark{}
-	}
+func marksFor(state runstate.State, movementID runstate.MovementID, snapshots map[uint64]*score.Score, repositoryRoot string, runID runstate.RunID) []Mark {
 	failedAttempts := 0
 	for _, attempt := range state.Attempts {
 		if attempt.MovementID == movementID && attempt.State == runstate.AttemptFailed {
@@ -390,13 +387,22 @@ func marksFor(state runstate.State, movementID runstate.MovementID, view score.M
 	}
 	ids := make([]string, 0)
 	for id, attempt := range state.Attempts {
-		if attempt.MovementID == movementID && attempt.State == runstate.AttemptCompleted {
+		if attempt.MovementID == movementID && (attempt.State == runstate.AttemptCompleted || attempt.State == runstate.AttemptVerifying) {
 			ids = append(ids, string(id))
 		}
 	}
 	sort.Strings(ids)
 	marks := make([]Mark, 0, len(ids))
 	for _, id := range ids {
+		attempt := state.Attempts[runstate.AttemptID(id)]
+		compiled, ok := snapshots[attempt.ScoreRevision]
+		if !ok {
+			continue
+		}
+		view, ok := movementView(compiled, movementID)
+		if !ok || len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria)+len(view.Acceptance.ReviewCriteria) == 0 {
+			continue
+		}
 		acceptance, ok := state.Acceptances[runstate.AttemptID(id)]
 		if !ok || !acceptance.EvaluationCompleted {
 			continue
@@ -414,16 +420,102 @@ func marksFor(state runstate.State, movementID runstate.MovementID, view score.M
 		if !complete {
 			continue
 		}
-		marks = append(marks, Mark{
-			Grade:          "VERIFIED",
-			AttemptID:      id,
-			Criteria:       criteria,
-			SubjectTree:    acceptance.SubjectTree,
-			ScoreRevision:  state.ScoreHead.Revision,
-			FailedAttempts: failedAttempts,
-		})
+		if len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria) != 0 {
+			marks = append(marks, Mark{Grade: "VERIFIED", AttemptID: id, Criteria: criteria, SubjectTree: acceptance.SubjectTree, ScoreRevision: attempt.ScoreRevision, FailedAttempts: failedAttempts})
+		}
+		if len(view.Acceptance.ReviewCriteria) == 1 {
+			artifactID := view.Acceptance.ReviewCriteria[0].Findings
+			instanceID := artifactID + "@" + id
+			marks = append(marks, Mark{Grade: "REVIEWED", AttemptID: id, Criteria: criteria, SubjectTree: acceptance.SubjectTree, ScoreRevision: attempt.ScoreRevision, FailedAttempts: failedAttempts, FindingsInstanceID: instanceID, ReviewOutcome: acceptance.ReviewOutcome})
+		}
 	}
 	return marks
+}
+
+func movementView(compiled *score.Score, movementID runstate.MovementID) (score.MovementView, bool) {
+	for _, movement := range compiled.Movements() {
+		if movement.ID == string(movementID) {
+			return movement, true
+		}
+	}
+	return score.MovementView{}, false
+}
+
+func validateReviewArtifacts(repositoryRoot string, runID runstate.RunID, snapshots map[uint64]*score.Score, state runstate.State) error {
+	for attemptID, attempt := range state.Attempts {
+		compiled, ok := snapshots[attempt.ScoreRevision]
+		if !ok {
+			return fmt.Errorf("%w: attempt %q has no score snapshot", ErrSnapshot, attemptID)
+		}
+		movement, ok := movementView(compiled, attempt.MovementID)
+		if !ok || len(movement.Acceptance.ReviewCriteria) != 1 {
+			continue
+		}
+		artifactID := movement.Acceptance.ReviewCriteria[0].Findings
+		value, ok := state.Acceptances[attemptID]
+		if !ok || !value.EvaluationCompleted {
+			continue
+		}
+		instanceID := runstate.ArtifactInstanceID(artifactID + "@" + string(attemptID))
+		artifact, ok := state.Artifacts[instanceID]
+		if !ok {
+			return fmt.Errorf("%w: findings artifact %q is absent", ErrRequiredInput, instanceID)
+		}
+		path := filepath.Join(repositoryRoot, ".partitur", "runs", string(runID), "artifacts", artifactID, string(attemptID))
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("%w: read findings artifact %q: %v", ErrRequiredInput, instanceID, err)
+		}
+		digest := sha256.Sum256(contents)
+		if fmt.Sprintf("sha256:%x", digest) != string(artifact.ContentHash) {
+			return fmt.Errorf("%w: findings artifact %q content hash mismatch", ErrRequiredInput, instanceID)
+		}
+		outcome, blockers, reason := acceptance.ValidateFindings(contents, value.SubjectTree, movement.Acceptance.ReviewCriteria[0].Rubrics, func(path string, line *int64) error {
+			return validateReviewEvidence(repositoryRoot, value.SubjectTree, path, line)
+		})
+		if reason != "" || outcome != value.ReviewOutcome || !sameFindings(blockers, value.BlockingFindings, string(instanceID)) {
+			return fmt.Errorf("%w: findings artifact %q is not the validated review evidence", ErrRequiredInput, instanceID)
+		}
+	}
+	return nil
+}
+
+func sameFindings(left []acceptance.FindingReference, right []runstate.FindingReference, instanceID string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].FindingID != right[index].FindingID || right[index].ArtifactInstanceID != instanceID {
+			return false
+		}
+	}
+	return true
+}
+
+func validateReviewEvidence(repositoryRoot, subjectTree, path string, line *int64) error {
+	object := strings.TrimPrefix(strings.TrimPrefix(subjectTree, "git-sha1:"), "git-sha256:")
+	listed, err := exec.Command("git", "-C", repositoryRoot, "ls-tree", object, "--", path).Output()
+	if err != nil || !strings.Contains(string(listed), " blob ") {
+		return errors.New("review evidence does not name a regular subject file")
+	}
+	if line == nil {
+		return nil
+	}
+	contents, err := exec.Command("git", "-C", repositoryRoot, "show", object+":"+path).Output()
+	if err != nil {
+		return err
+	}
+	lineCount := int64(0)
+	if len(contents) != 0 {
+		lineCount = int64(strings.Count(string(contents), "\n")) + 1
+		if contents[len(contents)-1] == '\n' {
+			lineCount--
+		}
+	}
+	if *line < 1 || *line > lineCount {
+		return errors.New("review evidence line is outside subject file")
+	}
+	return nil
 }
 
 func advisories(state runstate.State) []EnforcementAdvisory {

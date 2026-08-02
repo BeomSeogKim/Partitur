@@ -173,9 +173,10 @@ type Disposition struct {
 }
 
 type Attempt struct {
-	MovementID MovementID
-	State      AttemptState
-	Failure    *AttemptFailure
+	MovementID    MovementID
+	ScoreRevision uint64
+	State         AttemptState
+	Failure       *AttemptFailure
 }
 
 type AttemptFailure struct {
@@ -308,6 +309,13 @@ type CriterionRecord struct {
 	Outcome     string
 }
 
+// FindingReference identifies one validated blocking finding in an immutable
+// review artifact instance.
+type FindingReference struct {
+	ArtifactInstanceID string
+	FindingID          string
+}
+
 type Acceptance struct {
 	Started             bool
 	EvaluationCompleted bool
@@ -315,6 +323,8 @@ type Acceptance struct {
 	SpecHash            Hash
 	PlannedCriterionIDs []CriterionID
 	Criteria            map[CriterionID]CriterionRecord
+	ReviewOutcome       string
+	BlockingFindings    []FindingReference
 }
 
 type State struct {

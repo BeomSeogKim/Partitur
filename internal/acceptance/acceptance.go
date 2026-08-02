@@ -76,8 +76,12 @@ type Evaluation struct {
 	FailureDisposition    runstate.Disposition
 	FailureDispositionFor func(RunCriterionResult) (runstate.Disposition, error)
 	LookupArtifact        ArtifactLookup
+	ReadArtifact          func(runstate.ArtifactRecord) ([]byte, error)
+	ValidateEvidence      func(path string, line *int64) error
 	RunCriterion          RunCriterionExecutor
 	Append                AppendEvent
+	ReviewOutcome         string
+	BlockingFindings      []FindingReference
 }
 
 // Result reports the durable evaluation boundary and the derived VERIFIED
@@ -90,6 +94,9 @@ type Result struct {
 	AcceptanceSpecHash  runstate.Hash
 	FailedCriterionID   string
 	FailureReason       string
+	FindingsInstanceID  string
+	ReviewOutcome       string
+	BlockingFindings    []FindingReference
 	Receipts            []faultpoint.DurabilityReceipt
 }
 
@@ -98,6 +105,11 @@ type Result struct {
 type CriterionOutcome struct {
 	CriterionID string
 	Outcome     string
+}
+
+type FindingReference struct {
+	ArtifactInstanceID string
+	FindingID          string
 }
 
 // Plan is an immutable effective acceptance plan.
@@ -118,6 +130,8 @@ type criterion struct {
 	expectedHash string
 	specHash     runstate.Hash
 	generated    bool
+	review       bool
+	rubrics      []string
 }
 
 // Hash returns the effective acceptance-spec identity.
@@ -131,18 +145,11 @@ func (plan *Plan) Hash() runstate.Hash {
 // Compile builds the effective acceptance plan. Declared criteria retain
 // declaration order; generated checks retain output declaration order.
 func Compile(movement score.MovementView) (*Plan, error) {
-	if movement.Acceptance.HasReviewCriteria {
-		return nil, fmt.Errorf(
-			"%w: review criteria require unit 4.1",
-			ErrUnsupportedCriteria,
-		)
+	if contains(movement.Grants, "repo_write") && len(movement.Acceptance.ReviewCriteria) != 0 {
+		return nil, fmt.Errorf("%w: review criterion requires a read-only movement", ErrUnsupportedCriteria)
 	}
-	if movement.Acceptance.HumanGate == "on_contested" {
-		return nil, fmt.Errorf(
-			"%w: human_gate %q requires unit 4.1",
-			ErrUnsupportedCriteria,
-			movement.Acceptance.HumanGate,
-		)
+	if len(movement.Acceptance.ReviewCriteria) > 1 {
+		return nil, fmt.Errorf("%w: more than one review criterion", ErrUnsupportedCriteria)
 	}
 
 	outputKinds := make(map[string]string, len(movement.Outputs))
@@ -150,18 +157,22 @@ func Compile(movement score.MovementView) (*Plan, error) {
 		outputKinds[output.ArtifactID] = output.Kind
 	}
 	replaced := make(map[string]bool, len(movement.Acceptance.ArtifactCriteria))
-	criteria := make([]criterion, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Acceptance.RunCriteria)+len(movement.Outputs))
+	criteria := make([]criterion, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Acceptance.RunCriteria)+len(movement.Acceptance.ReviewCriteria)+len(movement.Outputs))
 	type declaredCriterion struct {
 		source   int
 		artifact *score.ArtifactCriterionView
 		run      *score.RunCriterionView
+		review   *score.ReviewCriterionView
 	}
-	declared := make([]declaredCriterion, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Acceptance.RunCriteria))
+	declared := make([]declaredCriterion, 0, len(movement.Acceptance.ArtifactCriteria)+len(movement.Acceptance.RunCriteria)+len(movement.Acceptance.ReviewCriteria))
 	for index := range movement.Acceptance.ArtifactCriteria {
 		declared = append(declared, declaredCriterion{source: movement.Acceptance.ArtifactCriteria[index].SourceIndex, artifact: &movement.Acceptance.ArtifactCriteria[index]})
 	}
 	for index := range movement.Acceptance.RunCriteria {
 		declared = append(declared, declaredCriterion{source: movement.Acceptance.RunCriteria[index].SourceIndex, run: &movement.Acceptance.RunCriteria[index]})
+	}
+	for index := range movement.Acceptance.ReviewCriteria {
+		declared = append(declared, declaredCriterion{source: movement.Acceptance.ReviewCriteria[index].SourceIndex, review: &movement.Acceptance.ReviewCriteria[index]})
 	}
 	for index := 1; index < len(declared); index++ {
 		for previous := index; previous > 0 && declared[previous].source < declared[previous-1].source; previous-- {
@@ -174,8 +185,10 @@ func Compile(movement score.MovementView) (*Plan, error) {
 		if item.artifact != nil {
 			compiled, err = compileArtifactCriterion(item.artifact.ID, item.artifact.ArtifactID, outputKinds[item.artifact.ArtifactID], item.artifact.ExpectedHash, false)
 			replaced[item.artifact.ArtifactID] = true
-		} else {
+		} else if item.run != nil {
 			compiled, err = compileRunCriterion(item.run.ID, item.run.Argv, item.run.TimeoutMin)
+		} else {
+			compiled, err = compileReviewCriterion(item.review.ID, item.review.Findings, outputKinds[item.review.Findings], item.review.Rubrics)
 		}
 		if err != nil {
 			return nil, err
@@ -199,15 +212,20 @@ func Compile(movement score.MovementView) (*Plan, error) {
 		criteria = append(criteria, compiled)
 	}
 
-	hard := make([]any, len(criteria))
-	for index, criterion := range criteria {
-		hard[index] = string(criterion.specHash)
+	hard := make([]any, 0, len(criteria))
+	review := make([]any, 0, 1)
+	for _, criterion := range criteria {
+		if criterion.review {
+			review = append(review, string(criterion.specHash))
+		} else {
+			hard = append(hard, string(criterion.specHash))
+		}
 	}
 	specHash, err := canonical.Hash(
 		canonical.DomainAcceptanceSpec,
 		map[string]any{
 			"hard":       hard,
-			"review":     []any{},
+			"review":     review,
 			"human_gate": movement.Acceptance.HumanGate,
 		},
 	)
@@ -232,6 +250,15 @@ func Compile(movement score.MovementView) (*Plan, error) {
 		acceptanceVersions: acceptanceVersions,
 		criterionVersions:  criterionVersions,
 	}, nil
+}
+
+func compileReviewCriterion(id, artifactID, outputKind string, rubrics []string) (criterion, error) {
+	projection := map[string]any{"kind": "review.findings", "id": id, "findings": artifactID, "rubric": stringsToAny(rubrics)}
+	hash, err := canonical.Hash(canonical.DomainCriterionSpec, projection)
+	if err != nil {
+		return criterion{}, err
+	}
+	return criterion{id: id, artifactID: artifactID, outputKind: outputKind, specHash: runstate.Hash(hash), review: true, rubrics: append([]string(nil), rubrics...)}, nil
 }
 
 func compileArtifactCriterion(
@@ -423,7 +450,11 @@ func evaluateStartedCriteria(
 			if err := appendStarted(nil, false); err != nil {
 				return result, err
 			}
-			outcome, reason, detail = evaluateCriterion(criterion, evaluation)
+			if criterion.review {
+				outcome, reason, detail = evaluateReviewCriterion(criterion, evaluation, &result)
+			} else {
+				outcome, reason, detail = evaluateCriterion(criterion, evaluation)
+			}
 		}
 		duration := dependencies.now().Sub(startedAt).Milliseconds()
 		if duration < 0 {
@@ -499,6 +530,8 @@ func evaluateStartedCriteria(
 		return result, nil
 	}
 
+	evaluation.ReviewOutcome = result.ReviewOutcome
+	evaluation.BlockingFindings = result.BlockingFindings
 	completed, err := completeStarted(plan, evaluation, outcomes)
 	result.Receipts = append(result.Receipts, completed.Receipts...)
 	result.EvaluationCompleted = completed.EvaluationCompleted
@@ -524,12 +557,21 @@ func completeStarted(plan *Plan, evaluation Evaluation, outcomes []CriterionOutc
 		RunID: evaluation.RunID, ScoreRevision: evaluation.ScoreRevision,
 		MovementID: evaluation.MovementID, PartID: evaluation.PartID, AttemptID: evaluation.AttemptID,
 	}
-	completed, err := eventWithPayload(base, runstate.EventAcceptanceEvaluationCompleted, map[string]any{
+	payload := map[string]any{
 		"subject_tree":         evaluation.SubjectTree,
 		"acceptance_spec_hash": plan.specHash,
 		"criterion_outcomes":   criterionOutcomes,
 		"identity_versions":    plan.acceptanceVersions,
-	})
+	}
+	if evaluation.ReviewOutcome != "" {
+		blockers := make([]any, len(evaluation.BlockingFindings))
+		for index, finding := range evaluation.BlockingFindings {
+			blockers[index] = map[string]any{"artifact_instance_id": finding.ArtifactInstanceID, "finding_id": finding.FindingID}
+		}
+		payload["review_outcome"] = evaluation.ReviewOutcome
+		payload["blocking_findings"] = blockers
+	}
+	completed, err := eventWithPayload(base, runstate.EventAcceptanceEvaluationCompleted, payload)
 	if err != nil {
 		return result, err
 	}
@@ -567,6 +609,9 @@ func validCriteriaEvaluation(plan *Plan, evaluation Evaluation, criteria []crite
 	}
 	for _, value := range criteria {
 		if value.artifactID != "" && evaluation.LookupArtifact == nil {
+			return false
+		}
+		if value.review && (evaluation.ReadArtifact == nil || evaluation.ValidateEvidence == nil) {
 			return false
 		}
 		if len(value.run) != 0 && evaluation.RunCriterion == nil {
@@ -619,6 +664,165 @@ func evaluateCriterion(
 		return "FAIL", "artifact_hash_mismatch", ""
 	}
 	return "PASS", "", ""
+}
+
+type findingsDocument struct {
+	Schema      string             `json:"schema"`
+	SubjectTree string             `json:"subject_tree"`
+	Coverage    []findingsCoverage `json:"coverage"`
+	Findings    []finding          `json:"findings"`
+	Provenance  *provenance        `json:"provenance,omitempty"`
+}
+
+type findingsCoverage struct {
+	Rubric     string  `json:"rubric"`
+	Conclusion string  `json:"conclusion"`
+	Note       *string `json:"note,omitempty"`
+}
+
+type finding struct {
+	ID       string     `json:"id"`
+	Rubric   string     `json:"rubric"`
+	Summary  string     `json:"summary"`
+	Evidence []evidence `json:"evidence"`
+	Blocking bool       `json:"blocking"`
+}
+
+type evidence struct {
+	Path string `json:"path"`
+	Line *int64 `json:"line,omitempty"`
+}
+
+type provenance struct {
+	Reviewer *string `json:"reviewer,omitempty"`
+	Model    *string `json:"model,omitempty"`
+	Adapter  *string `json:"adapter,omitempty"`
+}
+
+func evaluateReviewCriterion(criterion criterion, evaluation Evaluation, result *Result) (string, string, string) {
+	instanceID := runstate.ArtifactInstanceID(criterion.artifactID + "@" + string(evaluation.AttemptID))
+	artifact, present, err := evaluation.LookupArtifact(instanceID)
+	if err != nil {
+		return "ERROR", "criterion_errored", "artifact_lookup_failed"
+	}
+	if !present {
+		return "FAIL", "artifact_missing", ""
+	}
+	if artifact.AttemptID != evaluation.AttemptID || artifact.LogicalOutputID != criterion.artifactID || artifact.Kind != "findings" {
+		return "FAIL", "findings_malformed", ""
+	}
+	contents, err := evaluation.ReadArtifact(artifact)
+	if err != nil {
+		return "FAIL", "findings_malformed", ""
+	}
+	outcome, blocking, reason := ValidateFindings(contents, evaluation.SubjectTree, criterion.rubrics, evaluation.ValidateEvidence)
+	if reason != "" {
+		return "FAIL", reason, ""
+	}
+	result.FindingsInstanceID = string(instanceID)
+	for index := range blocking {
+		blocking[index].ArtifactInstanceID = string(instanceID)
+	}
+	result.BlockingFindings = blocking
+	result.ReviewOutcome = outcome
+	return "PASS", "", ""
+}
+
+// ValidateFindings applies the strict findings artifact schema and returns its
+// validated verdict. validateEvidence binds each cited source location.
+func ValidateFindings(contents []byte, subjectTree string, rubrics []string, validateEvidence func(string, *int64) error) (string, []FindingReference, string) {
+	var document findingsDocument
+	if err := decodeFindings(contents, &document); err != nil {
+		return "", nil, "findings_malformed"
+	}
+	if document.Schema != "partitur/findings+json;v=1" {
+		return "", nil, "findings_malformed"
+	}
+	if document.SubjectTree != subjectTree {
+		return "", nil, "findings_subject_mismatch"
+	}
+	if !validCoverage(document, rubrics) {
+		return "", nil, "findings_rubric_incomplete"
+	}
+	seen := make(map[string]bool, len(document.Findings))
+	blocking := make([]FindingReference, 0)
+	for _, value := range document.Findings {
+		if value.ID == "" || value.Summary == "" || seen[value.ID] || !contains(rubrics, value.Rubric) || len(value.Evidence) == 0 {
+			return "", nil, "findings_malformed"
+		}
+		seen[value.ID] = true
+		for _, location := range value.Evidence {
+			if !validPath(location.Path) || location.Line != nil && *location.Line < 1 || validateEvidence(location.Path, location.Line) != nil {
+				return "", nil, "findings_malformed"
+			}
+		}
+		if value.Blocking {
+			blocking = append(blocking, FindingReference{FindingID: value.ID})
+		}
+	}
+	if !validProvenance(document.Provenance) {
+		return "", nil, "findings_malformed"
+	}
+	if len(blocking) == 0 {
+		return "CLEAN", blocking, ""
+	}
+	return "CONTESTED", blocking, ""
+}
+
+func decodeFindings(contents []byte, value *findingsDocument) error {
+	if _, err := canonical.ParseJSON(contents); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(contents)))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(value)
+}
+
+func validCoverage(document findingsDocument, rubrics []string) bool {
+	if len(document.Coverage) != len(rubrics) {
+		return false
+	}
+	seen := make(map[string]bool, len(rubrics))
+	for _, value := range document.Coverage {
+		if !contains(rubrics, value.Rubric) || seen[value.Rubric] || (value.Conclusion != "examined_none_found" && value.Conclusion != "findings_raised") || value.Note != nil && *value.Note == "" {
+			return false
+		}
+		seen[value.Rubric] = true
+	}
+	return true
+}
+
+func validProvenance(value *provenance) bool {
+	if value == nil {
+		return true
+	}
+	for _, field := range []*string{value.Reviewer, value.Model, value.Adapter} {
+		if field != nil && *field == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func validPath(value string) bool {
+	if value == "" || strings.HasPrefix(value, "/") {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func eventWithPayload(

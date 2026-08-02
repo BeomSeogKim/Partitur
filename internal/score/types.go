@@ -91,8 +91,17 @@ type RunCriterionView struct {
 type AcceptanceView struct {
 	ArtifactCriteria  []ArtifactCriterionView
 	RunCriteria       []RunCriterionView
+	ReviewCriteria    []ReviewCriterionView
 	HasReviewCriteria bool
 	HumanGate         string
+}
+
+// ReviewCriterionView is one declared findings requirement.
+type ReviewCriterionView struct {
+	SourceIndex int
+	ID          string
+	Findings    string
+	Rubrics     []string
 }
 
 // ExecutionView contains score-level fields forwarded into an execute brief.

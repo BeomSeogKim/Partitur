@@ -3,16 +3,21 @@ package logs
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/score"
+	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 )
 
 func TestReadNormalizesObservationsAndLeavesTornTailUntouched(t *testing.T) {
@@ -73,6 +78,76 @@ func TestReadRejectsCorruptPrefix(t *testing.T) {
 	}
 	if _, err := Read(root, runID); !errors.Is(err, runstore.ErrJournalCorrupt) {
 		t.Fatalf("error = %v, want journal corruption", err)
+	}
+}
+
+func TestReadRejectsIllegalLifecycleTransition(t *testing.T) {
+	root, runID := logsFixture(t)
+	journal := filepath.Join(root, ".partitur", "runs", runID, "journal.jsonl")
+	file, err := os.OpenFile(journal, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	payload, err := json.Marshal(map[string]any{"reason": "fixture failure"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []runstate.Event{
+		{EventID: "event-failed-1", RunID: runstate.RunID(runID), Seq: 4, Timestamp: "2026-07-28T00:00:04.000Z", ScoreRevision: 1, Type: runstate.EventRunFailed, Payload: payload},
+		{EventID: "event-failed-2", RunID: runstate.RunID(runID), Seq: 5, Timestamp: "2026-07-28T00:00:05.000Z", ScoreRevision: 1, Type: runstate.EventRunFailed, Payload: payload},
+	} {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(append(encoded, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Read(root, runID); !errors.Is(err, runstore.ErrJournalCorrupt) {
+		t.Fatalf("error = %v, want illegal lifecycle rejection", err)
+	}
+}
+
+func TestReadRejectsSubstitutedScoreSnapshot(t *testing.T) {
+	root, runID := logsFixture(t)
+	snapshotPath := filepath.Join(root, ".partitur", "runs", runID, "scores", "revision-1.yaml")
+	source, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	substituted := strings.Replace(string(source), "Write the report.", "Write a different report.", 1)
+	if err := os.WriteFile(snapshotPath, []byte(substituted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(root, runID); !errors.Is(err, statusprojection.ErrSnapshot) {
+		t.Fatalf("error = %v, want substituted snapshot rejection", err)
+	}
+}
+
+func TestReadProjectsImmediateCancellationThroughStatusProjection(t *testing.T) {
+	root, runID := immediateCancellationFixture(t)
+	status, err := statusprojection.Read(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Run.Lifecycle != string(runstate.RunCancelled) {
+		t.Fatalf("status lifecycle = %q, want %q", status.Run.Lifecycle, runstate.RunCancelled)
+	}
+	logs, err := Read(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logs.Lifecycle != status.Run.Lifecycle {
+		t.Fatalf("logs lifecycle = %q, want status lifecycle %q", logs.Lifecycle, status.Run.Lifecycle)
+	}
+}
+
+func TestReadRejectsCancelledPhantomMovementID(t *testing.T) {
+	root, runID := immediateCancellationFixture(t, []string{"first", "phantom"})
+	if _, err := Read(root, runID); !errors.Is(err, runstore.ErrJournalCorrupt) {
+		t.Fatalf("error = %v, want cancelled phantom movement rejection", err)
 	}
 }
 
@@ -141,9 +216,19 @@ func logsFixture(t *testing.T) (string, string) {
 	if err := os.MkdirAll(filepath.Join(runRoot, "scores"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runRoot, "scores", "revision-1.yaml"), []byte(logsScore()), 0o600); err != nil {
+	source := logsScore()
+	if err := os.WriteFile(filepath.Join(runRoot, "scores", "revision-1.yaml"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	compiled, diagnostics := score.Compile([]byte(source))
+	if compiled == nil || len(diagnostics) != 0 {
+		t.Fatalf("compile diagnostics = %v", diagnostics)
+	}
+	semanticHash, err := compiled.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileHash := sha256.Sum256([]byte(source))
 	store, err := runstore.New(root, faultpoint.Nop{})
 	if err != nil {
 		t.Fatal(err)
@@ -154,8 +239,8 @@ func logsFixture(t *testing.T) (string, string) {
 			payload   any
 		}{
 			{runstate.EventRunStarted, map[string]any{
-				"base_commit": "base", "base_tree": "tree", "score_hash": "sha256:score",
-				"score_file_hash": "sha256:file", "resolved_cast_hash": "sha256:cast",
+				"base_commit": "base", "base_tree": "tree", "score_hash": semanticHash,
+				"score_file_hash": fmt.Sprintf("sha256:%x", fileHash), "resolved_cast_hash": "sha256:cast",
 				"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
 			}},
 			{runstate.EventLog, map[string]any{"level": "info", "message": "started"}},
@@ -177,6 +262,69 @@ func logsFixture(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	return root, runID
+}
+
+func immediateCancellationFixture(t *testing.T, cancellation ...[]string) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	runID := "run-cancelled"
+	runRoot := filepath.Join(root, ".partitur", "runs", runID)
+	if err := os.MkdirAll(filepath.Join(runRoot, "scores"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := immediateCancellationScore()
+	if err := os.WriteFile(filepath.Join(runRoot, "scores", "revision-1.yaml"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	compiled, diagnostics := score.Compile([]byte(source))
+	if compiled == nil || len(diagnostics) != 0 {
+		t.Fatalf("compile diagnostics = %v", diagnostics)
+	}
+	semanticHash, err := compiled.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileHash := sha256.Sum256([]byte(source))
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledMovements := []string{"first", "second"}
+	if len(cancellation) == 1 {
+		cancelledMovements = cancellation[0]
+	}
+	err = store.Mutate(runstate.RunID(runID), "", func(transaction *runstore.Txn) error {
+		for _, event := range []runstate.Event{
+			{RunID: runstate.RunID(runID), ScoreRevision: 1, Type: runstate.EventRunStarted, Payload: mustJSON(t, map[string]any{
+				"base_commit": "base", "base_tree": "tree", "score_hash": semanticHash,
+				"score_file_hash": fmt.Sprintf("sha256:%x", fileHash), "resolved_cast_hash": "sha256:cast",
+				"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
+			})},
+			{RunID: runstate.RunID(runID), ScoreRevision: 1, Type: runstate.EventRunCancelled, Payload: mustJSON(t, map[string]any{
+				"cancelled_movement_ids": cancelledMovements,
+				"cancelled_attempt_ids":  []string{},
+				"obsoleted_decision_ids": []string{},
+			})},
+		} {
+			if _, err := transaction.At("logs.immediate-cancellation").Append(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, runID
+}
+
+func mustJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func logsScore() string {
@@ -207,6 +355,53 @@ movements:
       hard:
         - id: report-present
           artifact: report
+policy:
+  allowed_paths: ["**"]
+  budget:
+    active_wall_clock_min: 10
+`
+}
+
+func immediateCancellationScore() string {
+	return `score: "0.2"
+name: immediate-cancellation
+revision: 1
+status: finalized
+goal: Cancel before execution.
+verification:
+  expectation:
+    intent: pass-existing-tests
+    apply_gate:
+      require: [verified]
+  final_movement: second
+parts:
+  reader:
+    capabilities: [repo_read]
+    read_only: true
+movements:
+  - id: first
+    part: reader
+    grants: [repo_read]
+    instruction: Do not start.
+    outputs:
+      - id: first-report
+        kind: artifact
+    acceptance:
+      hard:
+        - id: first-report-present
+          artifact: first-report
+  - id: second
+    part: reader
+    needs: [first]
+    grants: [repo_read]
+    instruction: Do not start.
+    outputs:
+      - id: second-report
+        kind: artifact
+    acceptance:
+      hard:
+        - id: second-report-present
+          artifact: second-report
 policy:
   allowed_paths: ["**"]
   budget:

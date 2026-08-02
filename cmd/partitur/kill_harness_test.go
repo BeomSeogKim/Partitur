@@ -28,6 +28,13 @@ type killEdge struct {
 	fixture func(*testing.T, string, string) (string, []string)
 }
 
+type killFixture struct {
+	name          string
+	build         func(*testing.T, string, string) (string, []string)
+	gateMode      string
+	reviewOutcome string
+}
+
 type expectedFailure struct {
 	event          runstate.EventType
 	kind           string
@@ -59,19 +66,27 @@ func TestSubprocessKillHarness(t *testing.T) {
 			continue
 		}
 		t.Run(string(edge.id), func(t *testing.T) {
-			for _, side := range []struct {
-				name  string
-				point faultpoint.PointID
-			}{
-				{name: "before", point: edge.before},
-				{name: "after", point: edge.after},
-			} {
-				side := side
-				t.Run(side.name, func(t *testing.T) {
-					repository, environment := edge.fixture(t, bin, vendor)
-					runID := killAtPoint(t, partitur, repository, environment, side.point)
-					assertCrashedStateBeforeResume(t, repository, runID, side.point)
-					assertRecoveryFixedPoint(t, partitur, repository, environment, runID, expectedFailureFor(side.point))
+			for _, fixture := range fixturesForKillEdge(edge) {
+				fixture := fixture
+				t.Run(fixture.name, func(t *testing.T) {
+					for _, side := range []struct {
+						name  string
+						point faultpoint.PointID
+					}{
+						{name: "before", point: edge.before},
+						{name: "after", point: edge.after},
+					} {
+						side := side
+						t.Run(side.name, func(t *testing.T) {
+							repository, environment := fixture.build(t, bin, vendor)
+							runID := killAtPoint(t, partitur, repository, environment, side.point)
+							assertCrashedStateBeforeResume(t, repository, runID, side.point)
+							assertRecoveryFixedPoint(t, partitur, repository, environment, runID, expectedFailureFor(side.point))
+							if fixture.gateMode != "" {
+								assertHumanGateFixture(t, readHarnessJournal(t, repository, runID), fixture.gateMode, fixture.reviewOutcome)
+							}
+						})
+					}
 				})
 			}
 		})
@@ -231,6 +246,26 @@ func nonCancellationKillHarnessEdges() []killEdge {
 		{faultpoint.EdgeLaunchCriterionMarkerHeldToIdentity, faultpoint.PointLaunchCriterionMarkerHeld, faultpoint.PointLaunchCriterionIdentityPublished, nil},
 		{faultpoint.EdgeLaunchCriterionIdentityToRecorded, faultpoint.PointLaunchCriterionIdentityPublished, faultpoint.PointLaunchCriterionIdentityRecorded, nil},
 		{faultpoint.EdgeLaunchCriterionRecordedToGate, faultpoint.PointLaunchCriterionIdentityRecorded, faultpoint.PointLaunchCriterionGateReleased, nil},
+	}
+}
+
+func fixturesForKillEdge(edge killEdge) []killFixture {
+	if edge.id == faultpoint.EdgeAcceptanceEvaluationCompletedToDecisionRequested {
+		return []killFixture{
+			{name: "always", build: humanGateKillHarnessRepository, gateMode: "always"},
+			{name: "on_contested", build: contestedHumanGateKillHarnessRepository, gateMode: "on_contested", reviewOutcome: "CONTESTED"},
+		}
+	}
+	return []killFixture{{name: "default", build: edge.fixture}}
+}
+
+func assertHumanGateFixture(t *testing.T, journal []byte, gateMode, reviewOutcome string) {
+	t.Helper()
+	if !bytes.Contains(journal, []byte(`"gate_mode":"`+gateMode+`"`)) {
+		t.Fatalf("human gate mode %q was not requested: journal=%s", gateMode, journal)
+	}
+	if reviewOutcome != "" && !bytes.Contains(journal, []byte(`"review_outcome":"`+reviewOutcome+`"`)) {
+		t.Fatalf("review outcome %q was not durable before recovery completed: journal=%s", reviewOutcome, journal)
 	}
 }
 
@@ -451,6 +486,20 @@ func humanGateKillHarnessRepository(t *testing.T, bin, vendor string) (string, [
 	score := runScore()
 	score["movements"].([]any)[0].(map[string]any)["acceptance"].(map[string]any)["human_gate"] = "always"
 	return killHarnessRepositoryWithInputs(t, bin, vendor, score, runCast())
+}
+
+func contestedHumanGateKillHarnessRepository(t *testing.T, bin, vendor string) (string, []string) {
+	score := runScore()
+	movement := score["movements"].([]any)[0].(map[string]any)
+	movement["outputs"] = append(movement["outputs"].([]any), map[string]any{"id": "findings", "kind": "findings"})
+	acceptance := movement["acceptance"].(map[string]any)
+	acceptance["review"] = []any{map[string]any{"id": "review", "findings": "findings", "rubric": []any{"coverage"}}}
+	acceptance["human_gate"] = "on_contested"
+	repository, baseEnvironment := killHarnessRepositoryWithInputs(t, bin, vendor, score, runCast())
+	return repository, replaceEnvironment(baseEnvironment, map[string]string{
+		runVendorContestedEnvironment: "1",
+		runVendorOutcomeEnvironment:   "success",
+	})
 }
 
 func killAtPoint(
