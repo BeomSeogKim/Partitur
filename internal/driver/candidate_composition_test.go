@@ -3,13 +3,16 @@ package driver
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
@@ -29,7 +32,7 @@ func TestComposeCandidateRecordsAppliedSequenceAndFullMergeContributors(t *testi
 	if expected.ResultTree == "" {
 		t.Fatalf("candidate precomposition = %+v", expected)
 	}
-	if err := ComposeCandidate(store, authority, input, 1, time.Now, func() (string, error) { return "candidate-composition", nil }); err != nil {
+	if err := ComposeCandidate(store, authority, input, 600000, time.Now, func() (string, error) { return "candidate-composition", nil }); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := store.ReadJournal(started.RunID)
@@ -63,6 +66,56 @@ func TestComposeCandidateRecordsAppliedSequenceAndFullMergeContributors(t *testi
 	output, err := command.Output()
 	if err != nil || "git-sha1:"+strings.TrimSpace(string(output)) != expected.ResultTree {
 		t.Fatalf("candidate pin = %q, %v; want %q", output, err, expected.ResultTree)
+	}
+}
+
+func TestComposeCandidateActiveBudgetExpiryUsesBudgetExhaustionPath(t *testing.T) {
+	_, store, authority, started, _, _ := candidateFanInCleanFixture(t)
+	defer authority.Release()
+	wrapper := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nsleep 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(wrapper)+":"+os.Getenv("PATH"))
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := input.Projection.Scheduler.RemainingTime
+	opened := time.Now().Add(-time.Duration(remaining)*time.Millisecond + 100*time.Millisecond)
+	err = ComposeCandidate(store, authority, input, remaining, func() time.Time { return opened }, func() (string, error) { return "candidate-budget", nil })
+	if !errors.Is(err, ErrCompositionBudgetExhausted) {
+		t.Fatalf("candidate composition error = %v, want active-budget exhaustion", err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) < 2 {
+		t.Fatalf("candidate budget journal has %d events", len(journal.Events))
+	}
+	stopped := journal.Events[len(journal.Events)-1]
+	if stopped.Type != runstate.EventExecutionStopped {
+		t.Fatalf("last event = %s, want execution.stopped before budget terminalization", stopped.Type)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stopped.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["reason"] != "budget_exhausted" || payload["charged_duration"] != float64(remaining) {
+		t.Fatalf("budget execution stop = %#v", payload)
+	}
+	input, err = store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := recovery.PlanBetweenUnit(input.Projection)
+	if decision.CaseID != recovery.CaseBudgetExhausted || decision.Action == nil || decision.Action.Kind != recovery.ActionAppendRunFailed {
+		t.Fatalf("post-composition decision = %#v, want direct run budget exhaustion", decision)
+	}
+	result := liveCompositionBudgetExhaustion(Result{RunID: started.RunID}, store, authority)
+	if result.Outcome != OutcomeFailed || result.Reason != "budget_exhausted" || result.Err != nil {
+		t.Fatalf("budget terminal result = %+v", result)
 	}
 }
 
@@ -106,7 +159,7 @@ func TestComposeCandidateUsesPinnedTopologicalDeclarationOrder(t *testing.T) {
 	if len(contributors) != 2 || contributors[0] != expectedContributors[0] || contributors[1] != expectedContributors[1] {
 		t.Fatalf("candidate contributors = %#v, want stable topological order %#v", contributors, expectedContributors)
 	}
-	if err := ComposeCandidate(store, authority, input, 1, time.Now, func() (string, error) { return "candidate-topological", nil }); err != nil {
+	if err := ComposeCandidate(store, authority, input, 600000, time.Now, func() (string, error) { return "candidate-topological", nil }); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := store.ReadJournal(started.RunID)
@@ -159,7 +212,7 @@ func TestComposeCandidateWaivedFoldsComposedWriterCandidateIntoRunSucceeded(t *t
 	if expected.ResultTree == "" {
 		t.Fatalf("waived candidate precomposition = %+v", expected)
 	}
-	if err := ComposeCandidate(store, authority, input, 1, time.Now, func() (string, error) { return "waived-candidate", nil }); err != nil {
+	if err := ComposeCandidate(store, authority, input, 600000, time.Now, func() (string, error) { return "waived-candidate", nil }); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := store.ReadJournal(started.RunID)
@@ -228,7 +281,7 @@ func TestComposeCandidateWaivedNoOpWriterPinsBaseCandidate(t *testing.T) {
 	if expected.ResultTree != input.BaseTree || expected.EnvironmentHash == "" {
 		t.Fatalf("no-op writer composition = %+v, want merge-mode base result", expected)
 	}
-	if err := ComposeCandidate(store, authority, input, 1, time.Now, func() (string, error) { return "waived-noop", nil }); err != nil {
+	if err := ComposeCandidate(store, authority, input, 600000, time.Now, func() (string, error) { return "waived-noop", nil }); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := store.ReadJournal(started.RunID)
@@ -297,7 +350,7 @@ func TestComposeCandidateWaivedConflictFailsRunAtCandidateScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = ComposeCandidate(store, authority, input, 1, time.Now, func() (string, error) { return "waived-candidate-conflict", nil })
+	err = ComposeCandidate(store, authority, input, 600000, time.Now, func() (string, error) { return "waived-candidate-conflict", nil })
 	if !errors.Is(err, ErrCompositionTerminalized) {
 		t.Fatalf("waived candidate composition error = %v", err)
 	}
@@ -338,7 +391,7 @@ func TestComposeCandidateConflictFailsRunAtCandidateScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = ComposeCandidate(store, authority, input, 1, time.Now, func() (string, error) { return "candidate-conflict", nil })
+	err = ComposeCandidate(store, authority, input, 600000, time.Now, func() (string, error) { return "candidate-conflict", nil })
 	if !errors.Is(err, ErrCompositionTerminalized) {
 		t.Fatalf("candidate composition error = %v", err)
 	}

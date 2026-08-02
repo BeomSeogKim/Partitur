@@ -195,7 +195,10 @@ func TestCollectReferencesCoversEveryReferenceKind(t *testing.T) {
 			"proposal_id": "proposal-1", "proposal_record_hash": fileHash(proposal),
 		})},
 	}
-	observations := collectReferences(root, runID, state, events)
+	observations, err := collectReferences(root, runID, state, events)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(observations) != 5 {
 		t.Fatalf("reference observations = %#v, want every kind", observations)
 	}

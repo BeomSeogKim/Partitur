@@ -231,6 +231,9 @@ func liveRunLoop(
 			if len(movement.Needs) != 0 {
 				composed, err := PrepareMovementBase(store, authority, input, decision.Action.MovementID, input.Projection.Scheduler.RemainingTime, dependencies.now, dependencies.newID)
 				if err != nil {
+					if errors.Is(err, ErrCompositionBudgetExhausted) {
+						return liveCompositionBudgetExhaustion(result, store, authority)
+					}
 					if errors.Is(err, ErrCompositionCancelled) {
 						if err := control.Execute(ctx); err != nil {
 							if errors.Is(err, runstate.ErrSweepUnverifiable) {
@@ -272,6 +275,9 @@ func liveRunLoop(
 			}
 		case recovery.ActionComposeCandidate:
 			if err := ComposeCandidate(store, authority, input, input.Projection.Scheduler.RemainingTime, dependencies.now, dependencies.newID); err != nil {
+				if errors.Is(err, ErrCompositionBudgetExhausted) {
+					return liveCompositionBudgetExhaustion(result, store, authority)
+				}
 				if errors.Is(err, ErrCompositionCancelled) {
 					if err := control.Execute(ctx); err != nil {
 						if errors.Is(err, runstate.ErrSweepUnverifiable) {
@@ -1519,6 +1525,9 @@ func liveMaterializeSuccessor(
 	}
 	base, err := PrepareSuccessorBase(store, authority, input, pending.MovementID, input.Projection.Scheduler.RemainingTime, dependencies.now, dependencies.newID)
 	if err != nil {
+		if errors.Is(err, ErrCompositionBudgetExhausted) {
+			return liveCompositionBudgetExhaustion(result, store, authority)
+		}
 		if errors.Is(err, ErrCompositionCancelled) {
 			if err := control.Execute(ctx); err != nil {
 				if errors.Is(err, runstate.ErrSweepUnverifiable) {
@@ -1590,6 +1599,18 @@ func liveMaterializeSuccessor(
 		VisitedPerformers:    append([]string(nil), next.Projection.CurrentHeadAttempt.FailureClassification.VisitedPerformers...),
 		Control:              control,
 	}, executionDependenciesFrom(dependencies))
+}
+
+func liveCompositionBudgetExhaustion(result Result, store *runstore.Store, authority *runstore.Driver) Result {
+	input, err := store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	decision := recovery.PlanBetweenUnit(input.Projection)
+	if decision.CaseID != recovery.CaseBudgetExhausted {
+		return interrupted(result, errors.New("driver: composition budget close did not select budget exhaustion"))
+	}
+	return liveBudgetExhaustion(result, store, authority, input, decision.Action)
 }
 
 // liveBudgetExhaustion realizes RC-RESUME-045 at a zero-budget selection cut.
@@ -1751,6 +1772,8 @@ func selectLiveBetweenUnit(store *runstore.Store, authority *runstore.Driver) (r
 
 func stopped(result Result, err error) Result {
 	switch {
+	case errors.Is(err, workspace.ErrGitUnverifiable):
+		return halted(result, "git_unverifiable", err)
 	case errors.Is(err, runstore.ErrJournalCorrupt):
 		return halted(result, "journal_corrupt", err)
 	case errors.Is(err, runstore.ErrJournalIdempotencyConflict):

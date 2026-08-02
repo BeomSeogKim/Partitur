@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -29,6 +30,7 @@ type CompositionInput struct {
 	RepositoryRoot string
 	BaseTree       string
 	Contributors   []CompositionContributor
+	ActiveDeadline time.Time
 }
 
 // CompositionPair is a sorted key/value pair in the composition environment.
@@ -61,8 +63,10 @@ type CompositionConflict struct {
 // CompositionFailure means that no merge verdict was obtained. ExitStatus is
 // present only when merge-tree itself exited.
 type CompositionFailure struct {
-	ExitStatus *int
-	Diagnostic string
+	ExitStatus            *int
+	Diagnostic            string
+	Unverifiable          bool
+	ActiveBudgetExhausted bool
 }
 
 // CompositionResult has exactly one outcome: ResultTree, Conflict, or
@@ -84,6 +88,12 @@ func Compose(input CompositionInput) CompositionResult {
 	git, err := newSystemGit()
 	if err != nil {
 		return compositionFailureResult("find git", nil, err)
+	}
+	if !input.ActiveDeadline.IsZero() {
+		if system, ok := git.(systemGit); ok {
+			system.activeDeadline = input.ActiveDeadline
+			git = system
+		}
 	}
 	return compose(git, input)
 }
@@ -696,6 +706,8 @@ func compositionEnvironmentPairs(environment []string) []CompositionPair {
 func compositionFailureResult(operation string, status *int, err error) CompositionResult {
 	return CompositionResult{Failure: &CompositionFailure{
 		ExitStatus: status, Diagnostic: compositionDiagnostic(operation, err),
+		Unverifiable:          errors.Is(err, ErrGitUnverifiable) || errors.Is(err, ErrActiveBudgetExhausted),
+		ActiveBudgetExhausted: errors.Is(err, ErrActiveBudgetExhausted),
 	}}
 }
 
@@ -707,7 +719,11 @@ func compositionFailureWithEnvironment(
 ) CompositionResult {
 	result.ResultTree = ""
 	result.Conflict = nil
-	result.Failure = &CompositionFailure{ExitStatus: status, Diagnostic: compositionDiagnostic(operation, err)}
+	result.Failure = &CompositionFailure{
+		ExitStatus: status, Diagnostic: compositionDiagnostic(operation, err),
+		Unverifiable:          errors.Is(err, ErrGitUnverifiable) || errors.Is(err, ErrActiveBudgetExhausted),
+		ActiveBudgetExhausted: errors.Is(err, ErrActiveBudgetExhausted),
+	}
 	return result
 }
 

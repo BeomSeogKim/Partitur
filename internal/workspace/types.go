@@ -14,6 +14,8 @@ import (
 var (
 	ErrIncompletePreparation = errors.New("workspace preparation is incomplete")
 	ErrGitTooOld             = errors.New("git version is below 2.47")
+	ErrGitUnverifiable       = errors.New("git invocation bound expired")
+	ErrActiveBudgetExhausted = errors.New("active execution budget expired")
 	ErrNotRepository         = errors.New("invocation directory is not the repository root")
 	ErrBareRepository        = errors.New("bare repositories are unsupported")
 	ErrDirtySource           = errors.New("source repository is dirty")

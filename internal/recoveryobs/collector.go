@@ -4,6 +4,7 @@
 package recoveryobs
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -67,7 +68,10 @@ func Collect(store *runstore.Store, runID runstate.RunID, projection recovery.Pr
 	if err != nil {
 		return recovery.Observations{}, err
 	}
-	observations.References = collectReferences(root, runID, projection.State, journal.Events)
+	observations.References, err = collectReferences(root, runID, projection.State, journal.Events)
+	if err != nil {
+		return recovery.Observations{}, err
+	}
 	if projection.State.PendingPrepare != nil {
 		observations.Prepare = collectPrepare(root, runID, *projection.State.PendingPrepare)
 	}
@@ -139,14 +143,18 @@ func rootSnapshotDivergence(path string, snapshot runstate.ScoreHead) (bool, err
 	return runstate.Hash(hash) != snapshot.SemanticHash, nil
 }
 
-func collectReferences(root string, runID runstate.RunID, state runstate.State, events []runstate.Event) []recovery.ReferenceObservation {
+func collectReferences(root string, runID runstate.RunID, state runstate.State, events []runstate.Event) ([]recovery.ReferenceObservation, error) {
 	references := make([]recovery.ReferenceObservation, 0, len(state.Artifacts)+len(state.ChangeSets)+len(events))
 	for _, artifact := range state.Artifacts {
 		path := filepath.Join(root, ".partitur", "runs", string(runID), "artifacts", artifact.LogicalOutputID, string(artifact.AttemptID))
 		references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceArtifact, Present: fileMatches(path, artifact.ContentHash)})
 	}
 	for _, changeSet := range state.ChangeSets {
-		references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceChangeSetRef, Present: refMatches(root, changeSet.Ref, changeSet.Commit)})
+		matched, err := refMatches(root, changeSet.Ref, changeSet.Commit)
+		if err != nil {
+			return nil, err
+		}
+		references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceChangeSetRef, Present: matched})
 	}
 	for _, event := range events {
 		payload := eventPayload(event)
@@ -166,7 +174,7 @@ func collectReferences(root string, runID runstate.RunID, state runstate.State, 
 		}
 	}
 	sort.Slice(references, func(i, j int) bool { return references[i].Kind < references[j].Kind })
-	return references
+	return references, nil
 }
 
 func collectPrepare(root string, runID runstate.RunID, prepare runstate.PendingPrepare) recovery.PrepareObservation {
@@ -275,16 +283,21 @@ func uintValue(payload map[string]any, key string) (uint64, bool) {
 	return uint64(value), ok && value >= 0 && value == float64(uint64(value))
 }
 
-func refMatches(root, ref, want string) bool {
+func refMatches(root, ref, want string) (bool, error) {
 	if ref == "" || want == "" {
-		return false
+		return false, nil
 	}
-	command := exec.Command("git", "-C", root, "rev-parse", "--verify", ref+"^{commit}")
+	ctx, cancel := context.WithTimeout(context.Background(), workspace.GitInvocationBound)
+	defer cancel()
+	command := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--verify", ref+"^{commit}")
 	output, err := command.Output()
-	if err != nil {
-		return false
+	if ctx.Err() != nil {
+		return false, fmt.Errorf("%w: %v", workspace.ErrGitUnverifiable, ctx.Err())
 	}
-	return string(output[:len(output)-1]) == unqualifiedGitObject(want)
+	if err != nil {
+		return false, nil
+	}
+	return string(output[:len(output)-1]) == unqualifiedGitObject(want), nil
 }
 
 func unqualifiedGitObject(value string) string {

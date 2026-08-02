@@ -126,7 +126,18 @@ func ComposeCandidate(
 	}
 	result := workspace.Compose(workspace.CompositionInput{
 		RepositoryRoot: store.RepositoryRoot(), BaseTree: input.BaseTree, Contributors: contributors,
+		ActiveDeadline: opened.Add(time.Duration(remainingMS) * time.Millisecond),
 	})
+	if result.Failure != nil && result.Failure.Unverifiable {
+		if result.Failure.ActiveBudgetExhausted {
+			stopped := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, Type: runstate.EventExecutionStopped, Payload: mustCompositionPayload(map[string]any{"interval_id": intervalID, "reason": "budget_exhausted", "charging": "measured", "charged_duration": remainingMS})}
+			if err := appendCompositionStopped(authority, stopped); err != nil {
+				return err
+			}
+			return ErrCompositionBudgetExhausted
+		}
+		return workspace.ErrGitUnverifiable
+	}
 	charged := now().Sub(opened).Milliseconds()
 	if charged < 0 {
 		charged = 0

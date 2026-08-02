@@ -14,6 +14,7 @@ func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 	t.Parallel()
 	allowed := []string{
 		"bytes",
+		"context",
 		"crypto/rand",
 		"crypto/sha256",
 		"encoding/json",
