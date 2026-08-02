@@ -4808,9 +4808,10 @@ decision.resolved {               # also a TAGGED UNION. NEVER appended on an am
                                   #   (§8). `scope.subject_tree` is the single source — there is
                                   #   no sibling subject_tree to fall out of agreement with
         overridden_findings: [{artifact_instance_id, finding_id}],   # sorted; empty when none
-        override_reason? }        # MUST be present and non-empty iff overridden_findings is
+        override_reason?,          # MUST be present and non-empty iff overridden_findings is
                                   #   non-empty (§8) — overriding a reviewer's blocking judgment
                                   #   is precisely the decision that must stay auditable
+        reason? }                  # optional non-empty operator reason iff disposition = rejected
 
 decision.obsoleted {
   decision_id                     # the envelope has no decision_id (§6), so the target must be

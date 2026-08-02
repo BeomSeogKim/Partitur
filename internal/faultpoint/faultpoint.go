@@ -69,6 +69,8 @@ const (
 	PointExecuteIntervalStopped           PointID = "execute.interval_stopped"
 	PointExecuteOutcomeRecorded           PointID = "execute.outcome_recorded"
 	PointAcceptanceFailureRecorded        PointID = "acceptance.failure_recorded"
+	PointAcceptanceEvaluationCompleted    PointID = "acceptance.evaluation_completed"
+	PointHumanGateDecisionRequested       PointID = "human_gate.decision_requested"
 	PointLifecycleAttemptCompleted        PointID = "lifecycle.attempt_completed"
 	PointLifecycleMovementSucceeded       PointID = "lifecycle.movement_succeeded"
 	PointLifecycleMovementFailed          PointID = "lifecycle.movement_failed"

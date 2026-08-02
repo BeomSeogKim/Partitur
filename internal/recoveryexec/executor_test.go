@@ -1680,6 +1680,64 @@ func TestRCResume033BudgetExhaustionUsesSharedAcceptanceTerminal(t *testing.T) {
 	}
 }
 
+func TestRecoveryFinalGateRejectionEndsAtomically(t *testing.T) {
+	fixture := rejectedHumanGateFixture(t, true)
+	defer fixture.driver.Release()
+
+	input := fixture.input(t)
+	if decision := recovery.PlanAttempt(input); decision.CaseID != recovery.CaseFinalGateRejected {
+		t.Fatalf("final rejection case = %s, want %s", decision.CaseID, recovery.CaseFinalGateRejected)
+	}
+	result, err := fixture.execute()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, events := fixture.stateAndEvents(t)
+	if state.Run != runstate.RunFailed || state.Movements["write"] != runstate.MovementFailed || state.Attempts[fixture.attemptID].State != runstate.AttemptFailed {
+		t.Fatalf("final rejection state: run=%s movement=%s attempt=%s result=%+v", state.Run, state.Movements["write"], state.Attempts[fixture.attemptID].State, result)
+	}
+	movementFailures := matchingEvents(events, runstate.EventMovementFailed)
+	if len(movementFailures) != 1 || !eventBool(t, movementFailures[0], "run_failed") {
+		t.Fatalf("final rejection movement failures = %+v, want one atomic run_failed=true event", movementFailures)
+	}
+	if got := len(matchingEvents(events, runstate.EventRunFailed)); got != 0 {
+		t.Fatalf("final rejection appended %d run.failed events, want none", got)
+	}
+	assertRejectedGateDidNotRetryOrFallback(t, events)
+}
+
+func TestRecoveryNonFinalGateRejectionCascades(t *testing.T) {
+	fixture := rejectedHumanGateFixture(t, false)
+	defer fixture.driver.Release()
+
+	input := fixture.input(t)
+	if decision := recovery.PlanAcceptance(input); decision.CaseID != recovery.CaseHumanGateRejected {
+		t.Fatalf("non-final rejection case = %s, want %s", decision.CaseID, recovery.CaseHumanGateRejected)
+	}
+	result, err := fixture.execute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fixture.sawRunFailedCase {
+		t.Fatalf("replan after non-final gate failure never selected %s: result=%+v", recovery.CaseRunFailed, result)
+	}
+
+	state, events := fixture.stateAndEvents(t)
+	if state.Run != runstate.RunFailed || state.Movements["write"] != runstate.MovementFailed || state.Attempts[fixture.attemptID].State != runstate.AttemptFailed {
+		t.Fatalf("non-final rejection state: run=%s movement=%s attempt=%s", state.Run, state.Movements["write"], state.Attempts[fixture.attemptID].State)
+	}
+	movementFailures := matchingEvents(events, runstate.EventMovementFailed)
+	if len(movementFailures) != 1 || eventBool(t, movementFailures[0], "run_failed") {
+		t.Fatalf("non-final rejection movement failures = %+v, want one run_failed=false event", movementFailures)
+	}
+	runFailures := matchingEvents(events, runstate.EventRunFailed)
+	if len(runFailures) != 1 || eventString(t, runFailures[0], "reason") != "movement_failed" {
+		t.Fatalf("non-final rejection run failures = %+v, want one movement_failed event", runFailures)
+	}
+	assertRejectedGateDidNotRetryOrFallback(t, events)
+}
+
 func TestRCResume019MatchesLiveMovementSuccessPayload(t *testing.T) {
 	for _, final := range []bool{false, true} {
 		t.Run(fmt.Sprintf("final=%t", final), func(t *testing.T) {
@@ -2248,22 +2306,49 @@ type resumeCriterionFixtureState struct {
 }
 
 func resumeCriterionFixture(t *testing.T, budgetSecondRun ...bool) resumeCriterionFixtureState {
+	return resumeCriterionFixtureWithOptions(t, resumeCriterionFixtureOptions{
+		budgetSecondRun: len(budgetSecondRun) != 0 && budgetSecondRun[0],
+		finalMovement:   true,
+	})
+}
+
+type resumeCriterionFixtureOptions struct {
+	budgetSecondRun bool
+	humanGate       string
+	finalMovement   bool
+}
+
+func resumeCriterionFixtureWithOptions(t *testing.T, options resumeCriterionFixtureOptions) resumeCriterionFixtureState {
 	t.Helper()
 	secondCriterion := map[string]any{"id": "second", "artifact": "second"}
-	if len(budgetSecondRun) != 0 && budgetSecondRun[0] {
+	if options.budgetSecondRun {
 		secondCriterion = map[string]any{"id": "second", "run": []any{"true"}}
 	}
 	root := t.TempDir()
+	acceptanceDocument := map[string]any{"hard": []any{map[string]any{"id": "first", "artifact": "first"}, secondCriterion}}
+	if options.humanGate != "" {
+		acceptanceDocument["human_gate"] = options.humanGate
+	}
+	finalMovementID := "write"
+	movements := []any{map[string]any{
+		"id": "write", "part": "writer", "grants": []any{"repo_read"}, "instruction": "fixture",
+		"outputs":    []any{map[string]any{"id": "first", "kind": "artifact"}, map[string]any{"id": "second", "kind": "artifact"}},
+		"acceptance": acceptanceDocument,
+	}}
+	if !options.finalMovement {
+		finalMovementID = "final"
+		movements = append(movements, map[string]any{
+			"id": "final", "part": "writer", "needs": []any{"write"}, "grants": []any{"repo_read"}, "instruction": "final fixture",
+			"outputs":    []any{map[string]any{"id": "final", "kind": "artifact"}},
+			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "final", "artifact": "final"}}},
+		})
+	}
 	scoreDocument := map[string]any{
 		"score": "0.2", "name": "resume-criterion", "revision": 1, "status": "finalized", "goal": "fixture",
-		"verification": map[string]any{"expectation": map[string]any{"intent": "pass-existing-tests", "apply_gate": map[string]any{"require": []any{"verified"}}}, "final_movement": "write"},
+		"verification": map[string]any{"expectation": map[string]any{"intent": "pass-existing-tests", "apply_gate": map[string]any{"require": []any{"verified"}}}, "final_movement": finalMovementID},
 		"parts":        map[string]any{"writer": map[string]any{"capabilities": []any{"repo_read"}, "read_only": true}},
-		"movements": []any{map[string]any{
-			"id": "write", "part": "writer", "grants": []any{"repo_read"}, "instruction": "fixture",
-			"outputs":    []any{map[string]any{"id": "first", "kind": "artifact"}, map[string]any{"id": "second", "kind": "artifact"}},
-			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "first", "artifact": "first"}, secondCriterion}},
-		}},
-		"policy": map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10}},
+		"movements":    movements,
+		"policy":       map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10}},
 	}
 	castDocument := map[string]any{
 		"cast": "0.1", "performers": map[string]any{"worker": map[string]any{"adapter": "fixture", "model": "fixture"}},
@@ -2301,7 +2386,7 @@ func resumeCriterionFixture(t *testing.T, budgetSecondRun ...bool) resumeCriteri
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := store.AcquireDriver(started.RunID, []runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+	authority, err := store.AcquireRecoveryDriver(started.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2334,7 +2419,7 @@ func resumeCriterionFixture(t *testing.T, budgetSecondRun ...bool) resumeCriteri
 	appendEvent(runstate.EventArtifactRecorded, map[string]any{"logical_output_id": "second", "kind": "artifact", "content_hash": "sha256:second", "size_bytes": 1, "source_path": "second"})
 	appendEvent(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false})
 	appendEvent(runstate.EventVerificationPassed, map[string]any{})
-	if len(budgetSecondRun) != 0 && budgetSecondRun[0] {
+	if options.budgetSecondRun {
 		appendEvent(runstate.EventExecutionStarted, map[string]any{"interval_id": "spent", "phase": "adapter", "wall_start": "2026-08-01T00:00:00.000Z", "remaining_at_start": 600000})
 		appendEvent(runstate.EventExecutionStopped, map[string]any{"interval_id": "spent", "reason": "normal", "charging": "measured", "charged_duration": 600000})
 		appendEvent(runstate.EventExecutionStarted, map[string]any{"interval_id": "acceptance", "phase": "acceptance", "wall_start": "2026-08-01T00:00:00.000Z", "remaining_at_start": 0})
@@ -2384,7 +2469,174 @@ func resumeCriterionFixture(t *testing.T, budgetSecondRun ...bool) resumeCriteri
 	for _, event := range firstEvents {
 		appendEvent(event.Type, event.Payload)
 	}
+	if options.humanGate != "" {
+		var secondEvents []runstate.Event
+		_, err = acceptance.EvaluateStartedCriterion(plan, acceptance.Evaluation{
+			RunID: started.RunID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: attempt.AttemptID,
+			SubjectTree: subjectTree,
+			LookupArtifact: func(id runstate.ArtifactInstanceID) (runstate.ArtifactRecord, bool, error) {
+				record, ok := map[runstate.ArtifactInstanceID]runstate.ArtifactRecord{
+					"first@" + runstate.ArtifactInstanceID(attempt.AttemptID):  {AttemptID: attempt.AttemptID, LogicalOutputID: "first", Kind: "artifact"},
+					"second@" + runstate.ArtifactInstanceID(attempt.AttemptID): {AttemptID: attempt.AttemptID, LogicalOutputID: "second", Kind: "artifact"},
+				}[id]
+				return record, ok, nil
+			},
+			Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
+				secondEvents = append(secondEvents, event)
+				return faultpoint.DurabilityReceipt{Mutation: faultpoint.Mutation{
+					Kind: faultpoint.JournalAppend, EventType: string(event.Type), EventID: "event", Sequence: uint64(len(secondEvents)),
+					Timestamp: "2026-08-01T00:00:00.000Z", Path: "journal.jsonl",
+				}}, nil
+			},
+		}, "second")
+		if err != nil {
+			authority.Release()
+			t.Fatal(err)
+		}
+		for _, event := range secondEvents {
+			appendEvent(event.Type, event.Payload)
+		}
+		if err := appendAcceptanceEvaluationCompleted(context.Background(), HandlerContext{
+			Store: store, Driver: authority, RunID: started.RunID,
+		}, recovery.Action{Kind: recovery.ActionAppendEvaluationCompleted, AttemptID: attempt.AttemptID}); err != nil {
+			authority.Release()
+			t.Fatal(err)
+		}
+	}
 	return resumeCriterionFixtureState{store: store, driver: authority, runID: started.RunID, attemptID: attempt.AttemptID}
+}
+
+type rejectedGateFixtureState struct {
+	resumeCriterionFixtureState
+	sawRunFailedCase bool
+}
+
+func rejectedHumanGateFixture(t *testing.T, finalMovement bool) *rejectedGateFixtureState {
+	t.Helper()
+	base := resumeCriterionFixtureWithOptions(t, resumeCriterionFixtureOptions{
+		humanGate:     "always",
+		finalMovement: finalMovement,
+	})
+	loaded, err := base.store.LoadRunInput(base.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := base.store.ReadJournal(base.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(matchingEvents(journal.Events, runstate.EventAcceptanceEvaluationCompleted)); got != 1 {
+		t.Fatalf("gate fixture acceptance evaluations = %d, want one", got)
+	}
+	subjectTree := loaded.Projection.State.Acceptances[base.attemptID].SubjectTree
+	if err := appendHumanGateRequest(context.Background(), HandlerContext{
+		Store: base.store, Driver: base.driver, RunID: base.runID, Input: recovery.Input{Projection: loaded.Projection},
+	}, recovery.Action{Kind: recovery.ActionAppendHumanGateRequest, AttemptID: base.attemptID, SubjectTree: subjectTree}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = base.store.ReadJournal(base.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := matchingEvents(journal.Events, runstate.EventDecisionRequested)
+	if len(requests) != 1 {
+		t.Fatalf("human gate requests = %+v, want exactly one", requests)
+	}
+	decisionID := eventString(t, requests[0], "decision_id")
+	if err := base.store.ResolveHumanGate(base.runID, decisionID, false, "fixture rejection"); err != nil {
+		t.Fatal(err)
+	}
+	return &rejectedGateFixtureState{resumeCriterionFixtureState: base}
+}
+
+func (fixture *rejectedGateFixtureState) input(t *testing.T) recovery.Input {
+	t.Helper()
+	loaded, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixture.recoveryInput(loaded.Projection)
+}
+
+func (fixture *rejectedGateFixtureState) execute() (Result, error) {
+	executor := &Executor{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID}
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		loaded, err := fixture.store.LoadRunInput(fixture.runID)
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		input := fixture.recoveryInput(loaded.Projection)
+		if loaded.Projection.CurrentHeadAttempt != nil && loaded.Projection.CurrentHeadAttempt.MovementFailed && !loaded.Projection.State.Run.Terminal() &&
+			recovery.PlanAttempt(input).CaseID == recovery.CaseRunFailed {
+			fixture.sawRunFailedCase = true
+		}
+		return input, nil
+	}
+	return executor.Execute(context.Background())
+}
+
+func (fixture *rejectedGateFixtureState) recoveryInput(projection recovery.Projection) recovery.Input {
+	return recovery.Input{
+		Projection: projection,
+		Observations: recovery.Observations{
+			Handoff: recovery.HandoffSafe, AdapterSweep: recovery.SweepSafe, Worktree: recovery.WorktreePresent,
+			CriterionSweep: recovery.SweepSafe, AcceptanceSubject: recovery.SubjectMatched,
+			Lease: recovery.LeaseObservation{Exists: true, Readable: true, Epoch: projection.State.Authority.Epoch, Owner: recovery.OwnerCurrentDriver},
+		},
+	}
+}
+
+func (fixture *rejectedGateFixtureState) stateAndEvents(t *testing.T) (runstate.State, []runstate.Event) {
+	t.Helper()
+	input, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return input.Projection.State, journal.Events
+}
+
+func matchingEvents(events []runstate.Event, eventType runstate.EventType) []runstate.Event {
+	var matches []runstate.Event
+	for _, event := range events {
+		if event.Type == eventType {
+			matches = append(matches, event)
+		}
+	}
+	return matches
+}
+
+func eventString(t *testing.T, event runstate.Event, key string) string {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	value, _ := payload[key].(string)
+	return value
+}
+
+func eventBool(t *testing.T, event runstate.Event, key string) bool {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	value, _ := payload[key].(bool)
+	return value
+}
+
+func assertRejectedGateDidNotRetryOrFallback(t *testing.T, events []runstate.Event) {
+	t.Helper()
+	if got := len(matchingEvents(events, runstate.EventAttemptFailed)) + len(matchingEvents(events, runstate.EventAcceptanceFailed)); got != 0 {
+		t.Fatalf("rejected gate charged %d retryable failures, want none", got)
+	}
+	if got := len(matchingEvents(events, runstate.EventPerformerSelected)); got != 1 {
+		t.Fatalf("rejected gate selected %d performers, want only the initial performer", got)
+	}
 }
 
 func handlerStoreWithSeeds(t *testing.T, selectAttempt bool, seed []runstate.MovementSeed) (*runstore.Store, *runstore.Driver) {

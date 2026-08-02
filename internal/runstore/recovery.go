@@ -218,6 +218,11 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 	projection.CurrentHeadAttempt = current
 	if acceptance, ok := state.Acceptances[current.AttemptID]; ok && acceptance.Started {
 		projection.Acceptance = facts.acceptance(current.AttemptID, current.MovementID, pinned)
+		if projection.Acceptance.Gate.Required && projection.Acceptance.Gate.Requested &&
+			projection.Acceptance.Gate.Resolved && !projection.Acceptance.Gate.Approved &&
+			state.FinalMovements[current.MovementID] {
+			current.FinalGateRejected = true
+		}
 	}
 	return projection
 }

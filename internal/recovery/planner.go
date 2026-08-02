@@ -532,6 +532,9 @@ func Plan(input Input) Decision {
 		}
 		return action(CasePendingPrepare, ActionCompleteOrAbandonPrepare, false)
 	}
+	if (!lease.Exists || lease.Owner == OwnerCurrentDriver) && hasAnyUnresolvedBlockingDecision(state) {
+		return action(CaseHumanGateWaiting, ActionReturnWaitingHuman, false)
+	}
 	if state.Authority.Epoch > 0 && (!lease.Exists || lease.Owner == OwnerDead) {
 		return action(CaseReclaimAuthority, ActionReclaimAuthority, false)
 	}
@@ -570,6 +573,15 @@ func Plan(input Input) Decision {
 	decision := action(CaseContinue, ActionProceedScheduler, false)
 	decision.Action.Continuation = ContinuationC4
 	return decision
+}
+
+func hasAnyUnresolvedBlockingDecision(state runstate.State) bool {
+	for _, decision := range state.PendingDecisions {
+		if decision.Blocking {
+			return true
+		}
+	}
+	return false
 }
 
 // PlanAttempt applies Appendix C.2 after C.1 selects ActionProceedAttempt.
@@ -688,6 +700,10 @@ func PlanAttempt(input Input) Decision {
 	if attempt.FinalGateRejected && !attempt.MovementFailed {
 		decision := action(CaseFinalGateRejected, ActionAppendFinalGateFailure, true)
 		decision.Action.AttemptID = attempt.AttemptID
+		if input.Projection.Acceptance != nil {
+			decision.Action.QuestionDecisionID = input.Projection.Acceptance.Gate.DecisionID
+			decision.Action.SubjectTree = input.Projection.State.Acceptances[attempt.AttemptID].SubjectTree
+		}
 		return decision
 	}
 	if attempt.AcceptanceStarted {

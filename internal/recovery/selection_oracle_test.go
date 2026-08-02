@@ -100,10 +100,9 @@ func TestAppendixC2RowsFollowDeclaredPrecedence(t *testing.T) {
 		{"begin acceptance", withVerificationPassed(withChangeSet(c2Input(runstate.AttemptVerifying))), CaseStartAcceptance},
 		{"completed attempt outranks historical acceptance", withAcceptanceStarted(c2Input(runstate.AttemptCompleted)), CaseMovementSucceeded},
 		{"failed movement", withMovementFailed(withFailedAttempt(c2Input(runstate.AttemptFailed), true)), CaseRunFailed},
-		{"rejected final gate", withFinalGateRejected(withFailedAttempt(c2Input(runstate.AttemptFailed), true)), CaseFinalGateRejected},
 	}
-	if len(tests) != 13 {
-		t.Fatalf("C.2 precedence cases = %d, want 13", len(tests))
+	if len(tests) != 12 {
+		t.Fatalf("C.2 precedence cases = %d, want 12", len(tests))
 	}
 	seen := make(map[CaseID]bool, len(tests))
 	for _, test := range tests {
@@ -310,7 +309,10 @@ func appendixC41ActionRows(t *testing.T) []appendixActionRow {
 
 func preprocessingCase(caseID CaseID) bool {
 	switch caseID {
-	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036", "RC-RESUME-038":
+	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036", "RC-RESUME-038",
+		CaseFinalGateRejected:
+		// RC-RESUME-021 needs the journal-projected rejected human gate; its
+		// recoveryexec fixture drives that state through resolution and replan.
 		return true
 	default:
 		return false
@@ -397,9 +399,6 @@ func appendixC41Cut(t *testing.T, row appendixActionRow) (Input, func(Input) Dec
 		return c2Input(runstate.AttemptCompleted), PlanAttempt
 	case CaseRunFailed:
 		return withMovementFailed(withFailedAttempt(c2Input(runstate.AttemptFailed), true)), PlanAttempt
-	case CaseFinalGateRejected:
-		return withFinalGateRejected(withFailedAttempt(c2Input(runstate.AttemptFailed), true)), PlanAttempt
-
 	case CaseAcceptanceFailed:
 		return withAcceptanceFailure(c3Input("c1")), PlanAcceptance
 	case CaseCriterionFailed:
@@ -501,8 +500,6 @@ func assertAppendixC41CutMatches(t *testing.T, row appendixActionRow) {
 		actual["consequence"], actual["unit"], actual["phase"] = "lifecycle_terminal", "attempt", "completed"
 	case CaseRunFailed:
 		actual["consequence"], actual["unit"], actual["phase"] = "lifecycle_terminal", "attempt", "failed"
-	case CaseFinalGateRejected:
-		actual["consequence"], actual["unit"], actual["phase"] = "lifecycle_terminal", "attempt", "gate_rejected"
 	case CaseCriterionFailed:
 		actual["unit"], actual["phase"] = "acceptance", "criterion_failed"
 	case CaseIncompleteCriterion:

@@ -43,8 +43,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 	}
 
 	owners := recovery.UnimplementedActionOwners()
-	if len(owners) != 6 {
-		t.Fatalf("named unimplemented action count = %d, want 6", len(owners))
+	if len(owners) != 3 {
+		t.Fatalf("named unimplemented action count = %d, want 3", len(owners))
 	}
 	for kind, unit := range owners {
 		if !unitIdentifier.MatchString(unit) {
@@ -62,8 +62,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 	}
 
 	handlers := defaultKinds()
-	if len(handlers) != 27 {
-		t.Fatalf("implemented defaultKinds count = %d, want 27", len(handlers))
+	if len(handlers) != 30 {
+		t.Fatalf("implemented defaultKinds count = %d, want 30", len(handlers))
 	}
 
 	bucketCounts := map[string]int{}
@@ -95,8 +95,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 			t.Fatalf("ActionKind %q has multiple classification buckets: %v", kind, buckets)
 		}
 	}
-	if bucketCounts["defaultKinds"] != 27 || bucketCounts["Steps"] != 8 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 6 {
-		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 27, 8, 3, 1, 6", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
+	if bucketCounts["defaultKinds"] != 30 || bucketCounts["Steps"] != 8 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 3 {
+		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 30, 8, 3, 1, 3", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
 	}
 }
 

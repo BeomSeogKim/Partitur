@@ -137,8 +137,7 @@ func Compile(movement score.MovementView) (*Plan, error) {
 			ErrUnsupportedCriteria,
 		)
 	}
-	if movement.Acceptance.HumanGate == "always" ||
-		movement.Acceptance.HumanGate == "on_contested" {
+	if movement.Acceptance.HumanGate == "on_contested" {
 		return nil, fmt.Errorf(
 			"%w: human_gate %q requires unit 4.1",
 			ErrUnsupportedCriteria,

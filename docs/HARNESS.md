@@ -190,7 +190,7 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |
 | `lifecycle.movement_failed_to_run_failed` | reachable | §7 lifecycle; E.2 | Real `run` subprocess matrix uses a terminal adapter-failure fixture at both endpoints; before `resume`, the crashed journal and projection prove the durable movement-failed/run-failed cut window |
 | `acceptance.criterion_error_to_failed` | not reached by this gate's cuts | §7 acceptance; E.2 | No criterion-error fixture |
-| `acceptance.evaluation_completed_to_decision_requested` | not reached by this gate's cuts | §7 acceptance; E.2 | No human-gate fixture |
+| `acceptance.evaluation_completed_to_decision_requested` | reachable | §7 acceptance; E.2 | Real `run` subprocess fixture cuts both the completed evaluation with the gate request absent and the durable gate request |
 
 ## Execution model — deterministic interleaving, not a self-racing process
 

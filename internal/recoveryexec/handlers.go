@@ -2,6 +2,7 @@ package recoveryexec
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +59,9 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionAppendMovementStarted:      appendMovementStarted,
 		recovery.ActionAppendAcceptanceStarted:    appendAcceptanceStarted,
 		recovery.ActionAppendEvaluationCompleted:  appendAcceptanceEvaluationCompleted,
+		recovery.ActionAppendHumanGateRequest:     appendHumanGateRequest,
+		recovery.ActionAppendGateRejectedFailure:  appendGateRejectedFailure,
+		recovery.ActionAppendFinalGateFailure:     appendGateRejectedFailure,
 		recovery.ActionSelectInitialPerformer:     selectInitialPerformer,
 		recovery.ActionResumeCriterion:            resumeCriterion,
 		recovery.ActionRealizeRecordedDisposition: realizeRecordedDisposition,
@@ -604,6 +608,74 @@ func appendAcceptanceEvaluationCompleted(_ context.Context, execution HandlerCon
 		return err
 	}
 	return fmt.Errorf("recovery acceptance completion movement %q is absent from pinned score", attempt.MovementID)
+}
+
+func appendHumanGateRequest(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" {
+		return errors.New("recovery human gate request requires store, driver, and attempt")
+	}
+	input, err := execution.Store.LoadRunInput(execution.RunID)
+	if err != nil {
+		return err
+	}
+	attempt, ok := input.Projection.State.Attempts[action.AttemptID]
+	if !ok {
+		return fmt.Errorf("recovery human gate attempt %q is absent", action.AttemptID)
+	}
+	var gateMode string
+	for _, movement := range input.Score.Movements() {
+		if runstate.MovementID(movement.ID) == attempt.MovementID {
+			gateMode = movement.Acceptance.HumanGate
+			break
+		}
+	}
+	if gateMode != "always" {
+		return fmt.Errorf("human_gate %q requires review evidence not implemented in unit 4.1", gateMode)
+	}
+	gateID, err := humanGateID(action.AttemptID)
+	if err != nil {
+		return err
+	}
+	decisionID, err := workspace.NewID()
+	if err != nil {
+		return fmt.Errorf("allocate human gate decision id: %w", err)
+	}
+	err = appendEvent(execution, input.Projection.State, action, runstate.EventDecisionRequested, map[string]any{
+		"decision_id": decisionID, "decision_type": "human_gate", "gate_id": gateID,
+		"gate_mode": "always", "subject_tree": action.SubjectTree, "blocking_findings": []any{},
+	})
+	if err == nil {
+		execution.Store.Reached(faultpoint.PointHumanGateDecisionRequested)
+	}
+	return err
+}
+
+func appendGateRejectedFailure(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	state, err := execution.Driver.State()
+	if err != nil {
+		return err
+	}
+	movementID, err := actionMovement(state, action)
+	if err != nil {
+		return err
+	}
+	action.FailureReason = "human_gate_rejected"
+	return appendEvent(execution, state, withMovement(action, movementID), runstate.EventMovementFailed, map[string]any{
+		"reason": "human_gate_rejected", "decision_id": action.QuestionDecisionID,
+		"subject_tree": action.SubjectTree, "run_failed": state.FinalMovements[movementID],
+	})
+}
+
+func humanGateID(attemptID runstate.AttemptID) (string, error) {
+	encoded, err := canonical.Encode(map[string]any{"attempt_id": string(attemptID)})
+	if err != nil {
+		return "", fmt.Errorf("encode human gate id: %w", err)
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("partitur/gate-id"))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(encoded)
+	return fmt.Sprintf("gat-%x", digest.Sum(nil)), nil
 }
 
 func realizeRecordedDisposition(_ context.Context, execution HandlerContext, action recovery.Action) error {
@@ -1277,6 +1349,10 @@ func sourceAuthority(execution HandlerContext, state runstate.State, action reco
 	}
 	match := func(event runstate.Event) bool { return event.AttemptID == action.AttemptID }
 	switch eventType {
+	case runstate.EventDecisionRequested:
+		return latestEventID(journal.Events, func(event runstate.Event) bool {
+			return event.Type == runstate.EventAcceptanceEvaluationCompleted && match(event)
+		})
 	case runstate.EventExecutionStopped:
 		if state.OpenExecution == nil {
 			return "", errors.New("recovered interval source is absent")
@@ -1315,6 +1391,12 @@ func sourceAuthority(execution HandlerContext, state runstate.State, action reco
 	case runstate.EventMovementSucceeded:
 		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == runstate.EventAttemptCompleted && match(event) })
 	case runstate.EventMovementFailed:
+		if action.FailureReason == "human_gate_rejected" {
+			return latestEventID(journal.Events, func(event runstate.Event) bool {
+				return event.Type == runstate.EventDecisionResolved && match(event) &&
+					payloadString(event.Payload, "decision_id") == action.QuestionDecisionID
+			})
+		}
 		if action.FailureReason == "budget_exhausted" {
 			return latestEventID(journal.Events, func(event runstate.Event) bool {
 				return event.Type == runstate.EventExecutionStopped && payloadString(event.Payload, "reason") == "budget_exhausted"

@@ -1327,7 +1327,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventDecisionRequested:
 		return []string{"decision_id", "decision_type"}, []string{"emitted_id", "question", "gate_id", "gate_mode", "subject_tree", "review_outcome", "blocking_findings", "proposal_id", "routed_reason", "blocking"}, true
 	case EventDecisionResolved:
-		return []string{"decision_id", "decision_type", "disposition"}, []string{"answer", "gate_id", "scope", "overridden_findings", "override_reason"}, true
+		return []string{"decision_id", "decision_type", "disposition"}, []string{"answer", "gate_id", "scope", "overridden_findings", "override_reason", "reason"}, true
 	case EventDecisionObsoleted:
 		return []string{"decision_id"}, nil, true
 	case EventAmendmentRejected:
@@ -1627,7 +1627,7 @@ func validateDecisionResolution(payload map[string]any) error {
 		if disposition := mustString(payload, "disposition"); disposition != "approved" && disposition != "rejected" {
 			return errors.New("invalid human_gate disposition")
 		}
-		if err := fields(payload, []string{"decision_id", "decision_type", "disposition", "gate_id", "scope", "overridden_findings"}, []string{"override_reason"}); err != nil {
+		if err := fields(payload, []string{"decision_id", "decision_type", "disposition", "gate_id", "scope", "overridden_findings"}, []string{"override_reason", "reason"}); err != nil {
 			return err
 		}
 		scope := mustObject(payload, "scope")
@@ -1643,6 +1643,14 @@ func validateDecisionResolution(payload map[string]any) error {
 		_, overrideReason := payload["override_reason"]
 		if (len(payload["overridden_findings"].([]any)) != 0) != overrideReason || (overrideReason && mustString(payload, "override_reason") == "") {
 			return errors.New("override_reason is required and non-empty iff findings are overridden")
+		}
+		if reason, present := payload["reason"]; present {
+			if mustString(payload, "disposition") != "rejected" {
+				return errors.New("reason is only valid for a rejected human gate")
+			}
+			if _, ok := reason.(string); !ok || mustString(payload, "reason") == "" {
+				return errors.New("reason must be a non-empty string")
+			}
 		}
 		return nil
 	default:
@@ -1829,7 +1837,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		arrays = optionalNames(payload, "blocking_findings")
 		bools = optionalNames(payload, "blocking")
 	case EventDecisionResolved:
-		strings = append([]string{"decision_id", "decision_type", "disposition"}, optionalNames(payload, "answer", "gate_id", "override_reason")...)
+		strings = append([]string{"decision_id", "decision_type", "disposition"}, optionalNames(payload, "answer", "gate_id", "override_reason", "reason")...)
 		objects = optionalNames(payload, "scope")
 		arrays = optionalNames(payload, "overridden_findings")
 	case EventDecisionObsoleted:
