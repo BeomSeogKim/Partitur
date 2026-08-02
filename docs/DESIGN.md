@@ -144,6 +144,10 @@ corrupt evidence by writing where evidence lives:
       artifacts/<logical-output-id>/<attempt-id>
                                # immutable artifact instances (identity and atomicity
                                # below); a retry never overwrites earlier evidence
+      inputs/<movement-id>/revision-<n>/subject-tree.json
+                               # immutable core-published review subject input (§4). It is
+                               # outside every worktree and read-only to the performer; a retry
+                               # or fallback on this movement revision reuses the same bytes
       session/                 # session hints, mode 0600 (see §4 privacy)
       driver.lease             # execution-driver lease (§6); absent when no driver runs
       authority.json           # execution-authority checkpoint: current **epoch only** (§6).
@@ -705,10 +709,16 @@ assigned to a later rule.
 6. Unknown fields in the core namespace are an error; adapter-specific data lives only
    under `extensions.<adapter-id>`.
 7. An `acceptance.review` entry must reference a `findings`-kind output of the same
-   movement. **v0.2 permits at most one review criterion per movement; the compiler rejects
-   more.** Thus its one declared criterion, when present, is bound to the one artifact
-   instance emitted for that logical output in that attempt (§1); two criteria cannot share an
-   output in v0.2.
+   movement. A movement declaring one **must not request `repo_write`; the compiler rejects
+   the score otherwise.** **v0.2 permits at most one review criterion per movement; the
+   compiler rejects more.** Thus its one declared criterion, when present, is bound to the one
+   artifact instance emitted for that logical output in that attempt (§1); two criteria cannot
+   share an output in v0.2. A writer that also needs review therefore splits into a writer
+   movement and a read-only reviewer movement. This deliberately forecloses self-review of a
+   writer's just-completed worktree; admitting that later requires a separately named
+   pre-execution subject and a specified relation between it and the writer acceptance subject.
+   Rule 2 still applies to the writer: review cannot replace its required declared hard criterion
+   or `human_gate: always`.
 8. **At most one** movement carries `phase: draft`, and if one exists it is the one
    `draft.interview_movement` names — and conversely. A `status: draft` score must have one; a
    finalized score retains whichever it had, since finalization patches only `/status`. A draft movement may not hold `repo_write`.
@@ -1548,6 +1558,35 @@ file content:
     findings_schema: "partitur/findings+json;v=1",
     rubrics: [{ id, required_coverage: true }] }
 ```
+
+**Review-subject publication.** Rule 7 (§2) makes every review performer a non-writer, so its
+subject is fixed before execution: it is exactly the movement base from which the core builds that
+reviewer's worktree. That means a reviewer of contributing writer results receives the deterministic
+composed base (§5), not the run base merely because the reviewer itself is read-only; the final
+reviewer receives the recorded candidate tree (§8). This is also the `subject_tree` that §7 later
+binds at `acceptance.started` and against which the findings artifact is compared. A reviewer never
+receives a writer's post-execution tree in v0.2.
+
+During attempt materialization, after that base is pinned and before the adapter trampoline is
+launched, the core writes this input at
+`runs/<run-id>/inputs/<movement-id>/revision-<score-revision>/subject-tree.json`. Its exact bytes
+are the **A.1 JCS encoding**, with no trailing newline, of the shown object: the literal `schema`
+and `findings_schema`, the movement base's object-format-qualified `subject_tree`, and one
+`{id, required_coverage: true}` entry for every rubric of the movement's sole review criterion,
+sorted by rubric id. The file is written temp → file fsync → rename → directory fsync, then made
+read-only to the performer. Its delivered `instance_id` is
+`partitur.subject-tree@<movement-id>@<score-revision>`; all retries and fallbacks on that movement
+revision reuse that instance and its exact raw bytes. The core may append `attempt.started` only
+after this publication, so the later execute brief can never cite an undurable subject-input hash.
+
+`attempt.started` records `review_subject_input: {instance_id, hash}` iff the movement declares a
+review criterion. The location is derived from that event envelope and its score revision; the
+adapter receives the same `instance_id`, path, and raw SHA-256 in `inputs`. The input remains
+core-owned and retained with the run — terminal staging cleanup never removes it. During recovery,
+an unreferenced pre-`attempt.started` copy is removed under `RC-RESUME-035`; once an
+`attempt.started` names it, `RC-RESUME-010` verifies the derived file against the recorded raw hash
+and halts `missing_artifact_file` on absence or mismatch. Recovery never regenerates a named input:
+the raw bytes that crossed the adapter boundary are evidence, not a cache.
 
 The reserved `partitur.` prefix is unusable as a score-declared output id by construction
 (§1 identifier grammar), so these inputs cannot be spoofed. The core-observed subject tree
@@ -2815,6 +2854,13 @@ visible in `status`, so flakiness is surfaced rather than laundered.
   other criterion. The rubric and the core-observed subject tree are forwarded to the performer
   via the reserved `partitur.subject-tree` input (§4). The core validates subject binding,
   rubric completeness, and schema — **never truth**.
+- **Review-execution lift gate.** An implementation that lifts the current refusal of review
+  criteria MUST atomically make compiler rule 7 reject both a second review criterion and a
+  `repo_write` movement declaring one, make acceptance admit exactly zero or one **review**
+  criterion — hard criteria and core-generated checks are unaffected — and
+  add fixtures for a read-only reviewer of a contributed base and both rejected shapes. Final-
+  movement rule 12 is not a substitute for this enforcement: it constrains only the apply-gate
+  sink, while rule 7 constrains every review movement before a reviewer can be launched.
 - The findings artifact is JSON, `kind: findings`, schema
   `partitur/findings+json;v=1`:
 
@@ -4548,6 +4594,9 @@ attempt.started {
                                   #   never persisted protects nothing. A dependency set with
                                   #   zero contributing change sets uses `composition_mode:
                                   #   identity`
+  review_subject_input?,          # present iff this movement declares a review criterion (§2):
+    {instance_id, hash}           # the durable, raw-byte commitment to §4's reserved input;
+                                  #   its path is derived from this envelope, not trusted input
   granted_authority: {            # exactly the wire `grants` object of §4
     paths_rw: [pattern], paths_ro: [pattern], shell: bool, network: bool
   },
@@ -5183,7 +5232,7 @@ tables below as their owning clauses require:
 | Recovery case | Existing owning rule |
 |---|---|
 | `RC-RESUME-034` | §1 torn-tail repair and manifest rebuild during journal replay |
-| `RC-RESUME-035` | §1 orphan artifact, routed-proposal record, and change-set-ref cleanup; §9 unreferenced pre-prepare snapshot cleanup |
+| `RC-RESUME-035` | §1 orphan artifact, routed-proposal record, and change-set-ref cleanup; §4 unreferenced pre-`attempt.started` review-subject input cleanup; §9 unreferenced pre-prepare snapshot cleanup |
 | `RC-RESUME-036` | §6/§9 inert orphan plan and quiesced-sidecar cleanup |
 | `RC-RESUME-038` | §2 reconstruction of an orphaned core-finalization proposal on the next `resume` |
 
@@ -5316,7 +5365,7 @@ The rows:
 | `RC-RESUME-007` | `amendment.approval_prepared` pending, no matching `amendment.approved` or `amendment.approval_abandoned`, no cancellation | **Complete or abandon the prepare — never step past it**, and the **mutation barrier stays in force** while doing so. Verify **both** referenced files, because first-match ordering means the generic missing-file checks below are never reached: `prepares/<prepare-id>.json` against its recorded hash (`missing_prepare_plan`), and the prewritten snapshot against its recorded raw *and* semantic hashes and its binding to that plan (`missing_snapshot_file`). Sweep every recorded adapter and criterion launch to verified empty (`sweep_unverifiable` halts). Then run §6's commit table exactly as the original approver would have, appending `amendment.approved` **from the persisted plan** — or `amendment.approval_abandoned` if the head changed or the plan no longer validates. Reclaiming authority or entering C.2 while a prepare is pending would let a new driver run against a revision that was about to change |
 | `RC-RESUME-008` | An `authority.granted` epoch exists with no live owner | Reclaim per §6 |
 | `RC-RESUME-009` | `root_snapshot_divergence` — the root score claims the snapshot's revision with a different semantic hash | Halt (§1). Resume is impossible until an operator resolves it |
-| `RC-RESUME-010` | A run-level snapshot, artifact, proposal record, ref, or `resolved-cast.yaml` named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
+| `RC-RESUME-010` | A run-level snapshot, artifact, proposal record, ref, `resolved-cast.yaml`, or attempt-started review-subject input named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
 | `RC-RESUME-037` | `amendment.routed_human` durable, its matching `decision.requested` absent | Apply §1's source-to-request rule idempotently, then re-evaluate C.1. The routed event fixes the request payload; recovery does not re-run routing or infer it from `attempt.blocked` |
 | `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). Do not enter C.2 or C.3 for an attempt from the superseded revision |
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
