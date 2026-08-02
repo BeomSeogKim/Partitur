@@ -705,7 +705,10 @@ assigned to a later rule.
 6. Unknown fields in the core namespace are an error; adapter-specific data lives only
    under `extensions.<adapter-id>`.
 7. An `acceptance.review` entry must reference a `findings`-kind output of the same
-   movement.
+   movement. **v0.2 permits at most one review criterion per movement; the compiler rejects
+   more.** Thus its one declared criterion, when present, is bound to the one artifact
+   instance emitted for that logical output in that attempt (§1); two criteria cannot share an
+   output in v0.2.
 8. **At most one** movement carries `phase: draft`, and if one exists it is the one
    `draft.interview_movement` names — and conversely. A `status: draft` score must have one; a
    finalized score retains whichever it had, since finalization patches only `/status`. A draft movement may not hold `repo_write`.
@@ -2807,9 +2810,11 @@ visible in `status`, so flakiness is surfaced rather than laundered.
 **Review criteria** (typed model evidence — never machine verification):
 
 - `acceptance.review` requires that the referenced `findings` artifact instance exists and
-  is well-formed. The rubric and the core-observed subject tree are forwarded to the
-  performer via the reserved `partitur.subject-tree` input (§4). The core validates subject
-  binding, rubric completeness, and schema — **never truth**.
+  is well-formed. In v0.2 that is the movement's sole review criterion (compiler rule 7,
+  §2), bound to exactly that one instance; its coverage and blockers are not unioned with any
+  other criterion. The rubric and the core-observed subject tree are forwarded to the performer
+  via the reserved `partitur.subject-tree` input (§4). The core validates subject binding,
+  rubric completeness, and schema — **never truth**.
 - The findings artifact is JSON, `kind: findings`, schema
   `partitur/findings+json;v=1`:
 
@@ -2817,23 +2822,45 @@ visible in `status`, so flakiness is surfaced rather than laundered.
   {
     schema: "partitur/findings+json;v=1",
     subject_tree,                    # MUST equal the core-observed tree — compared, not trusted
-    coverage: [                      # one entry per DECLARED rubric — no omissions
-      { rubric, conclusion: examined_none_found | findings_raised, note? }
+    coverage: [                      # exactly one entry per DECLARED rubric
+      { rubric, conclusion: examined_none_found | findings_raised, note?: string }
     ],
     findings: [
-      { id, rubric, summary, evidence: [{path, line}], blocking: bool }
+      { id: string, rubric, summary: string,
+        evidence: [{path: string, line?: integer}], blocking: bool }
     ],                               # `id` MUST be non-empty and unique within this artifact:
                                      #   overrides and gate decisions address individual
                                      #   findings as (artifact_instance_id, finding_id) (§8),
                                      #   which is not addressable if ids repeat or are blank.
                                      #   A duplicate or empty id makes the artifact malformed
-    provenance: { reviewer?, model?, adapter? }   # experiment metadata only; no rule may
+    provenance?: { reviewer?: string, model?: string, adapter?: string }
+                                                   # experiment metadata only; no rule may
   }                                              # condition on reviewer identity
   ```
 
-- A findings artifact whose `subject_tree` disagrees with the core-observed tree, that
-  omits a declared rubric, or that fails schema validation is **malformed** → acceptance
-  execution failure. Zero findings still requires a typed per-rubric conclusion.
+- **Strict findings decoding and fields.** A findings artifact is exactly one UTF-8 JSON
+  object. The strict decoder rejects invalid UTF-8, trailing content, unknown fields, and a
+  duplicate JSON object key at **any** nesting depth. The top-level required fields are
+  `schema`, `subject_tree`, `coverage`, and `findings`; `provenance` is optional. The only
+  fields of `provenance`, when it is present, are its three optional members shown above. This
+  is a closed v=1 schema: a compatible additive field requires a new findings schema version,
+  rather than being silently ignored.
+- **Coverage and finding values.** `coverage` is a set keyed by rubric: it contains each rubric
+  declared by this sole criterion exactly once, and no other rubric. A duplicate, omission, or
+  undeclared coverage rubric is malformed. Every finding's `rubric` likewise names a rubric
+  declared by the criterion. `id` and `summary` are non-empty strings. `note`, and each present
+  provenance value, are non-empty strings; an absent note or metadata value is represented by
+  omission, not an empty string. `provenance` itself may be absent entirely. The core validates
+  only this shape and never conditions any rule, outcome, or gate on provenance or its absence.
+- **Evidence locations.** Every finding has a non-empty `evidence` array. Each `path` is a
+  non-empty repository-relative POSIX path, with no leading `/` and no `.` or `..` component;
+  it must name a regular file in the core-observed subject tree. `line` is optional to permit a
+  file-level finding. When present it is a 1-based integer line number greater than zero and
+  must identify a line in that file. The core validates these locations, not whether the
+  reviewer drew the right conclusion from them.
+- A findings artifact whose `subject_tree` disagrees with the core-observed tree, fails any
+  rule above, or otherwise fails schema validation is **malformed** → acceptance execution
+  failure. Zero findings still requires a typed per-rubric conclusion.
 - `blocking: true` findings are reviewer *judgment*. They set `review_outcome` (§8) and
   open the human gate under `human_gate: on_contested`; they never count as machine
   verification, and unlike a red hard criterion they *are* legitimately human-overridable
@@ -3039,11 +3066,14 @@ candidate is recorded. The complete v=1 shape is:
 `criteria` is the full completed acceptance set, including core-generated checks, in acceptance
 plan order; it is never replaced by a count alone. A VERIFIED mark exists only with the complete
 criterion list, exact subject tree, revision, and failed-attempt count. A REVIEWED mark additionally
-carries its findings artifact instance and one of `CLEAN`, `CONTESTED`, or `OVERRIDDEN` as
-`review_outcome`; an APPROVED mark carries its exact gate decision id. Fields inapplicable to a
-grade are omitted, not filled with a misleading empty identifier. `enforcement_advisories` is the
-per-attempt record of the §4 predicate's explicitly allowed advisory exceptions; a fail-closed
-rejection has no successful attempt observation to disguise as an advisory.
+carries its one findings artifact instance and one of `CLEAN`, `CONTESTED`, or `OVERRIDDEN` as
+`review_outcome`; an APPROVED mark carries its exact gate decision id. The singular
+`findings_instance_id` is intentional v0.2 surface area and is sound because §2 rule 7 rejects
+multiple review criteria; a version that admits them must revise this status contract rather than
+silently selecting or flattening evidence. Fields inapplicable to a grade are omitted, not filled
+with a misleading empty identifier. `enforcement_advisories` is the per-attempt record of the §4
+predicate's explicitly allowed advisory exceptions; a fail-closed rejection has no successful
+attempt observation to disguise as an advisory.
 
 Without `--json`, `status` renders the same projection as deterministic lines: the run id and
 lifecycle, pinned score head, journal integrity and recovery state, application and promotion
@@ -3309,17 +3339,22 @@ counts toward anything that asks for VERIFIED or APPROVED.
   `override_reason`; an override with no recorded reason is invalid, because overriding a
   reviewer's blocking judgment is exactly the decision that must stay auditable. An approval
   never carries over to another attempt, revision, or subject tree.
-- **REVIEWED** — the movement declares ≥1 `review` criterion (compiler-enforced, §2 rule
-  11, so it can never hold by vacuous truth) and every declared review criterion is
-  satisfied by a well-formed, subject-bound findings artifact (§7). REVIEWED means "typed
+- **REVIEWED** — the movement declares ≥1 `review` criterion — **that clause is itself what
+  stops the mark holding by vacuous truth**, not any compiler rule; §2 rule 11 forces a review
+  criterion only on the final movement of a score whose apply gate requires one — and every
+  declared review criterion is satisfied by a well-formed, subject-bound findings artifact (§7). REVIEWED means "typed
   model review completed" — a *kind* marker, deliberately silent about the outcome.
 
 The outcome lives in a separate projection, `review_outcome`: `CLEAN` (zero blocking
 findings), `CONTESTED` (≥1 unresolved blocking finding, including partial overrides), or
 `OVERRIDDEN` (blocking findings were raised and **all** were overridden by exact-subject
-human decisions). Findings are immutable; an override links to the finding instance through
-events and yields `REVIEWED + APPROVED` with `review_outcome: OVERRIDDEN` — it never makes
-the blocker look like it was not raised.
+human decisions). In v0.2 these are the blocker set of the sole review artifact, so
+`on_contested` gates on that same set; there is no cross-criterion union or designated-criterion
+choice. Findings are immutable; an override links to the finding instance through events and
+yields `REVIEWED + APPROVED` with `review_outcome: OVERRIDDEN` — it never makes the blocker look
+like it was not raised. The one-criterion restriction deliberately forecloses independent
+multi-review aggregation until a later version specifies both that aggregation and its status and
+gate bindings.
 
 **A human gate resolved as reject** terminates the movement:
 `movement.failed {reason: human_gate_rejected, decision_id, subject_tree}`. It consumes no
