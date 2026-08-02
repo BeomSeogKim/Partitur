@@ -117,6 +117,9 @@ func composeCandidate(_ context.Context, execution HandlerContext, _ recovery.Ac
 	if errors.Is(err, driver.ErrCompositionCancelled) {
 		return ErrRecoveryReplan
 	}
+	if errors.Is(err, driver.ErrCompositionBudgetExhausted) {
+		return ErrRecoveryReplan
+	}
 	return err
 }
 
@@ -210,11 +213,17 @@ func rerunMovementComposition(_ context.Context, execution HandlerContext, actio
 		if errors.Is(err, driver.ErrCompositionCancelled) {
 			return ErrRecoveryReplan
 		}
+		if errors.Is(err, driver.ErrCompositionBudgetExhausted) {
+			return ErrRecoveryReplan
+		}
 		return err
 	}
 	_, err = driver.PrepareMovementBase(execution.Store, execution.Driver, input, action.MovementID, input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)
 	if errors.Is(err, driver.ErrCompositionTerminalized) {
 		return nil
+	}
+	if errors.Is(err, driver.ErrCompositionBudgetExhausted) {
+		return ErrRecoveryReplan
 	}
 	return err
 }
@@ -434,6 +443,9 @@ func selectInitialPerformer(ctx context.Context, execution HandlerContext, actio
 		if err != nil {
 			if errors.Is(err, driver.ErrCompositionTerminalized) {
 				return errMovementCompositionTerminalized
+			}
+			if errors.Is(err, driver.ErrCompositionBudgetExhausted) {
+				return ErrRecoveryReplan
 			}
 			return err
 		}
@@ -692,6 +704,9 @@ func executeRecoveredAttempt(
 			return errMovementCompositionTerminalized
 		}
 		if errors.Is(err, driver.ErrCompositionCancelled) {
+			return ErrRecoveryReplan
+		}
+		if errors.Is(err, driver.ErrCompositionBudgetExhausted) {
 			return ErrRecoveryReplan
 		}
 		return err

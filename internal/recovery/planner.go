@@ -71,6 +71,7 @@ const (
 	HaltMissingProposalRecord      HaltReason = "missing_proposal_record"
 	HaltMissingResolvedCast        HaltReason = "missing_resolved_cast"
 	HaltMissingPreparePlan         HaltReason = "missing_prepare_plan"
+	HaltGitUnverifiable            HaltReason = "git_unverifiable"
 	HaltSweepUnverifiable          HaltReason = "sweep_unverifiable"
 	HaltSpawnHandoffUnverifiable   HaltReason = "spawn_handoff_unverifiable"
 	HaltJournalCorrupt             HaltReason = "journal_corrupt"
@@ -87,6 +88,7 @@ var appendixDHaltReasonSet = map[HaltReason]bool{
 	HaltMissingProposalRecord:      true,
 	HaltMissingResolvedCast:        true,
 	HaltMissingPreparePlan:         true,
+	HaltGitUnverifiable:            true,
 	HaltSweepUnverifiable:          true,
 	HaltSpawnHandoffUnverifiable:   true,
 	HaltJournalCorrupt:             true,

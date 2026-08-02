@@ -13,6 +13,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
 var (
@@ -470,6 +471,8 @@ func haltDecision(decision recovery.Decision, err error) (recovery.Decision, boo
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingSnapshotFile}, true
 	case errors.Is(err, runstore.ErrMissingResolvedCast):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingResolvedCast}, true
+	case errors.Is(err, workspace.ErrGitUnverifiable):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltGitUnverifiable}, true
 	case errors.Is(err, runstate.ErrSweepUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltSweepUnverifiable}, true
 	case errors.Is(err, ErrHandoffUnverifiable):

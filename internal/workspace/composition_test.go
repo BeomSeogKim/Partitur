@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 )
@@ -282,6 +283,67 @@ func TestComposeDistinguishesNonVerdictMergeFailureFromConflict(t *testing.T) {
 	}
 	if !strings.Contains(result.Failure.Diagnostic, "merge-tree") {
 		t.Fatalf("failure diagnostic = %q, want merge-tree context", result.Failure.Diagnostic)
+	}
+}
+
+func TestGitInvocationBoundsMatchContract(t *testing.T) {
+	if GitInvocationBound != 2*time.Minute || mergeTreeBound != 10*time.Minute {
+		t.Fatalf("git bounds = %s and %s, want 2m and 10m", GitInvocationBound, mergeTreeBound)
+	}
+}
+
+func TestComposeMergeDeadlineIsUnverifiableAndDoesNotRecordAVerdict(t *testing.T) {
+	repository := newCompositionFixture(t)
+	base := compositionFixtureTree(t, repository)
+	writeFile(t, filepath.Join(repository, "value.txt"), []byte("changed\n"), 0o600)
+	gitRun(t, repository, "add", "value.txt")
+	gitRun(t, repository, "commit", "-m", "change")
+	changed := compositionFixtureTree(t, repository)
+
+	deadline := time.Now().Add(time.Second)
+	wrapper, mergeTreeInvocations := compositionHangWrapper(t)
+	result := compose(systemGit{path: wrapper, env: gitEnvironment(), activeDeadline: deadline}, CompositionInput{
+		RepositoryRoot: repository,
+		BaseTree:       base,
+		Contributors: []CompositionContributor{{
+			MovementID: "one", ChangeSetID: "one", BaseTree: base, ResultTree: changed,
+		}},
+	})
+	if result.ResultTree != "" || result.Conflict != nil || result.Failure == nil || !result.Failure.Unverifiable || !result.Failure.ActiveBudgetExhausted {
+		t.Fatalf("compose result = %#v, want unverifiable no-verdict failure", result)
+	}
+	if result.Environment == nil || result.Failure.ExitStatus != nil || len(result.Environment.Argv) != 0 || len(result.Environment.Env) != 0 {
+		t.Fatalf("expired merge recorded a verdict or invocation: %#v", result)
+	}
+	invocations, err := os.ReadFile(mergeTreeInvocations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(invocations) != "merge-tree\n" {
+		t.Fatalf("merge-tree invocations = %q, want exactly one merge-tree invocation", invocations)
+	}
+}
+
+func TestEffectiveGitBoundPrefersActiveBudgetOnTie(t *testing.T) {
+	started := time.Date(2026, time.August, 2, 0, 0, 0, 0, time.UTC)
+	bound := 2 * time.Minute
+	for _, test := range []struct {
+		name       string
+		deadline   time.Time
+		want       time.Duration
+		wantBudget bool
+	}{
+		{name: "no active interval", want: bound},
+		{name: "active budget is smaller", deadline: started.Add(time.Minute), want: time.Minute, wantBudget: true},
+		{name: "active budget ties the Git bound", deadline: started.Add(bound), want: bound, wantBudget: true},
+		{name: "Git bound is smaller", deadline: started.Add(3 * time.Minute), want: bound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, budget := effectiveGitBound(bound, test.deadline, started)
+			if got != test.want || budget != test.wantBudget {
+				t.Fatalf("effective Git bound = (%s, %t), want (%s, %t)", got, budget, test.want, test.wantBudget)
+			}
+		})
 	}
 }
 
@@ -724,4 +786,21 @@ func compositionExitWrapper(t *testing.T, status int) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func compositionHangWrapper(t *testing.T) (string, string) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "git-hang-wrapper")
+	mergeTreeInvocations := filepath.Join(filepath.Dir(path), "merge-tree-invocations")
+	script := "#!/bin/sh\nfor argument in \"$@\"; do\n" +
+		"  if [ \"$argument\" = merge-tree ]; then printf '%s\\n' merge-tree >> " + strconv.Quote(mergeTreeInvocations) + "; exec /bin/sleep 30; fi\n" +
+		"done\nexec " + realGit + " \"$@\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path, mergeTreeInvocations
 }

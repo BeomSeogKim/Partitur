@@ -19,6 +19,10 @@ import (
 // terminal event, so callers must not try to create an attempt for it.
 var ErrCompositionTerminalized = errors.New("driver: composition terminal event appended")
 
+// ErrCompositionBudgetExhausted reports that composition closed its active
+// interval at the budget boundary; callers must replan through RC-RESUME-045.
+var ErrCompositionBudgetExhausted = errors.New("driver: composition exhausted active budget")
+
 // ErrCompositionCancelled reports that a durable cancellation preempted a
 // composition outcome before it could become terminal.
 var ErrCompositionCancelled = errors.New("driver: composition cancelled before terminal append")
@@ -195,7 +199,17 @@ func composeMovementBaseWithAfterEvidence(store *runstore.Store, authority *runs
 	if _, err := authority.Append(runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, Type: runstate.EventExecutionStarted, Payload: mustCompositionPayload(map[string]any{"interval_id": intervalID, "phase": "composition", "wall_start": formatTime(opened), "remaining_at_start": remainingMS})}, "execution.composition.started"); err != nil {
 		return MovementBase{}, err
 	}
-	result := workspace.Compose(workspace.CompositionInput{RepositoryRoot: store.RepositoryRoot(), BaseTree: input.BaseTree, Contributors: contributors})
+	result := workspace.Compose(workspace.CompositionInput{RepositoryRoot: store.RepositoryRoot(), BaseTree: input.BaseTree, Contributors: contributors, ActiveDeadline: opened.Add(time.Duration(remainingMS) * time.Millisecond)})
+	if result.Failure != nil && result.Failure.Unverifiable {
+		if result.Failure.ActiveBudgetExhausted {
+			stopped := runstate.Event{RunID: authority.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision, Type: runstate.EventExecutionStopped, Payload: mustCompositionPayload(map[string]any{"interval_id": intervalID, "reason": "budget_exhausted", "charging": "measured", "charged_duration": remainingMS})}
+			if err := appendCompositionStopped(authority, stopped); err != nil {
+				return MovementBase{}, err
+			}
+			return MovementBase{}, ErrCompositionBudgetExhausted
+		}
+		return MovementBase{}, workspace.ErrGitUnverifiable
+	}
 	charged := now().Sub(opened).Milliseconds()
 	if charged < 0 {
 		charged = 0

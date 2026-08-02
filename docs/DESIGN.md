@@ -1848,6 +1848,24 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   describe that same invocation, and the two sequences share that order. Each invocation runs in a
   **non-bare** repository with system and global Git config isolated:
 
+  **Every Git invocation the core makes is bounded.** This is an exit contract, not a claim that
+  the environment below eliminates every way a local Git operation can stall. Each normative
+  `merge-tree` invocation receives a **10-minute** bound; every other single Git invocation —
+  source-workspace operations, composition preparation or inspection, result persistence, and
+  recovery observation included — receives a **2-minute** bound. A fan-in gets one 10-minute
+  bound per `merge-tree` invocation, not one aggregate bound for the fan-in.
+
+  A Git invocation that is charged to an active-execution interval has an effective bound of
+  `min(its Git bound, remaining active budget at invocation start)`. Thus composition cannot run
+  past the movement's remaining budget, while a run-start or recovery observation outside an
+  active interval uses its named Git bound and neither consumes nor borrows a movement budget. If
+  the active budget is the effective bound — including an equal-bound tie — expiry takes the existing
+  `budget_exhausted` path (§6). Only when the Git bound is strictly smaller is expiry
+  `git_unverifiable` (Appendix D): the core stops the
+  child and halts without appending an event, leaving the run at its last durable state. A later
+  explicit `resume` has only that durable state to act on; it must not manufacture a composition
+  verdict from the expired invocation.
+
   The Git subprocess environment is an **allowlist, not the inherited environment**: only the
   variables below are passed, so `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` —
   which can inject arbitrary config, custom merge drivers included — cannot reach it from the
@@ -1867,6 +1885,22 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
     NUL delimiting is required because a path may contain a newline.
   - Any other exit is a **composition execution failure**, defined below, and must never be
     reported as a conflict.
+
+  Expiry of the Git bound is **not an exit** — including if child termination happens to yield a
+  signal or an implementation-specific exit status. It is therefore not absorbed by “any other
+  exit”, is not `composition_failed`, and produces neither `composition.failed` evidence nor a
+  terminal lifecycle event. `git_unverifiable` is a recovery halt under B.7: it is reported to
+  the operator with exit 5, never journaled. The 2-minute and 10-minute values are contract
+  values; replacing the enforcement mechanism without preserving them changes this specification.
+
+  The composition allowlist is deliberately distinct from the shared Git environment. It contains
+  exactly the three `GIT_CONFIG_*` variables shown above plus the per-invocation
+  `GIT_ATTR_SOURCE`; it does not inherit the shared path's `GIT_TERMINAL_PROMPT=0`, `LANG=C`, or
+  `LC_ALL=C`, nor its `-c core.hooksPath=/dev/null` flag. The core-created empty-template
+  repository, rather than that shared flag, supplies the composition path's no-project-hook
+  guarantee. This is the current composition contract and identity input, not an implicit
+  hardening promise; any alignment must revise this section and the composition-environment
+  identity.
 
   `GIT_ATTR_SOURCE=<T>` is required so attributes are read from the composed *ours* tree rather
   than an unrelated checkout. The repository must be **non-bare** — a bare one fails this
@@ -5646,8 +5680,8 @@ implementation to classify.
 **Recovery halts** — conditions that stop a run rather than repairing it:
 `journal_idempotency_conflict`, `unsupported_run_format`, `missing_artifact_file`,
 `missing_snapshot_file`, `missing_changeset_ref`, `missing_proposal_record`,
-`missing_resolved_cast`, `missing_prepare_plan`, `owner_unverifiable`, `sweep_unverifiable`,
-`spawn_handoff_unverifiable`, `root_snapshot_divergence`, `journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
+`missing_resolved_cast`, `missing_prepare_plan`, `git_unverifiable`, `owner_unverifiable`,
+`sweep_unverifiable`, `spawn_handoff_unverifiable`, `root_snapshot_divergence`, `journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
 bytes do not match the recorded hash is no more usable than one that is gone, and splitting them
 would double the enum without changing any action.
 

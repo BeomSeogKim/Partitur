@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+)
+
+const (
+	GitInvocationBound = 2 * time.Minute
+	mergeTreeBound     = 10 * time.Minute
 )
 
 type gitResult struct {
@@ -31,8 +38,9 @@ type compositionGitCommand interface {
 }
 
 type systemGit struct {
-	path string
-	env  []string
+	path           string
+	env            []string
+	activeDeadline time.Time
 }
 
 func newSystemGit() (compositionGitCommand, error) {
@@ -79,29 +87,7 @@ func (g systemGit) RunWithEnvironment(
 		commandArgs = append(commandArgs, "-C", repositoryRoot)
 	}
 	commandArgs = append(commandArgs, args...)
-	command := exec.Command(g.path, commandArgs...)
-	command.Env = append(append([]string(nil), g.env...), environment...)
-	if stdin != nil {
-		command.Stdin = bytes.NewReader(stdin)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err := command.Run()
-	result := gitResult{
-		stdout:   stdout.Bytes(),
-		stderr:   stderr.Bytes(),
-		exitCode: 0,
-	}
-	if err == nil {
-		return result, nil
-	}
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) {
-		result.exitCode = exitError.ExitCode()
-		return result, nil
-	}
-	return gitResult{}, err
+	return runGitCommand(repositoryRoot, g.path, commandArgs, append(append([]string(nil), g.env...), environment...), stdin, GitInvocationBound, g.activeDeadline)
 }
 
 // RunComposition executes the §5 merge invocation exactly as supplied. It is
@@ -115,11 +101,18 @@ func (g systemGit) RunComposition(
 	environment []string,
 	args ...string,
 ) (gitResult, error) {
-	return runGitCommandIn(workingDirectory, g.path, args, environment, stdin)
+	return runGitCommandIn(workingDirectory, g.path, args, environment, stdin, g.activeDeadline)
 }
 
-func runGitCommandIn(workingDirectory, path string, args, environment []string, stdin []byte) (gitResult, error) {
-	command := exec.Command(path, args...)
+func runGitCommandIn(workingDirectory, path string, args, environment []string, stdin []byte, activeDeadline time.Time) (gitResult, error) {
+	return runGitCommand(workingDirectory, path, args, environment, stdin, mergeTreeBound, activeDeadline)
+}
+
+func runGitCommand(workingDirectory, path string, args, environment []string, stdin []byte, bound time.Duration, activeDeadline time.Time) (gitResult, error) {
+	timeout, activeBudgetBound := effectiveGitBound(bound, activeDeadline, time.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, path, args...)
 	command.Dir = workingDirectory
 	command.Env = append([]string(nil), environment...)
 	if stdin != nil {
@@ -129,6 +122,12 @@ func runGitCommandIn(workingDirectory, path string, args, environment []string, 
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	err := command.Run()
+	if ctx.Err() != nil {
+		if activeBudgetBound {
+			return gitResult{}, fmt.Errorf("%w: %v", ErrActiveBudgetExhausted, ctx.Err())
+		}
+		return gitResult{}, fmt.Errorf("%w: %v", ErrGitUnverifiable, ctx.Err())
+	}
 	result := gitResult{
 		stdout:   stdout.Bytes(),
 		stderr:   stderr.Bytes(),
@@ -143,6 +142,20 @@ func runGitCommandIn(workingDirectory, path string, args, environment []string, 
 		return result, nil
 	}
 	return gitResult{}, err
+}
+
+// effectiveGitBound identifies the constraint selected at invocation start.
+// An equal active budget is a budget binding, as required by the active-budget
+// precedence rule.
+func effectiveGitBound(bound time.Duration, activeDeadline, started time.Time) (time.Duration, bool) {
+	if activeDeadline.IsZero() {
+		return bound, false
+	}
+	remaining := activeDeadline.Sub(started)
+	if remaining <= bound {
+		return remaining, true
+	}
+	return bound, false
 }
 
 type repositoryFacts struct {

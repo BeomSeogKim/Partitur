@@ -475,6 +475,12 @@ func TestStoppedClassifiesOnlyAppendixDHalts(t *testing.T) {
 			outcome: OutcomeHalted,
 			reason:  "owner_unverifiable",
 		},
+		{
+			name:    "git unverifiable",
+			err:     workspace.ErrGitUnverifiable,
+			outcome: OutcomeHalted,
+			reason:  "git_unverifiable",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -661,7 +667,7 @@ func TestLiveMovementCompositionTerminalBindsItsEvidence(t *testing.T) {
 			MovementID: "dependency", ChangeSetID: "sha256:change-set",
 			BaseTree: input.BaseTree, ResultTree: "git-sha1:missing-tree",
 		}},
-		1,
+		600000,
 		time.Now,
 		func() (string, error) { return "composition-interval", nil },
 	)
@@ -729,7 +735,7 @@ func TestLiveMovementCompositionTerminalSerializesCancellationAfterEvidence(t *t
 			MovementID: "dependency", ChangeSetID: "sha256:change-set",
 			BaseTree: input.BaseTree, ResultTree: "git-sha1:missing-tree",
 		}},
-		1,
+		600000,
 		time.Now,
 		func() (string, error) { return "composition-interval", nil },
 		hook,
@@ -819,7 +825,7 @@ func TestLiveMovementCompositionConflictTerminalBindsItsEvidence(t *testing.T) {
 			{MovementID: "ours", ChangeSetID: "sha256:ours", BaseTree: input.BaseTree, ResultTree: ours},
 			{MovementID: "theirs", ChangeSetID: "sha256:theirs", BaseTree: input.BaseTree, ResultTree: theirs},
 		},
-		1,
+		600000,
 		time.Now,
 		func() (string, error) { return "composition-interval", nil },
 	)
@@ -907,7 +913,7 @@ func TestComposeMovementBasePinsCleanComposedTreeAndMergeHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	composed, err := composeMovementBase(
-		store, authority, input, "inspect", contributors, 1, time.Now,
+		store, authority, input, "inspect", contributors, 600000, time.Now,
 		func() (string, error) { return "composition-interval", nil },
 	)
 	if err != nil {
@@ -938,7 +944,7 @@ func TestPrepareMovementBaseUsesIdentityForZeroContributors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := PrepareMovementBase(store, authority, input, "inspect", 1, time.Now, func() (string, error) { return "unused", nil })
+	base, err := PrepareMovementBase(store, authority, input, "inspect", 600000, time.Now, func() (string, error) { return "unused", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1071,7 +1077,7 @@ func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := ComposeCandidate(store, authority, input, 1, time.Now, workspace.NewID); err != nil {
+		if err := ComposeCandidate(store, authority, input, 600000, time.Now, workspace.NewID); err != nil {
 			t.Fatal(err)
 		}
 		input, err = store.LoadRunInput(started.RunID)
@@ -1100,7 +1106,7 @@ func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		composed, err := PrepareMovementBase(store, authority, input, "target", 1, time.Now, workspace.NewID)
+		composed, err := PrepareMovementBase(store, authority, input, "target", 600000, time.Now, workspace.NewID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1568,7 +1574,7 @@ func TestLiveSuccessorMaterializesAtMovementBase(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := ComposeCandidate(store, authority, input, 1, time.Now, workspace.NewID); err != nil {
+		if err := ComposeCandidate(store, authority, input, 600000, time.Now, workspace.NewID); err != nil {
 			t.Fatal(err)
 		}
 		input, err = store.LoadRunInput(started.RunID)

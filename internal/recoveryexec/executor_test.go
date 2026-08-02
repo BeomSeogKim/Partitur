@@ -1916,6 +1916,7 @@ func TestExecutorMapsSweepFailureToHaltWithoutJournalWrite(t *testing.T) {
 	}{
 		{name: "recorded session sweep", step: recovery.StepSweepRecordedSession, err: runstate.ErrSweepUnverifiable, wantHalt: recovery.HaltSweepUnverifiable},
 		{name: "spawn handoff", step: recovery.StepStabilizeHandoff, err: ErrHandoffUnverifiable, wantHalt: recovery.HaltSpawnHandoffUnverifiable},
+		{name: "git invocation", step: recovery.StepSweepRecordedSession, err: workspace.ErrGitUnverifiable, wantHalt: recovery.HaltGitUnverifiable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, driver := handlerStore(t, true)
