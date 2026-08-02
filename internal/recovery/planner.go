@@ -144,11 +144,12 @@ type LeaseIdentity struct {
 type ReferenceKind string
 
 const (
-	ReferenceArtifact       ReferenceKind = "artifact"
-	ReferenceSnapshot       ReferenceKind = "snapshot"
-	ReferenceChangeSetRef   ReferenceKind = "change_set_ref"
-	ReferenceProposalRecord ReferenceKind = "proposal_record"
-	ReferenceResolvedCast   ReferenceKind = "resolved_cast"
+	ReferenceArtifact           ReferenceKind = "artifact"
+	ReferenceReviewSubjectInput ReferenceKind = "review_subject_input"
+	ReferenceSnapshot           ReferenceKind = "snapshot"
+	ReferenceChangeSetRef       ReferenceKind = "change_set_ref"
+	ReferenceProposalRecord     ReferenceKind = "proposal_record"
+	ReferenceResolvedCast       ReferenceKind = "resolved_cast"
 )
 
 // ReferenceObservation is one caller-supplied file observation.
@@ -319,12 +320,14 @@ const (
 // GateRecovery is a journal-replayed human-gate fact. A resolved gate remains
 // here after decision.resolved removes it from runstate.PendingDecisions.
 type GateRecovery struct {
-	Required   bool
-	Requested  bool
-	Resolved   bool
-	Approved   bool
-	DecisionID string
-	GateID     string
+	Required         bool
+	Requested        bool
+	Resolved         bool
+	Approved         bool
+	DecisionID       string
+	GateID           string
+	ReviewOutcome    string
+	BlockingFindings []runstate.FindingReference
 }
 
 // AcceptanceRecovery holds the C.3 facts which ordinary lifecycle projection
@@ -463,6 +466,8 @@ type Action struct {
 	CriterionID         runstate.CriterionID
 	MovementID          runstate.MovementID
 	SubjectTree         string
+	ReviewOutcome       string
+	BlockingFindings    []runstate.FindingReference
 	FailureKind         string
 	FailureReason       string
 	RecordedDisposition *runstate.Disposition
@@ -932,6 +937,8 @@ func planEvaluatedAcceptance(input Input, attempt *AttemptRecovery, acceptance r
 		decision.Action.AttemptID = attempt.AttemptID
 		decision.Action.QuestionDecisionID = gate.DecisionID
 		decision.Action.SubjectTree = acceptance.SubjectTree
+		decision.Action.ReviewOutcome = gate.ReviewOutcome
+		decision.Action.BlockingFindings = append([]runstate.FindingReference(nil), gate.BlockingFindings...)
 		return decision
 	}
 	if gate.Required && gate.Requested && !gate.Resolved {
@@ -1203,6 +1210,7 @@ func compositionKey(terminal CompositionTerminal) string {
 func firstMissingReferenceReason(references []ReferenceObservation) (HaltReason, bool) {
 	for _, kind := range []ReferenceKind{
 		ReferenceArtifact,
+		ReferenceReviewSubjectInput,
 		ReferenceSnapshot,
 		ReferenceChangeSetRef,
 		ReferenceProposalRecord,
@@ -1221,7 +1229,7 @@ func firstMissingReferenceReason(references []ReferenceObservation) (HaltReason,
 
 func missingReferenceReason(kind ReferenceKind) (HaltReason, bool) {
 	switch kind {
-	case ReferenceArtifact:
+	case ReferenceArtifact, ReferenceReviewSubjectInput:
 		return HaltMissingArtifactFile, true
 	case ReferenceSnapshot:
 		return HaltMissingSnapshotFile, true

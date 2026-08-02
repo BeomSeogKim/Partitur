@@ -157,7 +157,63 @@ func (store *Store) LoadRunInput(runID runstate.RunID) (RunInput, error) {
 	}, nil
 }
 
+// LoadInitialScore reads the score snapshot bound by run.started. It never
+// substitutes another surviving snapshot.
+func (store *Store) LoadInitialScore(runID runstate.RunID) (*score.Score, error) {
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		return nil, err
+	}
+	started, err := runStartedEventFrom(journal.Events)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := eventPayload(started)
+	if err != nil {
+		return nil, err
+	}
+	return store.loadPinnedScore(runID, started.ScoreRevision, payload)
+}
+
+// LoadScoreSnapshot reads the immutable score snapshot recorded for revision.
+// A revision is authoritative only when run.started or amendment.approved
+// bound both its file and semantic hashes in the journal.
+func (store *Store) LoadScoreSnapshot(runID runstate.RunID, revision uint64) (*score.Score, error) {
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventRunStarted && event.Type != runstate.EventAmendmentApproved {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			return nil, err
+		}
+		recordedRevision := event.ScoreRevision
+		if event.Type == runstate.EventAmendmentApproved {
+			var ok bool
+			recordedRevision, ok = uintPayload(payload, "new_revision")
+			if !ok {
+				return nil, fmt.Errorf("%w: amendment score revision is invalid", ErrMissingPinnedSnapshot)
+			}
+			payload = map[string]any{
+				"score_hash":      payload["new_snapshot_hash"],
+				"score_file_hash": payload["new_snapshot_file_hash"],
+			}
+		}
+		if recordedRevision == revision {
+			return store.loadPinnedScore(runID, revision, payload)
+		}
+	}
+	return nil, fmt.Errorf("%w: no recorded score revision %d", ErrMissingPinnedSnapshot, revision)
+}
+
 func (store *Store) loadPinnedScore(runID runstate.RunID, revision uint64, payload map[string]any) (*score.Score, error) {
+	if revision == 0 {
+		return nil, fmt.Errorf("%w: recorded score revision is zero", ErrMissingPinnedSnapshot)
+	}
 	path := filepath.Join(store.root, ".partitur", "runs", string(runID), "scores", fmt.Sprintf("revision-%d.yaml", revision))
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -170,6 +226,9 @@ func (store *Store) loadPinnedScore(runID runstate.RunID, revision uint64, paylo
 	if len(diagnostics) != 0 {
 		return nil, fmt.Errorf("%w: compile pinned score revision %d: %v", ErrMissingPinnedSnapshot, revision, diagnostics)
 	}
+	if compiled.Revision() != revision {
+		return nil, fmt.Errorf("%w: pinned score revision does not match journal", ErrMissingPinnedSnapshot)
+	}
 	semanticHash, err := compiled.Hash()
 	if err != nil {
 		return nil, err
@@ -178,6 +237,14 @@ func (store *Store) loadPinnedScore(runID runstate.RunID, revision uint64, paylo
 		return nil, fmt.Errorf("%w: pinned score semantic hash does not match journal", ErrMissingPinnedSnapshot)
 	}
 	return compiled, nil
+}
+
+func uintPayload(payload map[string]any, name string) (uint64, bool) {
+	value, ok := payload[name].(float64)
+	if !ok || value < 0 || value != float64(uint64(value)) {
+		return 0, false
+	}
+	return uint64(value), true
 }
 
 func (store *Store) loadResolvedCast(runID runstate.RunID, payload map[string]any) (*cast.Cast, error) {
@@ -304,6 +371,7 @@ type replayFact struct {
 	performers        map[runstate.AttemptID]string
 	visitedPerformers map[runstate.MovementID][]string
 	retriesConsumed   map[runstate.MovementID]int
+	reviewOutcomes    map[runstate.AttemptID]recovery.GateRecovery
 }
 
 type revisionApproval struct {
@@ -327,6 +395,7 @@ func replayFacts(events []runstate.Event) replayFact {
 		performers:        make(map[runstate.AttemptID]string),
 		visitedPerformers: make(map[runstate.MovementID][]string),
 		retriesConsumed:   make(map[runstate.MovementID]int),
+		reviewOutcomes:    make(map[runstate.AttemptID]recovery.GateRecovery),
 	}
 	type questionRef struct {
 		attemptID runstate.AttemptID
@@ -384,6 +453,12 @@ func replayFacts(events []runstate.Event) replayFact {
 		case runstate.EventAcceptanceStarted:
 			if attempt := facts.attempts[event.AttemptID]; attempt != nil {
 				attempt.AcceptanceStarted = true
+			}
+		case runstate.EventAcceptanceEvaluationCompleted:
+			if outcome := stringValue(payload, "review_outcome"); outcome != "" {
+				facts.reviewOutcomes[event.AttemptID] = recovery.GateRecovery{
+					ReviewOutcome: outcome, BlockingFindings: findingReferences(arrayValue(payload, "blocking_findings")),
+				}
 			}
 		case runstate.EventMovementSucceeded:
 			if attempt := facts.attempts[event.AttemptID]; attempt != nil {
@@ -642,14 +717,32 @@ func (facts replayFact) currentHeadAttempt(state runstate.State) *recovery.Attem
 
 func (facts replayFact) acceptance(attemptID runstate.AttemptID, movementID runstate.MovementID, pinned *score.Score) *recovery.AcceptanceRecovery {
 	result := &recovery.AcceptanceRecovery{Failed: facts.failed[attemptID]}
+	if review, ok := facts.reviewOutcomes[attemptID]; ok {
+		result.Gate.ReviewOutcome = review.ReviewOutcome
+		result.Gate.BlockingFindings = append([]runstate.FindingReference(nil), review.BlockingFindings...)
+	}
 	for _, movement := range pinned.Movements() {
-		if movement.ID == string(movementID) && movement.Acceptance.HumanGate == "always" {
-			result.Gate.Required = true
+		if movement.ID == string(movementID) {
+			result.Gate.Required = movement.Acceptance.HumanGate == "always"
+			if movement.Acceptance.HumanGate == "on_contested" {
+				if result.Gate.ReviewOutcome == "CONTESTED" {
+					result.Gate.Required = true
+				}
+			}
 			break
 		}
 	}
 	if gate := facts.gates[attemptID]; gate != nil {
 		result.Gate = *gate
+	}
+	return result
+}
+
+func findingReferences(values []any) []runstate.FindingReference {
+	result := make([]runstate.FindingReference, len(values))
+	for index, value := range values {
+		pair := value.(map[string]any)
+		result[index] = runstate.FindingReference{ArtifactInstanceID: stringValue(pair, "artifact_instance_id"), FindingID: stringValue(pair, "finding_id")}
 	}
 	return result
 }

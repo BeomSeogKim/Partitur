@@ -233,6 +233,29 @@ func TestRuleConformance(t *testing.T) {
 			want: Diagnostic{Rule07, "/movements/2/acceptance/review/0/findings", "review_findings_wrong_kind"},
 		},
 		{
+			name:   "7c_at_most_one_review_criterion",
+			accept: finalizedFixture,
+			mutate: func(document map[string]any) {
+				acceptance := acceptanceAt(document, 2)
+				acceptance["review"] = append(arrayAt(acceptance, "review"), map[string]any{
+					"id": "second-review", "findings": "review-findings", "rubric": []any{"regression"},
+				})
+			},
+			want: Diagnostic{Rule07, "/movements/2/acceptance/review/1", "multiple_review_criteria"},
+		},
+		{
+			name:   "7d_review_movement_cannot_write_repository",
+			accept: finalizedFixture,
+			mutate: func(document map[string]any) {
+				movement := movementAt(document, 1)
+				movement["outputs"] = append(arrayAt(movement, "outputs"), map[string]any{"id": "writer-findings", "kind": "findings"})
+				acceptanceAt(document, 1)["review"] = []any{map[string]any{
+					"id": "writer-review", "findings": "writer-findings", "rubric": []any{"coverage"},
+				}}
+			},
+			want: Diagnostic{Rule07, "/movements/1/grants/1", "review_repo_write"},
+		},
+		{
 			name: "8a_at_most_one_draft",
 			accept: func() map[string]any {
 				document := draftFixture()

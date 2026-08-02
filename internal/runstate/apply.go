@@ -258,8 +258,9 @@ func Apply(input State, event Event) (State, error) {
 			return state, transition(event, "movement is not RUNNING")
 		}
 		state.Attempts[event.AttemptID] = Attempt{
-			MovementID: event.MovementID,
-			State:      AttemptStarting,
+			MovementID:    event.MovementID,
+			ScoreRevision: event.ScoreRevision,
+			State:         AttemptStarting,
 		}
 	case EventAttemptStarted:
 		attempt, err := requireAttempt(state, event, AttemptStarting)
@@ -531,7 +532,14 @@ func Apply(input State, event Event) (State, error) {
 		if err := completedAcceptanceMatches(acceptance, outcomes); err != nil {
 			return state, invalid(event, err.Error())
 		}
+		if err := validateEvaluationReview(payload); err != nil {
+			return state, invalid(event, err.Error())
+		}
 		acceptance.EvaluationCompleted = true
+		acceptance.ReviewOutcome, _ = payload["review_outcome"].(string)
+		if values, ok := payload["blocking_findings"].([]any); ok {
+			acceptance.BlockingFindings = findingReferences(values)
+		}
 		state.Acceptances[event.AttemptID] = acceptance
 	case EventDecisionRequested:
 		decisionID := mustString(payload, "decision_id")
@@ -1297,7 +1305,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventPerformerSelected:
 		return []string{"reason", "performer_id", "adapter_id", "model"}, nil, true
 	case EventAttemptStarted:
-		return []string{"attempt_number", "adapter_process", "granted_authority", "identity_versions"}, []string{"base_composition_hash"}, true
+		return []string{"attempt_number", "adapter_process", "granted_authority", "identity_versions"}, []string{"base_composition_hash", "review_subject_input"}, true
 	case EventAdapterProbed:
 		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "truncated_resolutions", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, nil, true
 	case EventPerformerCompleted:
@@ -1323,7 +1331,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventAcceptanceFailed:
 		return []string{"reason", "subject_tree", "disposition"}, []string{"failed_criterion_id"}, true
 	case EventAcceptanceEvaluationCompleted:
-		return []string{"subject_tree", "acceptance_spec_hash", "criterion_outcomes", "identity_versions"}, nil, true
+		return []string{"subject_tree", "acceptance_spec_hash", "criterion_outcomes", "identity_versions"}, []string{"review_outcome", "blocking_findings"}, true
 	case EventDecisionRequested:
 		return []string{"decision_id", "decision_type"}, []string{"emitted_id", "question", "gate_id", "gate_mode", "subject_tree", "review_outcome", "blocking_findings", "proposal_id", "routed_reason", "blocking"}, true
 	case EventDecisionResolved:
@@ -1461,6 +1469,18 @@ func validateNestedPayload(eventType EventType, payload map[string]any) error {
 		}
 		if err := stringArray(grants, "paths_ro"); err != nil {
 			return fmt.Errorf("granted_authority: %w", err)
+		}
+		if review, present := payload["review_subject_input"]; present {
+			value, ok := review.(map[string]any)
+			if !ok {
+				return errors.New("review_subject_input must be an object")
+			}
+			if err := fields(value, []string{"instance_id", "hash"}, nil); err != nil {
+				return fmt.Errorf("review_subject_input: %w", err)
+			}
+			if err := namedTypes(value, []string{"instance_id", "hash"}, nil, nil, nil, nil); err != nil {
+				return fmt.Errorf("review_subject_input: %w", err)
+			}
 		}
 	case EventAmendmentApproved:
 		if err := validateTypedDelta(payload["typed_delta"].([]any)); err != nil {
@@ -1680,6 +1700,43 @@ func validateFindingPairs(values []any) error {
 	return nil
 }
 
+func validateEvaluationReview(payload map[string]any) error {
+	outcome, present := payload["review_outcome"]
+	blockers, blockersPresent := payload["blocking_findings"]
+	if present != blockersPresent {
+		return errors.New("review_outcome and blocking_findings must be present together")
+	}
+	if !present {
+		return nil
+	}
+	if outcome != "CLEAN" && outcome != "CONTESTED" {
+		return errors.New("invalid review_outcome")
+	}
+	values, ok := blockers.([]any)
+	if !ok {
+		return errors.New("blocking_findings must be an array")
+	}
+	if err := validateFindingPairs(values); err != nil {
+		return err
+	}
+	if (outcome == "CONTESTED") != (len(values) != 0) {
+		return errors.New("review_outcome does not match blocking_findings")
+	}
+	return nil
+}
+
+func findingReferences(values []any) []FindingReference {
+	result := make([]FindingReference, len(values))
+	for index, value := range values {
+		pair := value.(map[string]any)
+		result[index] = FindingReference{
+			ArtifactInstanceID: mustString(pair, "artifact_instance_id"),
+			FindingID:          mustString(pair, "finding_id"),
+		}
+	}
+	return result
+}
+
 func validateEnvelopeEvaluation(value map[string]any) error {
 	if err := fields(value, []string{"guard_passed"}, []string{"class", "guard_failure_reason"}); err != nil {
 		return err
@@ -1793,7 +1850,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		arrays = []string{"negotiated_features", "truncated_resolutions", "advisory_dimensions"}
 	case EventAttemptStarted:
 		strings = optionalNames(payload, "base_composition_hash")
-		objects = []string{"adapter_process", "granted_authority", "identity_versions"}
+		objects = append([]string{"adapter_process", "granted_authority", "identity_versions"}, optionalNames(payload, "review_subject_input")...)
 		integers = []string{"attempt_number"}
 	case EventPerformerCompleted:
 		bools = []string{"session_hint_stored"}
@@ -1830,7 +1887,8 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		objects = []string{"disposition"}
 	case EventAcceptanceEvaluationCompleted:
 		strings = []string{"subject_tree", "acceptance_spec_hash"}
-		arrays = []string{"criterion_outcomes"}
+		strings = append(strings, optionalNames(payload, "review_outcome")...)
+		arrays = append([]string{"criterion_outcomes"}, optionalNames(payload, "blocking_findings")...)
 		objects = []string{"identity_versions"}
 	case EventDecisionRequested:
 		strings = append([]string{"decision_id", "decision_type"}, optionalNames(payload, "emitted_id", "question", "gate_id", "gate_mode", "subject_tree", "review_outcome", "proposal_id", "routed_reason")...)

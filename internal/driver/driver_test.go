@@ -28,6 +28,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
+	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 	"github.com/BeomSeogKim/Partitur/internal/successor"
 	"github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
@@ -47,6 +48,29 @@ func TestMovementSeedsProjectFinality(t *testing.T) {
 	waived := movementSeeds(prepareFixture(t, waivedScore).Score)
 	if len(waived) != 1 || waived[0].Final {
 		t.Fatalf("waived seeds = %#v", waived)
+	}
+}
+
+func TestReviewEvidenceLineBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		contents string
+		line     int64
+		want     bool
+	}{
+		{name: "empty file", contents: "", line: 1, want: false},
+		{name: "no trailing newline first line", contents: "one", line: 1, want: true},
+		{name: "no trailing newline beyond file", contents: "one", line: 2, want: false},
+		{name: "trailing newline first line", contents: "one\n", line: 1, want: true},
+		{name: "trailing newline does not create line", contents: "one\n", line: 2, want: false},
+		{name: "zero", contents: "one\n", line: 0, want: false},
+		{name: "negative", contents: "one\n", line: -1, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validEvidenceLine([]byte(test.contents), test.line); got != test.want {
+				t.Fatalf("validEvidenceLine(%q, %d) = %t, want %t", test.contents, test.line, got, test.want)
+			}
+		})
 	}
 }
 
@@ -1094,7 +1118,7 @@ func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		state := executeLiveReaderAttempt(t, preparation.RepositoryRoot, authority, started.RunID, input, attempt, input.BaseTree, candidate.ResultTree, "")
+		state := executeLiveReaderAttempt(t, preparation.RepositoryRoot, authority, started.RunID, input, attempt, input.BaseTree, candidate.ResultTree, "", readerSuccessDependencies(t))
 		if got := state.Acceptances[attempt.AttemptID].SubjectTree; got != candidate.ResultTree {
 			t.Fatalf("final live acceptance subject = %q, want candidate result %q", got, candidate.ResultTree)
 		}
@@ -1118,11 +1142,54 @@ func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		state := executeLiveReaderAttempt(t, preparation.RepositoryRoot, authority, started.RunID, input, attempt, composed.Tree, input.BaseTree, composed.Hash)
+		state := executeLiveReaderAttempt(t, preparation.RepositoryRoot, authority, started.RunID, input, attempt, composed.Tree, input.BaseTree, composed.Hash, readerSuccessDependencies(t))
 		if got := state.Acceptances[attempt.AttemptID].SubjectTree; got != composed.Tree {
 			t.Fatalf("fan-in live acceptance subject = %q, want composed base %q", got, composed.Tree)
 		}
 	})
+}
+
+func TestLiveReadOnlyReviewerReceivesContributedBaseAndProducesReviewEvidence(t *testing.T) {
+	preparation, store, authority, started, _, _ := fanInReviewFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := PrepareMovementBase(store, authority, input, "target", 600000, time.Now, workspace.NewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttemptAtBase("target", composed.Commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := executeLiveReaderAttempt(t, preparation.RepositoryRoot, authority, started.RunID, input, attempt, composed.Tree, input.BaseTree, composed.Hash, reviewSuccessDependencies(t, composed.Tree))
+	if got := state.Acceptances[attempt.AttemptID].SubjectTree; got != composed.Tree {
+		t.Fatalf("review acceptance subject = %q, want composed base %q", got, composed.Tree)
+	}
+
+	inputPath := filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "inputs", "target", "revision-1", "subject-tree.json")
+	contents, err := os.ReadFile(inputPath)
+	if err != nil || !strings.Contains(string(contents), `"subject_tree":"`+composed.Tree+`"`) {
+		t.Fatalf("review subject input = %q, err=%v", contents, err)
+	}
+	report, err := statusprojection.Read(preparation.RepositoryRoot, string(started.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, movement := range report.Run.Movements {
+		if movement.ID != "target" {
+			continue
+		}
+		for _, mark := range movement.Marks {
+			if mark.Grade == "REVIEWED" && mark.SubjectTree == composed.Tree && mark.ReviewOutcome == "CLEAN" {
+				return
+			}
+		}
+		t.Fatalf("target review mark = %#v", movement.Marks)
+	}
+	t.Fatal("target movement missing from status")
 }
 
 func TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement(t *testing.T) {
@@ -1527,6 +1594,7 @@ func executeLiveReaderAttempt(
 	input runstore.RunInput,
 	attempt *workspace.AttemptWorkspace,
 	baseTree, candidateTree, baseCompositionHash string,
+	dependencies dependencies,
 ) runstate.State {
 	t.Helper()
 	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
@@ -1536,8 +1604,6 @@ func executeLiveReaderAttempt(
 			t.Fatal(err)
 		}
 	}
-	dependencies := readerSuccessDependencies(t)
-
 	result := ExecuteAttempt(context.Background(), AttemptExecution{
 		RepositoryRoot:      repositoryRoot,
 		Score:               input.Score,
@@ -1598,6 +1664,40 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 		newID:             workspace.NewID,
 		workspaceStart:    workspace.Start,
 	}
+}
+
+func reviewSuccessDependencies(t *testing.T, subjectTree string) dependencies {
+	t.Helper()
+	adapterDirectory := t.TempDir()
+	adapterPath := filepath.Join(adapterDirectory, "partitur-adapter-codex")
+	findings := fmt.Sprintf(`{"schema":"partitur/findings+json;v=1","subject_tree":%q,"coverage":[{"rubric":"coverage","conclusion":"examined_none_found"}],"findings":[]}`, subjectTree)
+	fakeAdapter := fmt.Sprintf(`#!/bin/sh
+IFS= read -r ignored
+printf '%%s\n' '{"jsonrpc":"2.0","id":"probe","result":{"protocol":2,"adapter":{"id":"codex","version":"fixture"},"capabilities":{"repo_read":true,"repo_write":true,"shell":false,"network":false,"resumable_sessions":false,"models":[{"id":"gpt-5.6-sol","aliases":[]}]},"enforcement":{"path_grants":true,"read_only":true,"network_grants":true,"shell_grants":true,"read_grants":true}}}'
+IFS= read -r request
+output=$(printf '%%s' "$request" | sed -n 's/.*"output_dir":"\([^"]*\)".*/\1/p')
+if [ -z "$output" ]; then exit 1; fi
+printf 'fixture report\n' > "$output/target-report"
+printf '%%s\n' '{"jsonrpc":"2.0","method":"event","params":{"type":"artifact","artifact_id":"target-report","path":"target-report"}}'
+printf '%%s\n' '%s' > "$output/target-findings"
+printf '%%s\n' '{"jsonrpc":"2.0","method":"event","params":{"type":"artifact","artifact_id":"target-findings","path":"target-findings"}}'
+printf '%%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}'
+`, findings)
+	if err := os.WriteFile(adapterPath, []byte(fakeAdapter), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", adapterDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	trampoline := filepath.Join(adapterDirectory, "partitur-trampoline")
+	command := exec.Command("go", "build", "-o", trampoline, "./cmd/partitur-trampoline")
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate driver test source")
+	}
+	command.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build trampoline: %v\n%s", err, output)
+	}
+	return dependencies{probe: faultpoint.Nop{}, client: adapter.NewClient(), resolveTrampoline: func() (string, error) { return trampoline, nil }, now: time.Now, newID: workspace.NewID, workspaceStart: workspace.Start}
 }
 
 // completedAdapterFixture reaches the durable post-adapter boundary without
@@ -2450,6 +2550,10 @@ func fanInCleanFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *r
 	return fanInFixture(t, false)
 }
 
+func fanInReviewFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+	return fanInFixtureWithNoOpWriterTrees(t, false, "ours", "theirs", nil, true, true, false, true)
+}
+
 func fanInFixture(t *testing.T, conflict bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
 	return fanInFixtureWithWriterIDs(t, conflict, "ours", "theirs", nil, true, true)
 }
@@ -2459,7 +2563,7 @@ func fanInWaivedFixture(t *testing.T, conflict bool) (*validate.Preparation, *ru
 }
 
 func fanInWaivedNoOpWriterFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
-	return fanInFixtureWithNoOpWriterTrees(t, false, "noop-a", "noop-b", nil, true, false, true)
+	return fanInFixtureWithNoOpWriterTrees(t, false, "noop-a", "noop-b", nil, true, false, true, false)
 }
 
 func candidateFanInCleanFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
@@ -2471,10 +2575,10 @@ func candidateFanInConflictFixture(t *testing.T) (*validate.Preparation, *runsto
 }
 
 func fanInFixtureWithWriterIDs(t *testing.T, conflict bool, firstID, secondID string, firstNeeds []any, waived, withTarget bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
-	return fanInFixtureWithNoOpWriterTrees(t, conflict, firstID, secondID, firstNeeds, waived, withTarget, false)
+	return fanInFixtureWithNoOpWriterTrees(t, conflict, firstID, secondID, firstNeeds, waived, withTarget, false, false)
 }
 
-func fanInFixtureWithNoOpWriterTrees(t *testing.T, conflict bool, firstID, secondID string, firstNeeds []any, waived, withTarget, noOpWriterTrees bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
+func fanInFixtureWithNoOpWriterTrees(t *testing.T, conflict bool, firstID, secondID string, firstNeeds []any, waived, withTarget, noOpWriterTrees, review bool) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, string, string) {
 	t.Helper()
 	document := writerSliceScore(waived)
 	first := document["movements"].([]any)[0].(map[string]any)
@@ -2495,6 +2599,10 @@ func fanInFixtureWithNoOpWriterTrees(t *testing.T, conflict bool, firstID, secon
 			"id": "target", "part": "reader", "needs": []any{firstID, secondID}, "grants": []any{"repo_read"},
 			"instruction": "inspect the composed base", "outputs": []any{map[string]any{"id": "target-report", "kind": "artifact"}},
 			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "target-report-present", "artifact": "target-report"}}},
+		}
+		if review {
+			target["outputs"] = append(target["outputs"].([]any), map[string]any{"id": "target-findings", "kind": "findings"})
+			target["acceptance"].(map[string]any)["review"] = []any{map[string]any{"id": "target-review", "findings": "target-findings", "rubric": []any{"coverage"}}}
 		}
 		document["movements"] = []any{first, second, target}
 		if !waived {

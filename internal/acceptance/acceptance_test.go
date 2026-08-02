@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -312,9 +311,8 @@ func TestGeneratedChecksParticipateInAcceptanceSpecHash(t *testing.T) {
 	}
 	withContestedGate := movementFixture()
 	withContestedGate.Acceptance.HumanGate = "on_contested"
-	if _, err := Compile(withContestedGate); !errors.Is(err, ErrUnsupportedCriteria) ||
-		!strings.Contains(err.Error(), "unit 4.1") {
-		t.Fatalf("human_gate on_contested error = %v, want unsupported criteria naming unit 4.1", err)
+	if _, err := Compile(withContestedGate); err != nil {
+		t.Fatalf("human_gate on_contested compile error = %v", err)
 	}
 }
 
@@ -633,32 +631,36 @@ func TestArtifactExpectedHashUsesHexadecimalCaseEquivalence(t *testing.T) {
 	}
 }
 
-func TestCompileRejectsUnsupportedAcceptanceShapes(t *testing.T) {
+func TestCompileRejectsSecondReviewCriterion(t *testing.T) {
 	tests := []struct {
-		name        string
-		mutate      func(*score.MovementView)
-		wantMessage string
-		absentUnit  string
+		name   string
+		mutate func(*score.MovementView)
 	}{
 		{
-			name: "review",
+			name: "second review",
 			mutate: func(movement *score.MovementView) {
-				movement.Acceptance.HasReviewCriteria = true
+				movement.Acceptance.ReviewCriteria = []score.ReviewCriterionView{{ID: "one", Findings: "findings", Rubrics: []string{"coverage"}}, {ID: "two", Findings: "findings", Rubrics: []string{"coverage"}}}
 			},
-			wantMessage: "unit 4.1",
-			absentUnit:  "unit 3.2",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			movement := movementFixture()
 			test.mutate(&movement)
-			if _, err := Compile(movement); !errors.Is(err, ErrUnsupportedCriteria) ||
-				!strings.Contains(err.Error(), test.wantMessage) ||
-				strings.Contains(err.Error(), test.absentUnit) {
-				t.Fatalf("error = %v, want unsupported criteria naming %q but not %q", err, test.wantMessage, test.absentUnit)
+			if _, err := Compile(movement); !errors.Is(err, ErrUnsupportedCriteria) {
+				t.Fatalf("error = %v, want ErrUnsupportedCriteria", err)
 			}
 		})
+	}
+}
+
+func TestCompileRejectsReviewCriterionOnRepoWriteMovement(t *testing.T) {
+	movement := movementFixture()
+	movement.Grants = []string{"repo_write"}
+	movement.Outputs = []score.OutputView{{ArtifactID: "findings", Kind: "findings"}}
+	movement.Acceptance.ReviewCriteria = []score.ReviewCriterionView{{ID: "review", Findings: "findings", Rubrics: []string{"coverage"}}}
+	if _, err := Compile(movement); !errors.Is(err, ErrUnsupportedCriteria) {
+		t.Fatalf("error = %v, want ErrUnsupportedCriteria", err)
 	}
 }
 

@@ -1339,6 +1339,13 @@ func TestResumeTerminalCleanupRemovesEveryC1Residue(t *testing.T) {
 	if err := os.WriteFile(plan, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	orphanReviewInput := filepath.Join(root, ".partitur", "runs", "run-1", "inputs", "review", "revision-1", "subject-tree.json")
+	if err := os.MkdirAll(filepath.Dir(orphanReviewInput), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orphanReviewInput, []byte("orphan"), 0o400); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Chdir(root)
 	var stdout, stderr bytes.Buffer
@@ -1349,6 +1356,7 @@ func TestResumeTerminalCleanupRemovesEveryC1Residue(t *testing.T) {
 		filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease"),
 		sidecar,
 		plan,
+		orphanReviewInput,
 		stagingRoot,
 	} {
 		if _, err := os.Stat(residue); !errors.Is(err, os.ErrNotExist) {

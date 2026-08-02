@@ -629,8 +629,8 @@ func appendHumanGateRequest(_ context.Context, execution HandlerContext, action 
 			break
 		}
 	}
-	if gateMode != "always" {
-		return fmt.Errorf("human_gate %q requires review evidence not implemented in unit 4.1", gateMode)
+	if gateMode != "always" && gateMode != "on_contested" {
+		return fmt.Errorf("invalid human_gate %q", gateMode)
 	}
 	gateID, err := humanGateID(action.AttemptID)
 	if err != nil {
@@ -640,10 +640,18 @@ func appendHumanGateRequest(_ context.Context, execution HandlerContext, action 
 	if err != nil {
 		return fmt.Errorf("allocate human gate decision id: %w", err)
 	}
-	err = appendEvent(execution, input.Projection.State, action, runstate.EventDecisionRequested, map[string]any{
+	blocking := make([]any, len(action.BlockingFindings))
+	for index, finding := range action.BlockingFindings {
+		blocking[index] = map[string]any{"artifact_instance_id": finding.ArtifactInstanceID, "finding_id": finding.FindingID}
+	}
+	payload := map[string]any{
 		"decision_id": decisionID, "decision_type": "human_gate", "gate_id": gateID,
-		"gate_mode": "always", "subject_tree": action.SubjectTree, "blocking_findings": []any{},
-	})
+		"gate_mode": gateMode, "subject_tree": action.SubjectTree, "blocking_findings": blocking,
+	}
+	if action.ReviewOutcome != "" {
+		payload["review_outcome"] = action.ReviewOutcome
+	}
+	err = appendEvent(execution, input.Projection.State, action, runstate.EventDecisionRequested, payload)
 	if err == nil {
 		execution.Store.Reached(faultpoint.PointHumanGateDecisionRequested)
 	}
@@ -928,6 +936,9 @@ func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Act
 			if _, err := transaction.At("recovery.terminal_cleanup/" + faultpoint.ReceiptAddress(residue)).RemoveDurable(runstore.Path(residue)); err != nil {
 				return err
 			}
+		}
+		if err := transaction.At("recovery.terminal_cleanup/review_subject_inputs").RemoveUnreferencedReviewSubjectInputs(); err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {

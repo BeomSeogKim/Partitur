@@ -440,6 +440,11 @@ func TestPlanC1HaltsUseAppendixDReasons(t *testing.T) {
 			caseID: CaseMissingReference, halt: HaltMissingArtifactFile,
 		},
 		{
+			name:   "review subject input hash mismatch uses missing artifact halt",
+			input:  withMissingReference(baseInput(), ReferenceReviewSubjectInput),
+			caseID: CaseMissingReference, halt: HaltMissingArtifactFile,
+		},
+		{
 			name:   "snapshot hash mismatch uses missing snapshot halt",
 			input:  withMissingReference(baseInput(), ReferenceSnapshot),
 			caseID: CaseMissingReference, halt: HaltMissingSnapshotFile,

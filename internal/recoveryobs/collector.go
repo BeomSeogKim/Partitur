@@ -159,6 +159,18 @@ func collectReferences(root string, runID runstate.RunID, state runstate.State, 
 	for _, event := range events {
 		payload := eventPayload(event)
 		switch event.Type {
+		case runstate.EventAttemptStarted:
+			reviewInput, ok := payload["review_subject_input"].(map[string]any)
+			if !ok {
+				continue
+			}
+			hash, ok := reviewInput["hash"].(string)
+			if !ok {
+				references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceReviewSubjectInput})
+				continue
+			}
+			path := filepath.Join(root, ".partitur", "runs", string(runID), "inputs", string(event.MovementID), fmt.Sprintf("revision-%d", event.ScoreRevision), "subject-tree.json")
+			references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceReviewSubjectInput, Present: fileMatches(path, runstate.Hash(hash))})
 		case runstate.EventRunStarted:
 			references = append(references,
 				recovery.ReferenceObservation{Kind: recovery.ReferenceSnapshot, Present: scoreMatches(filepath.Join(root, ".partitur", "runs", string(runID), "scores", fmt.Sprintf("revision-%d.yaml", event.ScoreRevision)), runstate.Hash(stringValue(payload, "score_file_hash")), runstate.Hash(stringValue(payload, "score_hash")))},

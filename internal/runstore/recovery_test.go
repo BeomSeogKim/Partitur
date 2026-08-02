@@ -707,8 +707,13 @@ func TestCompositionRecoveryIgnoresSupersededRevisionClose(t *testing.T) {
 
 func recoveryStore(t *testing.T) *Store {
 	t.Helper()
-	store := newTestStore(t)
 	scoreBytes := recoveryScoreJSON(t, 1, "pinned recovery fixture")
+	return recoveryStoreForScore(t, scoreBytes)
+}
+
+func recoveryStoreForScore(t *testing.T, scoreBytes []byte) *Store {
+	t.Helper()
+	store := newTestStore(t)
 	compiled, diagnostics := score.Compile(scoreBytes)
 	if len(diagnostics) != 0 {
 		t.Fatalf("fixture score diagnostics = %v", diagnostics)
@@ -746,6 +751,28 @@ func recoveryStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func TestOnContestedEvaluationCrashRequestsGate(t *testing.T) {
+	scoreBytes := recoveryPayload(t, map[string]any{"score": "0.2", "name": "contested-recovery", "revision": 1, "status": "finalized", "goal": "review", "verification": map[string]any{"expectation": map[string]any{"intent": "pass-existing-tests", "apply_gate": map[string]any{"waived": true, "reason": "fixture"}}}, "parts": map[string]any{"reader": map[string]any{"capabilities": []any{"repo_read"}}}, "movements": []any{map[string]any{"id": "read", "part": "reader", "grants": []any{"repo_read"}, "instruction": "review", "outputs": []any{map[string]any{"id": "findings", "kind": "findings"}}, "acceptance": map[string]any{"review": []any{map[string]any{"id": "review", "findings": "findings", "rubric": []any{"coverage"}}}, "human_gate": "on_contested"}}}, "policy": map[string]any{"allowed_paths": []any{"**"}, "budget": map[string]any{"active_wall_clock_min": 10}}})
+	store := recoveryStoreForScore(t, scoreBytes)
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", Type: runstate.EventMovementReady, Payload: recoveryPayload(t, map[string]any{})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", Type: runstate.EventMovementStarted, Payload: recoveryPayload(t, map[string]any{})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: recoveryPayload(t, map[string]any{"reason": "initial", "performer_id": "reader", "adapter_id": "adapter", "model": "model"})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: recoveryPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 10, "session_id": 10, "start_identity": map[string]any{"platform": "linux", "boot_id": "boot", "start_ticks": "12"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": recoveryVersions()})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: recoveryPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": false, "shell_grants": false, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": recoveryVersions()})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", AttemptID: "attempt-1", Type: runstate.EventPerformerCompleted, Payload: recoveryPayload(t, map[string]any{"session_hint_stored": false})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", AttemptID: "attempt-1", Type: runstate.EventVerificationPassed, Payload: recoveryPayload(t, map[string]any{})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", AttemptID: "attempt-1", Type: runstate.EventAcceptanceStarted, Payload: recoveryPayload(t, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{}, "identity_versions": recoveryVersions()})})
+	appendRecoveryEvent(t, store, runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "read", AttemptID: "attempt-1", Type: runstate.EventAcceptanceEvaluationCompleted, Payload: recoveryPayload(t, map[string]any{"subject_tree": "git-sha1:subject", "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{}, "review_outcome": "CONTESTED", "blocking_findings": []any{map[string]any{"artifact_instance_id": "findings@attempt-1", "finding_id": "F-1"}}, "identity_versions": recoveryVersions()})})
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := recovery.PlanAcceptance(recovery.Input{Projection: input.Projection})
+	if decision.CaseID != recovery.CaseRequestHumanGate || decision.Action == nil || decision.Action.Kind != recovery.ActionAppendHumanGateRequest || decision.Action.ReviewOutcome != "CONTESTED" || len(decision.Action.BlockingFindings) != 1 {
+		t.Fatalf("decision = %#v, want contested human-gate request", decision)
+	}
 }
 
 func appendDeadRecoveryLease(t *testing.T, store *Store) Lease {

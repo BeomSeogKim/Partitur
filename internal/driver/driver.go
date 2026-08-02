@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -467,6 +468,18 @@ func ExecuteAttempt(
 	if err != nil {
 		return stopped(result, err)
 	}
+	var reviewInput *protocol.ArtifactRef
+	if len(movement.Acceptance.ReviewCriteria) == 1 {
+		reviewSubjectTree := execution.BaseTree
+		if movement.ID == execution.Score.Execution().FinalMovementID {
+			reviewSubjectTree = execution.CandidateTree
+		}
+		input, err := publishReviewSubjectInput(authority, execution.RepositoryRoot, execution.RunID, movement, execution.Score.Revision(), reviewSubjectTree)
+		if err != nil {
+			return stopped(result, err)
+		}
+		reviewInput = &input
+	}
 	request := protocol.ExecuteRequest{
 		RunID:         string(startResult.RunID),
 		MovementID:    movement.ID,
@@ -480,6 +493,9 @@ func ExecuteAttempt(
 		Budget: protocol.Budget{
 			RemainingMS: remainingMS,
 		},
+	}
+	if reviewInput != nil {
+		request.Inputs = []protocol.ArtifactRef{*reviewInput}
 	}
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		encoded, err := json.Marshal(extension)
@@ -576,6 +592,9 @@ func ExecuteAttempt(
 		}
 		if baseCompositionHash != "" {
 			payload["base_composition_hash"] = baseCompositionHash
+		}
+		if reviewInput != nil {
+			payload["review_subject_input"] = map[string]any{"instance_id": reviewInput.ArtifactID, "hash": reviewInput.Hash}
 		}
 		return appendEvent(runstate.EventAttemptStarted, payload, "attempt.started")
 	}
@@ -900,6 +919,12 @@ func ExecuteAttempt(
 			record, exists := state.Artifacts[id]
 			return record, exists, nil
 		},
+		ReadArtifact: func(record runstate.ArtifactRecord) ([]byte, error) {
+			return os.ReadFile(filepath.Join(execution.RepositoryRoot, ".partitur", "runs", string(execution.RunID), "artifacts", record.LogicalOutputID, string(record.AttemptID)))
+		},
+		ValidateEvidence: func(path string, line *int64) error {
+			return validateReviewEvidence(execution.RepositoryRoot, subjectTree, path, line)
+		},
 		Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
 			return authority.Append(
 				event,
@@ -990,10 +1015,11 @@ func ExecuteAttempt(
 	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
 		return terminal
 	}
-	if !evaluation.EvaluationCompleted || !evaluation.Verified {
+	if !evaluation.EvaluationCompleted || (!evaluation.Verified && evaluation.ReviewOutcome == "") {
 		return interrupted(result, errors.New("attempt did not earn VERIFIED"))
 	}
-	if movement.Acceptance.HumanGate == "always" {
+	gateRequired := movement.Acceptance.HumanGate == "always" || (movement.Acceptance.HumanGate == "on_contested" && evaluation.ReviewOutcome == "CONTESTED")
+	if gateRequired {
 		gateID, err := humanGateID(attempt.AttemptID)
 		if err != nil {
 			return interrupted(result, err)
@@ -1002,10 +1028,18 @@ func ExecuteAttempt(
 		if err != nil {
 			return interrupted(result, fmt.Errorf("allocate human gate decision id: %w", err))
 		}
-		if _, err := appendEvent(runstate.EventDecisionRequested, map[string]any{
+		blocking := make([]any, len(evaluation.BlockingFindings))
+		for index, finding := range evaluation.BlockingFindings {
+			blocking[index] = map[string]any{"artifact_instance_id": finding.ArtifactInstanceID, "finding_id": finding.FindingID}
+		}
+		payload := map[string]any{
 			"decision_id": decisionID, "decision_type": "human_gate", "gate_id": gateID,
-			"gate_mode": "always", "subject_tree": subjectTree, "blocking_findings": []any{},
-		}, "acceptance.decision.requested.human_gate"); err != nil {
+			"gate_mode": movement.Acceptance.HumanGate, "subject_tree": subjectTree, "blocking_findings": blocking,
+		}
+		if evaluation.ReviewOutcome != "" {
+			payload["review_outcome"] = evaluation.ReviewOutcome
+		}
+		if _, err := appendEvent(runstate.EventDecisionRequested, payload, "acceptance.decision.requested.human_gate"); err != nil {
 			return stopped(result, err)
 		}
 		dependencies.probe.Reached(faultpoint.PointHumanGateDecisionRequested)
@@ -1071,6 +1105,79 @@ func humanGateID(attemptID runstate.AttemptID) (string, error) {
 	_, _ = digest.Write([]byte{0})
 	_, _ = digest.Write(encoded)
 	return fmt.Sprintf("gat-%x", digest.Sum(nil)), nil
+}
+
+func publishReviewSubjectInput(
+	authority *runstore.Driver,
+	repositoryRoot string,
+	runID runstate.RunID,
+	movement score.MovementView,
+	revision uint64,
+	subjectTree string,
+) (protocol.ArtifactRef, error) {
+	if authority == nil || len(movement.Acceptance.ReviewCriteria) != 1 || subjectTree == "" {
+		return protocol.ArtifactRef{}, errors.New("driver: incomplete review subject input")
+	}
+	rubrics := movement.Acceptance.ReviewCriteria[0].Rubrics
+	entries := make([]any, len(rubrics))
+	for index, rubric := range rubrics {
+		entries[index] = map[string]any{"id": rubric, "required_coverage": true}
+	}
+	contents, err := canonical.Encode(map[string]any{
+		"schema": "partitur/subject-tree+json;v=1", "subject_tree": subjectTree,
+		"findings_schema": "partitur/findings+json;v=1", "rubrics": entries,
+	})
+	if err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	digest := sha256.Sum256(contents)
+	hash := runstate.Hash(fmt.Sprintf("sha256:%x", digest))
+	relative := runstore.Path(filepath.ToSlash(filepath.Join("inputs", movement.ID, fmt.Sprintf("revision-%d", revision), "subject-tree.json")))
+	if err := authority.Mutate(func(transaction *runstore.Txn, _ runstate.State) error {
+		_, err := transaction.At("review.subject_tree.published").PublishImmutable(relative, contents, hash)
+		return err
+	}); err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	path := filepath.Join(repositoryRoot, ".partitur", "runs", string(runID), filepath.FromSlash(string(relative)))
+	if err := os.Chmod(path, 0o400); err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	return protocol.ArtifactRef{
+		ArtifactID: fmt.Sprintf("partitur.subject-tree@%s@%d", movement.ID, revision),
+		Kind:       "partitur/subject-tree+json;v=1", Path: path, Hash: string(hash),
+	}, nil
+}
+
+func validateReviewEvidence(repositoryRoot, subjectTree, path string, line *int64) error {
+	object := strings.TrimPrefix(subjectTree, "git-sha1:")
+	object = strings.TrimPrefix(object, "git-sha256:")
+	listed, err := exec.Command("git", "-C", repositoryRoot, "ls-tree", object, "--", path).Output()
+	if err != nil || !strings.Contains(string(listed), " blob ") {
+		return errors.New("review evidence does not name a regular subject file")
+	}
+	if line == nil {
+		return nil
+	}
+	contents, err := exec.Command("git", "-C", repositoryRoot, "show", object+":"+path).Output()
+	if err != nil {
+		return err
+	}
+	if !validEvidenceLine(contents, *line) {
+		return errors.New("review evidence line is outside subject file")
+	}
+	return nil
+}
+
+func validEvidenceLine(contents []byte, line int64) bool {
+	if line < 1 || len(contents) == 0 {
+		return false
+	}
+	lineCount := int64(strings.Count(string(contents), "\n")) + 1
+	if contents[len(contents)-1] == '\n' {
+		lineCount--
+	}
+	return line <= lineCount
 }
 
 func scopedAdapterID(prefix, domain string, attemptID runstate.AttemptID, emittedID string) (string, error) {
@@ -1234,9 +1341,13 @@ func executeBrief(
 		}
 		hard = append(hard, value)
 	}
+	review := make([]any, len(movement.Acceptance.ReviewCriteria))
+	for index, criterion := range movement.Acceptance.ReviewCriteria {
+		review[index] = map[string]any{"id": criterion.ID, "findings": criterion.Findings, "rubric": stringsToAny(criterion.Rubrics)}
+	}
 	acceptanceBytes, err := json.Marshal(map[string]any{
 		"hard":       hard,
-		"review":     []any{},
+		"review":     review,
 		"human_gate": movement.Acceptance.HumanGate,
 	})
 	if err != nil {

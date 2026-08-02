@@ -330,6 +330,11 @@ func (executor *Executor) acquireAuthority(input recovery.Input) error {
 		return fmt.Errorf("acquire recovery authority: %w", err)
 	}
 	executor.Driver = driver
+	if err := executor.Store.Mutate(executor.RunID, "", func(transaction *runstore.Txn) error {
+		return transaction.At("recovery.cleanup_review_subject_inputs").RemoveUnreferencedReviewSubjectInputs()
+	}); err != nil {
+		return fmt.Errorf("cleanup unreferenced review subject inputs: %w", err)
+	}
 	return nil
 }
 

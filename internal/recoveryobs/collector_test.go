@@ -180,14 +180,19 @@ func TestCollectReferencesCoversEveryReferenceKind(t *testing.T) {
 	}
 	artifact := []byte("artifact")
 	proposal := []byte("proposal")
+	subjectInput := []byte(`{"schema":"partitur/subject-tree+json;v=1"}`)
 	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", string(runID), "scores", "revision-1.yaml"), snapshot)
 	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", string(runID), "resolved-cast.yaml"), castBytes)
 	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", string(runID), "artifacts", "report", "attempt-1"), artifact)
 	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", string(runID), "proposals", "proposal-1.json"), proposal)
+	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", string(runID), "inputs", "review", "revision-1", "subject-tree.json"), subjectInput)
 	state := runstate.NewState(nil)
 	state.Artifacts["artifact-1"] = runstate.ArtifactRecord{AttemptID: "attempt-1", LogicalOutputID: "report", ContentHash: fileHash(artifact)}
 	state.ChangeSets["attempt-1"] = runstate.ChangeSetRecord{AttemptID: "attempt-1", Ref: "refs/partitur/test", Commit: "git-sha1:" + commit}
 	events := []runstate.Event{
+		{Type: runstate.EventAttemptStarted, MovementID: "review", ScoreRevision: 1, Payload: rawJSON(t, map[string]any{
+			"review_subject_input": map[string]any{"instance_id": "partitur.subject-tree@review@1", "hash": fileHash(subjectInput)},
+		})},
 		{Type: runstate.EventRunStarted, ScoreRevision: 1, Payload: rawJSON(t, map[string]any{
 			"score_file_hash": fileHash(snapshot), "score_hash": snapshotHash, "resolved_cast_hash": castHash,
 		})},
@@ -199,7 +204,7 @@ func TestCollectReferencesCoversEveryReferenceKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(observations) != 5 {
+	if len(observations) != 6 {
 		t.Fatalf("reference observations = %#v, want every kind", observations)
 	}
 	for _, observation := range observations {
