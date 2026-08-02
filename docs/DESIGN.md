@@ -2240,9 +2240,10 @@ share a mechanism:
 
 A run is *active* while nonterminal (`RUNNING` or `WAITING_HUMAN`). v0.2 allows one active
 run per repository: `partitur run` refuses to start while one exists (resume or cancel it
-first). Commands that address an existing run accept its explicit id or select the unique active
-run. The nonterminal journal state is the logical guard; the lease guards concurrent *drivers* of
-the same run.
+first). Commands whose grammar includes a run-id operand address an existing run by its explicit
+id or by selecting the unique active run; `answer` and human-gate `approve` select that active run
+through their decision-id rule (§7). The nonterminal journal state is the logical guard; the lease
+guards concurrent *drivers* of the same run.
 
 **Live between-unit continuation.** A live driver may advance ordinary between-unit work only
 while the run is nonterminal, it holds the current matching authority and lease, and it has itself
@@ -2340,7 +2341,12 @@ durable path that reaches a live driver at any point in its work:
 3. The driver watches control state continuously **for as long as it holds the lease** —
    a separate goroutine tailing the authoritative journal while the stdout reader stays blocked.
    Polling only between criteria cannot interrupt a long `execute`, so this is a continuous
-   watch, not a checkpoint.
+   watch, not a checkpoint. The same watch also observes decision state: after a durable
+   `decision.resolved` append, the driver reprojects its leased run and, when a released blocking
+   decision makes its current-head blocked attempt eligible, **must use**
+   `RC-RESUME-041`'s `decision_resume` selection and C.4's `performer.selected` materialization
+   path. A decision-resolution wake may prompt an immediate read, but the journal watch is
+   the mechanism that guarantees detection.
 
    The watch spans the driver's whole tenure rather than only a pending adapter `execute`, and the
    reason is step 6 rather than the adapter. A driver blocked on a long external criterion or on
@@ -2351,8 +2357,9 @@ durable path that reaches a live driver at any point in its work:
    than the canceller role is assigned would make it a defect in this section instead.
 
    Measured append-to-detection latency at a 20 ms poll interval was
-   22 ms on macOS and 24 ms on Linux, bounded by poll interval plus scheduling. A signal can
-   prompt an immediate read; correctness never depends on it.
+   22 ms on macOS and 24 ms on Linux, bounded by poll interval plus scheduling. This bound
+   applies to both control-state and decision-resolution appends. A signal can prompt an
+   immediate read; correctness never depends on it.
 4. On observing the request the driver stops what it launched. Where an adapter `execute` is in
    flight it issues protocol `cancel` and awaits that call's response, since §4 makes the response
    the completeness marker; where none is — a pending criterion, a composition, or an idle
@@ -2866,6 +2873,39 @@ So §4's "the core starts a new attempt once decisions resolve" reads precisely 
 *resolution makes the run eligible to continue.* A live driver continues it; otherwise a
 later `resume` does. `answer` never blocks waiting for work to finish.
 
+**Decision-resolution target and transaction.** `answer` and the human-gate form of
+`approve` intentionally take a `decision-id`, not a run id. A `decision_id` is
+**run-unique, not repository-global** (A.4.3); these commands first select the unique active
+run, then look up that id in its projected pending decisions. This is sufficient in v0.2 because
+only a pending decision may be resolved and v0.2 permits only one active run per repository.
+It deliberately forecloses addressing a terminal run's historical decision, and a future
+multi-active-run design must extend this grammar rather than treating a decision id as globally
+unique. The amendment and finalization forms of `approve` retain their §9 transaction and never
+append `decision.resolved`.
+
+For `answer` and human-gate `approve`, the command takes the existing repository state lock and,
+while holding it, reads and projects the selected run, checks that it remains nonterminal, and
+checks that the named decision is still pending and has the command's expected type (`question`
+or `human_gate`, respectively). It then appends and fsyncs exactly one corresponding
+`decision.resolved` event before releasing the lock. The transaction does **not** require a
+matching driver lease, and may proceed while a verified live lease owner runs: the lease fences
+execution mutations, whereas this command records a lifecycle-authorized resolution only. No
+second lock or lease observation is part of this decision.
+
+A missing, obsoleted, already-resolved, or wrong-type decision is a refused wrong-projection-state
+precondition: append nothing and exit 2. It is not command-level idempotent success; Appendix B's
+`decision_id` idempotency key protects a retry of the same event append at the writer boundary, not
+a fresh operator request whose answer or approval might differ. Because the projection check and append
+are one state-lock transaction, a concurrent terminalizing writer cannot terminalize the run
+between them: it either wins before the check (which refuses) or follows this durable resolution
+and, during terminalization, obsoletes any other remaining pending decisions.
+
+After a successful append and after releasing the state lock, the command best-effort wakes a
+currently matching live lease owner. The journal remains authoritative: a wake is neither required
+for success nor waited on, and a live driver continuously watches it for control and decision
+state throughout its lease (§6). Thus a successful command returns after recording the resolution,
+not after continuation; if there is no live owner, a later `resume` performs that continuation.
+
 **CLI v0.2.**
 
 ```text
@@ -2940,6 +2980,8 @@ Every command is **non-interactive**: a missing operand is an error, never a pro
 scriptable and a GUI can use the same commands (§0). `partitur run` accepts no run-id operand or
 option: §1's core allocation is the only creation path. For commands whose syntax includes
 `[<run-id>]`, omitting it selects the unique active run and errors if there is not exactly one.
+`answer` and the human-gate form of `approve` instead select that same unique active run through
+their decision-resolution rule above; their decision ids are run-unique rather than global.
 `--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
 human gate would be indefensible.
 
@@ -3236,11 +3278,15 @@ cast produce `binding_missing`, which is a validation result about content that 
 |---|---|
 | 0 | success |
 | 1 | usage error: unknown command, missing or malformed operand |
-| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state, dirty checkout, lock held, unwritable output stream |
+| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state (including a missing, obsoleted, already-resolved, or wrong-type decision addressed by `answer` or gate `approve`), dirty checkout, lock held, unwritable output stream |
 | 3 | validation failed: `partitur validate`, pre-run validation for `partitur run`, or a rejected amendment |
 | 4 | a run-driving command reached terminal `FAILED` or `CANCELLED` |
 | 5 | recovery halt — the run cannot proceed and needs an operator (Appendix D) |
 | 6 | post-creation operational interruption — the run remains nonterminal and resumable |
+
+For `answer` and gate `approve`, exit 2 does not by itself distinguish no active run from a
+missing, obsoleted, already-resolved, or wrong-type decision. The stderr diagnostic names the
+refused precondition; when an active run exists, `status` separately shows its pending decisions.
 
 ## 8. Verification and shipping
 
