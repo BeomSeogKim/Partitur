@@ -80,7 +80,7 @@ func TestProjectionVersionsMatchDesignA3(t *testing.T) {
 	}
 }
 
-var a3ProjectionVersionRow = regexp.MustCompile("(?m)^\\| per-domain `projection_version` \\| .+ \\| ([0-9]+), except `([^`]+)`: ([0-9]+) \\|$")
+var a3ProjectionVersionRow = regexp.MustCompile("(?m)^\\| per-domain `projection_version` \\| .+ \\| ([0-9]+), except (.+): ([0-9]+) \\|$")
 
 // projectionVersionsFromDesignA3 recognizes A.3's one default projection
 // version plus inline domain exceptions. It does not understand a per-domain
@@ -133,7 +133,13 @@ func projectionVersionsFromDesignA3(t *testing.T) map[Domain]int {
 	} {
 		versions[domain] = defaultVersion
 	}
-	versions[Domain(match[2])] = exceptionVersion
+	for _, rawDomain := range strings.Split(match[2], " and ") {
+		domain := Domain(strings.Trim(rawDomain, "`"))
+		if _, ok := versions[domain]; !ok {
+			t.Fatalf("A.3 projection_version exception domain %q is unregistered", domain)
+		}
+		versions[domain] = exceptionVersion
+	}
 	if len(versions) == 0 {
 		t.Fatal("A.3 projection_version extraction produced no versions")
 	}
@@ -178,6 +184,36 @@ func TestHashSeparatesDomainsAndProjectionVersions(t *testing.T) {
 	}
 }
 
+func TestExecutionDependencyHashChangesWithProjectionVersion(t *testing.T) {
+	value := map[string]any{"same": true}
+	versionOne, err := hashPreimage(
+		DomainExecutionDependency,
+		Versions{CanonicalEncoding: 1, Projection: 1},
+		value,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionTwo, err := hashPreimage(
+		DomainExecutionDependency,
+		Versions{CanonicalEncoding: 1, Projection: 2},
+		value,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versionOne == versionTwo {
+		t.Fatalf("execution dependency projection versions collided: %s", versionOne)
+	}
+	current, err := Hash(DomainExecutionDependency, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != versionTwo {
+		t.Fatalf("execution dependency current hash = %q, want v2 hash %q", current, versionTwo)
+	}
+}
+
 func TestHistoricalHashRecomputesRecordedTuple(t *testing.T) {
 	value := []any{"value"}
 	current, err := Hash(DomainCandidate, value)
@@ -216,7 +252,7 @@ func TestCompositionSubjectHashSupportsHistoricalAndCurrentVersions(t *testing.T
 	}
 }
 
-func TestProjectionVersionTwoIsOnlySupportedForCompositionSubject(t *testing.T) {
+func TestProjectionVersionTwoIsSupportedOnlyForCompositionSubjectAndExecutionDependency(t *testing.T) {
 	for _, domain := range []Domain{
 		DomainScore,
 		DomainScoreSubtree,
@@ -228,13 +264,22 @@ func TestProjectionVersionTwoIsOnlySupportedForCompositionSubject(t *testing.T) 
 		DomainCandidateComposition,
 		DomainMovementComposition,
 		DomainCompositionEnvironment,
-		DomainExecutionDependency,
 		DomainPatchOperations,
 		DomainResolutionBody,
 	} {
 		if _, err := hashWithVersions(domain, Versions{CanonicalEncoding: 1, Projection: 2}, nil); !errors.Is(err, ErrUnsupportedRunFormat) {
 			t.Fatalf("domain %q projection version 2 error = %v, want unsupported format", domain, err)
 		}
+	}
+}
+
+func TestExecutionDependencyHistoricalV1FailsClosed(t *testing.T) {
+	if _, err := hashWithVersions(
+		DomainExecutionDependency,
+		Versions{CanonicalEncoding: 1, Projection: 1},
+		nil,
+	); !errors.Is(err, ErrUnsupportedRunFormat) {
+		t.Fatalf("execution dependency v1 error = %v, want unsupported format", err)
 	}
 }
 
