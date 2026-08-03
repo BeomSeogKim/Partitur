@@ -629,6 +629,45 @@ func TestDecisionAmendmentAndCompositionEvents(t *testing.T) {
 	}
 }
 
+func TestDecisionResolutionRetainsFullHumanGateFact(t *testing.T) {
+	state := NewState([]MovementSeed{{ID: "m1", Initial: MovementPending}})
+	state.Run = RunWaitingHuman
+	state.Movements["m1"] = MovementWaitingHuman
+	state.Attempts["a1"] = Attempt{MovementID: "m1", ScoreRevision: 7, State: AttemptVerifying}
+	state.PendingDecisions["gate-decision"] = PendingDecision{
+		ID: "gate-decision", Type: "human_gate", MovementID: "m1", AttemptID: "a1", ScoreRevision: 7,
+		GateID: "gate-a1", SubjectTree: "git-sha1:subject",
+	}
+
+	next := applyFixture(t, state, EventDecisionResolved, map[string]any{
+		"decision_id": "gate-decision", "decision_type": "human_gate", "disposition": "approved",
+		"gate_id": "gate-a1", "scope": map[string]any{"subject_tree": "git-sha1:subject"},
+		"overridden_findings": []any{map[string]any{"artifact_instance_id": "findings@a1", "finding_id": "F-1"}},
+		"override_reason":     "human judgment",
+	}, attemptEnvelope)
+
+	resolution, ok := next.ResolvedHumanGates["a1"]
+	if !ok || resolution.DecisionID != "gate-decision" || resolution.MovementID != "m1" ||
+		resolution.AttemptID != "a1" || resolution.ScoreRevision != 7 || resolution.GateID != "gate-a1" ||
+		resolution.Scope.SubjectTree != "git-sha1:subject" || resolution.Disposition != "approved" ||
+		resolution.OverrideReason != "human judgment" || len(resolution.OverriddenFindings) != 1 ||
+		resolution.OverriddenFindings[0] != (FindingReference{ArtifactInstanceID: "findings@a1", FindingID: "F-1"}) {
+		t.Fatalf("retained human-gate resolution = %#v", resolution)
+	}
+	if _, pending := next.PendingDecisions["gate-decision"]; pending {
+		t.Fatalf("resolved human gate remained pending: %#v", next.PendingDecisions)
+	}
+
+	rejected := applyFixture(t, state, EventDecisionResolved, map[string]any{
+		"decision_id": "gate-decision", "decision_type": "human_gate", "disposition": "rejected",
+		"gate_id": "gate-a1", "scope": map[string]any{"subject_tree": "git-sha1:subject"},
+		"overridden_findings": []any{}, "reason": "not ready",
+	}, attemptEnvelope)
+	if got := rejected.ResolvedHumanGates["a1"].Reason; got != "not ready" {
+		t.Fatalf("rejected human-gate reason = %q", got)
+	}
+}
+
 func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
 	state := runningAttemptState(t)
 	requested := fixtureEvent(EventDecisionRequested, map[string]any{

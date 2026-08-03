@@ -149,6 +149,27 @@ type PendingDecision struct {
 	SubjectTree   string
 }
 
+// HumanGateScope is the exact scope carried by a human-gate resolution.
+type HumanGateScope struct {
+	SubjectTree string
+}
+
+// HumanGateResolution retains a resolved human gate after it leaves the
+// pending-decision projection. It is the ordinary projection source for
+// status and recovery; the journal remains authoritative.
+type HumanGateResolution struct {
+	DecisionID         string
+	MovementID         MovementID
+	AttemptID          AttemptID
+	ScoreRevision      uint64
+	GateID             string
+	Scope              HumanGateScope
+	Disposition        string
+	OverriddenFindings []FindingReference
+	OverrideReason     string
+	Reason             string
+}
+
 type RoutedAmendment struct {
 	ProposalID        ProposalID
 	DecisionID        string
@@ -351,6 +372,7 @@ type State struct {
 	CriterionLaunches    map[CriterionLaunchKey]CriterionLaunch
 	Acceptances          map[AttemptID]Acceptance
 	PendingDecisions     map[string]PendingDecision
+	ResolvedHumanGates   map[AttemptID]HumanGateResolution
 	RoutedAmendments     map[ProposalID]RoutedAmendment
 	CancelRequested      bool
 	appliedEvents        map[string]appliedEvent

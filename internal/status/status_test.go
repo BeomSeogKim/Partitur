@@ -359,6 +359,56 @@ func TestProjectCarriesVerifiedProvenanceAndShippingRecovery(t *testing.T) {
 	}
 }
 
+// TestProjectGateOnlyWriteCarriesApprovedMarkWithoutCarryover supplies the
+// accepted projection directly. The compiler admits this shape, but the
+// current driver interrupts it before requesting the gate because it has no
+// hard criterion. This test pins the specified projection behavior, not a
+// live driver path; TestRunHumanGateApprovalProjectsApprovedMark covers that.
+func TestProjectGateOnlyWriteCarriesApprovedMarkWithoutCarryover(t *testing.T) {
+	compiled := mustCompile(t, gateOnlyWriteScore())
+	// Mismatched scope and revision are defensive, fail-closed checks. Driver
+	// and recovery-produced journals bind both values to the accepted attempt.
+	for _, test := range []struct {
+		name               string
+		attemptState       runstate.AttemptState
+		resolutionScope    string
+		resolutionRevision uint64
+		wantMarks          int
+	}{
+		{name: "completed", attemptState: runstate.AttemptCompleted, resolutionScope: "git-sha1:subject", resolutionRevision: 1, wantMarks: 1},
+		{name: "subject mismatch", attemptState: runstate.AttemptCompleted, resolutionScope: "git-sha1:other", resolutionRevision: 1, wantMarks: 0},
+		{name: "revision mismatch", attemptState: runstate.AttemptCompleted, resolutionScope: "git-sha1:subject", resolutionRevision: 2, wantMarks: 0},
+		{name: "superseded", attemptState: runstate.AttemptSuperseded, resolutionScope: "git-sha1:subject", resolutionRevision: 1, wantMarks: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := runstate.NewState(movementSeeds(compiled))
+			state.Run = runstate.RunSucceeded
+			state.Movements["write"] = runstate.MovementSucceeded
+			state.Attempts["attempt-1"] = runstate.Attempt{
+				MovementID: "write", ScoreRevision: 1, State: test.attemptState,
+			}
+			state.Acceptances["attempt-1"] = runstate.Acceptance{
+				Started: true, EvaluationCompleted: true, SubjectTree: "git-sha1:subject",
+				PlannedCriterionIDs: []runstate.CriterionID{}, Criteria: map[runstate.CriterionID]runstate.CriterionRecord{},
+			}
+			state.ResolvedHumanGates["attempt-1"] = runstate.HumanGateResolution{
+				DecisionID: "gate-decision", MovementID: "write", AttemptID: "attempt-1", ScoreRevision: test.resolutionRevision,
+				GateID: "gate-attempt-1", Scope: runstate.HumanGateScope{SubjectTree: test.resolutionScope}, Disposition: "approved",
+			}
+
+			marks := project("run-1", compiled, runstore.ReadReplayResult{State: state}).Run.Movements[0].Marks
+			if len(marks) != test.wantMarks {
+				t.Fatalf("marks = %#v, want %d", marks, test.wantMarks)
+			}
+			if test.wantMarks != 0 && (marks[0].Grade != "APPROVED" || marks[0].GateDecisionID != "gate-decision" ||
+				marks[0].AttemptID != "attempt-1" || marks[0].SubjectTree != "git-sha1:subject" ||
+				marks[0].ScoreRevision != 1 || len(marks[0].Criteria) != 0) {
+				t.Fatalf("approved gate-only mark = %#v", marks[0])
+			}
+		})
+	}
+}
+
 func TestProjectRendersFailureCancellationAndSupersessionStates(t *testing.T) {
 	compiled := mustCompile(t, statusScore())
 	for _, test := range []struct {
@@ -504,6 +554,38 @@ movements:
       hard:
         - id: report-present
           artifact: report
+policy:
+  allowed_paths: ["**"]
+  budget:
+    active_wall_clock_min: 10
+`
+}
+
+func gateOnlyWriteScore() string {
+	return `score: "0.2"
+name: gate-only-write
+revision: 1
+status: finalized
+goal: Write only after human approval.
+verification:
+  expectation:
+    intent: pass-existing-tests
+    apply_gate:
+      waived: true
+      reason: fixture waiver
+parts:
+  writer:
+    capabilities: [repo_read, repo_write]
+movements:
+  - id: write
+    part: writer
+    grants: [repo_read, repo_write]
+    instruction: Write the change.
+    outputs:
+      - id: change-set
+        kind: change_set
+    acceptance:
+      human_gate: always
 policy:
   allowed_paths: ["**"]
   budget:
