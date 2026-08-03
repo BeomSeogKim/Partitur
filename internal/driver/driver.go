@@ -480,6 +480,21 @@ func ExecuteAttempt(
 		}
 		reviewInput = &input
 	}
+	inputState, err := authority.State()
+	if err != nil {
+		return stopped(result, err)
+	}
+	inputs, err := deliveredInputs(
+		execution.Score,
+		movement,
+		inputState,
+		execution.RepositoryRoot,
+		execution.RunID,
+		reviewInput,
+	)
+	if err != nil {
+		return stopped(result, err)
+	}
 	request := protocol.ExecuteRequest{
 		RunID:         string(startResult.RunID),
 		MovementID:    movement.ID,
@@ -493,9 +508,7 @@ func ExecuteAttempt(
 		Budget: protocol.Budget{
 			RemainingMS: remainingMS,
 		},
-	}
-	if reviewInput != nil {
-		request.Inputs = []protocol.ArtifactRef{*reviewInput}
+		Inputs: inputs,
 	}
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		encoded, err := json.Marshal(extension)
@@ -562,6 +575,7 @@ func ExecuteAttempt(
 			globalInvariants,
 			plan.Hash(),
 			baseCompositionHash,
+			request.Inputs,
 		)
 		if err != nil {
 			return faultpoint.DurabilityReceipt{}, err
@@ -594,7 +608,7 @@ func ExecuteAttempt(
 			payload["base_composition_hash"] = baseCompositionHash
 		}
 		if reviewInput != nil {
-			payload["review_subject_input"] = map[string]any{"instance_id": reviewInput.ArtifactID, "hash": reviewInput.Hash}
+			payload["review_subject_input"] = map[string]any{"instance_id": reviewInput.InstanceID, "hash": reviewInput.Hash}
 		}
 		return appendEvent(runstate.EventAttemptStarted, payload, "attempt.started")
 	}
@@ -1144,9 +1158,69 @@ func publishReviewSubjectInput(
 		return protocol.ArtifactRef{}, err
 	}
 	return protocol.ArtifactRef{
-		ArtifactID: fmt.Sprintf("partitur.subject-tree@%s@%d", movement.ID, revision),
-		Kind:       "partitur/subject-tree+json;v=1", Path: path, Hash: string(hash),
+		ArtifactID: "partitur.subject-tree",
+		Kind:       "partitur/subject-tree+json;v=1",
+		InstanceID: fmt.Sprintf("partitur.subject-tree@%s@%d", movement.ID, revision),
+		Path:       path,
+		Hash:       string(hash),
 	}, nil
+}
+
+// deliveredInputs freezes the artifact instances that this attempt will send
+// to its performer. It reads only the already-materialized state passed by the
+// caller; retries and fallbacks therefore resolve the same successful source
+// attempt rather than mutable current state.
+func deliveredInputs(
+	compiled *score.Score,
+	movement score.MovementView,
+	state runstate.State,
+	repositoryRoot string,
+	runID runstate.RunID,
+	reviewInput *protocol.ArtifactRef,
+) ([]protocol.ArtifactRef, error) {
+	outputs := make(map[string]score.OutputView)
+	producers := make(map[string]runstate.MovementID)
+	for _, candidate := range compiled.Movements() {
+		for _, output := range candidate.Outputs {
+			outputs[output.ArtifactID] = output
+			producers[output.ArtifactID] = runstate.MovementID(candidate.ID)
+		}
+	}
+	inputs := make([]protocol.ArtifactRef, 0, len(movement.Inputs)+1)
+	for _, artifactID := range movement.Inputs {
+		output, exists := outputs[artifactID]
+		if !exists {
+			return nil, fmt.Errorf("driver: input %q has no declared output", artifactID)
+		}
+		if output.Kind == "change_set" {
+			continue
+		}
+		result, exists := state.MovementResults[producers[artifactID]]
+		if !exists || result.AttemptID == "" {
+			return nil, fmt.Errorf("driver: input %q has no successful producer", artifactID)
+		}
+		instanceID := runstate.ArtifactInstanceID(artifactID + "@" + string(result.AttemptID))
+		record, exists := state.Artifacts[instanceID]
+		if !exists || record.LogicalOutputID != artifactID || record.Kind != output.Kind {
+			return nil, fmt.Errorf("driver: input %q has no matching delivered artifact", artifactID)
+		}
+		inputs = append(inputs, protocol.ArtifactRef{
+			ArtifactID: artifactID,
+			Kind:       output.Kind,
+			InstanceID: string(instanceID),
+			Path: filepath.Join(
+				repositoryRoot, ".partitur", "runs", string(runID), "artifacts", artifactID, string(record.AttemptID),
+			),
+			Hash: string(record.ContentHash),
+		})
+	}
+	if reviewInput != nil {
+		inputs = append(inputs, *reviewInput)
+	}
+	slices.SortFunc(inputs, func(left, right protocol.ArtifactRef) int {
+		return strings.Compare(left.ArtifactID, right.ArtifactID)
+	})
+	return inputs, nil
 }
 
 func validateReviewEvidence(repositoryRoot, subjectTree, path string, line *int64) error {
@@ -1383,6 +1457,7 @@ func executionDependencyHash(
 	global map[string]any,
 	acceptanceHash runstate.Hash,
 	baseCompositionHash string,
+	inputs []protocol.ArtifactRef,
 ) (string, error) {
 	value := executionDependencyProjection(
 		compiled,
@@ -1393,6 +1468,7 @@ func executionDependencyHash(
 		global,
 		acceptanceHash,
 		baseCompositionHash,
+		inputs,
 	)
 	return canonical.Hash(canonical.DomainExecutionDependency, value)
 }
@@ -1406,6 +1482,7 @@ func executionDependencyProjection(
 	global map[string]any,
 	acceptanceHash runstate.Hash,
 	baseCompositionHash string,
+	inputs []protocol.ArtifactRef,
 ) map[string]any {
 	outputs := make([]any, len(movement.Outputs))
 	for index, output := range movement.Outputs {
@@ -1414,16 +1491,21 @@ func executionDependencyProjection(
 			"kind":        output.Kind,
 		}
 	}
+	inputValues := make([]any, len(inputs))
+	for index, input := range inputs {
+		inputValues[index] = map[string]any{
+			"artifact_id":  input.ArtifactID,
+			"kind":         input.Kind,
+			"instance_id":  input.InstanceID,
+			"content_hash": input.Hash,
+		}
+	}
 	movementValue := map[string]any{
 		"id":          movement.ID,
 		"part":        movement.PartID,
 		"instruction": movement.Instruction,
 		"needs":       stringsToAny(movement.Needs),
-		// Score-declared inputs cannot enter this projection until artifact-instance
-		// resolution provides instance_id and content_hash. A.5 binds delivered
-		// instance bytes as well as the logical artifact id, so an upstream retry
-		// with different bytes must not share a dependency hash.
-		"inputs":      []any{},
+		"inputs":      inputValues,
 		"outputs":     outputs,
 		"grants":      stringsToAny(movement.Grants),
 		"may_propose": movement.MayPropose,

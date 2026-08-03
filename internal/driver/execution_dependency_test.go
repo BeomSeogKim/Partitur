@@ -3,12 +3,14 @@ package driver
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
+	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
@@ -39,6 +41,7 @@ func TestExecutionDependencyProjectionCompleteness(t *testing.T) {
 		map[string]any{},
 		plan.Hash(),
 		compositionHash,
+		nil,
 	)
 	assertDeclaredProjectionFields(t, "A.5", projection, declared.top)
 	movementValue, ok := projection["movement"].(map[string]any)
@@ -108,6 +111,7 @@ func TestExecutionDependencyHashBindsFanInIdentity(t *testing.T) {
 			map[string]any{},
 			plan.Hash(),
 			composition,
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -119,6 +123,111 @@ func TestExecutionDependencyHashBindsFanInIdentity(t *testing.T) {
 	}
 	if hash([]string{"prepare"}, baseCompositionHash) == hash([]string{"prepare"}, "sha256:other-composition") {
 		t.Fatal("execution dependency hash does not bind base composition hash")
+	}
+}
+
+func TestExecutionDependencyHashBindsDeliveredArtifactInstance(t *testing.T) {
+	prepared := fanInProjectionFixture(t)
+	movement, part, performer, plan, err := selectAttempt(
+		prepared.Score, prepared.Cast, "inspect", "worker",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movement.Inputs = []string{"prepared-report"}
+	state := runstate.State{
+		MovementResults: map[runstate.MovementID]runstate.MovementResult{
+			"prepare":   {AttemptID: "prepare-attempt"},
+			"unrelated": {AttemptID: "unrelated-attempt"},
+		},
+		Artifacts: map[runstate.ArtifactInstanceID]runstate.ArtifactRecord{
+			"prepared-report@prepare-attempt": {
+				AttemptID: "prepare-attempt", LogicalOutputID: "prepared-report", Kind: "artifact", ContentHash: "sha256:first",
+			},
+			"unrelated-report@unrelated-attempt": {
+				AttemptID: "unrelated-attempt", LogicalOutputID: "unrelated-report", Kind: "artifact", ContentHash: "sha256:unrelated",
+			},
+		},
+	}
+	inputs, err := deliveredInputs(prepared.Score, movement, state, "/repo", "run-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []protocol.ArtifactRef{{
+		ArtifactID: "prepared-report", Kind: "artifact", InstanceID: "prepared-report@prepare-attempt",
+		Path: "/repo/.partitur/runs/run-1/artifacts/prepared-report/prepare-attempt", Hash: "sha256:first",
+	}}
+	if !reflect.DeepEqual(inputs, want) {
+		t.Fatalf("delivered inputs = %#v, want %#v", inputs, want)
+	}
+	hash := func(value []protocol.ArtifactRef) string {
+		t.Helper()
+		got, err := executionDependencyHash(
+			prepared.Score, movement, part, performer,
+			effectiveGrants(movement, prepared.Score.EffectivePolicy()), map[string]any{},
+			plan.Hash(), "sha256:tree", value,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := hash(inputs)
+	differentBytes := append([]protocol.ArtifactRef(nil), inputs...)
+	differentBytes[0].Hash = "sha256:second"
+	if first == hash(differentBytes) {
+		t.Fatal("execution dependency hash does not bind delivered content hash")
+	}
+	differentArtifact := append([]protocol.ArtifactRef(nil), inputs...)
+	differentArtifact[0].ArtifactID = "other-report"
+	if first == hash(differentArtifact) {
+		t.Fatal("execution dependency hash does not bind delivered logical artifact id")
+	}
+	differentKind := append([]protocol.ArtifactRef(nil), inputs...)
+	differentKind[0].Kind = "findings"
+	if first == hash(differentKind) {
+		t.Fatal("execution dependency hash does not bind delivered artifact kind")
+	}
+	differentInstance := append([]protocol.ArtifactRef(nil), inputs...)
+	differentInstance[0].InstanceID = "prepared-report@retry-attempt"
+	if first == hash(differentInstance) {
+		t.Fatal("execution dependency hash does not bind delivered instance id")
+	}
+	state.Artifacts["unrelated-report@unrelated-attempt"] = runstate.ArtifactRecord{
+		AttemptID: "unrelated-attempt", LogicalOutputID: "unrelated-report", Kind: "artifact", ContentHash: "sha256:changed-unrelated",
+	}
+	unchangedInputs, err := deliveredInputs(prepared.Score, movement, state, "/repo", "run-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != hash(unchangedInputs) {
+		t.Fatal("execution dependency hash binds an unrelated attempt's delivered input")
+	}
+}
+
+func TestDeliveredInputsSortByArtifactID(t *testing.T) {
+	prepared := fanInProjectionFixture(t)
+	movement, _, _, _, err := selectAttempt(prepared.Score, prepared.Cast, "inspect", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	movement.Inputs = []string{"prepared-report"}
+	state := runstate.State{
+		MovementResults: map[runstate.MovementID]runstate.MovementResult{"prepare": {AttemptID: "prepare-attempt"}},
+		Artifacts: map[runstate.ArtifactInstanceID]runstate.ArtifactRecord{
+			"prepared-report@prepare-attempt": {
+				AttemptID: "prepare-attempt", LogicalOutputID: "prepared-report", Kind: "artifact", ContentHash: "sha256:prepared",
+			},
+		},
+	}
+	inputs, err := deliveredInputs(prepared.Score, movement, state, "/repo", "run-1", &protocol.ArtifactRef{
+		ArtifactID: "partitur.subject-tree", Kind: "partitur/subject-tree+json;v=1", InstanceID: "partitur.subject-tree@inspect@1", Hash: "sha256:subject",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{inputs[0].ArtifactID, inputs[1].ArtifactID}; !slices.Equal(got, []string{"partitur.subject-tree", "prepared-report"}) {
+		t.Fatalf("delivered input order = %v, want artifact-id order", got)
 	}
 }
 
