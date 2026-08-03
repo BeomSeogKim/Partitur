@@ -200,8 +200,8 @@ func runWithReaders(
 	if decisionID, answerText, ok := parseAnswerArgs(args); ok {
 		return runAnswer(decisionID, answerText, stderr)
 	}
-	if decisionID, approved, reason, ok := parseApproveArgs(args); ok {
-		return runApprove(decisionID, approved, reason, stderr)
+	if decisionID, approved, overridden, reason, ok := parseApproveArgs(args); ok {
+		return runApprove(decisionID, approved, overridden, reason, stderr)
 	}
 	if len(args) == 1 && args[0] == "run" {
 		preparation, preparationResult := prepare()
@@ -263,31 +263,68 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "commands: version, validate, run, resume, answer, approve, cancel, status, logs")
 }
 
-func parseApproveArgs(args []string) (decisionID string, approved bool, reason string, ok bool) {
-	if len(args) < 3 || len(args) > 5 || args[0] != "approve" || args[1] == "" || strings.HasPrefix(args[1], "-") {
-		return "", false, "", false
+func parseApproveArgs(args []string) (decisionID string, approved bool, overridden []runstate.FindingReference, reason string, ok bool) {
+	if len(args) < 3 || args[0] != "approve" || args[1] == "" || strings.HasPrefix(args[1], "-") {
+		return "", false, nil, "", false
 	}
 	switch args[2] {
 	case "--approve":
 		if len(args) == 3 {
-			return args[1], true, "", true
+			return args[1], true, nil, "", true
 		}
-		return "", false, "", false
+		for index := 3; index < len(args); {
+			if args[index] == "--reason" {
+				if len(overridden) == 0 || index+2 != len(args) || args[index+1] == "" {
+					return "", false, nil, "", false
+				}
+				return args[1], true, overridden, args[index+1], true
+			}
+			if args[index] != "--override" || index+1 >= len(args) {
+				return "", false, nil, "", false
+			}
+			pair, pairOK := parseFindingReference(args[index+1])
+			if !pairOK || findingReferencePresent(overridden, pair) {
+				return "", false, nil, "", false
+			}
+			overridden = append(overridden, pair)
+			index += 2
+		}
+		return "", false, nil, "", false
 	case "--reject":
 		if len(args) == 3 {
-			return args[1], false, "", true
+			return args[1], false, nil, "", true
 		}
 		if len(args) == 5 && args[3] == "--reason" && args[4] != "" {
-			return args[1], false, args[4], true
+			return args[1], false, nil, args[4], true
 		}
-		return "", false, "", false
+		return "", false, nil, "", false
 	default:
-		return "", false, "", false
+		return "", false, nil, "", false
 	}
 }
 
-func runApprove(decisionID string, approved bool, reason string, stderr io.Writer) int {
-	if err := resolveHumanGate(decisionID, approved, reason); err != nil {
+func parseFindingReference(operand string) (runstate.FindingReference, bool) {
+	if strings.Count(operand, ":") != 1 {
+		return runstate.FindingReference{}, false
+	}
+	parts := strings.SplitN(operand, ":", 2)
+	if parts[0] == "" || parts[1] == "" {
+		return runstate.FindingReference{}, false
+	}
+	return runstate.FindingReference{ArtifactInstanceID: parts[0], FindingID: parts[1]}, true
+}
+
+func findingReferencePresent(references []runstate.FindingReference, candidate runstate.FindingReference) bool {
+	for _, reference := range references {
+		if reference == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func runApprove(decisionID string, approved bool, overridden []runstate.FindingReference, reason string, stderr io.Writer) int {
+	if err := resolveHumanGate(decisionID, approved, overridden, reason); err != nil {
 		if errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
@@ -303,7 +340,7 @@ func runApprove(decisionID string, approved bool, reason string, stderr io.Write
 	return 0
 }
 
-func resolveHumanGate(decisionID string, approved bool, reason string) error {
+func resolveHumanGate(decisionID string, approved bool, overridden []runstate.FindingReference, reason string) error {
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve invocation directory: %w", err)
@@ -317,7 +354,7 @@ func resolveHumanGate(decisionID string, approved bool, reason string) error {
 		return err
 	}
 	runID := runstate.RunID(report.Run.ID)
-	if err := store.ResolveHumanGate(runID, decisionID, approved, reason); err != nil {
+	if err := store.ResolveHumanGate(runID, decisionID, approved, overridden, reason); err != nil {
 		return err
 	}
 	store.WakeLeaseOwner(runID)

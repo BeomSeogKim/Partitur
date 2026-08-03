@@ -637,6 +637,7 @@ func TestDecisionResolutionRetainsFullHumanGateFact(t *testing.T) {
 	state.PendingDecisions["gate-decision"] = PendingDecision{
 		ID: "gate-decision", Type: "human_gate", MovementID: "m1", AttemptID: "a1", ScoreRevision: 7,
 		GateID: "gate-a1", SubjectTree: "git-sha1:subject",
+		BlockingFindings: []FindingReference{{ArtifactInstanceID: "findings@a1", FindingID: "F-1"}},
 	}
 
 	next := applyFixture(t, state, EventDecisionResolved, map[string]any{
@@ -665,6 +666,46 @@ func TestDecisionResolutionRetainsFullHumanGateFact(t *testing.T) {
 	}, attemptEnvelope)
 	if got := rejected.ResolvedHumanGates["a1"].Reason; got != "not ready" {
 		t.Fatalf("rejected human-gate reason = %q", got)
+	}
+
+	for _, payload := range []map[string]any{
+		{
+			"decision_id": "gate-decision", "decision_type": "human_gate", "disposition": "approved",
+			"gate_id": "gate-a1", "scope": map[string]any{"subject_tree": "git-sha1:subject"},
+			"overridden_findings": []any{map[string]any{"artifact_instance_id": "other@a1", "finding_id": "F-1"}},
+			"override_reason":     "human judgment",
+		},
+		{
+			"decision_id": "gate-decision", "decision_type": "human_gate", "disposition": "approved",
+			"gate_id": "gate-a1", "scope": map[string]any{"subject_tree": "git-sha1:subject"},
+			"overridden_findings": []any{map[string]any{"artifact_instance_id": "findings@a1", "finding_id": "other"}},
+			"override_reason":     "human judgment",
+		},
+		{
+			"decision_id": "gate-decision", "decision_type": "human_gate", "disposition": "rejected",
+			"gate_id": "gate-a1", "scope": map[string]any{"subject_tree": "git-sha1:subject"},
+			"overridden_findings": []any{map[string]any{"artifact_instance_id": "findings@a1", "finding_id": "F-1"}},
+			"override_reason":     "human judgment",
+		},
+	} {
+		if _, err := Apply(state, fixtureEvent(EventDecisionResolved, payload, attemptEnvelope)); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("invalid human-gate resolution error = %v, want ErrInvalidEvent", err)
+		}
+	}
+}
+
+func TestHumanGateRequestRetainsBlockingFindings(t *testing.T) {
+	state := NewState([]MovementSeed{{ID: "m1", Initial: MovementPending}})
+	state.Run = RunRunning
+	state.Movements["m1"] = MovementRunning
+	next := applyFixture(t, state, EventDecisionRequested, map[string]any{
+		"decision_id": "gate-decision", "decision_type": "human_gate", "gate_id": "gate-a1",
+		"gate_mode": "on_contested", "subject_tree": "git-sha1:subject", "review_outcome": "CONTESTED",
+		"blocking_findings": []any{map[string]any{"artifact_instance_id": "findings@a1", "finding_id": "F-1"}},
+	}, attemptEnvelope)
+	decision := next.PendingDecisions["gate-decision"]
+	if decision.BlockingFindings == nil || len(decision.BlockingFindings) != 1 || decision.BlockingFindings[0] != (FindingReference{ArtifactInstanceID: "findings@a1", FindingID: "F-1"}) {
+		t.Fatalf("retained blocking findings = %#v", decision)
 	}
 }
 

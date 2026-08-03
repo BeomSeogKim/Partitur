@@ -138,15 +138,16 @@ type PendingPrepare struct {
 }
 
 type PendingDecision struct {
-	ID            string
-	Type          string
-	Blocking      bool
-	MovementID    MovementID
-	AttemptID     AttemptID
-	ScoreRevision uint64
-	ProposalID    ProposalID
-	GateID        string
-	SubjectTree   string
+	ID               string
+	Type             string
+	Blocking         bool
+	MovementID       MovementID
+	AttemptID        AttemptID
+	ScoreRevision    uint64
+	ProposalID       ProposalID
+	GateID           string
+	SubjectTree      string
+	BlockingFindings []FindingReference
 }
 
 // HumanGateScope is the exact scope carried by a human-gate resolution.

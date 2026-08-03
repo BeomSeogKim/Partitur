@@ -426,7 +426,8 @@ func marksFor(state runstate.State, movementID runstate.MovementID, snapshots ma
 		if len(view.Acceptance.ReviewCriteria) == 1 {
 			artifactID := view.Acceptance.ReviewCriteria[0].Findings
 			instanceID := artifactID + "@" + id
-			marks = append(marks, Mark{Grade: "REVIEWED", AttemptID: id, Criteria: criteria, SubjectTree: acceptance.SubjectTree, ScoreRevision: attempt.ScoreRevision, FailedAttempts: failedAttempts, FindingsInstanceID: instanceID, ReviewOutcome: acceptance.ReviewOutcome})
+			resolution := state.ResolvedHumanGates[runstate.AttemptID(id)]
+			marks = append(marks, Mark{Grade: "REVIEWED", AttemptID: id, Criteria: criteria, SubjectTree: acceptance.SubjectTree, ScoreRevision: attempt.ScoreRevision, FailedAttempts: failedAttempts, FindingsInstanceID: instanceID, ReviewOutcome: runstate.ProjectedReviewOutcome(acceptance, resolution, attempt.ScoreRevision)})
 		}
 		// The driver and recovery handlers bind the pending gate to this accepted
 		// attempt, and Apply binds a resolution to that pending gate. Keep these

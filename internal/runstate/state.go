@@ -102,6 +102,10 @@ func cloneState(input State) State {
 	}
 	output.CriterionLaunches = cloneMap(input.CriterionLaunches)
 	output.PendingDecisions = cloneMap(input.PendingDecisions)
+	for id, decision := range output.PendingDecisions {
+		decision.BlockingFindings = append([]FindingReference(nil), decision.BlockingFindings...)
+		output.PendingDecisions[id] = decision
+	}
 	output.ResolvedHumanGates = cloneMap(input.ResolvedHumanGates)
 	for id, resolution := range output.ResolvedHumanGates {
 		resolution.OverriddenFindings = append([]FindingReference(nil), resolution.OverriddenFindings...)

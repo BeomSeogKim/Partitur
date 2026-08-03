@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -345,18 +346,28 @@ func TestParseApproveArgs(t *testing.T) {
 	for _, test := range []struct {
 		args                    []string
 		wantID, wantReason      string
+		wantOverrides           []runstate.FindingReference
 		wantApproved, wantValid bool
 	}{
 		{args: []string{"approve", "gate-1", "--approve"}, wantID: "gate-1", wantApproved: true, wantValid: true},
+		{args: []string{"approve", "gate-1", "--approve", "--override", "findings@attempt-1:F-1", "--reason", "human judgment"}, wantID: "gate-1", wantApproved: true, wantOverrides: []runstate.FindingReference{{ArtifactInstanceID: "findings@attempt-1", FindingID: "F-1"}}, wantReason: "human judgment", wantValid: true},
+		{args: []string{"approve", "gate-1", "--approve", "--override", "findings@attempt-1:F-1", "--override", "findings@attempt-2:F-2", "--reason", "human judgment"}, wantID: "gate-1", wantApproved: true, wantOverrides: []runstate.FindingReference{{ArtifactInstanceID: "findings@attempt-1", FindingID: "F-1"}, {ArtifactInstanceID: "findings@attempt-2", FindingID: "F-2"}}, wantReason: "human judgment", wantValid: true},
 		{args: []string{"approve", "gate-1", "--reject"}, wantID: "gate-1", wantValid: true},
 		{args: []string{"approve", "gate-1", "--reject", "--reason", "not ready"}, wantID: "gate-1", wantReason: "not ready", wantValid: true},
 		{args: []string{"approve", "gate-1", "--approve", "--reason", "no"}},
+		{args: []string{"approve", "gate-1", "--approve", "--override", "findings@attempt-1:F-1"}},
+		{args: []string{"approve", "gate-1", "--reject", "--override", "findings@attempt-1:F-1", "--reason", "no"}},
+		{args: []string{"approve", "gate-1", "--approve", "--override", "findings@attempt-1:F-1", "--override", "findings@attempt-1:F-1", "--reason", "human judgment"}},
+		{args: []string{"approve", "gate-1", "--approve", "--override", "missing-separator", "--reason", "human judgment"}},
+		{args: []string{"approve", "gate-1", "--approve", "--override", ":F-1", "--reason", "human judgment"}},
+		{args: []string{"approve", "gate-1", "--approve", "--override", "findings@attempt-1:", "--reason", "human judgment"}},
+		{args: []string{"approve", "gate-1", "--approve", "--override", "findings@attempt-1:F-1:extra", "--reason", "human judgment"}},
 		{args: []string{"approve", "gate-1", "--reject", "--reason", ""}},
 		{args: []string{"approve", "gate-1"}},
 	} {
-		id, approved, reason, ok := parseApproveArgs(test.args)
-		if id != test.wantID || approved != test.wantApproved || reason != test.wantReason || ok != test.wantValid {
-			t.Fatalf("parseApproveArgs(%v) = (%q, %t, %q, %t)", test.args, id, approved, reason, ok)
+		id, approved, overrides, reason, ok := parseApproveArgs(test.args)
+		if id != test.wantID || approved != test.wantApproved || !reflect.DeepEqual(overrides, test.wantOverrides) || reason != test.wantReason || ok != test.wantValid {
+			t.Fatalf("parseApproveArgs(%v) = (%q, %t, %#v, %q, %t)", test.args, id, approved, overrides, reason, ok)
 		}
 	}
 }

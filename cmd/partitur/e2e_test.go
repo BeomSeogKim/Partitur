@@ -434,6 +434,141 @@ func TestRunHumanGateApprovalProjectsApprovedMark(t *testing.T) {
 	}
 }
 
+func TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := contestedHumanGateKillHarnessRepository(t, bin, vendor)
+
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := strings.TrimSpace(stdout)
+	if code != 0 || runID == "" || stdout != runID+"\n" || stderr != "" {
+		t.Fatalf("waiting-human run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	waiting := statusCommandReport(t, partitur, repository, environment, runID)
+	if waiting.Run.Lifecycle != string(runstate.RunWaitingHuman) || len(waiting.Run.PendingDecisions) != 1 || waiting.Run.PendingDecisions[0].Type != "human_gate" {
+		t.Fatalf("waiting report = %#v", waiting.Run)
+	}
+	decisionID := waiting.Run.PendingDecisions[0].ID
+	reviewed := reviewedMark(t, waiting)
+	if reviewed.ReviewOutcome != "CONTESTED" || reviewed.FindingsInstanceID == "" {
+		t.Fatalf("waiting REVIEWED mark = %#v", reviewed)
+	}
+
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := input.Projection.State.PendingDecisions[decisionID]
+	if pending.GateID == "" || len(pending.BlockingFindings) != 1 || pending.BlockingFindings[0] != (runstate.FindingReference{ArtifactInstanceID: reviewed.FindingsInstanceID, FindingID: "fixture-blocker"}) {
+		t.Fatalf("pending contested gate = %#v", pending)
+	}
+	journalPath := filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl")
+	journalBefore, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, override := range []string{
+		"missing-separator",
+		":fixture-blocker",
+		reviewed.FindingsInstanceID + ":",
+		reviewed.FindingsInstanceID + ":fixture-blocker:extra",
+	} {
+		code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", override, "--reason", "human judgment")
+		if code != 1 || stdout != "" || !strings.Contains(stderr, "usage:") {
+			t.Fatalf("malformed override %q exit=%d stdout=%q stderr=%q", override, code, stdout, stderr)
+		}
+	}
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", reviewed.FindingsInstanceID+":fixture-blocker", "--override", reviewed.FindingsInstanceID+":fixture-blocker", "--reason", "human judgment")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "usage:") {
+		t.Fatalf("duplicate override exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	journalAfterUsage, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(journalBefore, journalAfterUsage) {
+		t.Fatalf("usage error appended a journal event")
+	}
+
+	for _, override := range []string{
+		"other@attempt:fixture-blocker",
+		reviewed.FindingsInstanceID + ":other",
+	} {
+		code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", override, "--reason", "human judgment")
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "precondition refused") {
+			t.Fatalf("out-of-set override %q exit=%d stdout=%q stderr=%q", override, code, stdout, stderr)
+		}
+	}
+
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", reviewed.FindingsInstanceID+":fixture-blocker", "--reason", "human judgment")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("approve override exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "resume", runID)
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	report := statusCommandReport(t, partitur, repository, environment, runID)
+	if report.Run.Lifecycle != string(runstate.RunSucceeded) {
+		t.Fatalf("completed report = %#v", report.Run)
+	}
+	reviewed = reviewedMark(t, report)
+	if reviewed.ReviewOutcome != "OVERRIDDEN" {
+		t.Fatalf("completed REVIEWED mark = %#v", reviewed)
+	}
+	var approved []statusprojection.Mark
+	for _, mark := range report.Run.Movements[0].Marks {
+		if mark.Grade == "APPROVED" {
+			approved = append(approved, mark)
+		}
+	}
+	if len(approved) != 1 || approved[0].GateDecisionID != decisionID {
+		t.Fatalf("APPROVED marks = %#v, want gate decision %q", approved, decisionID)
+	}
+}
+
+func statusCommandReport(t *testing.T, partitur, repository string, environment []string, runID string) statusprojection.Report {
+	t.Helper()
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "status", runID, "--json")
+	var report statusprojection.Report
+	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &report) != nil {
+		t.Fatalf("status exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	return report
+}
+
+func reviewedMark(t *testing.T, report statusprojection.Report) statusprojection.Mark {
+	t.Helper()
+	if len(report.Run.Movements) != 1 {
+		t.Fatalf("movements = %#v", report.Run.Movements)
+	}
+	var reviewed []statusprojection.Mark
+	for _, mark := range report.Run.Movements[0].Marks {
+		if mark.Grade == "REVIEWED" {
+			reviewed = append(reviewed, mark)
+		}
+	}
+	if len(reviewed) != 1 {
+		t.Fatalf("REVIEWED marks = %#v", reviewed)
+	}
+	return reviewed[0]
+}
+
 func TestRunTaskFailureTerminalizesThroughLiveNoneDisposition(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

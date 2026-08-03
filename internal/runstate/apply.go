@@ -568,6 +568,7 @@ func Apply(input State, event Event) (State, error) {
 		if gateID, ok := payload["gate_id"].(string); ok {
 			decision.GateID = gateID
 			decision.SubjectTree = mustString(payload, "subject_tree")
+			decision.BlockingFindings = findingReferences(payload["blocking_findings"].([]any))
 		}
 		state.PendingDecisions[decisionID] = decision
 		refreshWaitingHuman(&state)
@@ -582,6 +583,11 @@ func Apply(input State, event Event) (State, error) {
 			return state, invalid(event, "human gate resolution does not match the pending decision")
 		}
 		if decision.Type == "human_gate" {
+			for _, overridden := range findingReferences(payload["overridden_findings"].([]any)) {
+				if !containsFindingReference(decision.BlockingFindings, overridden) {
+					return state, invalid(event, "human gate override is not a pending blocker")
+				}
+			}
 			resolution := HumanGateResolution{
 				DecisionID:         decisionID,
 				MovementID:         decision.MovementID,
@@ -1675,6 +1681,9 @@ func validateDecisionResolution(payload map[string]any) error {
 		if err := validateFindingPairs(payload["overridden_findings"].([]any)); err != nil {
 			return err
 		}
+		if mustString(payload, "disposition") == "rejected" && len(payload["overridden_findings"].([]any)) != 0 {
+			return errors.New("rejected human gate cannot override findings")
+		}
 		_, overrideReason := payload["override_reason"]
 		if (len(payload["overridden_findings"].([]any)) != 0) != overrideReason || (overrideReason && mustString(payload, "override_reason") == "") {
 			return errors.New("override_reason is required and non-empty iff findings are overridden")
@@ -1750,6 +1759,15 @@ func findingReferences(values []any) []FindingReference {
 		}
 	}
 	return result
+}
+
+func containsFindingReference(references []FindingReference, candidate FindingReference) bool {
+	for _, reference := range references {
+		if reference.ArtifactInstanceID == candidate.ArtifactInstanceID && reference.FindingID == candidate.FindingID {
+			return true
+		}
+	}
+	return false
 }
 
 func validateEnvelopeEvaluation(value map[string]any) error {
