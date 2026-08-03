@@ -41,13 +41,16 @@ func hashWithVersions(domain Domain, versions Versions, value any) (string, erro
 
 func supported(domain Domain, versions Versions) bool {
 	// Keep implemented historical tuples separate from CurrentVersions.
-	// When a current version advances, old tuples remain explicit cases here.
+	// Historical tuples remain explicit cases only when this binary implements
+	// their projector.
 	if versions.CanonicalEncoding != 1 {
 		return false
 	}
 	switch domain {
 	case DomainCompositionSubject:
 		return versions.Projection == 1 || versions.Projection == 2
+	case DomainExecutionDependency:
+		return versions.Projection == 2
 	case DomainScore,
 		DomainScoreSubtree,
 		DomainResolvedCast,
@@ -58,7 +61,6 @@ func supported(domain Domain, versions Versions) bool {
 		DomainCandidateComposition,
 		DomainMovementComposition,
 		DomainCompositionEnvironment,
-		DomainExecutionDependency,
 		DomainPatchOperations,
 		DomainResolutionBody:
 		return versions.Projection == 1
