@@ -3036,8 +3036,10 @@ part of v0.2's surface:
 ```text
 partitur validate
 partitur answer  <decision-id> --answer <text> | --answer-file <path>
-partitur approve <decision-id> --approve | --reject [--reason <text>]
-                 [--override <artifact-instance-id>:<finding-id>]...   # requires --reason
+partitur approve <decision-id> --approve
+                              | --approve --override <artifact-instance-id>:<finding-id>
+                                  [--override <artifact-instance-id>:<finding-id>]... --reason <text>
+                              | --reject [--reason <text>]
 partitur amend   --patch <path>            # RFC 6902 JSON; - reads stdin
                  --reason <text> [--claimed-impact <path>]
 partitur cancel  [<run-id>]
@@ -3056,7 +3058,11 @@ option: §1's core allocation is the only creation path. For commands whose synt
 `answer` and the human-gate form of `approve` instead select that same unique active run through
 their decision-resolution rule above; their decision ids are run-unique rather than global.
 `--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
-human gate would be indefensible.
+human gate would be indefensible. `--reason` is valid only with `--reject`, where it becomes
+`reason`, or with one or more `--override` options, where it becomes `override_reason`; it is
+required in the latter form and invalid with bare `--approve`. `--override` is invalid with
+`--reject`. Repeating the same `--override` pair is a usage error (exit 1): the command appends
+nothing.
 
 **`partitur status` observable surface.** `status` is an observation of the selected run's
 authoritative journal and its immutable pinned score snapshots. It takes neither a driver lease nor
@@ -3385,6 +3391,15 @@ counts toward anything that asks for VERIFIED or APPROVED.
   `override_reason`; an override with no recorded reason is invalid, because overriding a
   reviewer's blocking judgment is exactly the decision that must stay auditable. An approval
   never carries over to another attempt, revision, or subject tree.
+
+  **Override permissibility.** `overridden_findings` is meaningful only on an approved human-gate
+  resolution. Each pair **must** be a member of the `blocking_findings` set carried by that pending
+  gate request, matched by both `artifact_instance_id` and `finding_id`; every other pair is an
+  invalid event. Thus an unraised or non-blocking finding, or a finding from another artifact
+  instance, attempt, or revision, cannot be overridden. The `approve` command checks this within
+  its decision-resolution transaction before append: an out-of-set pair is a wrong-projection-state
+  refusal (exit 2), and appends nothing. A rejected human-gate resolution **must** carry an empty
+  `overridden_findings` array (and therefore no `override_reason`).
 - **REVIEWED** — the movement declares ≥1 `review` criterion — **that clause is itself what
   stops the mark holding by vacuous truth**, not any compiler rule; §2 rule 11 forces a review
   criterion only on the final movement of a score whose apply gate requires one — and every
@@ -3394,7 +3409,8 @@ counts toward anything that asks for VERIFIED or APPROVED.
 The outcome lives in a separate projection, `review_outcome`: `CLEAN` (zero blocking
 findings), `CONTESTED` (≥1 unresolved blocking finding, including partial overrides), or
 `OVERRIDDEN` (blocking findings were raised and **all** were overridden by exact-subject
-human decisions). In v0.2 these are the blocker set of the sole review artifact, so
+human decisions). `OVERRIDDEN` additionally requires an approved human-gate resolution; a
+rejected resolution cannot produce it. In v0.2 these are the blocker set of the sole review artifact, so
 `on_contested` gates on that same set; there is no cross-criterion union or designated-criterion
 choice. Findings are immutable; an override links to the finding instance through events and
 yields `REVIEWED + APPROVED` with `review_outcome: OVERRIDDEN` — it never makes the blocker look
@@ -4856,7 +4872,7 @@ decision.requested {              # a TAGGED UNION on decision_type — a flat b
   decision_type: "human_gate"  ⇒ { gate_id, gate_mode, subject_tree,
                                    review_outcome?,        # present iff review evidence exists
                                    blocking_findings: [{artifact_instance_id, finding_id}] }
-                                                           # sorted; empty when the gate is
+                                                           # sorted, duplicate-free; empty when the gate is
                                                            #   `always` with no blockers raised
   decision_type: "amendment"   ⇒ { proposal_id, routed_reason, blocking }
                                                            # `blocking` preserves the proposal's
@@ -4891,7 +4907,9 @@ decision.resolved {               # also a TAGGED UNION. NEVER appended on an am
                                   #   never carries over to another attempt, revision, or tree
                                   #   (§8). `scope.subject_tree` is the single source — there is
                                   #   no sibling subject_tree to fall out of agreement with
-        overridden_findings: [{artifact_instance_id, finding_id}],   # sorted; empty when none
+        overridden_findings: [{artifact_instance_id, finding_id}],   # sorted, duplicate-free; on approval, each
+                                  #   is a member of the pending gate request's
+                                  #   blocking_findings; empty when rejected or none
         override_reason?,          # MUST be present and non-empty iff overridden_findings is
                                   #   non-empty (§8) — overriding a reviewer's blocking judgment
                                   #   is precisely the decision that must stay auditable
