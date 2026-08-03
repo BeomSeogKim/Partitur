@@ -3099,6 +3099,17 @@ candidate is recorded. The complete v=1 shape is:
         subject_tree, score_revision, failed_attempts,
         findings_instance_id?, review_outcome?, gate_decision_id?
       }]
+    }],
+    retired_movements: [{
+      id, removed_in_revision, state_at_removal,
+      attempts: [{ id, state, failure: null | { kind, reason? } }],
+      marks: [{
+        grade: VERIFIED | APPROVED | REVIEWED,
+        attempt_id,
+        criteria: [{ id, spec_hash }],
+        subject_tree, score_revision, failed_attempts,
+        findings_instance_id?, review_outcome?, gate_decision_id?
+      }]
     }]
   },
   application: {
@@ -3767,6 +3778,46 @@ changes; and changes to not-yet-started read-only movements.
 **Approval effects.** The core alone assigns the new revision as exactly
 `base_revision + 1`. An approved revision change invalidates the **current execution
 episode**, not merely running attempts:
+
+**Revised-score lifecycle reconciliation.** The new head is also the authority for the
+current movement collection. This is necessary on the human path: the envelope whitelist
+does not admit a membership or order change automatically, but steps 1--9 may admit one
+for human approval before any candidate is recorded and before it invalidates a completed
+successful attempt. The following projection is part of the one `amendment.approved`
+transition; it appends no per-movement lifecycle event:
+
+- The current movement entries are exactly the movements in the approved head, in that
+  head's declaration order. A retained id keeps its lifecycle state and its attempt,
+  result, artifact, change-set, and mark history. Closing old blocking decisions still
+  has the ordinary §6 effect: a retained `WAITING_HUMAN` movement returns to `RUNNING`
+  when no blocking decision remains.
+- An added movement begins in the state it would have had had the run started from the
+  approved head: `PENDING`, except that a finalized score's retained draft interview
+  movement is `INAPPLICABLE` (§2). It has no inherited attempt, result, artifact,
+  change-set, or mark.
+- A removed movement has no current lifecycle entry and is never scheduled, made
+  `READY`, or made the target of a later `movement.*` event. Its pre-approval lifecycle
+  state and every historical attempt, result, artifact, change set, and mark remain
+  journal history. Any nonterminal attempt of it is superseded by this approval under
+  the rule below; a removed movement with a completed successful non-superseded attempt
+  never reaches this point because step 8 rejects it.
+- `repo_write`, dependency membership, and final-movement designation are properties of
+  the approved head only. They are re-derived for every current movement; no designation
+  is inherited merely because an id existed in the base head. Thus the scheduler uses the
+  approved head's `needs` graph and declaration order, and completion tests use its
+  `repo_write` and final designations. Compiler validation already rejects a new `needs`
+  edge to a removed or otherwise absent id; candidate compatibility already rejects a
+  membership, order, `needs`, or writer change once a candidate exists.
+
+This is not a cancellation and must not manufacture `movement.cancelled` or success for
+a removed movement. `status` lists only current movements in the approved head's order,
+then a `retired_movements` array in removal-revision then id order. Each retired entry
+contains `{id, removed_in_revision, state_at_removal, attempts, marks}` and exposes the
+same historical attempt and mark detail as a current movement, without making it
+scheduleable. The human rendering labels those entries `RETIRED`. `logs` remains the
+complete journal-order stream of durable `log` and `progress` observations: it neither
+filters observations because their movement was retired nor invents lifecycle log lines
+for the reconciliation.
 
 - **Every nonterminal attempt** — `STARTING`, `RUNNING`, or `VERIFYING` — is superseded, not
   only running ones: a human gate can leave an old-revision attempt sitting in `VERIFYING`,
@@ -4929,7 +4980,7 @@ decision.obsoleted {
 | `amendment.approval_prepared` | ✓ | `prepare_id`; **at most one prepare may be pending per run**, since two concurrent quiesces would race for one lease | **approval intent established** — for `auto`, after envelope classification and state guards pass; for `human`, after the decision is approve and steps 1–9 have been re-run. Not merely "passed 1–9", which precedes approval policy and would let a merely-routable proposal reserve a prepare | **Changes nothing**, and **raises the mutation barrier** (§6). The durable quiesce request: binds the proposal, the base head, the already-written snapshot, the persisted approval plan, the target attempts, and the observed authority epoch, so a driver's lease-move ACK matches a specific prepare rather than "some approval". A repeat with the same `prepare_id` is an idempotent re-request |
 | `amendment.approval_abandoned` | ✓ | `prepare_id` | a pending prepare | Terminally closes the prepare and **lifts the barrier**. Required because the journal is append-only: removing the sidecar cannot clear a pending `approval_prepared`, so without this event the prepare stays pending on every replay, "at most one pending prepare" blocks every retry, and the run wedges permanently |
 | `amendment.routed_human` | ✓ | proposal_id | admissible | **Non-terminal** routing marker; appends `decision.requested` for the amendment |
-| `amendment.approved` | ✓ | proposal_id | **a matching commit-ready prepare** (§6 step 3) — not merely "passed 1–9", which would let an implementation bypass preparation and quiescence entirely | The **single authoritative transition**: new snapshot head, new revision, superseded attempt ids, obsoleted decision ids, re-bound `candidate_id`. Resolves its own decision directly. **Finalization special case** (`/status: draft → finalized`, §2): the same event additionally closes the draft phase and projects the interview movement to `SUCCEEDED`, manufacturing no `attempt.completed` and no VERIFIED/APPROVED evidence |
+| `amendment.approved` | ✓ | proposal_id | **a matching commit-ready prepare** (§6 step 3) — not merely "passed 1–9", which would let an implementation bypass preparation and quiescence entirely | The **single authoritative transition**: new snapshot head, new revision, superseded attempt ids, obsoleted decision ids, re-bound `candidate_id`, and §9's revised-score lifecycle reconciliation. Resolves its own decision directly. **Finalization special case** (`/status: draft → finalized`, §2): the same event additionally closes the draft phase and projects the interview movement to `SUCCEEDED`, manufacturing no `attempt.completed` and no VERIFIED/APPROVED evidence |
 | `amendment.human_rejected` | ✓ | proposal_id | routed | Terminal; carries proposal id, decision id, human reason; resolves its own decision |
 
 **Payloads.** Every amendment event carries `base_hash` and `classifier_version` (§9).
