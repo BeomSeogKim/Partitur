@@ -3040,7 +3040,7 @@ partitur approve <decision-id> --approve
                               | --approve --override <artifact-instance-id>:<finding-id>
                                   [--override <artifact-instance-id>:<finding-id>]... --reason <text>
                               | --reject [--reason <text>]
-partitur amend   --patch <path>            # RFC 6902 JSON; - reads stdin
+partitur amend   [<run-id>] --patch <path> # RFC 6902 JSON; - reads stdin
                  --reason <text> [--claimed-impact <path>]
 partitur cancel  [<run-id>]
 partitur run
@@ -3616,6 +3616,17 @@ deciding human would loop. Rejection is permanent; a corrected proposal is a new
 The proposal's origin (adapter or CLI) never affects any rule — with the single, explicit
 exception that only the core may construct the reserved `/status` finalization amendment, which
 still always requires human approval.
+
+A CLI-originated proposal captures the selected run's snapshot `base_revision` and `base_hash`
+before taking the §9 admission lock, and retains them through any later human decision. It never
+silently rebases: step 2 rejects it as `stale` if the head moved before admission or before the
+decision-time re-run. It records `requires_decision: false`: no attempt is waiting on it.
+Routing nevertheless opens its human decision. On a CLI route, `amend` writes a human-oriented
+diagnostic to stderr naming the allocated proposal and decision ids, routed reason, and actual
+impact; it also includes the envelope evaluation when policy evaluated it. Stdout is empty, and this
+diagnostic is not a stable parseable surface. The operator may inspect those computed routing facts
+before invoking `approve`. Its pending decision is non-blocking: it does not put an attempt,
+movement, or run in `WAITING_HUMAN`.
 
 Passing this pipeline and the approval policy establishes intent; it does not by itself authorize
 `amendment.approval_prepared`. §6's durable-consequence closure barrier runs before preparation and
