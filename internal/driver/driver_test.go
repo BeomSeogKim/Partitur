@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -81,6 +82,88 @@ func TestEffectiveAuthorityDoesNotInferReadFromWrite(t *testing.T) {
 	grants := effectiveGrants(movement, score.EffectivePolicy())
 	if len(grants.PathsRW) != 1 || len(grants.PathsRO) != 0 {
 		t.Fatalf("effective grants = %+v", grants)
+	}
+}
+
+func TestExecuteAttemptDeliversAndBindsSuccessfulArtifactInstance(t *testing.T) {
+	execute := func(contents string) (protocol.ExecuteRequest, string) {
+		t.Helper()
+		document := sliceScore()
+		verification := document["verification"].(map[string]any)
+		verification["expectation"].(map[string]any)["apply_gate"] = map[string]any{"waived": true, "reason": "fixture"}
+		delete(verification, "final_movement")
+		prepare := document["movements"].([]any)[0].(map[string]any)
+		prepare["id"] = "prepare"
+		prepare["instruction"] = "Produce the source artifact."
+		prepare["outputs"] = []any{map[string]any{"id": "source-report", "kind": "artifact"}}
+		prepare["acceptance"] = map[string]any{"hard": []any{map[string]any{"id": "source-report-present", "artifact": "source-report"}}}
+		inspect := map[string]any{
+			"id": "inspect", "part": "reader", "needs": []any{"prepare"}, "inputs": []any{"source-report"},
+			"grants": []any{"repo_read"}, "instruction": "Consume the source artifact.",
+			"outputs":    []any{map[string]any{"id": "report", "kind": "artifact"}},
+			"acceptance": map[string]any{"hard": []any{map[string]any{"id": "report-present", "artifact": "report"}}},
+		}
+		document["movements"] = []any{prepare, inspect}
+		preparation := prepareRunnableFixture(t, document, sliceCast())
+		started, err := workspace.Start(preparation, faultpoint.Nop{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer authority.Release()
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := &deliveredInputAdapterFixture{t: t, sourceContents: contents}
+		dependencies := testDependencies()
+		dependencies.client = client
+		dependencies.resolveTrampoline = func() (string, error) { return "/fixture/trampoline", nil }
+		for _, movementID := range []string{"prepare", "inspect"} {
+			attempt, err := started.Run.CreateAttempt(movementID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := executeLiveReaderAttempt(
+				t, preparation.RepositoryRoot, authority, started.RunID, input, attempt,
+				input.BaseTree, input.BaseTree, "", dependencies,
+			)
+			if movementID == "prepare" {
+				input, err = store.LoadRunInput(started.RunID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state.MovementResults["prepare"].AttemptID != attempt.AttemptID {
+					t.Fatalf("prepare result = %#v", state.MovementResults["prepare"])
+				}
+			}
+		}
+		request, exists := client.requests["inspect"]
+		if !exists {
+			t.Fatal("inspect execute request is absent")
+		}
+		state, err := authority.State()
+		if err != nil {
+			t.Fatal(err)
+		}
+		observation := state.AdapterObservations[runstate.AttemptID(request.AttemptID)]
+		return request, string(observation.ExecutionDependencyHash)
+	}
+	firstRequest, firstHash := execute("first upstream bytes")
+	if len(firstRequest.Inputs) != 1 || firstRequest.Inputs[0].ArtifactID != "source-report" ||
+		firstRequest.Inputs[0].InstanceID == "" || firstRequest.Inputs[0].Hash == "" {
+		t.Fatalf("downstream delivered inputs = %#v", firstRequest.Inputs)
+	}
+	_, secondHash := execute("second upstream bytes")
+	if firstHash == secondHash {
+		t.Fatal("downstream execution dependency hash did not change with upstream delivered bytes")
 	}
 }
 
@@ -1192,6 +1275,44 @@ func TestLiveReadOnlyReviewerReceivesContributedBaseAndProducesReviewEvidence(t 
 	t.Fatal("target movement missing from status")
 }
 
+func TestLiveReviewSubjectInputRendersReservedBriefContract(t *testing.T) {
+	preparation, store, authority, started, _, _ := fanInReviewFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := PrepareMovementBase(store, authority, input, "target", 600000, time.Now, workspace.NewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttemptAtBase("target", composed.Commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &deliveredInputAdapterFixture{t: t, reviewSubjectTree: composed.Tree}
+	dependencies := testDependencies()
+	dependencies.client = client
+	dependencies.resolveTrampoline = func() (string, error) { return "/fixture/trampoline", nil }
+	executeLiveReaderAttempt(
+		t, preparation.RepositoryRoot, authority, started.RunID, input, attempt,
+		composed.Tree, input.BaseTree, composed.Hash, dependencies,
+	)
+	request, exists := client.requests["target"]
+	if !exists {
+		t.Fatal("review execute request is absent")
+	}
+	prompt := adapterkit.RenderPrompt(&request)
+	if !strings.Contains(prompt, "The findings artifact MUST carry the exact subject_tree from the SUBJECT TREE file") {
+		t.Fatalf("review subject contract missing from live prompt:\n%s", prompt)
+	}
+	inputsStart := strings.Index(prompt, "## Inputs")
+	reservedStart := strings.Index(prompt, "## Reserved input contracts")
+	if inputsStart < 0 || reservedStart < 0 || strings.Contains(prompt[inputsStart:reservedStart], "partitur.subject-tree") {
+		t.Fatalf("live review subject input rendered as ordinary:\n%s", prompt)
+	}
+}
+
 func TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement(t *testing.T) {
 	scoreDocument := sliceScore()
 	movement := scoreDocument["movements"].([]any)[0].(map[string]any)
@@ -1706,6 +1827,13 @@ type completedAdapterFixture struct {
 	t *testing.T
 }
 
+type deliveredInputAdapterFixture struct {
+	t                 *testing.T
+	sourceContents    string
+	reviewSubjectTree string
+	requests          map[string]protocol.ExecuteRequest
+}
+
 type waitingAdapterFixture struct {
 	t        *testing.T
 	proposal *protocol.ProposalEvent
@@ -1764,6 +1892,78 @@ func (fixture *waitingAdapterFixture) Execute(_ context.Context, plan adapter.Ex
 
 func (fixture *completedAdapterFixture) Resolve(adapterID string) (string, error) {
 	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+func (fixture *deliveredInputAdapterFixture) Resolve(adapterID string) (string, error) {
+	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+func (fixture *deliveredInputAdapterFixture) Execute(_ context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	fixture.t.Helper()
+	if fixture.requests == nil {
+		fixture.requests = make(map[string]protocol.ExecuteRequest)
+	}
+	fixture.requests[plan.Request.MovementID] = plan.Request
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	if _, err := plan.RecordIdentity(runstate.ProcessIdentity{PID: os.Getpid(), SessionID: os.Getpid(), Start: start}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	probe := protocol.ProbeResult{
+		Protocol: protocol.ProtocolVersion,
+		Adapter:  protocol.AdapterIdentity{ID: plan.AdapterID, Version: "fixture"},
+		Capabilities: protocol.Capabilities{
+			RepoRead: true, RepoWrite: true, Models: []protocol.Model{{ID: "gpt-5.6-sol"}},
+		},
+		Enforcement: protocol.Enforcement{
+			PathGrants: true, ReadOnly: true, NetworkGrants: true, ShellGrants: true, ReadGrants: true,
+		},
+	}
+	if _, err := plan.Recorder.RecordProbe(probe); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	artifacts := []adapter.ArtifactObservation{}
+	writeArtifact := func(artifactID, kind, contents string) error {
+		artifactPath := filepath.Join(plan.Request.OutputDir, artifactID)
+		if err := os.WriteFile(artifactPath, []byte(contents), 0o600); err != nil {
+			return err
+		}
+		artifact := adapter.ArtifactObservation{ArtifactID: artifactID, Kind: kind, Path: artifactPath, SourcePath: artifactID}
+		if _, err := plan.Recorder.RecordArtifact(artifact); err != nil {
+			return err
+		}
+		artifacts = append(artifacts, artifact)
+		return nil
+	}
+	if plan.Request.MovementID == "prepare" {
+		if err := writeArtifact("source-report", "artifact", fixture.sourceContents); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+	} else if fixture.reviewSubjectTree != "" {
+		if err := writeArtifact("target-report", "artifact", "reviewed report"); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+		findings := fmt.Sprintf(`{"schema":"partitur/findings+json;v=1","subject_tree":%q,"coverage":[{"rubric":"coverage","conclusion":"examined_none_found"}],"findings":[]}`, fixture.reviewSubjectTree)
+		if err := writeArtifact("target-findings", "findings", findings); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+	} else if err := writeArtifact("report", "artifact", "downstream report"); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	if _, err := plan.Recorder.RecordExecutionStopped(adapter.ExecutionStop{
+		IntervalID: plan.IntervalID, Reason: "normal", Charging: "measured", ObservedAt: plan.IntervalOpened,
+	}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	result := protocol.ExecuteResult{Outcome: protocol.OutcomeCompleted}
+	if _, err := plan.Recorder.RecordOutcome(adapter.OutcomeObservation{
+		EventType: string(runstate.EventPerformerCompleted), Result: result,
+	}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	return adapter.ExecuteReport{Probe: probe, Result: &result, Artifacts: artifacts}, nil
 }
 
 func (fixture *completedAdapterFixture) Execute(_ context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {

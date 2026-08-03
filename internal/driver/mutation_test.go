@@ -132,6 +132,50 @@ func TestMutationLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	assertDriverMutationKilled(t, "TestLiveFanInCreatesTargetAtPinnedBaseCommit", goEnvironment, "driver.go", "attempt, err = run.CreateAttemptAtBase(movement.ID, baseCommit)", "attempt, err = run.CreateAttempt(movement.ID)")
 }
 
+func TestMutationExecutionDependencyHashBindsDeliveredArtifactID(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecutionDependencyHashBindsDeliveredArtifactInstance(t)
+	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsDeliveredArtifactInstance", goEnvironment, "driver.go", `"artifact_id":  input.ArtifactID,`, "// mutation: delivered logical artifact id omitted")
+}
+
+func TestMutationExecutionDependencyHashBindsDeliveredArtifactKind(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecutionDependencyHashBindsDeliveredArtifactInstance(t)
+	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsDeliveredArtifactInstance", goEnvironment, "driver.go", `"kind":         input.Kind,`, "// mutation: delivered artifact kind omitted")
+}
+
+func TestMutationExecutionDependencyHashBindsDeliveredInstanceID(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecutionDependencyHashBindsDeliveredArtifactInstance(t)
+	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsDeliveredArtifactInstance", goEnvironment, "driver.go", `"instance_id":  input.InstanceID,`, "// mutation: delivered instance id omitted")
+}
+
+func TestMutationExecutionDependencyHashBindsDeliveredContentHash(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecutionDependencyHashBindsDeliveredArtifactInstance(t)
+	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsDeliveredArtifactInstance", goEnvironment, "driver.go", `"content_hash": input.Hash,`, "// mutation: delivered content hash omitted")
+}
+
+func TestMutationDeliveredInputsSortByArtifactID(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestDeliveredInputsSortByArtifactID(t)
+	assertDriverMutationKilled(t, "TestDeliveredInputsSortByArtifactID", goEnvironment, "driver.go", `slices.SortFunc(inputs, func(left, right protocol.ArtifactRef) int {
+		return strings.Compare(left.ArtifactID, right.ArtifactID)
+	})`, "// mutation: delivered input order left unresolved")
+}
+
+func TestMutationDeliveredInputsIgnoreUnrelatedSuccessfulAttempt(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecutionDependencyHashBindsDeliveredArtifactInstance(t)
+	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsDeliveredArtifactInstance", goEnvironment, "driver.go", `result, exists := state.MovementResults[producers[artifactID]]`, `result, exists := state.MovementResults["unrelated"]`)
+}
+
+func TestMutationReviewSubjectInputRendersReservedBriefContract(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestLiveReviewSubjectInputRendersReservedBriefContract(t)
+	assertDriverMutationKilled(t, "TestLiveReviewSubjectInputRendersReservedBriefContract", goEnvironment, "driver.go", `ArtifactID: "partitur.subject-tree",`, `ArtifactID: fmt.Sprintf("partitur.subject-tree@%s@%d", movement.ID, revision),`)
+}
+
 func TestMutationCandidateConflictFailsRunAtCandidateScope(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestComposeCandidateConflictFailsRunAtCandidateScope(t)

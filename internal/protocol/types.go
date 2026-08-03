@@ -77,6 +77,7 @@ type Brief struct {
 type ArtifactRef struct {
 	ArtifactID string `json:"artifact_id"`
 	Kind       string `json:"kind"`
+	InstanceID string `json:"instance_id"`
 	Path       string `json:"path"`
 	Hash       string `json:"hash"`
 }
