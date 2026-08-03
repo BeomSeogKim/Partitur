@@ -111,7 +111,7 @@ func TestResolveHumanGateAppendsExactlyOneResolutionAndRefusesWrongType(t *testi
 		}),
 	})
 
-	if err := store.ResolveHumanGate("run-1", "gate-1", false, "not ready"); err != nil {
+	if err := store.ResolveHumanGate("run-1", "gate-1", false, nil, "not ready"); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := store.ReadJournal("run-1")
@@ -130,7 +130,7 @@ func TestResolveHumanGateAppendsExactlyOneResolutionAndRefusesWrongType(t *testi
 		t.Fatalf("human gate resolution payload = %#v", payload)
 	}
 	count := len(journal.Events)
-	if err := store.ResolveHumanGate("run-1", "question-1", true, ""); !errors.Is(err, ErrDecisionResolutionNotAllowed) {
+	if err := store.ResolveHumanGate("run-1", "question-1", true, nil, ""); !errors.Is(err, ErrDecisionResolutionNotAllowed) {
 		t.Fatalf("wrong-type resolution error = %v, want refusal", err)
 	}
 	journal, err = store.ReadJournal("run-1")

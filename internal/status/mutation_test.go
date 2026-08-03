@@ -31,7 +31,7 @@ func TestMutationGateOnlyWriteRequiresApprovedResolution(t *testing.T) {
 		{"TestProjectGateOnlyWriteCarriesApprovedMarkWithoutCarryover/revision_mismatch", "resolution.ScoreRevision == attempt.ScoreRevision", "resolution.ScoreRevision != attempt.ScoreRevision"},
 	} {
 		t.Run(mutation.testName, func(t *testing.T) {
-			assertStatusMutationKilled(t, mutation.testName, environment, mutation.before, mutation.after, "internal/status", ".")
+			assertStatusMutationKilled(t, mutation.testName, environment, mutation.before, mutation.after, "internal/status/status.go", "internal/status", ".")
 		})
 	}
 }
@@ -47,12 +47,38 @@ func TestMutationLiveApprovedMarkRequiresApproval(t *testing.T) {
 		environment,
 		"resolution.Disposition == \"approved\"",
 		"resolution.Disposition == \"rejected\"",
+		"internal/status/status.go",
 		"cmd/partitur",
 		".",
 	)
 }
 
-func assertStatusMutationKilled(t *testing.T, testName string, environment mutationtest.GoEnvironment, before, after, relativeDirectory, packageName string) {
+func TestMutationLiveOverrideGuards(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []struct {
+		name, before, after, source, directory, packageName, testName string
+	}{
+		{"artifact instance membership", "reference.ArtifactInstanceID == candidate.ArtifactInstanceID && reference.FindingID == candidate.FindingID", "reference.FindingID == candidate.FindingID", "internal/runstate/apply.go", "cmd/partitur", ".", "TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks"},
+		{"finding membership", "reference.ArtifactInstanceID == candidate.ArtifactInstanceID && reference.FindingID == candidate.FindingID", "reference.ArtifactInstanceID == candidate.ArtifactInstanceID", "internal/runstate/apply.go", "cmd/partitur", ".", "TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks"},
+		{"approved override", "resolution.Disposition != \"approved\"", "resolution.Disposition == \"approved\"", "internal/runstate/review.go", "cmd/partitur", ".", "TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks"},
+		{"override reason iff", "(len(payload[\"overridden_findings\"].([]any)) != 0) != overrideReason", "(len(payload[\"overridden_findings\"].([]any)) != 0) == overrideReason", "internal/runstate/apply.go", "cmd/partitur", ".", "TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks"},
+		{"rejected has no overrides", "mustString(payload, \"disposition\") == \"rejected\" && len(payload[\"overridden_findings\"].([]any)) != 0", "mustString(payload, \"disposition\") == \"rejected\" && len(payload[\"overridden_findings\"].([]any)) == 0", "internal/runstate/apply.go", "internal/runstate", ".", "TestDecisionResolutionRetainsFullHumanGateFact"},
+		{"all blockers required", "if len(left) != len(right)", "if len(left) == len(right)", "internal/runstate/review.go", "internal/runstate", ".", "TestProjectedReviewOutcomeRequiresEveryExactApprovedOverride/all_overridden"},
+		{"projected blocker identity", "if !containsFindingReference(right, reference)", "if false && !containsFindingReference(right, reference)", "internal/runstate/review.go", "internal/runstate", ".", "TestProjectedReviewOutcomeRequiresEveryExactApprovedOverride/different_blocker"},
+		{"exact subject", "resolution.Scope.SubjectTree != acceptance.SubjectTree", "resolution.Scope.SubjectTree == acceptance.SubjectTree", "internal/runstate/review.go", "internal/runstate", ".", "TestProjectedReviewOutcomeRequiresEveryExactApprovedOverride/wrong_subject"},
+		{"exact revision", "resolution.ScoreRevision != scoreRevision", "resolution.ScoreRevision == scoreRevision", "internal/runstate/review.go", "internal/runstate", ".", "TestProjectedReviewOutcomeRequiresEveryExactApprovedOverride/wrong_revision"},
+		{"first-colon finding parser", "strings.SplitN(operand, \":\", 2)", "strings.Split(operand, \":\")", "cmd/partitur/main.go", "cmd/partitur", ".", "TestParseApproveArgs"},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			assertStatusMutationKilled(t, mutation.testName, environment, mutation.before, mutation.after, mutation.source, mutation.directory, mutation.packageName)
+		})
+	}
+}
+
+func assertStatusMutationKilled(t *testing.T, testName string, environment mutationtest.GoEnvironment, before, after, sourceRelative, relativeDirectory, packageName string) {
 	t.Helper()
 	lockStatusMutationSource(t)
 	_, currentFile, _, ok := runtime.Caller(0)
@@ -64,7 +90,7 @@ func assertStatusMutationKilled(t *testing.T, testName string, environment mutat
 	if err := copyStatusMutationRepository(copyRoot, root); err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(copyRoot, "internal", "status", "status.go")
+	source := filepath.Join(copyRoot, sourceRelative)
 	contents, err := os.ReadFile(source)
 	if err != nil {
 		t.Fatal(err)

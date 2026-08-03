@@ -2543,7 +2543,7 @@ func rejectedHumanGateFixture(t *testing.T, finalMovement bool) *rejectedGateFix
 		t.Fatalf("human gate requests = %+v, want exactly one", requests)
 	}
 	decisionID := eventString(t, requests[0], "decision_id")
-	if err := base.store.ResolveHumanGate(base.runID, decisionID, false, "fixture rejection"); err != nil {
+	if err := base.store.ResolveHumanGate(base.runID, decisionID, false, nil, "fixture rejection"); err != nil {
 		t.Fatal(err)
 	}
 	return &rejectedGateFixtureState{resumeCriterionFixtureState: base}
