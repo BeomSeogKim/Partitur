@@ -92,10 +92,17 @@ Currently red: seven of the thirteen are dispatched.
 | Check |
 |---|
 | The event types declared in `internal/runstate` are exactly the events enumerated in `DESIGN.md` |
-| Every one of them has at least one non-test append site |
+| Every event **not marked *derived*** in `DESIGN.md` Appendix B has at least one non-test append site |
 
 The reconciliation is the first check, not an aside: without it, deleting a declaration would
 discharge an obligation.
+
+For this row, the derived set is read from Appendix B's normative `*derived*` markings, never from
+`isDerivedEvent` or another Go classification. A Go classification that disagrees with those
+markings cannot make a missing producer pass: a normative non-derived event remains in this row's
+append-site denominator. The converse — a normative derived event that Go misclassifies, or whose
+source projection is absent — is held by the derived-event source-projection prerequisite below;
+completion cannot be declared while that prerequisite is outstanding.
 
 This row has already earned its place. It is what showed that the entire human-decision handshake
 was projected, planned for, and recoverable while nothing in production ever appended it.
@@ -241,8 +248,18 @@ without anyone deciding to move it.
 pinned to a normative enumeration and whose green predicate is decidable today. Surfaces that need
 an artefact before they can be stated that way — an outcome matrix for commands, a single typed
 boundary for unit-owned deferrals, an inventory mapping normative clauses to their evidence, a
-strengthened dispatch lock, a claim manifest for documentation — are tracked as outstanding
-prerequisites, and each becomes a row here when its artefact exists.
+strengthened dispatch lock, a claim manifest for documentation, a derived-event source-projection
+lock — are tracked as outstanding prerequisites, and each becomes a row here when its artefact
+exists.
+
+The derived-event source-projection lock must read Appendix B's `*derived*` markings and the
+authoritative source transitions named by those rows; reject an empty or unparsable extraction;
+and require that set to equal the Go derived classification. For every normative source transition,
+it must require a non-test append site for the source and a fixture with a live target that applies
+the source, observes the named derived state effect, and proves replay preserves it. This is not a
+row yet because no such lock exists. In particular, adding a new normative derived event cannot be
+a cheaper path to completion: it adds a source-and-projection obligation to this prerequisite, and
+completion remains unavailable until the prerequisite becomes a row and is green.
 
 So the rule is explicit rather than implied:
 
