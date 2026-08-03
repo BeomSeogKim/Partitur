@@ -304,11 +304,8 @@ func parseApproveArgs(args []string) (decisionID string, approved bool, overridd
 }
 
 func parseFindingReference(operand string) (runstate.FindingReference, bool) {
-	if strings.Count(operand, ":") != 1 {
-		return runstate.FindingReference{}, false
-	}
 	parts := strings.SplitN(operand, ":", 2)
-	if parts[0] == "" || parts[1] == "" {
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return runstate.FindingReference{}, false
 	}
 	return runstate.FindingReference{ArtifactInstanceID: parts[0], FindingID: parts[1]}, true

@@ -29,6 +29,7 @@ const runVendorEnvironment = "PARTITUR_RUN_VENDOR_FIXTURE"
 const runVendorOutcomeEnvironment = "PARTITUR_RUN_VENDOR_OUTCOME"
 const runVendorMarkerEnvironment = "PARTITUR_RUN_VENDOR_MARKER"
 const runVendorContestedEnvironment = "PARTITUR_RUN_VENDOR_CONTESTED"
+const runVendorFindingIDEnvironment = "PARTITUR_RUN_VENDOR_FINDING_ID"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runVendorEnvironment) == "1" {
@@ -448,6 +449,8 @@ func TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository, environment := contestedHumanGateKillHarnessRepository(t, bin, vendor)
+	const findingID = "perf:n+1"
+	environment = replaceEnvironment(environment, map[string]string{runVendorFindingIDEnvironment: findingID})
 
 	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
 	runID := strings.TrimSpace(stdout)
@@ -473,7 +476,7 @@ func TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending := input.Projection.State.PendingDecisions[decisionID]
-	if pending.GateID == "" || len(pending.BlockingFindings) != 1 || pending.BlockingFindings[0] != (runstate.FindingReference{ArtifactInstanceID: reviewed.FindingsInstanceID, FindingID: "fixture-blocker"}) {
+	if pending.GateID == "" || len(pending.BlockingFindings) != 1 || pending.BlockingFindings[0] != (runstate.FindingReference{ArtifactInstanceID: reviewed.FindingsInstanceID, FindingID: findingID}) {
 		t.Fatalf("pending contested gate = %#v", pending)
 	}
 	journalPath := filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl")
@@ -485,14 +488,13 @@ func TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks(t *testing.T) {
 		"missing-separator",
 		":fixture-blocker",
 		reviewed.FindingsInstanceID + ":",
-		reviewed.FindingsInstanceID + ":fixture-blocker:extra",
 	} {
 		code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", override, "--reason", "human judgment")
 		if code != 1 || stdout != "" || !strings.Contains(stderr, "usage:") {
 			t.Fatalf("malformed override %q exit=%d stdout=%q stderr=%q", override, code, stdout, stderr)
 		}
 	}
-	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", reviewed.FindingsInstanceID+":fixture-blocker", "--override", reviewed.FindingsInstanceID+":fixture-blocker", "--reason", "human judgment")
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", reviewed.FindingsInstanceID+":"+findingID, "--override", reviewed.FindingsInstanceID+":"+findingID, "--reason", "human judgment")
 	if code != 1 || stdout != "" || !strings.Contains(stderr, "usage:") {
 		t.Fatalf("duplicate override exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -505,8 +507,9 @@ func TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks(t *testing.T) {
 	}
 
 	for _, override := range []string{
-		"other@attempt:fixture-blocker",
+		"other@attempt:" + findingID,
 		reviewed.FindingsInstanceID + ":other",
+		reviewed.FindingsInstanceID + ":fixture-blocker:extra",
 	} {
 		code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", override, "--reason", "human judgment")
 		if code != 2 || stdout != "" || !strings.Contains(stderr, "precondition refused") {
@@ -514,7 +517,7 @@ func TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks(t *testing.T) {
 		}
 	}
 
-	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", reviewed.FindingsInstanceID+":fixture-blocker", "--reason", "human judgment")
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", reviewed.FindingsInstanceID+":"+findingID, "--reason", "human judgment")
 	if code != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("approve override exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -1527,7 +1530,11 @@ func runVendorFixture() {
 		if err != nil {
 			os.Exit(93)
 		}
-		findings := fmt.Sprintf(`{"schema":"partitur/findings+json;v=1","subject_tree":"git-sha1:%s","coverage":[{"rubric":"coverage","conclusion":"findings_raised"}],"findings":[{"id":"fixture-blocker","rubric":"coverage","summary":"fixture blocker","blocking":true,"evidence":[{"path":"partitur.yaml"}]}]}`, strings.TrimSpace(string(tree)))
+		findingID := os.Getenv(runVendorFindingIDEnvironment)
+		if findingID == "" {
+			findingID = "fixture-blocker"
+		}
+		findings := fmt.Sprintf(`{"schema":"partitur/findings+json;v=1","subject_tree":"git-sha1:%s","coverage":[{"rubric":"coverage","conclusion":"findings_raised"}],"findings":[{"id":%q,"rubric":"coverage","summary":"fixture blocker","blocking":true,"evidence":[{"path":"partitur.yaml"}]}]}`, strings.TrimSpace(string(tree)), findingID)
 		if err := os.WriteFile(filepath.Join(outputDir, "findings.json"), []byte(findings), 0o600); err != nil {
 			os.Exit(93)
 		}

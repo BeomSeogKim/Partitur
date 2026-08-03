@@ -70,6 +70,7 @@ func TestMutationLiveOverrideGuards(t *testing.T) {
 		{"projected blocker identity", "if !containsFindingReference(right, reference)", "if false && !containsFindingReference(right, reference)", "internal/runstate/review.go", "internal/runstate", ".", "TestProjectedReviewOutcomeRequiresEveryExactApprovedOverride/different_blocker"},
 		{"exact subject", "resolution.Scope.SubjectTree != acceptance.SubjectTree", "resolution.Scope.SubjectTree == acceptance.SubjectTree", "internal/runstate/review.go", "internal/runstate", ".", "TestProjectedReviewOutcomeRequiresEveryExactApprovedOverride/wrong_subject"},
 		{"exact revision", "resolution.ScoreRevision != scoreRevision", "resolution.ScoreRevision == scoreRevision", "internal/runstate/review.go", "internal/runstate", ".", "TestProjectedReviewOutcomeRequiresEveryExactApprovedOverride/wrong_revision"},
+		{"first-colon finding parser", "strings.SplitN(operand, \":\", 2)", "strings.Split(operand, \":\")", "cmd/partitur/main.go", "cmd/partitur", ".", "TestParseApproveArgs"},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			assertStatusMutationKilled(t, mutation.testName, environment, mutation.before, mutation.after, mutation.source, mutation.directory, mutation.packageName)
