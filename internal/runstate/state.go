@@ -20,6 +20,7 @@ func NewState(seed []MovementSeed) State {
 		CriterionLaunches:   make(map[CriterionLaunchKey]CriterionLaunch),
 		Acceptances:         make(map[AttemptID]Acceptance),
 		PendingDecisions:    make(map[string]PendingDecision),
+		ResolvedHumanGates:  make(map[AttemptID]HumanGateResolution),
 		RoutedAmendments:    make(map[ProposalID]RoutedAmendment),
 		appliedEvents:       make(map[string]appliedEvent),
 		Application:         ApplicationProjection{State: ApplicationNotApplied},
@@ -101,6 +102,11 @@ func cloneState(input State) State {
 	}
 	output.CriterionLaunches = cloneMap(input.CriterionLaunches)
 	output.PendingDecisions = cloneMap(input.PendingDecisions)
+	output.ResolvedHumanGates = cloneMap(input.ResolvedHumanGates)
+	for id, resolution := range output.ResolvedHumanGates {
+		resolution.OverriddenFindings = append([]FindingReference(nil), resolution.OverriddenFindings...)
+		output.ResolvedHumanGates[id] = resolution
+	}
 	output.RoutedAmendments = cloneMap(input.RoutedAmendments)
 	output.appliedEvents = cloneMap(input.appliedEvents)
 	output.Acceptances = make(map[AttemptID]Acceptance, len(input.Acceptances))

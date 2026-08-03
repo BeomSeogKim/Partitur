@@ -284,7 +284,7 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 	projection.Scheduler.PendingSuccessor = pendingSuccessor(*current)
 	projection.CurrentHeadAttempt = current
 	if acceptance, ok := state.Acceptances[current.AttemptID]; ok && acceptance.Started {
-		projection.Acceptance = facts.acceptance(current.AttemptID, current.MovementID, pinned)
+		projection.Acceptance = facts.acceptance(state, current.AttemptID, current.MovementID, pinned)
 		if projection.Acceptance.Gate.Required && projection.Acceptance.Gate.Requested &&
 			projection.Acceptance.Gate.Resolved && !projection.Acceptance.Gate.Approved &&
 			state.FinalMovements[current.MovementID] {
@@ -362,7 +362,6 @@ func movementSeed(pinned *score.Score) []runstate.MovementSeed {
 
 type replayFact struct {
 	attempts          map[runstate.AttemptID]*recovery.AttemptRecovery
-	gates             map[runstate.AttemptID]*recovery.GateRecovery
 	sequence          map[runstate.AttemptID]uint64
 	failed            map[runstate.AttemptID]bool
 	approvals         []revisionApproval
@@ -388,7 +387,6 @@ type compositionClose struct {
 func replayFacts(events []runstate.Event) replayFact {
 	facts := replayFact{
 		attempts:          make(map[runstate.AttemptID]*recovery.AttemptRecovery),
-		gates:             make(map[runstate.AttemptID]*recovery.GateRecovery),
 		sequence:          make(map[runstate.AttemptID]uint64),
 		failed:            make(map[runstate.AttemptID]bool),
 		compositionCloses: make(map[string]compositionClose),
@@ -402,7 +400,6 @@ func replayFacts(events []runstate.Event) replayFact {
 		index     int
 	}
 	requests := make(map[string]questionRef)
-	gateDecisions := make(map[string]runstate.AttemptID)
 	for _, event := range events {
 		payload, err := eventPayload(event)
 		if err != nil {
@@ -434,17 +431,6 @@ func replayFacts(events []runstate.Event) replayFact {
 				if reference, ok := requests[stringValue(payload, "decision_id")]; ok {
 					facts.attempts[reference.attemptID].QuestionRequests[reference.index].Durable = true
 				}
-			}
-			if stringValue(payload, "decision_type") == "human_gate" {
-				gate := &recovery.GateRecovery{Required: true, Requested: true, DecisionID: stringValue(payload, "decision_id"), GateID: stringValue(payload, "gate_id")}
-				facts.gates[event.AttemptID] = gate
-				gateDecisions[gate.DecisionID] = event.AttemptID
-			}
-		case runstate.EventDecisionResolved:
-			if attemptID, ok := gateDecisions[stringValue(payload, "decision_id")]; ok {
-				gate := facts.gates[attemptID]
-				gate.Resolved = true
-				gate.Approved = stringValue(payload, "disposition") == "approved"
 			}
 		case runstate.EventChangeSetRecorded:
 			if attempt := facts.attempts[event.AttemptID]; attempt != nil {
@@ -715,7 +701,7 @@ func (facts replayFact) currentHeadAttempt(state runstate.State) *recovery.Attem
 	return selected
 }
 
-func (facts replayFact) acceptance(attemptID runstate.AttemptID, movementID runstate.MovementID, pinned *score.Score) *recovery.AcceptanceRecovery {
+func (facts replayFact) acceptance(state runstate.State, attemptID runstate.AttemptID, movementID runstate.MovementID, pinned *score.Score) *recovery.AcceptanceRecovery {
 	result := &recovery.AcceptanceRecovery{Failed: facts.failed[attemptID]}
 	if review, ok := facts.reviewOutcomes[attemptID]; ok {
 		result.Gate.ReviewOutcome = review.ReviewOutcome
@@ -732,8 +718,24 @@ func (facts replayFact) acceptance(attemptID runstate.AttemptID, movementID runs
 			break
 		}
 	}
-	if gate := facts.gates[attemptID]; gate != nil {
-		result.Gate = *gate
+	// An amendment or terminal source closes pending decisions before its
+	// decision.obsoleted audit event is appended, and an amendment supersedes
+	// its live attempts. A reachable current-head gate is therefore never lost
+	// merely because it is absent from PendingDecisions here.
+	for _, decision := range state.PendingDecisions {
+		if decision.Type == "human_gate" && decision.AttemptID == attemptID && decision.MovementID == movementID {
+			result.Gate.Requested = true
+			result.Gate.DecisionID = decision.ID
+			result.Gate.GateID = decision.GateID
+			break
+		}
+	}
+	if resolution, ok := state.ResolvedHumanGates[attemptID]; ok && resolution.MovementID == movementID {
+		result.Gate.Requested = true
+		result.Gate.Resolved = true
+		result.Gate.Approved = resolution.Disposition == "approved"
+		result.Gate.DecisionID = resolution.DecisionID
+		result.Gate.GateID = resolution.GateID
 	}
 	return result
 }

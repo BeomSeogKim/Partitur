@@ -378,6 +378,62 @@ func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRunHumanGateApprovalProjectsApprovedMark(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := humanGateKillHarnessRepository(t, bin, vendor)
+
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := strings.TrimSpace(stdout)
+	if code != 0 || runID == "" || stdout != runID+"\n" || stderr != "" {
+		t.Fatalf("waiting-human run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	waiting, err := statusprojection.Read(repository, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waiting.Run.PendingDecisions) != 1 || waiting.Run.PendingDecisions[0].Type != "human_gate" {
+		t.Fatalf("pending decisions = %#v, want one human gate", waiting.Run.PendingDecisions)
+	}
+	decisionID := waiting.Run.PendingDecisions[0].ID
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("approve exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "resume", runID)
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	report, err := statusprojection.Read(repository, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Run.Lifecycle != string(runstate.RunSucceeded) || len(report.Run.Movements) != 1 {
+		t.Fatalf("completed report = %#v", report.Run)
+	}
+	var approved []statusprojection.Mark
+	for _, mark := range report.Run.Movements[0].Marks {
+		if mark.Grade == "APPROVED" {
+			approved = append(approved, mark)
+		}
+	}
+	if len(approved) != 1 || approved[0].GateDecisionID != decisionID {
+		t.Fatalf("APPROVED marks = %#v, want gate decision %q", approved, decisionID)
+	}
+}
+
 func TestRunTaskFailureTerminalizesThroughLiveNoneDisposition(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

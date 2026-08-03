@@ -317,8 +317,7 @@ const (
 	UnjournaledLaunchSweepUnverifiable   UnjournaledLaunchState = "sweep_unverifiable"
 )
 
-// GateRecovery is a journal-replayed human-gate fact. A resolved gate remains
-// here after decision.resolved removes it from runstate.PendingDecisions.
+// GateRecovery is the recovery view of ordinary human-gate projection data.
 type GateRecovery struct {
 	Required         bool
 	Requested        bool

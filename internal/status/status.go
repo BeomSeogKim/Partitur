@@ -400,7 +400,7 @@ func marksFor(state runstate.State, movementID runstate.MovementID, snapshots ma
 			continue
 		}
 		view, ok := movementView(compiled, movementID)
-		if !ok || len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria)+len(view.Acceptance.ReviewCriteria) == 0 {
+		if !ok {
 			continue
 		}
 		acceptance, ok := state.Acceptances[runstate.AttemptID(id)]
@@ -427,6 +427,14 @@ func marksFor(state runstate.State, movementID runstate.MovementID, snapshots ma
 			artifactID := view.Acceptance.ReviewCriteria[0].Findings
 			instanceID := artifactID + "@" + id
 			marks = append(marks, Mark{Grade: "REVIEWED", AttemptID: id, Criteria: criteria, SubjectTree: acceptance.SubjectTree, ScoreRevision: attempt.ScoreRevision, FailedAttempts: failedAttempts, FindingsInstanceID: instanceID, ReviewOutcome: acceptance.ReviewOutcome})
+		}
+		// The driver and recovery handlers bind the pending gate to this accepted
+		// attempt, and Apply binds a resolution to that pending gate. Keep these
+		// fail-closed checks for malformed projection input; they are not an
+		// independently reachable journal path.
+		if resolution := state.ResolvedHumanGates[runstate.AttemptID(id)]; resolution.Disposition == "approved" && resolution.Scope.SubjectTree == acceptance.SubjectTree &&
+			resolution.ScoreRevision == attempt.ScoreRevision {
+			marks = append(marks, Mark{Grade: "APPROVED", AttemptID: id, Criteria: criteria, SubjectTree: acceptance.SubjectTree, ScoreRevision: attempt.ScoreRevision, FailedAttempts: failedAttempts, GateDecisionID: resolution.DecisionID})
 		}
 	}
 	return marks

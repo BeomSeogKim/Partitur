@@ -581,6 +581,21 @@ func Apply(input State, event Event) (State, error) {
 			decision.SubjectTree != mustString(mustObject(payload, "scope"), "subject_tree")) {
 			return state, invalid(event, "human gate resolution does not match the pending decision")
 		}
+		if decision.Type == "human_gate" {
+			resolution := HumanGateResolution{
+				DecisionID:         decisionID,
+				MovementID:         decision.MovementID,
+				AttemptID:          decision.AttemptID,
+				ScoreRevision:      decision.ScoreRevision,
+				GateID:             mustString(payload, "gate_id"),
+				Scope:              HumanGateScope{SubjectTree: mustString(mustObject(payload, "scope"), "subject_tree")},
+				Disposition:        mustString(payload, "disposition"),
+				OverriddenFindings: findingReferences(payload["overridden_findings"].([]any)),
+			}
+			resolution.OverrideReason, _ = payload["override_reason"].(string)
+			resolution.Reason, _ = payload["reason"].(string)
+			state.ResolvedHumanGates[decision.AttemptID] = resolution
+		}
 		delete(state.PendingDecisions, decisionID)
 		refreshWaitingHuman(&state)
 	case EventAmendmentRejected:
