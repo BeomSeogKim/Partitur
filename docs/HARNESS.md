@@ -161,9 +161,9 @@ unreachable: it records only that this gate has no fixture for the stated Append
 |---|---|---|---|
 | `prepare.snapshot_to_plan` | not reached by this gate's cuts | §6 step 1; §9; E.2 | No prepare/approval subprocess fixture |
 | `prepare.plan_to_prepared` | not reached by this gate's cuts | §6 step 1; B.5; E.2 | No prepare/approval subprocess fixture |
-| `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | No driver/approver delayed-observation fixture |
-| `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No pending-prepare quiesce fixture |
-| `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No pending-prepare commit fixture |
+| `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | The gate's probe blocks only `BoundaryReached` points, so the parent cannot append a prepare while the live child is paused. The prepare must carry the driver's `observed_authority_epoch`, which is allocated when that driver acquires, so it cannot be written before the run starts either |
+| `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | Same parent-injection gap as the row above; the left endpoint is reachable only inside a live driver already draining a durable prepare |
+| `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | The left endpoint is a `DurabilityReceipt`, and receipts are not probe notifications, so the gate cannot suspend after the lease move and before the approver takes the lock |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
 | `cancel.swept_to_terminal` | reachable | §6 (a), (e); E.2 | Real `cancel` subprocess matrix covers all eight `(b, c, d)` combinations at both endpoints |
 | `cancel.swept_to_quarantined` | reachable | §6 (a)-(b); E.2 | Real `cancel` subprocess matrix covers the four `(b)`-true combinations at both endpoints |

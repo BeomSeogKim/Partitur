@@ -144,6 +144,9 @@ func run(
 		return stopped(result, err)
 	}
 	defer func() {
+		if result.prepareAcknowledged {
+			return
+		}
 		if !releasesDriverLease(result.Outcome) {
 			return
 		}
@@ -168,13 +171,13 @@ func run(
 			}
 		}
 	}()
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	if err := startResult.Run.BindDriver(authority); err != nil {
 		return stopped(result, err)
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	return liveRunLoop(ctx, result, startResult.Run, store, authority, control, dependencies)
@@ -192,7 +195,7 @@ func liveRunLoop(
 	dependencies dependencies,
 ) Result {
 	for {
-		if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 			return cancelled
 		}
 		input, err := store.LoadRunInput(result.RunID)
@@ -392,7 +395,7 @@ func ExecuteAttempt(
 		}
 		defer control.Stop()
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	policy := execution.Score.EffectivePolicy()
@@ -445,7 +448,7 @@ func ExecuteAttempt(
 			return stopped(result, err)
 		}
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	adapterPath, err := dependencies.client.Resolve(performer.Adapter)
@@ -837,13 +840,13 @@ func ExecuteAttempt(
 		IntervalID:     runstate.IntervalID(adapterInterval),
 		IntervalOpened: adapterOpened,
 		MayPropose:     movement.MayPropose,
-		Cancel:         control.Cancelled(),
+		Cancel:         control.Interrupt(),
 		Probe:          dependencies.probe,
 		RecordIdentity: recordIdentity,
 		Recorder:       recorder,
 	})
 	cancel()
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	if err != nil {
@@ -881,7 +884,7 @@ func ExecuteAttempt(
 		}
 		return interrupted(result, err)
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	subjectTree := execution.BaseTree
@@ -908,7 +911,7 @@ func ExecuteAttempt(
 	}, "execution.acceptance.started"); err != nil {
 		return stopped(result, err)
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	acceptanceDisposition, err := classifyFailure(successor.FailureCase{AcceptanceReason: "acceptance_failed"})
@@ -953,7 +956,7 @@ func ExecuteAttempt(
 				RunID: execution.RunID, AttemptID: attempt.AttemptID, AttemptRoot: filepath.Dir(attempt.Worktree),
 				Worktree: attempt.Worktree, RepositoryRoot: execution.RepositoryRoot, SubjectTree: subjectTree,
 				TrampolinePath: trampoline, RemainingMS: remaining, Probe: dependencies.probe,
-				Cancel: control.Cancelled(),
+				Cancel: control.Interrupt(),
 			}, request)
 		},
 		FailureDispositionFor: func(runResult acceptance.RunCriterionResult) (runstate.Disposition, error) {
@@ -978,7 +981,7 @@ func ExecuteAttempt(
 	if evaluation.EvaluationCompleted {
 		dependencies.probe.Reached(faultpoint.PointAcceptanceEvaluationCompleted)
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	if evaluation.Cancelled {
@@ -1023,7 +1026,7 @@ func ExecuteAttempt(
 	}, "execution.acceptance.stopped"); err != nil {
 		return stopped(result, err)
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
@@ -1067,7 +1070,7 @@ func ExecuteAttempt(
 	); err != nil {
 		return stopped(result, err)
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	state, err := authority.State()
@@ -1094,7 +1097,7 @@ func ExecuteAttempt(
 	if _, err := appendEvent(runstate.EventMovementSucceeded, payload, "movement.succeeded"); err != nil {
 		return stopped(result, err)
 	}
-	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
 	result.Outcome = OutcomeSucceeded
@@ -2129,6 +2132,29 @@ func cancellationResult(ctx context.Context, result Result, control *cancellatio
 		result.Outcome = OutcomeCancelled
 		result.Reason = ""
 		result.Err = nil
+		return result, true
+	default:
+		return Result{}, false
+	}
+}
+
+func controlResult(ctx context.Context, result Result, store *runstore.Store, authority *runstore.Driver, control *cancellation.Watcher) (Result, bool) {
+	if cancelled, handled := cancellationResult(ctx, result, control); handled {
+		return cancelled, true
+	}
+	select {
+	case <-control.Prepared():
+		store.Reached(faultpoint.PointPrepareObserved)
+		if err := store.AcknowledgePrepare(ctx, authority, control.PrepareID()); err != nil {
+			if cancelled, handled := cancellationResult(ctx, result, control); handled {
+				return cancelled, true
+			}
+			return stopped(result, err), true
+		}
+		result.Outcome = OutcomeWaitingHuman
+		result.Reason = ""
+		result.Err = nil
+		result.prepareAcknowledged = true
 		return result, true
 	default:
 		return Result{}, false

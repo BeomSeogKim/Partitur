@@ -2,6 +2,7 @@ package cancellation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -20,12 +21,19 @@ type Watcher struct {
 	runID runstate.RunID
 
 	cancelled chan struct{}
+	prepared  chan struct{}
+	interrupt chan struct{}
 	wake      chan struct{}
 	stop      context.CancelFunc
 	done      chan struct{}
 
-	mu  sync.Mutex
-	err error
+	mu        sync.Mutex
+	err       error
+	prepareID runstate.PrepareID
+
+	cancelOnce    sync.Once
+	prepareOnce   sync.Once
+	interruptOnce sync.Once
 }
 
 // Watch starts the continuous control watch required while a driver owns its
@@ -40,6 +48,8 @@ func Watch(store *runstore.Store, runID runstate.RunID) (*Watcher, error) {
 		store:     store,
 		runID:     runID,
 		cancelled: make(chan struct{}),
+		prepared:  make(chan struct{}),
+		interrupt: make(chan struct{}),
 		wake:      make(chan struct{}, 1),
 		stop:      stop,
 		done:      make(chan struct{}),
@@ -58,6 +68,37 @@ func (watcher *Watcher) Cancelled() <-chan struct{} {
 		return nil
 	}
 	return watcher.cancelled
+}
+
+// Prepared closes once a durable, still-pending approval prepare is visible.
+// Unlike cancellation, preparation does not stop observation: a later
+// cancel.requested must still take priority.
+func (watcher *Watcher) Prepared() <-chan struct{} {
+	if watcher == nil {
+		return nil
+	}
+	watcher.ensureSignals()
+	return watcher.prepared
+}
+
+// Interrupt closes for either durable control intent. Driver-authorized
+// processes use it so their response recording stops at control observation.
+func (watcher *Watcher) Interrupt() <-chan struct{} {
+	if watcher == nil {
+		return nil
+	}
+	watcher.ensureSignals()
+	return watcher.interrupt
+}
+
+// PrepareID returns the exact durable prepare that closed Prepared.
+func (watcher *Watcher) PrepareID() runstate.PrepareID {
+	if watcher == nil {
+		return ""
+	}
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	return watcher.prepareID
 }
 
 // Err reports a journal-read failure that stopped the watch.
@@ -118,6 +159,7 @@ func (watcher *Watcher) watch(ctx context.Context, ticker *time.Ticker) {
 // observe returns true once the watch has reached a terminal state. Keeping
 // this separate lets the test drive a journal interleaving without a sleep.
 func (watcher *Watcher) observe() bool {
+	watcher.ensureSignals()
 	journal, err := watcher.store.ReadJournal(watcher.runID)
 	if err != nil {
 		watcher.mu.Lock()
@@ -125,11 +167,45 @@ func (watcher *Watcher) observe() bool {
 		watcher.mu.Unlock()
 		return true
 	}
+	var pending runstate.PrepareID
 	for _, event := range journal.Events {
 		if event.Type == runstate.EventCancelRequested {
-			close(watcher.cancelled)
+			watcher.cancelOnce.Do(func() { close(watcher.cancelled) })
+			watcher.interruptOnce.Do(func() { close(watcher.interrupt) })
 			return true
 		}
+		switch event.Type {
+		case runstate.EventAmendmentApprovalPrepared:
+			var payload struct {
+				PrepareID runstate.PrepareID `json:"prepare_id"`
+			}
+			if json.Unmarshal(event.Payload, &payload) == nil {
+				pending = payload.PrepareID
+			}
+		case runstate.EventAmendmentApprovalAbandoned, runstate.EventAmendmentApproved:
+			pending = ""
+		}
+	}
+	if pending != "" {
+		watcher.mu.Lock()
+		watcher.prepareID = pending
+		watcher.mu.Unlock()
+		watcher.prepareOnce.Do(func() { close(watcher.prepared) })
+		watcher.interruptOnce.Do(func() { close(watcher.interrupt) })
 	}
 	return false
+}
+
+func (watcher *Watcher) ensureSignals() {
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	if watcher.cancelled == nil {
+		watcher.cancelled = make(chan struct{})
+	}
+	if watcher.prepared == nil {
+		watcher.prepared = make(chan struct{})
+	}
+	if watcher.interrupt == nil {
+		watcher.interrupt = make(chan struct{})
+	}
 }

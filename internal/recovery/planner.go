@@ -171,7 +171,10 @@ type PrepareObservation struct {
 // established State.ScoreHead and the named affected movement has no attempt
 // on that head. The planner does not rediscover that fact from live state.
 type RevisionRestart struct {
-	MovementID runstate.MovementID
+	MovementID      runstate.MovementID
+	AttemptID       runstate.AttemptID
+	ApprovalEventID string
+	Performer       string
 }
 
 // CompositionTerminal is replay-derived evidence waiting for the terminal
@@ -207,10 +210,11 @@ type ScheduledMovement struct {
 // PendingSuccessor is a successor already selected by §3.1, RC-RESUME-041,
 // or RC-RESUME-042. C.4 only makes it durable; it never chooses another one.
 type PendingSuccessor struct {
-	MovementID runstate.MovementID
-	AttemptID  runstate.AttemptID
-	Performer  string
-	Reason     string
+	MovementID  runstate.MovementID
+	AttemptID   runstate.AttemptID
+	Performer   string
+	Reason      string
+	CausationID string
 }
 
 // Scheduler is the compiled score view C.4 needs after journal replay. A
@@ -564,6 +568,14 @@ func Plan(input Input) Decision {
 	if restart, ok := firstRevisionRestart(input.Projection.RevisionRestarts); ok {
 		decision := action(CaseRevisionRestart, ActionSelectRevisionRestart, false)
 		decision.Action.RevisionRestart = &restart
+		decision.Action.PendingSuccessor = &PendingSuccessor{
+			MovementID:  restart.MovementID,
+			AttemptID:   restart.AttemptID,
+			Performer:   restart.Performer,
+			Reason:      "revision_restart",
+			CausationID: restart.ApprovalEventID,
+		}
+		decision.Action.Continuation = ContinuationC4
 		return decision
 	}
 	if terminal, ok := firstCompositionTerminal(input.Projection.CompositionTerminals); ok {
@@ -1181,7 +1193,7 @@ func firstMissingRoutedRequest(state runstate.State) (runstate.ProposalID, bool)
 func firstRevisionRestart(restarts []RevisionRestart) (RevisionRestart, bool) {
 	var selected RevisionRestart
 	for _, restart := range restarts {
-		if restart.MovementID == "" {
+		if restart.MovementID == "" || restart.AttemptID == "" || restart.ApprovalEventID == "" || restart.Performer == "" {
 			continue
 		}
 		if selected.MovementID == "" || restart.MovementID < selected.MovementID {

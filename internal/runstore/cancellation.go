@@ -65,7 +65,7 @@ func (store *Store) ExecuteCancellation(ctx context.Context, runID runstate.RunI
 	if state.Run == runstate.RunNotStarted || state.Run.Terminal() || !state.CancelRequested {
 		return ErrLeaseConflict
 	}
-	if err := sweepCancellationSessions(ctx, state); err != nil {
+	if err := sweepRecordedSessions(ctx, state); err != nil {
 		return err
 	}
 	store.probe.Reached(faultpoint.PointCancelSessionsSwept)
@@ -103,7 +103,7 @@ func (store *Store) executeCancellation(runID runstate.RunID) error {
 			}
 		}
 		if state.OpenExecution != nil {
-			event, err := cancellationStopEvent(transaction, state, runID)
+			event, err := controlStopEvent(transaction, state, runID, "cancelled")
 			if err != nil {
 				return err
 			}
@@ -146,7 +146,7 @@ func (store *Store) executeCancellation(runID runstate.RunID) error {
 	})
 }
 
-func sweepCancellationSessions(ctx context.Context, state runstate.State) error {
+func sweepRecordedSessions(ctx context.Context, state runstate.State) error {
 	attemptIDs := make([]runstate.AttemptID, 0, len(state.AdapterLaunches))
 	for attemptID := range state.AdapterLaunches {
 		attemptIDs = append(attemptIDs, attemptID)
@@ -231,10 +231,10 @@ func (transaction *Txn) fileMatchesHash(path Path, expected runstate.Hash) (bool
 	return Hash(digest(contents)) == Hash(expected), nil
 }
 
-func cancellationStopEvent(transaction *Txn, state runstate.State, runID runstate.RunID) (runstate.Event, error) {
+func controlStopEvent(transaction *Txn, state runstate.State, runID runstate.RunID, reason string) (runstate.Event, error) {
 	interval := state.OpenExecution
 	if interval == nil {
-		return runstate.Event{}, errors.New("cancellation interval is absent")
+		return runstate.Event{}, errors.New("control interval is absent")
 	}
 	started, err := time.Parse(time.RFC3339Nano, interval.WallStart)
 	if err != nil {
@@ -262,12 +262,12 @@ func cancellationStopEvent(transaction *Txn, state runstate.State, runID runstat
 		break
 	}
 	if causationID == "" {
-		return runstate.Event{}, errors.New("cancellation execution start source is absent")
+		return runstate.Event{}, errors.New("control execution start source is absent")
 	}
 	return runstate.Event{
 		RunID: runID, ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventExecutionStopped, CausationID: causationID,
 		Payload: cancellationPayload(map[string]any{
-			"interval_id": string(interval.ID), "reason": "cancelled", "charging": "clamped", "charged_duration": duration,
+			"interval_id": string(interval.ID), "reason": reason, "charging": "clamped", "charged_duration": duration,
 			"observed_at": observed.Format("2006-01-02T15:04:05.000Z"),
 		}),
 	}, nil

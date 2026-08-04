@@ -271,7 +271,7 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 	facts := replayFacts(events)
 	projection := recovery.Projection{
 		State:                state,
-		RevisionRestarts:     facts.revisionRestarts(state),
+		RevisionRestarts:     facts.revisionRestarts(state, pinned, resolved),
 		CompositionTerminals: facts.compositionTerminals(events, state.ScoreHead.Revision),
 		Scheduler:            schedulerFromScore(state, pinned),
 	}
@@ -374,6 +374,7 @@ type replayFact struct {
 }
 
 type revisionApproval struct {
+	EventID             string
 	Revision            uint64
 	Finalization        bool
 	SupersededAttemptID []runstate.AttemptID
@@ -469,6 +470,7 @@ func replayFacts(events []runstate.Event) replayFact {
 			}
 		case runstate.EventAmendmentApproved:
 			approval := revisionApproval{
+				EventID:      event.EventID,
 				Revision:     uintValue(payload, "new_revision"),
 				Finalization: boolValue(payload, "finalization"),
 			}
@@ -533,7 +535,7 @@ func (facts replayFact) failureClassification(
 	return result
 }
 
-func (facts replayFact) revisionRestarts(state runstate.State) []recovery.RevisionRestart {
+func (facts replayFact) revisionRestarts(state runstate.State, pinned *score.Score, resolved *cast.Cast) []recovery.RevisionRestart {
 	var restarts []recovery.RevisionRestart
 	for _, approval := range facts.approvals {
 		if approval.Revision != state.ScoreHead.Revision || approval.Finalization {
@@ -544,7 +546,24 @@ func (facts replayFact) revisionRestarts(state runstate.State) []recovery.Revisi
 			if !ok || facts.hasAttemptOnRevision(attempt.MovementID, approval.Revision) {
 				continue
 			}
-			restarts = append(restarts, recovery.RevisionRestart{MovementID: attempt.MovementID})
+			performer := ""
+			if pinned != nil && resolved != nil {
+				for _, movement := range pinned.Movements() {
+					if runstate.MovementID(movement.ID) != attempt.MovementID {
+						continue
+					}
+					if binding, ok := resolved.Binding(movement.PartID); ok {
+						performer = binding.Performer
+					}
+					break
+				}
+			}
+			restarts = append(restarts, recovery.RevisionRestart{
+				MovementID:      attempt.MovementID,
+				AttemptID:       attemptID,
+				ApprovalEventID: approval.EventID,
+				Performer:       performer,
+			})
 		}
 	}
 	return restarts

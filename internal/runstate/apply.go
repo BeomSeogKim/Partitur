@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 )
 
 var (
@@ -92,6 +93,9 @@ func Apply(input State, event Event) (State, error) {
 		return state, err
 	}
 	wasTerminal := state.Run.Terminal()
+	if state.PendingPrepare != nil && !preparePendingMutation(event.Type) {
+		return state, transition(event, "prepare_pending")
+	}
 
 	switch event.Type {
 	case EventRunStarted:
@@ -681,6 +685,13 @@ func Apply(input State, event Event) (State, error) {
 		if mustUint(payload, "new_revision") != baseRevision+1 {
 			return state, invalid(event, "new_revision must immediately follow base_revision")
 		}
+		if mustUint(payload, "observed_authority_epoch") != state.Authority.Epoch {
+			return state, invalid(event, "observed_authority_epoch does not match current authority")
+		}
+		deadline, err := time.Parse("2006-01-02T15:04:05.000Z", mustString(payload, "quiesce_deadline"))
+		if err != nil || deadline.Format("2006-01-02T15:04:05.000Z") != mustString(payload, "quiesce_deadline") {
+			return state, invalid(event, "quiesce_deadline must be RFC 3339 milliseconds")
+		}
 		targetAttemptIDs := mustStrings(payload, "target_attempt_ids")
 		if !slices.Equal(targetAttemptIDs, cancellableAttemptIDs(state)) {
 			return state, invalid(event, "target_attempt_ids do not match the pre-event projection")
@@ -908,6 +919,16 @@ func Apply(input State, event Event) (State, error) {
 		}
 	}
 	return state, nil
+}
+
+func preparePendingMutation(eventType EventType) bool {
+	switch eventType {
+	case EventExecutionStopped, EventCancelRequested,
+		EventAmendmentApprovalAbandoned, EventAmendmentApproved:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateDerivedCausationID(event Event) error {

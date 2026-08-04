@@ -3366,6 +3366,8 @@ func TestReclaimAuthorityIsTheOnlyAuthorityBoundary(t *testing.T) {
 		recovery.ActionRefuseResume,
 		recovery.ActionReturnWaitingHuman,
 		recovery.ActionExecuteCancellation,
+		recovery.ActionCompleteOrAbandonPrepare,
+		recovery.ActionSelectRevisionRestart,
 	} {
 		if actionRequiresDriver(recovery.Action{Kind: action}) {
 			t.Fatalf("%s unexpectedly requires authority", action)
@@ -3373,6 +3375,35 @@ func TestReclaimAuthorityIsTheOnlyAuthorityBoundary(t *testing.T) {
 	}
 	if !actionRequiresDriver(recovery.Action{Kind: recovery.ActionReclaimAuthority}) {
 		t.Fatal("reclaim_authority must establish authority")
+	}
+}
+
+func TestSelectRevisionRestartRequiresThePlannerSelectedC4Successor(t *testing.T) {
+	action := recovery.Action{
+		Kind: recovery.ActionSelectRevisionRestart,
+		RevisionRestart: &recovery.RevisionRestart{
+			MovementID: "movement", AttemptID: "attempt", ApprovalEventID: "approval", Performer: "performer",
+		},
+		PendingSuccessor: &recovery.PendingSuccessor{
+			MovementID: "movement", AttemptID: "attempt", Performer: "performer", Reason: "revision_restart", CausationID: "approval",
+		},
+		Continuation: recovery.ContinuationC4,
+	}
+	if err := selectRevisionRestart(context.Background(), HandlerContext{}, action); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*recovery.Action){
+		func(action *recovery.Action) { action.PendingSuccessor.Reason = "initial" },
+		func(action *recovery.Action) { action.PendingSuccessor.CausationID = "other" },
+		func(action *recovery.Action) { action.Continuation = recovery.ContinuationC2 },
+	} {
+		mutated := action
+		pending := *action.PendingSuccessor
+		mutated.PendingSuccessor = &pending
+		mutate(&mutated)
+		if err := selectRevisionRestart(context.Background(), HandlerContext{}, mutated); err == nil {
+			t.Fatalf("invalid revision restart action was accepted: %+v", mutated)
+		}
 	}
 }
 
