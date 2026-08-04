@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches nineteen E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches twenty E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.

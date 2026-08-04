@@ -277,7 +277,7 @@ func retryCoveragePoints() []faultpoint.PointID {
 }
 
 func TestKillHarnessCatalogCrossCheck(t *testing.T) {
-	design := edgeIDsFromAppendixE(t)
+	design, _ := edgeIDsFromAppendixE(t)
 	dispositions := gateCutDispositions(t)
 	if len(design) == 0 || len(dispositions) == 0 {
 		t.Fatal("catalog extraction must not be empty")
@@ -286,17 +286,7 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 		t.Fatalf("catalog count mismatch: DESIGN=%d HARNESS=%d", len(design), len(dispositions))
 	}
 
-	reachable := make(map[string]bool)
-	for _, edge := range killHarnessEdges() {
-		id := string(edge.id)
-		if reachable[id] {
-			t.Fatalf("kill harness declares duplicate reachable edge %q", id)
-		}
-		reachable[id] = true
-	}
-	if len(reachable) != 20 {
-		t.Fatalf("reachable edge count=%d, want twenty", len(reachable))
-	}
+	reachable := reachableKillHarnessEdges(t)
 	if len(retryCoveragePoints()) != 2 || retryCoveragePoints()[0] == retryCoveragePoints()[1] {
 		t.Fatalf("retry coverage must name two distinct cut sides: %v", retryCoveragePoints())
 	}
@@ -329,19 +319,112 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 	}
 }
 
+func TestE2CatalogCountClaims(t *testing.T) {
+	catalogRows, boundaryRows := edgeIDsFromAppendixE(t)
+	design, err := os.ReadFile(filepath.Join("..", "..", "docs", "DESIGN.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCountClaim(t, string(design),
+		regexp.MustCompile(`\*\*([A-Z][a-z-]*) of the ([a-z-]+)\s+have a `+"`B`"+` endpoint\*\*`),
+		boundaryRows, len(catalogRows),
+	)
+
+	reached := reachableKillHarnessEdges(t)
+	harness, err := os.ReadFile(filepath.Join("..", "..", "docs", "HARNESS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCountClaim(t, string(harness), regexp.MustCompile(`This gate reaches ([a-z-]+) E\.2 edges\.`), len(reached))
+}
+
+func reachableKillHarnessEdges(t *testing.T) map[string]bool {
+	t.Helper()
+	reachable := make(map[string]bool)
+	for _, edge := range killHarnessEdges() {
+		id := string(edge.id)
+		if reachable[id] {
+			t.Fatalf("kill harness declares duplicate reachable edge %q", id)
+		}
+		reachable[id] = true
+	}
+	if len(reachable) == 0 {
+		t.Fatal("kill harness declares no reachable edges")
+	}
+	return reachable
+}
+
+func assertCountClaim(t *testing.T, contents string, claim *regexp.Regexp, counts ...int) {
+	t.Helper()
+	matches := claim.FindAllStringSubmatch(contents, -1)
+	if len(matches) == 0 {
+		t.Fatalf("count claim %q is absent", claim)
+	}
+	if len(matches) != 1 || len(matches[0])-1 != len(counts) {
+		t.Fatalf("count claim %q matches=%d groups=%d", claim, len(matches), len(matches[0])-1)
+	}
+	for index, count := range counts {
+		if !strings.EqualFold(matches[0][index+1], countWord(t, count)) {
+			t.Fatalf("count claim %q value %q, want %q", claim, matches[0][index+1], countWord(t, count))
+		}
+	}
+}
+
+func countWord(t *testing.T, count int) string {
+	t.Helper()
+	ones := []string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"}
+	if count < len(ones) {
+		return ones[count]
+	}
+	tens := []string{"", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+	if count >= 100 {
+		t.Fatalf("count %d cannot be expressed by this prose guard", count)
+	}
+	result := tens[count/10]
+	if count%10 != 0 {
+		result += "-" + ones[count%10]
+	}
+	return result
+}
+
 type gateCutDisposition struct {
 	kind   string
 	clause string
 	reason string
 }
 
-func edgeIDsFromAppendixE(t *testing.T) map[string]bool {
+func edgeIDsFromAppendixE(t *testing.T) (map[string]bool, int) {
 	t.Helper()
 	contents, err := os.ReadFile(filepath.Join("..", "..", "docs", "DESIGN.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return edgeIDsFromTable(t, string(contents), "## E.2 The catalog", "## E.3 ", 1, 1)
+	lines := strings.Split(string(contents), "\n")
+	start, end := tableBoundsCounted(t, lines, "## E.2 The catalog", "## E.3 ", 1, 1)
+	pattern := regexp.MustCompile("^`([a-z][a-z0-9_.]*)`$")
+	edges := make(map[string]bool)
+	boundaryRows := 0
+	for _, line := range lines[start:end] {
+		if !strings.HasPrefix(line, "|") || strings.HasPrefix(line, "| Edge |") || strings.HasPrefix(line, "|---") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) != 7 {
+			t.Fatalf("unparseable DESIGN E.2 row %q", line)
+		}
+		match := pattern.FindStringSubmatch(strings.TrimSpace(cells[1]))
+		if match == nil || edges[match[1]] {
+			t.Fatalf("unparseable or duplicate DESIGN E.2 row %q", line)
+		}
+		edges[match[1]] = true
+		if strings.HasSuffix(strings.TrimSpace(cells[2]), "`B`") || strings.HasSuffix(strings.TrimSpace(cells[3]), "`B`") {
+			boundaryRows++
+		}
+	}
+	if len(edges) == 0 {
+		t.Fatal("DESIGN E.2 extraction produced no rows")
+	}
+	return edges, boundaryRows
 }
 
 func gateCutDispositions(t *testing.T) map[string]gateCutDisposition {
@@ -373,28 +456,6 @@ func gateCutDispositions(t *testing.T) map[string]gateCutDisposition {
 		t.Fatal("HARNESS disposition extraction produced no rows")
 	}
 	return rows
-}
-
-func edgeIDsFromTable(t *testing.T, contents, heading, nextHeading string, wantHeading, wantNext int) map[string]bool {
-	t.Helper()
-	lines := strings.Split(contents, "\n")
-	start, end := tableBoundsCounted(t, lines, heading, nextHeading, wantHeading, wantNext)
-	pattern := regexp.MustCompile("^\\| `([a-z][a-z0-9_.]*)` \\|")
-	edges := make(map[string]bool)
-	for _, line := range lines[start:end] {
-		if !strings.HasPrefix(line, "|") || strings.HasPrefix(line, "| Edge |") || strings.HasPrefix(line, "|---") {
-			continue
-		}
-		match := pattern.FindStringSubmatch(line)
-		if match == nil || edges[match[1]] {
-			t.Fatalf("unparseable or duplicate %s row %q", heading, line)
-		}
-		edges[match[1]] = true
-	}
-	if len(edges) == 0 {
-		t.Fatalf("%s extraction produced no edge IDs", heading)
-	}
-	return edges
 }
 
 func tableBounds(t *testing.T, lines []string, heading, nextHeading string) (int, int) {
