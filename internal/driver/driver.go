@@ -511,8 +511,9 @@ func ExecuteAttempt(
 		Budget: protocol.Budget{
 			RemainingMS: remainingMS,
 		},
-		Inputs:   inputs,
-		Feedback: []protocol.Feedback{},
+		Inputs:            inputs,
+		Feedback:          []protocol.Feedback{},
+		ResolvedDecisions: []protocol.ResolvedDecision{},
 	}
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		encoded, err := json.Marshal(extension)
@@ -570,6 +571,10 @@ func ExecuteAttempt(
 			return faultpoint.DurabilityReceipt{}, err
 		}
 		features := recognizedFeatures(probe.Features)
+		resolutions, err := resolutionProjection(request.ResolvedDecisions)
+		if err != nil {
+			return faultpoint.DurabilityReceipt{}, err
+		}
 		executionHash, err = executionDependencyHash(
 			execution.Score,
 			movement,
@@ -580,6 +585,7 @@ func ExecuteAttempt(
 			plan.Hash(),
 			baseCompositionHash,
 			request.Inputs,
+			request.ResolvedDecisions,
 			request.Feedback,
 		)
 		if err != nil {
@@ -591,6 +597,7 @@ func ExecuteAttempt(
 			"enforcement":               probe.Enforcement,
 			"negotiated_features":       features,
 			"truncated_resolutions":     []any{},
+			"delivered_resolutions":     resolutions,
 			"delivered_feedback":        feedbackProjection(request.Feedback),
 			"advisory_dimensions":       advisory,
 			"execution_dependency_hash": executionHash,
@@ -1464,9 +1471,10 @@ func executionDependencyHash(
 	acceptanceHash runstate.Hash,
 	baseCompositionHash string,
 	inputs []protocol.ArtifactRef,
+	resolutions []protocol.ResolvedDecision,
 	feedback []protocol.Feedback,
 ) (string, error) {
-	value := executionDependencyProjection(
+	value, err := executionDependencyProjection(
 		compiled,
 		movement,
 		part,
@@ -1476,8 +1484,12 @@ func executionDependencyHash(
 		acceptanceHash,
 		baseCompositionHash,
 		inputs,
+		resolutions,
 		feedback,
 	)
+	if err != nil {
+		return "", err
+	}
 	return canonical.Hash(canonical.DomainExecutionDependency, value)
 }
 
@@ -1491,8 +1503,9 @@ func executionDependencyProjection(
 	acceptanceHash runstate.Hash,
 	baseCompositionHash string,
 	inputs []protocol.ArtifactRef,
+	resolutions []protocol.ResolvedDecision,
 	feedback []protocol.Feedback,
-) map[string]any {
+) (map[string]any, error) {
 	outputs := make([]any, len(movement.Outputs))
 	for index, output := range movement.Outputs {
 		outputs[index] = map[string]any{
@@ -1510,6 +1523,10 @@ func executionDependencyProjection(
 		}
 	}
 	feedbackValues := feedbackProjection(feedback)
+	resolutionValues, err := resolutionProjection(resolutions)
+	if err != nil {
+		return nil, err
+	}
 	movementValue := map[string]any{
 		"id":          movement.ID,
 		"part":        movement.PartID,
@@ -1549,13 +1566,38 @@ func executionDependencyProjection(
 			"side_effects": stringsToAny(compiled.EffectivePolicy().SideEffects),
 		},
 		"score":              scoreValue,
-		"resolved_decisions": []any{},
+		"resolved_decisions": resolutionValues,
 		"feedback":           feedbackValues,
 	}
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		value["extensions"] = extension
 	}
-	return value
+	return value, nil
+}
+
+func resolutionProjection(resolutions []protocol.ResolvedDecision) ([]any, error) {
+	values := make([]any, len(resolutions))
+	for index, decision := range resolutions {
+		body := map[string]any{"kind": string(decision.Kind)}
+		switch decision.Kind {
+		case protocol.ResolvedDecisionAnswer:
+			body["answer"] = decision.Answer
+		case protocol.ResolvedDecisionAmendmentRejected:
+			body["reason"] = decision.Reason
+		default:
+			return nil, fmt.Errorf("unknown resolved decision kind %q", decision.Kind)
+		}
+		digest, err := canonical.Hash(canonical.DomainResolutionBody, body)
+		if err != nil {
+			return nil, err
+		}
+		values[index] = map[string]any{
+			"decision_id": decision.DecisionID,
+			"kind":        string(decision.Kind),
+			"digest":      digest,
+		}
+	}
+	return values, nil
 }
 
 func feedbackProjection(feedback []protocol.Feedback) []any {

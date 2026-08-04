@@ -229,10 +229,17 @@ type AdapterObservation struct {
 	Enforcement             map[string]bool
 	NegotiatedFeatures      []string
 	TruncatedResolutions    []string
+	DeliveredResolutions    []DeliveredResolution
 	DeliveredFeedback       []DeliveredFeedback
 	AdvisoryDimensions      []string
 	ExecutionDependencyHash Hash
 	IdentityVersions        json.RawMessage
+}
+
+type DeliveredResolution struct {
+	DecisionID string
+	Kind       string
+	Digest     Hash
 }
 
 type DeliveredFeedback struct {

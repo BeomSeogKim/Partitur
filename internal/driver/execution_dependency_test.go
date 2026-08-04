@@ -32,7 +32,7 @@ func TestExecutionDependencyProjectionCompleteness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection := executionDependencyProjection(
+	projection, err := executionDependencyProjection(
 		prepared.Score,
 		movement,
 		part,
@@ -43,7 +43,11 @@ func TestExecutionDependencyProjectionCompleteness(t *testing.T) {
 		compositionHash,
 		nil,
 		nil,
+		nil,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertDeclaredProjectionFields(t, "A.5", projection, declared.top)
 	movementValue, ok := projection["movement"].(map[string]any)
 	if !ok {
@@ -114,6 +118,7 @@ func TestExecutionDependencyHashBindsFanInIdentity(t *testing.T) {
 			composition,
 			nil,
 			nil,
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -169,6 +174,7 @@ func TestExecutionDependencyHashBindsDeliveredArtifactInstance(t *testing.T) {
 			effectiveGrants(movement, prepared.Score.EffectivePolicy()), map[string]any{},
 			plan.Hash(), "sha256:tree", value,
 			nil,
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -221,7 +227,7 @@ func TestExecutionDependencyHashBindsDeliveredFeedback(t *testing.T) {
 		got, err := executionDependencyHash(
 			prepared.Score, movement, part, performer,
 			effectiveGrants(movement, prepared.Score.EffectivePolicy()), map[string]any{},
-			plan.Hash(), "sha256:tree", nil, feedback,
+			plan.Hash(), "sha256:tree", nil, nil, feedback,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -241,6 +247,42 @@ func TestExecutionDependencyHashBindsDeliveredFeedback(t *testing.T) {
 	differentBytes[0].ContentHash = "sha256:second"
 	if first == hash(differentBytes) {
 		t.Fatal("execution dependency hash does not bind delivered feedback content hash")
+	}
+}
+
+func TestExecutionDependencyHashBindsDeliveredResolutions(t *testing.T) {
+	prepared := fanInProjectionFixture(t)
+	movement, part, performer, plan, err := selectAttempt(
+		prepared.Score, prepared.Cast, "inspect", "worker",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := func(resolutions []protocol.ResolvedDecision) string {
+		t.Helper()
+		got, err := executionDependencyHash(
+			prepared.Score, movement, part, performer,
+			effectiveGrants(movement, prepared.Score.EffectivePolicy()), map[string]any{},
+			plan.Hash(), "sha256:tree", nil, resolutions, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	resolutions := []protocol.ResolvedDecision{{
+		DecisionID: "decision-1", Kind: protocol.ResolvedDecisionAnswer, Answer: "yes",
+	}}
+	first := hash(resolutions)
+	differentAnswer := append([]protocol.ResolvedDecision(nil), resolutions...)
+	differentAnswer[0].Answer = "no"
+	if first == hash(differentAnswer) {
+		t.Fatal("execution dependency hash does not bind delivered resolution body")
+	}
+	differentID := append([]protocol.ResolvedDecision(nil), resolutions...)
+	differentID[0].DecisionID = "decision-2"
+	if first == hash(differentID) {
+		t.Fatal("execution dependency hash does not bind delivered resolution id")
 	}
 }
 
