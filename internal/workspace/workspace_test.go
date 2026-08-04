@@ -1184,6 +1184,7 @@ func appendAttemptVerifyingHistory(t *testing.T, run *Run, attempt *AttemptWorks
 			},
 			"negotiated_features":       []any{},
 			"truncated_resolutions":     []any{},
+			"delivered_resolutions":     []any{},
 			"delivered_feedback":        []any{},
 			"advisory_dimensions":       []any{},
 			"execution_dependency_hash": "sha256:dependency",

@@ -50,6 +50,22 @@ func TestAdapterProbedRecordsDeliveredFeedback(t *testing.T) {
 	}
 }
 
+func TestAdapterProbedRecordsDeliveredResolutions(t *testing.T) {
+	lines := recoveryDesignLines(t)
+	section := recoveryDocumentSection(t, lines,
+		"adapter.probed {",
+		"attempt.started {")
+	contents := strings.Join(strings.Fields(strings.Join(section, "\n")), " ")
+	for _, clause := range []string{
+		"delivered_resolutions: [ {decision_id, kind, digest} ],",
+		"# in delivered order; always present, including [], so the # exact request remains reconstructible rather than inferring # delivery from eligibility and truncation",
+	} {
+		if !strings.Contains(contents, clause) {
+			t.Fatalf("adapter.probed delivered resolutions is missing clause %q", clause)
+		}
+	}
+}
+
 func TestRoutedProposalE2EdgesAreSpecified(t *testing.T) {
 	lines := recoveryDesignLines(t)
 	section := recoveryDocumentSection(t, lines,

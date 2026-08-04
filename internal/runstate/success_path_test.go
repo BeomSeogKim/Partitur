@@ -505,6 +505,69 @@ func TestAdapterProbedProjectsDeliveredFeedback(t *testing.T) {
 	}
 }
 
+func TestAdapterProbedProjectsDeliveredResolutions(t *testing.T) {
+	state := runningAttemptState(t)
+	payload := adapterProbedPayload()
+	payload["delivered_resolutions"] = []any{map[string]any{
+		"decision_id": "decision-1",
+		"kind":        "answer",
+		"digest":      "sha256:answer",
+	}}
+	state = applyFixture(t, state, EventAdapterProbed, payload, attemptEnvelope)
+	if got := state.AdapterObservations["a1"].DeliveredResolutions; !reflect.DeepEqual(got, []DeliveredResolution{{
+		DecisionID: "decision-1", Kind: "answer", Digest: "sha256:answer",
+	}}) {
+		t.Fatalf("delivered resolutions = %#v", got)
+	}
+}
+
+func TestAdapterProbedDeliveredResolutionGuards(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{
+			name: "absent required selection",
+			mutate: func(payload map[string]any) {
+				delete(payload, "delivered_resolutions")
+			},
+			want: `required field "delivered_resolutions" is absent`,
+		},
+		{
+			name: "missing tuple member",
+			mutate: func(payload map[string]any) {
+				payload["delivered_resolutions"] = []any{map[string]any{
+					"decision_id": "decision-1",
+					"kind":        "answer",
+				}}
+			},
+			want: `delivered_resolutions: entry 0: required field "digest" is absent`,
+		},
+		{
+			name: "malformed tuple member",
+			mutate: func(payload map[string]any) {
+				payload["delivered_resolutions"] = []any{map[string]any{
+					"decision_id": "decision-1",
+					"kind":        "answer",
+					"digest":      12,
+				}}
+			},
+			want: "delivered_resolutions: entry 0: digest must be a string",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := adapterProbedPayload()
+			test.mutate(payload)
+			err := ValidateEvent(fixtureEvent(EventAdapterProbed, payload, attemptEnvelope))
+			if !errors.Is(err, ErrInvalidEvent) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want invalid event containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestAdapterProbedDeliveredFeedbackGuards(t *testing.T) {
 	tests := []struct {
 		name   string

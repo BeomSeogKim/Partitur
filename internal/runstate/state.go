@@ -73,6 +73,7 @@ func cloneState(input State) State {
 		observation.Enforcement = cloneMap(observation.Enforcement)
 		observation.NegotiatedFeatures = append([]string(nil), observation.NegotiatedFeatures...)
 		observation.TruncatedResolutions = append([]string(nil), observation.TruncatedResolutions...)
+		observation.DeliveredResolutions = append([]DeliveredResolution(nil), observation.DeliveredResolutions...)
 		observation.DeliveredFeedback = append([]DeliveredFeedback(nil), observation.DeliveredFeedback...)
 		observation.AdvisoryDimensions = append([]string(nil), observation.AdvisoryDimensions...)
 		observation.IdentityVersions = append([]byte(nil), observation.IdentityVersions...)

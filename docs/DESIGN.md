@@ -4673,6 +4673,11 @@ adapter.probed {
                                   #   payload change.
   truncated_resolutions: [decision_id],
                                   # sorted; resolutions dropped for the frame budget (§4)
+  delivered_resolutions: [
+    {decision_id, kind, digest}
+  ],                              # in delivered order; always present, including [], so the
+                                  # exact request remains reconstructible rather than inferring
+                                  # delivery from eligibility and truncation
   delivered_feedback: [
     {previous_attempt_id, kind, artifact_instance_id, content_hash}
   ],                              # sorted by (previous_attempt_id, artifact_instance_id); always
