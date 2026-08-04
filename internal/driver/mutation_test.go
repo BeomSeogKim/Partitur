@@ -170,6 +170,36 @@ func TestMutationDeliveredInputsIgnoreUnrelatedSuccessfulAttempt(t *testing.T) {
 	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsDeliveredArtifactInstance", goEnvironment, "driver.go", `result, exists := state.MovementResults[producers[artifactID]]`, `result, exists := state.MovementResults["unrelated"]`)
 }
 
+func TestMutationExecutionDependencyHashBindsResolvedQuestions(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecuteBriefProjectsResolvedQuestions(t)
+	assertDriverMutationKilled(t, "TestExecuteBriefProjectsResolvedQuestions", goEnvironment, "driver.go", `"resolved_questions": resolvedQuestionProjection(compiled.ResolvedQuestions()),`, `"resolved_questions": []any{}, // mutation: resolved score questions omitted`)
+}
+
+func TestMutationExecutionDependencyHashBindsScoreBaseForMayPropose(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecutionDependencyHashBindsScoreBaseForMayPropose(t)
+	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsScoreBaseForMayPropose", goEnvironment, "driver.go", `if movement.MayPropose {
+		scoreBaseHash, err := compiled.Hash()
+		if err != nil {
+			return nil, err
+		}
+		movementValue["score_base_hash"] = scoreBaseHash
+	}`, `if movement.MayPropose {
+		// mutation: semantic score-base hash omitted
+	}`)
+}
+
+func TestMutationExecutionDependencyHashBindsDraftPhase(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecutionDependencyHashBindsDraftPhase(t)
+	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsDraftPhase", goEnvironment, "driver.go", `if movement.Phase == "draft" {
+		movementValue["phase"] = movement.Phase
+	}`, `if movement.Phase == "draft" {
+		// mutation: draft phase omitted
+	}`)
+}
+
 func TestMutationReviewSubjectInputRendersReservedBriefContract(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestLiveReviewSubjectInputRendersReservedBriefContract(t)

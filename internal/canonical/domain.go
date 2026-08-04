@@ -41,7 +41,7 @@ const (
 	ProjectionVersionMovementComposition    = 1
 	ProjectionVersionCompositionEnvironment = 1
 	ProjectionVersionCompositionSubject     = 2
-	ProjectionVersionExecutionDependency    = 2
+	ProjectionVersionExecutionDependency    = 3
 	ProjectionVersionPatchOperations        = 1
 	ProjectionVersionResolutionBody         = 1
 )

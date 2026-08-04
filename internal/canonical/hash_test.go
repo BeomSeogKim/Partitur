@@ -80,7 +80,8 @@ func TestProjectionVersionsMatchDesignA3(t *testing.T) {
 	}
 }
 
-var a3ProjectionVersionRow = regexp.MustCompile("(?m)^\\| per-domain `projection_version` \\| .+ \\| ([0-9]+), except (.+): ([0-9]+) \\|$")
+var a3ProjectionVersionRow = regexp.MustCompile("(?m)^\\| per-domain `projection_version` \\| .+ \\| ([0-9]+), except (.+) \\|$")
+var a3ProjectionVersionException = regexp.MustCompile("`([^`]+)`: ([0-9]+)")
 
 // projectionVersionsFromDesignA3 recognizes A.3's one default projection
 // version plus inline domain exceptions. It does not understand a per-domain
@@ -110,10 +111,6 @@ func projectionVersionsFromDesignA3(t *testing.T) map[Domain]int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exceptionVersion, err := strconv.Atoi(match[3])
-	if err != nil {
-		t.Fatal(err)
-	}
 	versions := map[Domain]int{}
 	for _, domain := range []Domain{
 		DomainScore,
@@ -133,10 +130,14 @@ func projectionVersionsFromDesignA3(t *testing.T) map[Domain]int {
 	} {
 		versions[domain] = defaultVersion
 	}
-	for _, rawDomain := range strings.Split(match[2], " and ") {
-		domain := Domain(strings.Trim(rawDomain, "`"))
+	for _, exception := range a3ProjectionVersionException.FindAllStringSubmatch(match[2], -1) {
+		domain := Domain(exception[1])
 		if _, ok := versions[domain]; !ok {
 			t.Fatalf("A.3 projection_version exception domain %q is unregistered", domain)
+		}
+		exceptionVersion, err := strconv.Atoi(exception[2])
+		if err != nil {
+			t.Fatal(err)
 		}
 		versions[domain] = exceptionVersion
 	}
@@ -186,14 +187,6 @@ func TestHashSeparatesDomainsAndProjectionVersions(t *testing.T) {
 
 func TestExecutionDependencyHashChangesWithProjectionVersion(t *testing.T) {
 	value := map[string]any{"same": true}
-	versionOne, err := hashPreimage(
-		DomainExecutionDependency,
-		Versions{CanonicalEncoding: 1, Projection: 1},
-		value,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	versionTwo, err := hashPreimage(
 		DomainExecutionDependency,
 		Versions{CanonicalEncoding: 1, Projection: 2},
@@ -202,15 +195,23 @@ func TestExecutionDependencyHashChangesWithProjectionVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if versionOne == versionTwo {
-		t.Fatalf("execution dependency projection versions collided: %s", versionOne)
+	versionThree, err := hashPreimage(
+		DomainExecutionDependency,
+		Versions{CanonicalEncoding: 1, Projection: 3},
+		value,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versionTwo == versionThree {
+		t.Fatalf("execution dependency projection versions collided: %s", versionTwo)
 	}
 	current, err := Hash(DomainExecutionDependency, value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current != versionTwo {
-		t.Fatalf("execution dependency current hash = %q, want v2 hash %q", current, versionTwo)
+	if current != versionThree {
+		t.Fatalf("execution dependency current hash = %q, want v3 hash %q", current, versionThree)
 	}
 }
 
@@ -252,7 +253,7 @@ func TestCompositionSubjectHashSupportsHistoricalAndCurrentVersions(t *testing.T
 	}
 }
 
-func TestProjectionVersionTwoIsSupportedOnlyForCompositionSubjectAndExecutionDependency(t *testing.T) {
+func TestProjectionVersionTwoIsSupportedOnlyForCompositionSubject(t *testing.T) {
 	for _, domain := range []Domain{
 		DomainScore,
 		DomainScoreSubtree,
@@ -273,13 +274,13 @@ func TestProjectionVersionTwoIsSupportedOnlyForCompositionSubjectAndExecutionDep
 	}
 }
 
-func TestExecutionDependencyHistoricalV1FailsClosed(t *testing.T) {
+func TestExecutionDependencyHistoricalV2FailsClosed(t *testing.T) {
 	if _, err := hashWithVersions(
 		DomainExecutionDependency,
-		Versions{CanonicalEncoding: 1, Projection: 1},
+		Versions{CanonicalEncoding: 1, Projection: 2},
 		nil,
 	); !errors.Is(err, ErrUnsupportedRunFormat) {
-		t.Fatalf("execution dependency v1 error = %v, want unsupported format", err)
+		t.Fatalf("execution dependency v2 error = %v, want unsupported format", err)
 	}
 }
 

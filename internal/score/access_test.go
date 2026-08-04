@@ -45,6 +45,17 @@ func TestExecutionReadSurface(t *testing.T) {
 		t.Fatal("waived apply gate was hidden from the execution view")
 	}
 
+	questions := append(arrayAt(document, "open_questions"), map[string]any{
+		"id": "a-waived", "question": "May this be waived?", "waived": true,
+	})
+	document["open_questions"] = questions
+	if got, want := assertCompiles(t, document).ResolvedQuestions(), []ResolvedQuestionView{
+		{ID: "a-waived", Question: "May this be waived?"},
+		{ID: "q-1", Question: "Is the intent complete?", Resolution: "Yes.", ResolutionPresent: true},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ResolvedQuestions() = %#v, want %#v", got, want)
+	}
+
 	movements := compiled.Movements()
 	if got, want := movements[0], (MovementView{
 		ID:          "plan",
