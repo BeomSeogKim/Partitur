@@ -1,6 +1,9 @@
 package score
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // Revision returns the validated positive score revision.
 func (s *Score) Revision() uint64 {
@@ -82,6 +85,37 @@ func (s *Score) Execution() ExecutionView {
 		result.GateWaived = *expectation.ApplyGate.Waived
 		if expectation.ApplyGate.Reason != nil {
 			result.WaiverReason = *expectation.ApplyGate.Reason
+		}
+	}
+	return result
+}
+
+// ResolvedQuestions returns finalized question dispositions sorted by id.
+// Every returned value is detached from the compiled score.
+func (s *Score) ResolvedQuestions() []ResolvedQuestionView {
+	if s == nil {
+		return nil
+	}
+	questions := slices.Clone(s.document.OpenQuestions)
+	slices.SortFunc(questions, func(left, right question) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+	result := make([]ResolvedQuestionView, 0, len(questions))
+	for _, question := range questions {
+		if question.Resolution != nil {
+			result = append(result, ResolvedQuestionView{
+				ID:                question.ID,
+				Question:          question.Question,
+				Resolution:        *question.Resolution,
+				ResolutionPresent: true,
+			})
+			continue
+		}
+		if question.Waived != nil && *question.Waived {
+			result = append(result, ResolvedQuestionView{
+				ID:       question.ID,
+				Question: question.Question,
+			})
 		}
 	}
 	return result

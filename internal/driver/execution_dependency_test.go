@@ -133,6 +133,120 @@ func TestExecutionDependencyHashBindsFanInIdentity(t *testing.T) {
 	}
 }
 
+func TestExecuteBriefProjectsResolvedQuestions(t *testing.T) {
+	document := sliceScore()
+	document["open_questions"] = []any{
+		map[string]any{"id": "z-resolved", "question": "May we proceed?", "resolution": "Yes."},
+		map[string]any{"id": "a-waived", "question": "Need a follow-up?", "waived": true},
+	}
+	prepared := prepareFixture(t, document)
+	movement, _, _, _, err := selectAttempt(prepared.Score, prepared.Cast, "inspect", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, global, err := executeBrief(
+		prepared.Score,
+		movement,
+		effectiveGrants(movement, prepared.Score.EffectivePolicy()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []any{
+		map[string]any{"id": "a-waived", "question": "Need a follow-up?", "disposition": "waived"},
+		map[string]any{"id": "z-resolved", "question": "May we proceed?", "disposition": "resolved", "resolution": "Yes."},
+	}
+	if got := global["resolved_questions"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved questions = %#v, want %#v", got, want)
+	}
+}
+
+func TestExecutionDependencyHashBindsScoreBaseForMayPropose(t *testing.T) {
+	first := sliceScore()
+	second := sliceScore()
+	second["policy"].(map[string]any)["budget"].(map[string]any)["active_wall_clock_min"] = float64(11)
+	firstPrepared := prepareFixture(t, first)
+	secondPrepared := prepareFixture(t, second)
+	movement, part, performer, plan, err := selectAttempt(firstPrepared.Score, firstPrepared.Cast, "inspect", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	movement.MayPropose = true
+	projection, err := executionDependencyProjection(
+		firstPrepared.Score, movement, part, performer,
+		effectiveGrants(movement, firstPrepared.Score.EffectivePolicy()), map[string]any{},
+		plan.Hash(), "", nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoreBaseHash, err := firstPrepared.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := projection["movement"].(map[string]any)["score_base_hash"]; got != scoreBaseHash {
+		t.Fatalf("may_propose score base hash = %#v, want semantic score hash %q", got, scoreBaseHash)
+	}
+	hash := func(prepared *validate.Preparation) string {
+		t.Helper()
+		movement, part, performer, plan, err := selectAttempt(prepared.Score, prepared.Cast, "inspect", "worker")
+		if err != nil {
+			t.Fatal(err)
+		}
+		movement.MayPropose = true
+		got, err := executionDependencyHash(
+			prepared.Score, movement, part, performer,
+			effectiveGrants(movement, prepared.Score.EffectivePolicy()), map[string]any{},
+			plan.Hash(), "", nil, nil, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if firstHash, secondHash := hash(firstPrepared), hash(secondPrepared); firstHash == secondHash {
+		t.Fatal("may_propose execution dependency hash does not bind the complete score base")
+	}
+}
+
+func TestExecutionDependencyHashBindsDraftPhase(t *testing.T) {
+	prepared := fanInProjectionFixture(t)
+	movement, part, performer, plan, err := selectAttempt(prepared.Score, prepared.Cast, "inspect", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := movement
+	draft.Phase = "draft"
+	projection, err := executionDependencyProjection(
+		prepared.Score, draft, part, performer,
+		effectiveGrants(draft, prepared.Score.EffectivePolicy()), map[string]any{},
+		plan.Hash(), "sha256:tree", nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := projection["movement"].(map[string]any)["phase"]; got != "draft" {
+		t.Fatalf("draft phase = %#v, want draft", got)
+	}
+	hash := func(phase string) string {
+		t.Helper()
+		candidate := movement
+		candidate.Phase = phase
+		got, err := executionDependencyHash(
+			prepared.Score, candidate, part, performer,
+			effectiveGrants(candidate, prepared.Score.EffectivePolicy()), map[string]any{},
+			plan.Hash(), "sha256:tree", nil, nil, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if hash("") == hash("draft") {
+		t.Fatal("execution dependency hash does not bind draft phase")
+	}
+}
+
 func TestExecutionDependencyHashBindsDeliveredArtifactInstance(t *testing.T) {
 	prepared := fanInProjectionFixture(t)
 	movement, part, performer, plan, err := selectAttempt(

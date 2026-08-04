@@ -4130,7 +4130,7 @@ projection changed. Four versions move independently:
 | Version | Governs | v0.2 value |
 |---|---|---|
 | `canonical_encoding_version` | A.1 — the encoder itself | 1 |
-| per-domain `projection_version` | what each domain feeds the encoder (A.4) | 1, except `partitur/composition-subject` and `partitur/execution-dependency`: 2 |
+| per-domain `projection_version` | what each domain feeds the encoder (A.4) | 1, except `partitur/composition-subject`: 2 and `partitur/execution-dependency`: 3 |
 | `amendment_classifier_version` | §9 typed classification and impact rules | 1 |
 | `composition_algorithm_version` | §5 fan-in merge algorithm and Git merge implementation | 1 |
 

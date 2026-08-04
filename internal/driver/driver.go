@@ -464,7 +464,7 @@ func ExecuteAttempt(
 	}
 	grants := effectiveGrants(movement, policy)
 	brief, globalInvariants, err := executeBrief(
-		execution.Score.Execution(),
+		execution.Score,
 		movement,
 		grants,
 	)
@@ -1382,10 +1382,11 @@ func effectiveGrants(
 }
 
 func executeBrief(
-	execution score.ExecutionView,
+	compiled *score.Score,
 	movement score.MovementView,
 	grants protocol.Grants,
 ) (protocol.Brief, map[string]any, error) {
+	execution := compiled.Execution()
 	outputs := make([]protocol.OutputSpec, len(movement.Outputs))
 	for index, output := range movement.Outputs {
 		outputs[index] = protocol.OutputSpec{
@@ -1394,7 +1395,7 @@ func executeBrief(
 		}
 	}
 	global := map[string]any{
-		"resolved_questions": []any{},
+		"resolved_questions": resolvedQuestionProjection(compiled.ResolvedQuestions()),
 		"effective_paths": map[string]any{
 			"rw": stringsToAny(grants.PathsRW),
 			"ro": stringsToAny(grants.PathsRO),
@@ -1459,6 +1460,24 @@ func executeBrief(
 		}
 	}
 	return brief, global, nil
+}
+
+func resolvedQuestionProjection(questions []score.ResolvedQuestionView) []any {
+	values := make([]any, len(questions))
+	for index, question := range questions {
+		value := map[string]any{
+			"id":       question.ID,
+			"question": question.Question,
+		}
+		if question.ResolutionPresent {
+			value["disposition"] = "resolved"
+			value["resolution"] = question.Resolution
+		} else {
+			value["disposition"] = "waived"
+		}
+		values[index] = value
+	}
+	return values
 }
 
 func executionDependencyHash(
@@ -1537,6 +1556,16 @@ func executionDependencyProjection(
 		"grants":      stringsToAny(movement.Grants),
 		"may_propose": movement.MayPropose,
 		"acceptance":  string(acceptanceHash),
+	}
+	if movement.MayPropose {
+		scoreBaseHash, err := compiled.Hash()
+		if err != nil {
+			return nil, err
+		}
+		movementValue["score_base_hash"] = scoreBaseHash
+	}
+	if movement.Phase == "draft" {
+		movementValue["phase"] = movement.Phase
 	}
 	if baseCompositionHash != "" {
 		movementValue["base_composition_hash"] = baseCompositionHash

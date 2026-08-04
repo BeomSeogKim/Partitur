@@ -15,6 +15,27 @@ import (
 )
 
 func TestMutationExecutionDependencyProjectionVersionChangesHash(t *testing.T) {
+	assertCanonicalMutationKilled(
+		t,
+		"domain.go",
+		"\tProjectionVersionExecutionDependency    = 3\n",
+		"\tProjectionVersionExecutionDependency    = 2\n",
+		"TestExecutionDependencyHashChangesWithProjectionVersion",
+	)
+}
+
+func TestMutationExecutionDependencyHistoricalV2FailsClosed(t *testing.T) {
+	assertCanonicalMutationKilled(
+		t,
+		"hash.go",
+		"\t\treturn versions.Projection == 3\n",
+		"\t\treturn versions.Projection == 2 || versions.Projection == 3\n",
+		"TestExecutionDependencyHistoricalV2FailsClosed",
+	)
+}
+
+func assertCanonicalMutationKilled(t *testing.T, sourceName, before, after, testName string) {
+	t.Helper()
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
 		t.Fatal(err)
@@ -38,10 +59,8 @@ func TestMutationExecutionDependencyProjectionVersionChangesHash(t *testing.T) {
 	if err := os.CopyFS(copyPackage, os.DirFS(filepath.Join(repositoryRoot, "internal", "canonical"))); err != nil {
 		t.Fatal(err)
 	}
-	sourcePath := filepath.Join(copyPackage, "domain.go")
+	sourcePath := filepath.Join(copyPackage, sourceName)
 	contents := mustReadFile(t, sourcePath)
-	const before = "\tProjectionVersionExecutionDependency    = 2\n"
-	const after = "\tProjectionVersionExecutionDependency    = 1\n"
 	if count := strings.Count(string(contents), before); count != 1 {
 		t.Fatalf("mutation anchor count = %d, want 1", count)
 	}
@@ -57,12 +76,12 @@ func TestMutationExecutionDependencyProjectionVersionChangesHash(t *testing.T) {
 	result := mutationtest.Run(ctx, mutationtest.Child{
 		Dir:         copyPackage,
 		Package:     ".",
-		TestPattern: "TestExecutionDependencyHashChangesWithProjectionVersion",
-		TestNames:   []string{"TestExecutionDependencyHashChangesWithProjectionVersion"},
+		TestPattern: testName,
+		TestNames:   []string{testName},
 		Environment: environment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1"),
 	})
 	if result.Outcome != mutationtest.Killed {
-		t.Fatalf("execution dependency projection-version mutation: %s", result.Diagnostic())
+		t.Fatalf("execution dependency mutation: %s", result.Diagnostic())
 	}
 }
 

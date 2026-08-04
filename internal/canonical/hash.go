@@ -50,7 +50,7 @@ func supported(domain Domain, versions Versions) bool {
 	case DomainCompositionSubject:
 		return versions.Projection == 1 || versions.Projection == 2
 	case DomainExecutionDependency:
-		return versions.Projection == 2
+		return versions.Projection == 3
 	case DomainScore,
 		DomainScoreSubtree,
 		DomainResolvedCast,

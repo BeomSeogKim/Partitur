@@ -118,6 +118,15 @@ type ExecutionView struct {
 	WaiverReason                   string
 }
 
+// ResolvedQuestionView is one finalized score question in its A.5 disposition.
+// ResolutionPresent distinguishes a resolved question from a waived one.
+type ResolvedQuestionView struct {
+	ID                string
+	Question          string
+	Resolution        string
+	ResolutionPresent bool
+}
+
 // PolicyView is a defensive read view of effective score policy.
 type PolicyView struct {
 	AllowedPaths       []string
