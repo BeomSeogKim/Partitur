@@ -5998,7 +5998,7 @@ requires, not the number of review rounds that have run.
 
 ## E.2 The catalog
 
-`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-one
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-two
 have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
 
 **Prepare and quiesce**
