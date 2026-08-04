@@ -98,7 +98,7 @@ func appendWaivedRunSucceeded(
 		return err
 	}
 	versions["composition"] = canonical.CompositionAlgorithmVersion
-	candidate, err := candidatePayload(input.BaseTree, resultTree, orderedChangeSets, contributors, compositionHash)
+	candidate, err := candidatePayload(input.BaseTree, resultTree, orderedChangeSets, contributors, environmentHash, compositionHash)
 	if err != nil {
 		return err
 	}

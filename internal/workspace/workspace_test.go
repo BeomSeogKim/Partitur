@@ -419,6 +419,9 @@ func TestZeroWriterCandidateUsesIdentityWithoutRunningMerge(t *testing.T) {
 		candidate.CompositionDependencyHash != wantHash {
 		t.Fatalf("composition hash = %#v, want %q", payload, wantHash)
 	}
+	if candidate.CompositionEnvironmentHash != "" {
+		t.Fatalf("identity candidate environment hash = %q, want absent", candidate.CompositionEnvironmentHash)
+	}
 	if bytes.Contains(event.Payload, []byte("composition_environment_hash")) ||
 		bytes.Contains(event.Payload, []byte(`"composition_mode":"merge"`)) {
 		t.Fatalf("identity event fabricated merge facts: %s", event.Payload)

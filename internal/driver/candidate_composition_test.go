@@ -55,6 +55,16 @@ func TestComposeCandidateRecordsAppliedSequenceAndFullMergeContributors(t *testi
 	if payload["result_tree"] != expected.ResultTree {
 		t.Fatalf("candidate result tree = %v, want %q", payload["result_tree"], expected.ResultTree)
 	}
+	if payload["composition_environment_hash"] != expected.EnvironmentHash {
+		t.Fatalf("candidate environment hash = %v, want %q", payload["composition_environment_hash"], expected.EnvironmentHash)
+	}
+	state, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ApplicationCandidate == nil || state.ApplicationCandidate.CompositionEnvironmentHash != runstate.Hash(expected.EnvironmentHash) {
+		t.Fatalf("projected candidate environment hash = %#v", state.ApplicationCandidate)
+	}
 	if got := payload["ordered_change_sets"].([]any); len(got) != 2 || got[0] != "sha256:ours" || got[1] != "sha256:theirs" {
 		t.Fatalf("candidate ordered applied change sets = %#v", got)
 	}
@@ -193,6 +203,9 @@ func TestComposeCandidateUsesPinnedTopologicalDeclarationOrder(t *testing.T) {
 	if got := payload["candidate_composition_dependency_hash"]; got != wantDependencyHash {
 		t.Fatalf("candidate dependency hash = %v, want %q", got, wantDependencyHash)
 	}
+	if got := payload["composition_environment_hash"]; got != expected.EnvironmentHash {
+		t.Fatalf("candidate environment hash = %v, want %q", got, expected.EnvironmentHash)
+	}
 }
 
 func TestComposeCandidateWaivedFoldsComposedWriterCandidateIntoRunSucceeded(t *testing.T) {
@@ -238,6 +251,9 @@ func TestComposeCandidateWaivedFoldsComposedWriterCandidateIntoRunSucceeded(t *t
 	candidate := payload["candidate"].(map[string]any)
 	if candidate["result_tree"] != expected.ResultTree {
 		t.Fatalf("waived candidate tree = %v, want %q", candidate["result_tree"], expected.ResultTree)
+	}
+	if candidate["composition_environment_hash"] != expected.EnvironmentHash {
+		t.Fatalf("waived candidate environment hash = %v, want %q", candidate["composition_environment_hash"], expected.EnvironmentHash)
 	}
 	if got := candidate["contributors"].([]any); len(got) != 2 ||
 		got[0].(map[string]any)["movement_id"] != "ours" || got[1].(map[string]any)["movement_id"] != "theirs" {
@@ -331,6 +347,7 @@ func TestComposeCandidateWaivedNoOpWriterPinsBaseCandidate(t *testing.T) {
 			map[string]any{"movement_id": "noop-b", "change_set_id": "sha256:noop-b"},
 		},
 		"candidate_composition_dependency_hash": compositionHash,
+		"composition_environment_hash":          expected.EnvironmentHash,
 	}
 	if !reflect.DeepEqual(payload["candidate"], wantCandidate) {
 		t.Fatalf("waived no-op merge candidate = %#v, want %#v", payload["candidate"], wantCandidate)

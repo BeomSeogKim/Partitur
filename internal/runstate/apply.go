@@ -118,14 +118,15 @@ func Apply(input State, event Event) (State, error) {
 			return state, invalid(event, encodeErr.Error())
 		}
 		state.ApplicationCandidate = &ApplicationCandidate{
-			ID:                        mustString(candidate, "candidate_id"),
-			Revision:                  event.ScoreRevision,
-			BaseTree:                  mustString(candidate, "base_tree"),
-			ResultTree:                mustString(candidate, "result_tree"),
-			OrderedChangeSets:         mustStrings(candidate, "ordered_change_sets"),
-			Contributors:              candidateContributors(candidate["contributors"].([]any)),
-			CompositionDependencyHash: Hash(mustString(candidate, "candidate_composition_dependency_hash")),
-			IdentityVersions:          versions,
+			ID:                         mustString(candidate, "candidate_id"),
+			Revision:                   event.ScoreRevision,
+			BaseTree:                   mustString(candidate, "base_tree"),
+			ResultTree:                 mustString(candidate, "result_tree"),
+			OrderedChangeSets:          mustStrings(candidate, "ordered_change_sets"),
+			Contributors:               candidateContributors(candidate["contributors"].([]any)),
+			CompositionDependencyHash:  Hash(mustString(candidate, "candidate_composition_dependency_hash")),
+			CompositionEnvironmentHash: Hash(stringOrEmpty(candidate, "composition_environment_hash")),
+			IdentityVersions:           versions,
 		}
 		state.Run = RunSucceeded
 		closeAllPendingDecisions(&state)
@@ -429,14 +430,15 @@ func Apply(input State, event Event) (State, error) {
 			return state, invalid(event, encodeErr.Error())
 		}
 		state.ApplicationCandidate = &ApplicationCandidate{
-			ID:                        mustString(payload, "candidate_id"),
-			Revision:                  event.ScoreRevision,
-			BaseTree:                  mustString(payload, "base_tree"),
-			ResultTree:                mustString(payload, "result_tree"),
-			OrderedChangeSets:         mustStrings(payload, "ordered_change_sets"),
-			Contributors:              candidateContributors(payload["contributors"].([]any)),
-			CompositionDependencyHash: Hash(mustString(payload, "candidate_composition_dependency_hash")),
-			IdentityVersions:          versions,
+			ID:                         mustString(payload, "candidate_id"),
+			Revision:                   event.ScoreRevision,
+			BaseTree:                   mustString(payload, "base_tree"),
+			ResultTree:                 mustString(payload, "result_tree"),
+			OrderedChangeSets:          mustStrings(payload, "ordered_change_sets"),
+			Contributors:               candidateContributors(payload["contributors"].([]any)),
+			CompositionDependencyHash:  Hash(mustString(payload, "candidate_composition_dependency_hash")),
+			CompositionEnvironmentHash: Hash(stringOrEmpty(payload, "composition_environment_hash")),
+			IdentityVersions:           versions,
 		}
 	case EventAcceptanceStarted:
 		if _, err := requireAttempt(state, event, AttemptVerifying); err != nil {
@@ -1387,7 +1389,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventChangeSetRecorded:
 		return []string{"change_set_id", "base_tree", "result_tree", "commit", "ref", "identity_versions"}, nil, true
 	case EventApplicationCandidateRecorded:
-		return []string{"candidate_id", "base_tree", "result_tree", "ordered_change_sets", "contributors", "candidate_composition_dependency_hash", "identity_versions"}, nil, true
+		return []string{"candidate_id", "base_tree", "result_tree", "ordered_change_sets", "contributors", "candidate_composition_dependency_hash", "identity_versions"}, []string{"composition_environment_hash"}, true
 	case EventAcceptanceStarted:
 		return []string{"subject_tree", "acceptance_spec_hash", "planned_criterion_ids", "identity_versions"}, nil, true
 	case EventCriterionStarted:
@@ -1466,13 +1468,13 @@ func validateNestedPayload(eventType EventType, payload map[string]any) error {
 		candidate := mustObject(payload, "candidate")
 		if err := fields(candidate,
 			[]string{"candidate_id", "base_tree", "result_tree", "ordered_change_sets", "contributors", "candidate_composition_dependency_hash"},
-			nil,
+			[]string{"composition_environment_hash"},
 		); err != nil {
 			return fmt.Errorf("candidate: %w", err)
 		}
 		if err := namedTypes(
 			candidate,
-			[]string{"candidate_id", "base_tree", "result_tree", "candidate_composition_dependency_hash"},
+			append([]string{"candidate_id", "base_tree", "result_tree", "candidate_composition_dependency_hash"}, optionalNames(candidate, "composition_environment_hash")...),
 			nil,
 			[]string{"ordered_change_sets", "contributors"},
 			nil,
@@ -2019,7 +2021,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		strings = []string{"change_set_id", "base_tree", "result_tree", "commit", "ref"}
 		objects = []string{"identity_versions"}
 	case EventApplicationCandidateRecorded:
-		strings = []string{"candidate_id", "base_tree", "result_tree", "candidate_composition_dependency_hash"}
+		strings = append([]string{"candidate_id", "base_tree", "result_tree", "candidate_composition_dependency_hash"}, optionalNames(payload, "composition_environment_hash")...)
 		arrays = []string{"ordered_change_sets", "contributors"}
 		objects = []string{"identity_versions"}
 	case EventAcceptanceStarted:
@@ -2240,6 +2242,8 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		return validatePendingDecisionIDs(payload)
 	case EventDecisionRequested:
 		return nil
+	case EventRunSucceeded:
+		return validateCandidateCompositionEnvironment(mustObject(payload, "candidate"))
 	case EventDecisionResolved:
 		return nil
 	case EventAmendmentRejected:
@@ -2305,6 +2309,8 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		if len(mustString(payload, "diagnostic")) > 4096 {
 			return errors.New("diagnostic exceeds 4 KiB")
 		}
+	case EventApplicationCandidateRecorded:
+		return validateCandidateCompositionEnvironment(payload)
 	case EventPerformerSelected:
 		switch mustString(payload, "reason") {
 		case "initial", "quality_retry", "fallback", "revision_restart", "decision_resume":
@@ -2514,6 +2520,24 @@ func validCompositionFailureCause(cause string) bool {
 	default:
 		return false
 	}
+}
+
+func validateCandidateCompositionEnvironment(candidate map[string]any) error {
+	_, present := candidate["composition_environment_hash"]
+	contributors := candidate["contributors"].([]any)
+	if len(contributors) == 0 {
+		if present {
+			return errors.New("identity candidate forbids composition_environment_hash")
+		}
+		return nil
+	}
+	if !present {
+		return errors.New("merged candidate requires composition_environment_hash")
+	}
+	if present && mustString(candidate, "composition_environment_hash") == "" {
+		return errors.New("composition_environment_hash must be non-empty")
+	}
+	return nil
 }
 
 func fields(value map[string]any, required, optional []string) error {

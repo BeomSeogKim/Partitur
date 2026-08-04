@@ -208,7 +208,7 @@ func (run *Run) RecordZeroWriterCandidate() (Candidate, error) {
 	if err != nil {
 		return Candidate{}, err
 	}
-	return run.recordCandidate(run.baseTreeQualified, nil, nil, compositionHash)
+	return run.recordCandidate(run.baseTreeQualified, nil, nil, "", compositionHash)
 }
 
 // RecordComposedCandidate records a merged candidate. The contributor list is
@@ -227,19 +227,20 @@ func (run *Run) RecordComposedCandidate(
 	if err != nil {
 		return Candidate{}, err
 	}
-	return run.recordCandidate(resultTree, orderedChangeSets, contributors, compositionHash)
+	return run.recordCandidate(resultTree, orderedChangeSets, contributors, environmentHash, compositionHash)
 }
 
 func (run *Run) recordCandidate(
 	resultTree string,
 	orderedChangeSets []string,
 	contributors []CompositionContributor,
+	environmentHash string,
 	compositionHash string,
 ) (Candidate, error) {
 	if run == nil || resultTree == "" || compositionHash == "" {
 		return Candidate{}, errors.New("workspace: incomplete candidate")
 	}
-	candidateValue, err := candidatePayload(run.baseTreeQualified, resultTree, orderedChangeSets, contributors, compositionHash)
+	candidateValue, err := candidatePayload(run.baseTreeQualified, resultTree, orderedChangeSets, contributors, environmentHash, compositionHash)
 	if err != nil {
 		return Candidate{}, err
 	}
@@ -302,11 +303,12 @@ func (run *Run) recordCandidate(
 		return Candidate{}, err
 	}
 	return Candidate{
-		ID:                        candidateID,
-		BaseTree:                  run.baseTreeQualified,
-		ResultTree:                resultTree,
-		CompositionDependencyHash: compositionHash,
-		Receipt:                   receipt,
+		ID:                         candidateID,
+		BaseTree:                   run.baseTreeQualified,
+		ResultTree:                 resultTree,
+		CompositionDependencyHash:  compositionHash,
+		CompositionEnvironmentHash: environmentHash,
+		Receipt:                    receipt,
 	}, nil
 }
 
@@ -315,6 +317,7 @@ func candidatePayload(
 	resultTree string,
 	orderedChangeSets []string,
 	contributors []CompositionContributor,
+	environmentHash string,
 	compositionHash string,
 ) (map[string]any, error) {
 	if baseTree == "" || resultTree == "" || compositionHash == "" {
@@ -327,14 +330,18 @@ func candidatePayload(
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"candidate_id":                          candidateID,
 		"base_tree":                             baseTree,
 		"result_tree":                           resultTree,
 		"ordered_change_sets":                   ordered,
 		"contributors":                          candidateContributorsValue(contributors),
 		"candidate_composition_dependency_hash": compositionHash,
-	}, nil
+	}
+	if environmentHash != "" {
+		payload["composition_environment_hash"] = environmentHash
+	}
+	return payload, nil
 }
 
 func candidateCommit(git gitCommand, root, baseCommit, tree string) (string, error) {
