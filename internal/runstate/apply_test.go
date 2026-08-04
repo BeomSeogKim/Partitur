@@ -1114,6 +1114,43 @@ func TestAmendmentApprovalModeFieldsAreConditional(t *testing.T) {
 	}
 }
 
+func TestAmendmentRejectedPatchHashFormIsConditional(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		valid  bool
+		mutate func(map[string]any)
+	}{
+		{name: "canonical form", valid: true, mutate: func(map[string]any) {}},
+		{name: "raw byte form", valid: true, mutate: func(payload map[string]any) { payload["patch_operations_hash_form"] = "raw-byte-sha256" }},
+		{name: "absent when required", mutate: func(payload map[string]any) { delete(payload, "patch_operations_hash_form") }},
+		{name: "present when forbidden", mutate: func(payload map[string]any) {
+			delete(payload, "patch_operations_hash")
+			delete(payload, "error_location")
+			payload["typed_delta"] = []any{}
+			payload["actual_impact"] = emptyActualImpact()
+		}},
+		{name: "wrong value", mutate: func(payload map[string]any) { payload["patch_operations_hash_form"] = "other" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := amendmentRejectedPayload()
+			test.mutate(payload)
+			err := ValidateEvent(fixtureEvent(EventAmendmentRejected, payload, nil))
+			if test.valid {
+				if err != nil {
+					t.Fatalf("ValidateEvent() error = %v", err)
+				}
+				if _, err := Apply(NewState(nil), fixtureEvent(EventAmendmentRejected, payload, nil)); err != nil {
+					t.Fatalf("Apply() error = %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("ValidateEvent() error = %v, want ErrInvalidEvent", err)
+			}
+		})
+	}
+}
+
 func TestHumanApprovalBindsPreparedDecision(t *testing.T) {
 	state := runningAttemptState(t)
 	prepare := autoPreparePayload()
@@ -1693,7 +1730,7 @@ func headMovementsPayload(ids ...string) []any {
 func amendmentRejectedPayload() map[string]any {
 	return map[string]any{
 		"proposal_id": "proposal-1", "reason": "patch_error", "base_revision": 1, "base_hash": "sha256:score-1",
-		"classifier_version": 1, "patch_operations_hash": "sha256:patch", "error_location": "patch[0]",
+		"classifier_version": 1, "patch_operations_hash": "sha256:patch", "patch_operations_hash_form": "partitur/patch-operations", "error_location": "patch[0]",
 		"identity_versions": testIdentityVersions(),
 	}
 }
