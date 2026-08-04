@@ -511,7 +511,8 @@ func ExecuteAttempt(
 		Budget: protocol.Budget{
 			RemainingMS: remainingMS,
 		},
-		Inputs: inputs,
+		Inputs:   inputs,
+		Feedback: []protocol.Feedback{},
 	}
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		encoded, err := json.Marshal(extension)
@@ -579,6 +580,7 @@ func ExecuteAttempt(
 			plan.Hash(),
 			baseCompositionHash,
 			request.Inputs,
+			request.Feedback,
 		)
 		if err != nil {
 			return faultpoint.DurabilityReceipt{}, err
@@ -589,6 +591,7 @@ func ExecuteAttempt(
 			"enforcement":               probe.Enforcement,
 			"negotiated_features":       features,
 			"truncated_resolutions":     []any{},
+			"delivered_feedback":        feedbackProjection(request.Feedback),
 			"advisory_dimensions":       advisory,
 			"execution_dependency_hash": executionHash,
 			"identity_versions":         executionVersions,
@@ -1461,6 +1464,7 @@ func executionDependencyHash(
 	acceptanceHash runstate.Hash,
 	baseCompositionHash string,
 	inputs []protocol.ArtifactRef,
+	feedback []protocol.Feedback,
 ) (string, error) {
 	value := executionDependencyProjection(
 		compiled,
@@ -1472,6 +1476,7 @@ func executionDependencyHash(
 		acceptanceHash,
 		baseCompositionHash,
 		inputs,
+		feedback,
 	)
 	return canonical.Hash(canonical.DomainExecutionDependency, value)
 }
@@ -1486,6 +1491,7 @@ func executionDependencyProjection(
 	acceptanceHash runstate.Hash,
 	baseCompositionHash string,
 	inputs []protocol.ArtifactRef,
+	feedback []protocol.Feedback,
 ) map[string]any {
 	outputs := make([]any, len(movement.Outputs))
 	for index, output := range movement.Outputs {
@@ -1503,6 +1509,7 @@ func executionDependencyProjection(
 			"content_hash": input.Hash,
 		}
 	}
+	feedbackValues := feedbackProjection(feedback)
 	movementValue := map[string]any{
 		"id":          movement.ID,
 		"part":        movement.PartID,
@@ -1543,12 +1550,25 @@ func executionDependencyProjection(
 		},
 		"score":              scoreValue,
 		"resolved_decisions": []any{},
-		"feedback":           []any{},
+		"feedback":           feedbackValues,
 	}
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		value["extensions"] = extension
 	}
 	return value
+}
+
+func feedbackProjection(feedback []protocol.Feedback) []any {
+	values := make([]any, len(feedback))
+	for index, item := range feedback {
+		values[index] = map[string]any{
+			"previous_attempt_id":  item.PreviousAttemptID,
+			"kind":                 item.Kind,
+			"artifact_instance_id": item.ArtifactInstanceID,
+			"content_hash":         item.ContentHash,
+		}
+	}
+	return values
 }
 
 func movementCompositionDependencyHash(movementID, baseTree string) (string, error) {

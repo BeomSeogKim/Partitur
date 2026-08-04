@@ -34,6 +34,22 @@ func TestAmendmentEvaluatorReadinessIsNotProved(t *testing.T) {
 	}
 }
 
+func TestAdapterProbedRecordsDeliveredFeedback(t *testing.T) {
+	lines := recoveryDesignLines(t)
+	section := recoveryDocumentSection(t, lines,
+		"adapter.probed {",
+		"attempt.started {")
+	contents := strings.Join(strings.Fields(strings.Join(section, "\n")), " ")
+	for _, clause := range []string{
+		"delivered_feedback: [ {previous_attempt_id, kind, artifact_instance_id, content_hash} ],",
+		"# sorted by (previous_attempt_id, artifact_instance_id); always # present, including [], so the exact request remains # reconstructible rather than leaving \"none delivered\" ambiguous",
+	} {
+		if !strings.Contains(contents, clause) {
+			t.Fatalf("adapter.probed delivered feedback is missing clause %q", clause)
+		}
+	}
+}
+
 func TestRoutedProposalE2EdgesAreSpecified(t *testing.T) {
 	lines := recoveryDesignLines(t)
 	section := recoveryDocumentSection(t, lines,

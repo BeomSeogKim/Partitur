@@ -4673,6 +4673,11 @@ adapter.probed {
                                   #   payload change.
   truncated_resolutions: [decision_id],
                                   # sorted; resolutions dropped for the frame budget (§4)
+  delivered_feedback: [
+    {previous_attempt_id, kind, artifact_instance_id, content_hash}
+  ],                              # sorted by (previous_attempt_id, artifact_instance_id); always
+                                  #   present, including [], so the exact request remains
+                                  #   reconstructible rather than leaving "none delivered" ambiguous
   advisory_dimensions: [dimension],
                                   # sorted; exact constraints proceeding without enforcement
   execution_dependency_hash,      # A.5; the exact request shape is now fixed

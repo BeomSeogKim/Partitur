@@ -83,9 +83,11 @@ type ArtifactRef struct {
 }
 
 type Feedback struct {
-	PreviousAttemptID string `json:"previous_attempt_id"`
-	Kind              string `json:"kind"`
-	ArtifactID        string `json:"artifact_id"`
+	PreviousAttemptID  string `json:"previous_attempt_id"`
+	Kind               string `json:"kind"`
+	ArtifactInstanceID string `json:"artifact_instance_id"`
+	Path               string `json:"path"`
+	ContentHash        string `json:"hash"`
 }
 
 type ResolvedDecisionKind string

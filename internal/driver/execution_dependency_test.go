@@ -42,6 +42,7 @@ func TestExecutionDependencyProjectionCompleteness(t *testing.T) {
 		plan.Hash(),
 		compositionHash,
 		nil,
+		nil,
 	)
 	assertDeclaredProjectionFields(t, "A.5", projection, declared.top)
 	movementValue, ok := projection["movement"].(map[string]any)
@@ -112,6 +113,7 @@ func TestExecutionDependencyHashBindsFanInIdentity(t *testing.T) {
 			plan.Hash(),
 			composition,
 			nil,
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -166,6 +168,7 @@ func TestExecutionDependencyHashBindsDeliveredArtifactInstance(t *testing.T) {
 			prepared.Score, movement, part, performer,
 			effectiveGrants(movement, prepared.Score.EffectivePolicy()), map[string]any{},
 			plan.Hash(), "sha256:tree", value,
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -202,6 +205,42 @@ func TestExecutionDependencyHashBindsDeliveredArtifactInstance(t *testing.T) {
 	}
 	if first != hash(unchangedInputs) {
 		t.Fatal("execution dependency hash binds an unrelated attempt's delivered input")
+	}
+}
+
+func TestExecutionDependencyHashBindsDeliveredFeedback(t *testing.T) {
+	prepared := fanInProjectionFixture(t)
+	movement, part, performer, plan, err := selectAttempt(
+		prepared.Score, prepared.Cast, "inspect", "worker",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := func(feedback []protocol.Feedback) string {
+		t.Helper()
+		got, err := executionDependencyHash(
+			prepared.Score, movement, part, performer,
+			effectiveGrants(movement, prepared.Score.EffectivePolicy()), map[string]any{},
+			plan.Hash(), "sha256:tree", nil, feedback,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	feedback := []protocol.Feedback{{
+		PreviousAttemptID: "attempt-1", Kind: "acceptance_report", ArtifactInstanceID: "report@attempt-1", ContentHash: "sha256:first",
+	}}
+	first := hash(feedback)
+	differentInstance := append([]protocol.Feedback(nil), feedback...)
+	differentInstance[0].ArtifactInstanceID = "report@attempt-2"
+	if first == hash(differentInstance) {
+		t.Fatal("execution dependency hash does not bind delivered feedback artifact instance")
+	}
+	differentBytes := append([]protocol.Feedback(nil), feedback...)
+	differentBytes[0].ContentHash = "sha256:second"
+	if first == hash(differentBytes) {
+		t.Fatal("execution dependency hash does not bind delivered feedback content hash")
 	}
 }
 

@@ -303,6 +303,7 @@ func Apply(input State, event Event) (State, error) {
 			Enforcement:             boolMap(mustObject(payload, "enforcement")),
 			NegotiatedFeatures:      mustStrings(payload, "negotiated_features"),
 			TruncatedResolutions:    mustStrings(payload, "truncated_resolutions"),
+			DeliveredFeedback:       deliveredFeedback(payload["delivered_feedback"].([]any)),
 			AdvisoryDimensions:      mustStrings(payload, "advisory_dimensions"),
 			ExecutionDependencyHash: Hash(mustString(payload, "execution_dependency_hash")),
 			IdentityVersions:        versions,
@@ -1375,7 +1376,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventAttemptStarted:
 		return []string{"attempt_number", "adapter_process", "granted_authority", "identity_versions"}, []string{"base_composition_hash", "review_subject_input"}, true
 	case EventAdapterProbed:
-		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "truncated_resolutions", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, nil, true
+		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "truncated_resolutions", "delivered_feedback", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, nil, true
 	case EventPerformerCompleted:
 		return []string{"session_hint_stored"}, nil, true
 	case EventAttemptCompleted, EventVerificationPassed, EventAttemptCancelled, EventAttemptSuperseded:
@@ -1511,6 +1512,11 @@ func validateNestedPayload(eventType EventType, payload map[string]any) error {
 		}
 		if err := namedTypes(enforcement, nil, nil, nil, names, nil); err != nil {
 			return fmt.Errorf("enforcement: %w", err)
+		}
+		if value, present := payload["delivered_feedback"]; present {
+			if err := validateDeliveredFeedback(value.([]any)); err != nil {
+				return fmt.Errorf("delivered_feedback: %w", err)
+			}
 		}
 	case EventAttemptBlocked:
 		if err := validateRaisedDecisions(payload["raised"].([]any)); err != nil {
@@ -2002,7 +2008,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 	case EventAdapterProbed:
 		strings = []string{"adapter_version", "execution_dependency_hash"}
 		objects = []string{"capabilities", "enforcement", "identity_versions"}
-		arrays = []string{"negotiated_features", "truncated_resolutions", "advisory_dimensions"}
+		arrays = append([]string{"negotiated_features", "truncated_resolutions", "advisory_dimensions"}, optionalNames(payload, "delivered_feedback")...)
 	case EventAttemptStarted:
 		strings = optionalNames(payload, "base_composition_hash")
 		objects = append([]string{"adapter_process", "granted_authority", "identity_versions"}, optionalNames(payload, "review_subject_input")...)
@@ -2143,7 +2149,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		return err
 	}
 	for _, name := range arrays {
-		if name == "typed_delta" || name == "head_movements" || name == "contributors" || name == "criterion_outcomes" || name == "raised" || name == "blocking_findings" || name == "overridden_findings" {
+		if name == "typed_delta" || name == "head_movements" || name == "contributors" || name == "criterion_outcomes" || name == "raised" || name == "blocking_findings" || name == "overridden_findings" || name == "delivered_feedback" {
 			continue
 		}
 		if err := stringArray(payload, name); err != nil {
@@ -2577,6 +2583,42 @@ func sortedStringFields(payload map[string]any, names ...string) error {
 		}
 	}
 	return nil
+}
+
+func validateDeliveredFeedback(value []any) error {
+	previous := ""
+	for index, raw := range value {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("entry %d must be an object", index)
+		}
+		if err := fields(item, []string{"previous_attempt_id", "kind", "artifact_instance_id", "content_hash"}, nil); err != nil {
+			return fmt.Errorf("entry %d: %w", index, err)
+		}
+		if err := namedTypes(item, optionalNames(item, "previous_attempt_id", "kind", "artifact_instance_id", "content_hash"), nil, nil, nil, nil); err != nil {
+			return fmt.Errorf("entry %d: %w", index, err)
+		}
+		key := mustString(item, "previous_attempt_id") + "\x00" + mustString(item, "artifact_instance_id")
+		if index > 0 && key <= previous {
+			return errors.New("entries must be sorted and unique by previous_attempt_id and artifact_instance_id")
+		}
+		previous = key
+	}
+	return nil
+}
+
+func deliveredFeedback(value []any) []DeliveredFeedback {
+	result := make([]DeliveredFeedback, len(value))
+	for index, raw := range value {
+		item := raw.(map[string]any)
+		result[index] = DeliveredFeedback{
+			PreviousAttemptID:  AttemptID(mustString(item, "previous_attempt_id")),
+			Kind:               mustString(item, "kind"),
+			ArtifactInstanceID: ArtifactInstanceID(mustString(item, "artifact_instance_id")),
+			ContentHash:        Hash(mustString(item, "content_hash")),
+		}
+	}
+	return result
 }
 
 func mustObject(value map[string]any, name string) map[string]any {
