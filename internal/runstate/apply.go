@@ -1405,7 +1405,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventDecisionObsoleted:
 		return []string{"decision_id"}, nil, true
 	case EventAmendmentRejected:
-		return []string{"proposal_id", "reason", "base_revision", "base_hash", "classifier_version", "identity_versions"}, []string{"emitted_id", "condition", "typed_delta", "actual_impact", "patch_operations_hash", "error_location", "decision_id"}, true
+		return []string{"proposal_id", "reason", "base_revision", "base_hash", "classifier_version", "identity_versions"}, []string{"emitted_id", "condition", "typed_delta", "actual_impact", "patch_operations_hash", "patch_operations_hash_form", "error_location", "decision_id"}, true
 	case EventExecutionStarted:
 		return []string{"interval_id", "phase", "wall_start", "remaining_at_start"}, nil, true
 	case EventExecutionStopped:
@@ -2054,7 +2054,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 	case EventDecisionObsoleted:
 		strings = []string{"decision_id"}
 	case EventAmendmentRejected:
-		strings = append([]string{"proposal_id", "reason", "base_hash"}, optionalNames(payload, "emitted_id", "condition", "patch_operations_hash", "error_location", "decision_id")...)
+		strings = append([]string{"proposal_id", "reason", "base_hash"}, optionalNames(payload, "emitted_id", "condition", "patch_operations_hash", "patch_operations_hash_form", "error_location", "decision_id")...)
 		arrays = optionalNames(payload, "typed_delta")
 		objects = append([]string{"identity_versions"}, optionalNames(payload, "actual_impact")...)
 		integers = []string{"base_revision", "classifier_version"}
@@ -2257,9 +2257,16 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		_, typedDelta := payload["typed_delta"]
 		_, actualImpact := payload["actual_impact"]
 		_, patchHash := payload["patch_operations_hash"]
+		patchHashForm, hasPatchHashForm := payload["patch_operations_hash_form"]
 		_, location := payload["error_location"]
 		if typedDelta != actualImpact || patchHash != location || typedDelta == patchHash {
 			return errors.New("amendment rejection must carry exactly one diagnostic form")
+		}
+		if patchHash != hasPatchHashForm {
+			return errors.New("patch_operations_hash_form is required iff patch_operations_hash")
+		}
+		if patchHash && patchHashForm != "partitur/patch-operations" && patchHashForm != "raw-byte-sha256" {
+			return errors.New("invalid patch_operations_hash_form")
 		}
 	case EventAmendmentRoutedHuman:
 		if !validAmendmentRouteReason(mustString(payload, "reason")) {

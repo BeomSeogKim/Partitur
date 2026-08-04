@@ -82,6 +82,7 @@ prose pass, and they are at different stages:
 | Process primitives — trampoline gate, session sweep, start identity | SPIKE-4 measurement | measured |
 | The prepare / ACK / quiesce protocol built on them (§6) | replay and fault-injection tests (Appendix E) | **not proved** — designed against the measurements, not measured itself |
 | Recovery — pending-prepare, cancellation precedence, live criterion sweeping | replay and fault-injection tests (Appendix E) | **not proved** |
+| The amendment evaluator and routed-proposal recovery (§9) | evaluator, recovery, and fault-injection tests (Appendix E) | **not proved** — no amendment evaluator, routed-path executor, or routed-path crash oracle exists |
 | Forced PID reuse, Intel macOS, power-loss durability | targeted testing | open |
 | Safety-policy choices, including the factory cast's enforcement posture (§3) | specification review | reviewed, and review is the only instrument they admit |
 
@@ -646,8 +647,8 @@ verbatim rather than being re-encoded.
 `partitur/patch-operations` hash, but that hash is only constructible once the operations are known
 to be a JCS-encodable RFC 6902 array. A `patch_error` rejection caused by operations that are *not*
 that — a malformed array, an unencodable value — therefore records the raw-byte `sha256` of the
-submitted operations instead, and says which form it used. Promising a canonical hash of something
-that cannot be canonically encoded would be unimplementable.
+submitted operations instead, with `patch_operations_hash_form: raw-byte-sha256`. Promising a
+canonical hash of something that cannot be canonically encoded would be unimplementable.
 
 **Amendment format v0.2.** A `proposal` carries:
 
@@ -5032,6 +5033,9 @@ amendment.rejected {
   actual_impact?,                 # §9 shape
   # for failures at steps 1-6 there is no validated AST, so the record is coarser:
   patch_operations_hash?,         # partitur/patch-operations
+  patch_operations_hash_form?,    # required iff patch_operations_hash: `partitur/patch-operations`
+                                  #   for the canonical identity, or `raw-byte-sha256` for the
+                                  #   submitted operations' raw-byte sha256
   error_location?,                # where in the patch or the score the failure was found
   decision_id?,                   # present iff a decision exists or could exist for this
                                   #   proposal — that is, iff it was blocking (§4) OR it had been
@@ -6013,7 +6017,7 @@ requires, not the number of review rounds that have run.
 
 ## E.2 The catalog
 
-`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-two
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-four
 have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
 
 **Prepare and quiesce**
@@ -6026,6 +6030,13 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 | `quiesce.swept_to_lease_moved` | adapter and criterion sessions verified empty `B` | `driver.lease` compare-moved to the prepare-bound path `R` | §6 step 2 | A crash here leaves **no** sidecar, and the sidecar is the only durable evidence that the whole ACK sequence ran — sweep, interval close, writer stop, revalidation, compare-move. Absence forces another sweep in the reachable *matching lease, no sidecar* state; the *no lease, no sidecar* branch legitimately commits without one |
 | `quiesce.lease_moved_to_commit_lock` | lease move durable `R` | approver holds the state lock `B` | §6 step 3 | A matching sidecar does **not** mean the approval must commit — it means commit must be **re-entered**, approving only if every guard still passes. Cancellation may win, a hash mismatch may halt, and a changed base head or invalidated plan abandons. What is forbidden is stepping past a pending prepare |
 | `prepare.quarantined_to_abandoned` | snapshot quarantine durable `R` | `amendment.approval_abandoned` appended `R` | §6 `(b)` and step 3's abandon row; §9 snapshot lifecycle | The barrier must not lift with the immutable revision path still occupied, so the quarantine precedes the append that lifts it. This holds for **every** abandonment reason — `cancelled`, `base_head_changed`, `plan_invalidated` — not only the cancellation one. The accompanying plan and sidecar removals carry no separate assertion: an orphan plan is removed on sight and a leftover sidecar is inert, so losing either is recoverable |
+
+**Routed proposals**
+
+| Edge | Left | Right | Owning clause | Assertion across a crash |
+|---|---|---|---|---|
+| `proposal.published_to_routed` | proposal record published `R` | `amendment.routed_human` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-035` | A proposal record with no routing event is unreferenced and quarantined; recovery never manufactures a route from an orphan record |
+| `proposal.routed_to_decision_requested` | `amendment.routed_human` appended `R` | matching `decision.requested` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-037` | Recovery appends the request idempotently from the routed event; it never re-runs routing or infers the request from `attempt.blocked` |
 
 **Cancellation** — `(a)`–`(f)` are §6's labels and are not restated here.
 

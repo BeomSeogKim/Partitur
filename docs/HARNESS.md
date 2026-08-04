@@ -67,6 +67,13 @@ a `B` is therefore one the harness cannot hang off an fsync at all.
 | `quiesce.lease_moved_to_commit_lock` | R → **B** | driver, then approver | sidecar written, approver not yet re-entered |
 | `prepare.quarantined_to_abandoned` | R → R | approver or canceller | an abandonment on each reason: `cancelled`, `base_head_changed`, `plan_invalidated` |
 
+### Routed proposals
+
+| Edge | Selection | Driven by | Reason |
+|---|---|---|---|
+| `proposal.published_to_routed` | not reached by this gate's cuts | — | No routed-proposal subprocess fixture |
+| `proposal.routed_to_decision_requested` | not reached by this gate's cuts | — | No routed-proposal subprocess fixture |
+
 ### Cancellation
 
 `(a)`–`(f)` are §6's labels. E.4 requires all eight `(b, c, d)` combinations, and its step 3 permits
@@ -165,6 +172,8 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | Same parent-injection gap as the row above; the left endpoint is reachable only inside a live driver already draining a durable prepare |
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | The left endpoint is a `DurabilityReceipt`, and receipts are not probe notifications, so the gate cannot suspend after the lease move and before the approver takes the lock |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
+| `proposal.published_to_routed` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-035`; E.2 | No routed-proposal subprocess fixture |
+| `proposal.routed_to_decision_requested` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-037`; E.2 | No routed-proposal subprocess fixture |
 | `cancel.swept_to_terminal` | reachable | §6 (a), (e); E.2 | Real `cancel` subprocess matrix covers all eight `(b, c, d)` combinations at both endpoints |
 | `cancel.swept_to_quarantined` | reachable | §6 (a)-(b); E.2 | Real `cancel` subprocess matrix covers the four `(b)`-true combinations at both endpoints |
 | `cancel.interval_stopped_to_terminal` | reachable | §6 (c)-(e); E.2 | Real `cancel` subprocess matrix covers the four `(c)`-true combinations at both endpoints |

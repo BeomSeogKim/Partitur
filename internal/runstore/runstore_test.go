@@ -591,7 +591,7 @@ func TestJournalIdempotencyForDirectionEvents(t *testing.T) {
 			name: "amendment rejected",
 			event: directionEvent(runstate.EventAmendmentRejected, map[string]any{
 				"proposal_id": "proposal-1", "reason": "patch_error", "base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
-				"patch_operations_hash": "sha256:patch", "error_location": "patch[0]", "identity_versions": identityVersions,
+				"patch_operations_hash": "sha256:patch", "patch_operations_hash_form": "partitur/patch-operations", "error_location": "patch[0]", "identity_versions": identityVersions,
 			}),
 		},
 		{
