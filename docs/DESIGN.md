@@ -2614,7 +2614,7 @@ The procedure:
    barrier admits nothing but the drain and cancellation, the drain does not advance it, and
    cancellation leaves through the first row. So every reachable state with a lease has a matching
    one. If an implementation ever observes otherwise, the barrier has been violated somewhere else and
-   the right response is to halt, not to guess which incarnation is authoritative.
+   the right response is to halt `prepare_lease_epoch_mismatch`, not to guess which incarnation is authoritative.
 
 **Plan validation is a closed predicate**, not a judgement. Commit verifies the plan bytes against
 `plan_record_hash` — a mismatch or missing file halts `missing_prepare_plan`, exactly as recovery does —
@@ -5919,7 +5919,7 @@ implementation to classify.
 `journal_idempotency_conflict`, `unsupported_run_format`, `missing_artifact_file`,
 `missing_snapshot_file`, `missing_changeset_ref`, `missing_proposal_record`,
 `missing_resolved_cast`, `missing_prepare_plan`, `git_unverifiable`, `owner_unverifiable`,
-`sweep_unverifiable`, `spawn_handoff_unverifiable`, `root_snapshot_divergence`, `journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
+`prepare_lease_epoch_mismatch`, `sweep_unverifiable`, `spawn_handoff_unverifiable`, `root_snapshot_divergence`, `journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
 bytes do not match the recorded hash is no more usable than one that is gone, and splitting them
 would double the enum without changing any action.
 

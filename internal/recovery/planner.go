@@ -74,6 +74,7 @@ const (
 	HaltGitUnverifiable            HaltReason = "git_unverifiable"
 	HaltSweepUnverifiable          HaltReason = "sweep_unverifiable"
 	HaltSpawnHandoffUnverifiable   HaltReason = "spawn_handoff_unverifiable"
+	HaltPrepareLeaseEpochMismatch  HaltReason = "prepare_lease_epoch_mismatch"
 	HaltJournalCorrupt             HaltReason = "journal_corrupt"
 )
 
@@ -91,6 +92,7 @@ var appendixDHaltReasonSet = map[HaltReason]bool{
 	HaltGitUnverifiable:            true,
 	HaltSweepUnverifiable:          true,
 	HaltSpawnHandoffUnverifiable:   true,
+	HaltPrepareLeaseEpochMismatch:  true,
 	HaltJournalCorrupt:             true,
 }
 
