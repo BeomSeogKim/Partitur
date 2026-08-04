@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -439,7 +440,7 @@ func TestDerivedCancellationAndSupersessionContracts(t *testing.T) {
 		"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
 		"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
 		"new_revision": 2, "new_snapshot_hash": "sha256:score-2", "new_snapshot_file_hash": "sha256:file-2",
-		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "superseded_attempt_ids": []any{},
+		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "head_movements": headMovementsPayload("m1"), "superseded_attempt_ids": []any{},
 		"obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": testIdentityVersions(),
 	})
 	if _, err := Apply(supersededState, invalidApproval); !errors.Is(err, ErrInvalidEvent) {
@@ -756,7 +757,7 @@ func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
 		"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
 		"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
 		"new_revision": 2, "new_snapshot_hash": "sha256:score-2", "new_snapshot_file_hash": "sha256:file-2",
-		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "superseded_attempt_ids": []any{"a1"},
+		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "head_movements": headMovementsPayload("m1"), "superseded_attempt_ids": []any{"a1"},
 		"obsoleted_decision_ids": []any{"decision-1"}, "finalization": false, "identity_versions": testIdentityVersions(),
 	})
 	next, err = Apply(state, approval)
@@ -1028,6 +1029,7 @@ func TestAutoApprovalCommitsPreparedHeadAndSupersedesExactAttempts(t *testing.T)
 			},
 			"budget": map[string]any{},
 		},
+		"head_movements":         headMovementsPayload("m1"),
 		"superseded_attempt_ids": []any{"a1"},
 		"obsoleted_decision_ids": []any{},
 		"finalization":           false,
@@ -1043,6 +1045,128 @@ func TestAutoApprovalCommitsPreparedHeadAndSupersedesExactAttempts(t *testing.T)
 		state.ScoreHead != (ScoreHead{Revision: 2, SemanticHash: "sha256:score-2", FileHash: "sha256:file-2"}) ||
 		state.Attempts["a1"].State != AttemptSuperseded {
 		t.Fatalf("approved projection = %+v", state)
+	}
+}
+
+func TestAmendmentApprovalModeFieldsAreConditional(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "auto requires envelope class", mutate: func(payload map[string]any) { delete(payload, "envelope_class") }},
+		{name: "auto forbids decision id", mutate: func(payload map[string]any) { payload["decision_id"] = "decision-1" }},
+		{name: "auto forbids envelope evaluation", mutate: func(payload map[string]any) { payload["envelope_evaluation"] = map[string]any{"guard_passed": true} }},
+		{name: "auto rejects invalid envelope class", mutate: func(payload map[string]any) { payload["envelope_class"] = "WIDE" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := approvalPayload("auto")
+			test.mutate(payload)
+			if err := ValidateEvent(fixtureEvent(EventAmendmentApproved, payload, nil)); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("ValidateEvent() error = %v, want ErrInvalidEvent", err)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "human requires decision id", mutate: func(payload map[string]any) { delete(payload, "decision_id") }},
+		{name: "human forbids envelope class", mutate: func(payload map[string]any) { payload["envelope_class"] = "NARROW_PATHS" }},
+		{name: "human requires envelope evaluation", mutate: func(payload map[string]any) { delete(payload, "envelope_evaluation") }},
+		{name: "human finalization remains unsupported", mutate: func(payload map[string]any) { payload["finalization"] = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := approvalPayload("human")
+			test.mutate(payload)
+			if err := ValidateEvent(fixtureEvent(EventAmendmentApproved, payload, nil)); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("ValidateEvent() error = %v, want ErrInvalidEvent", err)
+			}
+		})
+	}
+}
+
+func TestHumanApprovalBindsPreparedDecision(t *testing.T) {
+	state := runningAttemptState(t)
+	prepare := autoPreparePayload()
+	prepare["mode"] = "human"
+	delete(prepare, "envelope_class")
+	prepare["decision_id"] = "decision-1"
+	var err error
+	state, err = Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, prepare, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := fixtureEvent(EventAmendmentApproved, approvalPayload("human"), func(event *Event) {
+		event.ScoreRevision = 2
+	})
+	if _, err := Apply(state, approval); err != nil {
+		t.Fatal(err)
+	}
+	approval.Payload = mustPayload(t, approvalPayload("human"))
+	var payload map[string]any
+	if err := json.Unmarshal(approval.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["decision_id"] = "decision-other"
+	approval.Payload = mustPayload(t, payload)
+	if _, err := Apply(state, approval); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("Apply() error = %v, want ErrInvalidEvent", err)
+	}
+}
+
+func TestApprovalReconcilesHeadMovements(t *testing.T) {
+	state := runningAttemptState(t)
+	state, err := Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := approvalPayload("auto")
+	approval["head_movements"] = []any{
+		map[string]any{"id": "m1", "initial": "PENDING", "repo_write": false, "has_dependencies": false, "final": false},
+		map[string]any{"id": "m2", "initial": "PENDING", "repo_write": true, "has_dependencies": true, "final": true},
+	}
+	next, err := Apply(state, fixtureEvent(EventAmendmentApproved, approval, func(event *Event) { event.ScoreRevision = 2 }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Movements["m1"] != MovementRunning || next.Movements["m2"] != MovementPending ||
+		!slices.Equal(next.MovementOrder, []MovementID{"m1", "m2"}) ||
+		next.RepoWriteMovements["m1"] || !next.RepoWriteMovements["m2"] ||
+		next.DependencyMovements["m1"] || !next.DependencyMovements["m2"] ||
+		next.FinalMovements["m1"] || !next.FinalMovements["m2"] {
+		t.Fatalf("reconciled head = %+v", next)
+	}
+}
+
+func TestApprovalRejectsRemovingSucceededMovement(t *testing.T) {
+	state := runningAttemptState(t)
+	state.Movements["retired"] = MovementSucceeded
+	state, err := Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(state, autoApprovalEvent()); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("Apply() error = %v, want ErrInvalidEvent", err)
+	}
+}
+
+func TestApprovalHeadMovementsAreClosed(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		head []any
+	}{
+		{name: "empty", head: []any{}},
+		{name: "duplicate", head: append(headMovementsPayload("m1"), headMovementsPayload("m1")...)},
+		{name: "invalid initial", head: []any{map[string]any{"id": "m1", "initial": "READY", "repo_write": false, "has_dependencies": false, "final": false}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := approvalPayload("auto")
+			payload["head_movements"] = test.head
+			if err := ValidateEvent(fixtureEvent(EventAmendmentApproved, payload, nil)); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("ValidateEvent() error = %v, want ErrInvalidEvent", err)
+			}
+		})
 	}
 }
 
@@ -1491,15 +1615,25 @@ func blockedPayload() map[string]any {
 }
 
 func autoApprovalEvent() Event {
-	return fixtureEvent(EventAmendmentApproved, map[string]any{
-		"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
-		"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
-		"new_revision": 2, "new_snapshot_hash": "sha256:score-2", "new_snapshot_file_hash": "sha256:file-2",
-		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "superseded_attempt_ids": []any{"a1"},
-		"obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": testIdentityVersions(),
-	}, func(event *Event) {
+	return fixtureEvent(EventAmendmentApproved, approvalPayload("auto"), func(event *Event) {
 		event.ScoreRevision = 2
 	})
+}
+
+func approvalPayload(mode string) map[string]any {
+	payload := map[string]any{
+		"proposal_id": "proposal-1", "mode": mode, "base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+		"new_revision": 2, "new_snapshot_hash": "sha256:score-2", "new_snapshot_file_hash": "sha256:file-2",
+		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "head_movements": headMovementsPayload("m1"), "superseded_attempt_ids": []any{"a1"},
+		"obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": testIdentityVersions(),
+	}
+	if mode == "auto" {
+		payload["envelope_class"] = "NARROW_PATHS"
+	} else {
+		payload["decision_id"] = "decision-1"
+		payload["envelope_evaluation"] = map[string]any{"guard_passed": true}
+	}
+	return payload
 }
 
 func emptyActualImpact() map[string]any {
@@ -1512,6 +1646,16 @@ func emptyActualImpact() map[string]any {
 		},
 		"budget": map[string]any{},
 	}
+}
+
+func headMovementsPayload(ids ...string) []any {
+	values := make([]any, len(ids))
+	for index, id := range ids {
+		values[index] = map[string]any{
+			"id": id, "initial": "PENDING", "repo_write": false, "has_dependencies": false, "final": false,
+		}
+	}
+	return values
 }
 
 func amendmentRejectedPayload() map[string]any {

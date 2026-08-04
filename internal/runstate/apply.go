@@ -693,6 +693,7 @@ func Apply(input State, event Event) (State, error) {
 			ID:            PrepareID(mustString(payload, "prepare_id")),
 			ProposalID:    ProposalID(mustString(payload, "proposal_id")),
 			Mode:          mustString(payload, "mode"),
+			DecisionID:    optionalStringPointer(payload, "decision_id"),
 			EnvelopeClass: mustString(payload, "envelope_class"),
 			BaseHead:      state.ScoreHead,
 			NewHead: ScoreHead{
@@ -728,9 +729,19 @@ func Apply(input State, event Event) (State, error) {
 			return state, invalid(event, "approved base does not match pending prepare")
 		}
 		if mustString(payload, "mode") != state.PendingPrepare.Mode ||
-			mustString(payload, "envelope_class") != state.PendingPrepare.EnvelopeClass ||
 			mustUint(payload, "classifier_version") != state.PendingPrepare.ClassifierVersion {
 			return state, invalid(event, "approved policy binding does not match pending prepare")
+		}
+		switch state.PendingPrepare.Mode {
+		case "auto":
+			if mustString(payload, "envelope_class") != state.PendingPrepare.EnvelopeClass {
+				return state, invalid(event, "approved policy binding does not match pending prepare")
+			}
+		case "human":
+			decisionID := optionalStringPointer(payload, "decision_id")
+			if decisionID == nil || state.PendingPrepare.DecisionID == nil || *decisionID != *state.PendingPrepare.DecisionID {
+				return state, invalid(event, "approved policy binding does not match pending prepare")
+			}
 		}
 		approvedHead := ScoreHead{
 			Revision:     mustUint(payload, "new_revision"),
@@ -746,11 +757,32 @@ func Apply(input State, event Event) (State, error) {
 		if !slices.Equal(mustStrings(payload, "obsoleted_decision_ids"), pendingDecisionIDs(state)) {
 			return state, invalid(event, "obsoleted_decision_ids do not match the pre-event projection")
 		}
-		state.ScoreHead = approvedHead
+		head, err := headMovements(payload["head_movements"].([]any))
+		if err != nil {
+			return state, invalid(event, err.Error())
+		}
+		movements, order, repoWrite, dependencies, final, err := reconciledHead(state, head)
+		if err != nil {
+			return state, invalid(event, err.Error())
+		}
 		supersededAttemptIDs := mustStrings(payload, "superseded_attempt_ids")
 		if !slices.Equal(supersededAttemptIDs, cancellableAttemptIDs(state)) {
 			return state, invalid(event, "superseded_attempt_ids do not match the pre-event projection")
 		}
+		observedEpoch := state.PendingPrepare.ObservedAuthorityEpoch
+		if state.Authority.Epoch != observedEpoch {
+			return state, invalid(event, "authority epoch does not match pending prepare observation")
+		}
+		fencedEpoch, fenced := optionalUint(payload, "fenced_epoch")
+		if fenced && fencedEpoch != observedEpoch+1 {
+			return state, invalid(event, "fenced_epoch is not observed authority epoch plus one")
+		}
+		state.ScoreHead = approvedHead
+		state.Movements = movements
+		state.MovementOrder = order
+		state.RepoWriteMovements = repoWrite
+		state.DependencyMovements = dependencies
+		state.FinalMovements = final
 		for _, id := range supersededAttemptIDs {
 			attemptID := AttemptID(id)
 			attempt, ok := state.Attempts[attemptID]
@@ -760,16 +792,8 @@ func Apply(input State, event Event) (State, error) {
 			attempt.State = AttemptSuperseded
 			state.Attempts[attemptID] = attempt
 		}
-		observedEpoch := state.PendingPrepare.ObservedAuthorityEpoch
-		if state.Authority.Epoch != observedEpoch {
-			return state, invalid(event, "authority epoch does not match pending prepare observation")
-		}
-		if epoch, ok := optionalUint(payload, "fenced_epoch"); ok {
-			if epoch == observedEpoch+1 {
-				state.Authority = Authority{Epoch: epoch}
-			} else {
-				return state, invalid(event, "fenced_epoch is not observed authority epoch plus one")
-			}
+		if fenced {
+			state.Authority = Authority{Epoch: fencedEpoch}
 		}
 		state.PendingPrepare = nil
 		closeAllPendingDecisions(&state)
@@ -1366,13 +1390,13 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventExecutionStopped:
 		return []string{"interval_id", "reason", "charging", "charged_duration"}, []string{"observed_at"}, true
 	case EventAmendmentApprovalPrepared:
-		return []string{"prepare_id", "proposal_id", "mode", "envelope_class", "base_revision", "base_hash", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "target_attempt_ids", "observed_authority_epoch", "quiesce_deadline", "classifier_version", "identity_versions"}, nil, true
+		return []string{"prepare_id", "proposal_id", "mode", "base_revision", "base_hash", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "target_attempt_ids", "observed_authority_epoch", "quiesce_deadline", "classifier_version", "identity_versions"}, []string{"decision_id", "envelope_class"}, true
 	case EventAmendmentApprovalAbandoned:
 		return []string{"prepare_id", "proposal_id", "reason", "base_revision", "base_hash", "classifier_version"}, nil, true
 	case EventAmendmentRoutedHuman:
 		return []string{"proposal_id", "reason", "decision_type", "blocking", "proposal_record_hash", "base_revision", "base_hash", "classifier_version", "decision_id", "typed_delta", "actual_impact", "identity_versions"}, []string{"emitted_id", "envelope_evaluation"}, true
 	case EventAmendmentApproved:
-		return []string{"proposal_id", "mode", "envelope_class", "base_revision", "base_hash", "classifier_version", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "typed_delta", "actual_impact", "superseded_attempt_ids", "obsoleted_decision_ids", "finalization", "identity_versions"}, []string{"emitted_id", "candidate_id", "fenced_epoch"}, true
+		return []string{"proposal_id", "mode", "base_revision", "base_hash", "classifier_version", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "typed_delta", "actual_impact", "head_movements", "superseded_attempt_ids", "obsoleted_decision_ids", "finalization", "identity_versions"}, []string{"emitted_id", "decision_id", "envelope_class", "candidate_id", "envelope_evaluation", "fenced_epoch"}, true
 	case EventAuthorityGranted:
 		return []string{"authority_epoch", "owner_pid", "owner_start_identity"}, []string{"reclaimed_from_epoch"}, true
 	case EventCancelRequested:
@@ -1509,6 +1533,14 @@ func validateNestedPayload(eventType EventType, payload map[string]any) error {
 		}
 		if err := validateActualImpact(mustObject(payload, "actual_impact")); err != nil {
 			return err
+		}
+		if _, err := headMovements(payload["head_movements"].([]any)); err != nil {
+			return err
+		}
+		if evaluation, ok := payload["envelope_evaluation"].(map[string]any); ok {
+			if err := validateEnvelopeEvaluation(evaluation); err != nil {
+				return err
+			}
 		}
 	case EventAmendmentRejected:
 		if typedDelta, ok := payload["typed_delta"].([]any); ok {
@@ -1787,6 +1819,73 @@ func validateEnvelopeEvaluation(value map[string]any) error {
 	return nil
 }
 
+func headMovements(values []any) ([]HeadMovement, error) {
+	if len(values) == 0 {
+		return nil, errors.New("head_movements must not be empty")
+	}
+	head := make([]HeadMovement, 0, len(values))
+	seen := make(map[MovementID]bool, len(values))
+	for _, raw := range values {
+		value, ok := raw.(map[string]any)
+		if !ok {
+			return nil, errors.New("head_movements entries must be objects")
+		}
+		if err := fields(value, []string{"id", "initial", "repo_write", "has_dependencies", "final"}, nil); err != nil {
+			return nil, fmt.Errorf("head_movements: %w", err)
+		}
+		if err := namedTypes(value, []string{"id", "initial"}, nil, nil, []string{"repo_write", "has_dependencies", "final"}, nil); err != nil {
+			return nil, fmt.Errorf("head_movements: %w", err)
+		}
+		movement := HeadMovement{
+			ID:              MovementID(mustString(value, "id")),
+			Initial:         MovementState(mustString(value, "initial")),
+			RepoWrite:       mustBool(value, "repo_write"),
+			HasDependencies: mustBool(value, "has_dependencies"),
+			Final:           mustBool(value, "final"),
+		}
+		if movement.ID == "" || seen[movement.ID] {
+			return nil, errors.New("head_movements ids must be non-empty and unique")
+		}
+		if movement.Initial != MovementPending && movement.Initial != MovementInapplicable {
+			return nil, errors.New("head_movements initial must be PENDING or INAPPLICABLE")
+		}
+		seen[movement.ID] = true
+		head = append(head, movement)
+	}
+	return head, nil
+}
+
+func reconciledHead(state State, head []HeadMovement) (map[MovementID]MovementState, []MovementID, map[MovementID]bool, map[MovementID]bool, map[MovementID]bool, error) {
+	movements := make(map[MovementID]MovementState, len(head))
+	order := make([]MovementID, 0, len(head))
+	repoWrite := make(map[MovementID]bool)
+	dependencies := make(map[MovementID]bool)
+	final := make(map[MovementID]bool)
+	for _, movement := range head {
+		if current, retained := state.Movements[movement.ID]; retained {
+			movements[movement.ID] = current
+		} else {
+			movements[movement.ID] = movement.Initial
+		}
+		order = append(order, movement.ID)
+		if movement.RepoWrite {
+			repoWrite[movement.ID] = true
+		}
+		if movement.HasDependencies {
+			dependencies[movement.ID] = true
+		}
+		if movement.Final {
+			final[movement.ID] = true
+		}
+	}
+	for id, current := range state.Movements {
+		if _, retained := movements[id]; !retained && current == MovementSucceeded {
+			return nil, nil, nil, nil, nil, fmt.Errorf("head_movements removes succeeded movement %q", id)
+		}
+	}
+	return movements, order, repoWrite, dependencies, final, nil
+}
+
 func validateActualImpact(value map[string]any) error {
 	if err := fields(value, []string{"score_changes", "authority", "budget"}, nil); err != nil {
 		return fmt.Errorf("actual_impact: %w", err)
@@ -1945,7 +2044,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		strings = append([]string{"interval_id", "reason", "charging"}, optionalNames(payload, "observed_at")...)
 		integers = []string{"charged_duration"}
 	case EventAmendmentApprovalPrepared:
-		strings = []string{"prepare_id", "proposal_id", "mode", "envelope_class", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "quiesce_deadline"}
+		strings = append([]string{"prepare_id", "proposal_id", "mode", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "quiesce_deadline"}, optionalNames(payload, "decision_id", "envelope_class")...)
 		arrays = []string{"target_attempt_ids"}
 		objects = []string{"identity_versions"}
 		integers = []string{"base_revision", "new_revision", "observed_authority_epoch", "classifier_version"}
@@ -1959,9 +2058,9 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		bools = []string{"blocking"}
 		integers = []string{"base_revision", "classifier_version"}
 	case EventAmendmentApproved:
-		strings = append([]string{"proposal_id", "mode", "envelope_class", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash"}, optionalNames(payload, "emitted_id", "candidate_id")...)
-		arrays = []string{"typed_delta", "superseded_attempt_ids", "obsoleted_decision_ids"}
-		objects = []string{"actual_impact", "identity_versions"}
+		strings = append([]string{"proposal_id", "mode", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash"}, optionalNames(payload, "emitted_id", "decision_id", "envelope_class", "candidate_id")...)
+		arrays = []string{"typed_delta", "head_movements", "superseded_attempt_ids", "obsoleted_decision_ids"}
+		objects = append([]string{"actual_impact", "identity_versions"}, optionalNames(payload, "envelope_evaluation")...)
 		bools = []string{"finalization"}
 		integers = append([]string{"base_revision", "classifier_version", "new_revision"}, optionalNames(payload, "fenced_epoch")...)
 	case EventAuthorityGranted:
@@ -2021,7 +2120,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		return err
 	}
 	for _, name := range arrays {
-		if name == "typed_delta" || name == "contributors" || name == "criterion_outcomes" || name == "raised" || name == "blocking_findings" || name == "overridden_findings" {
+		if name == "typed_delta" || name == "head_movements" || name == "contributors" || name == "criterion_outcomes" || name == "raised" || name == "blocking_findings" || name == "overridden_findings" {
 			continue
 		}
 		if err := stringArray(payload, name); err != nil {
@@ -2193,22 +2292,39 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 			"advisory_dimensions",
 		)
 	case EventAmendmentApprovalPrepared:
-		if mustString(payload, "mode") != "auto" {
-			return errors.New("only auto amendment prepares are supported")
-		}
-		if !validEnvelopeClass(mustString(payload, "envelope_class")) {
-			return errors.New("invalid auto envelope_class")
+		switch mustString(payload, "mode") {
+		case "auto":
+			if hasField(payload, "decision_id") || !validEnvelopeClass(mustString(payload, "envelope_class")) {
+				return errors.New("auto prepare requires envelope_class and forbids decision_id")
+			}
+		case "human":
+			if hasField(payload, "envelope_class") || mustString(payload, "decision_id") == "" {
+				return errors.New("human prepare requires decision_id and forbids envelope_class")
+			}
+		default:
+			return errors.New("invalid amendment prepare mode")
 		}
 		return sortedStringFields(payload, "target_attempt_ids")
 	case EventAmendmentApproved:
-		if mustString(payload, "mode") != "auto" {
-			return errors.New("only auto amendment approvals are supported")
-		}
-		if !validEnvelopeClass(mustString(payload, "envelope_class")) {
-			return errors.New("invalid auto envelope_class")
+		switch mustString(payload, "mode") {
+		case "auto":
+			if hasField(payload, "decision_id") || hasField(payload, "envelope_evaluation") ||
+				!validEnvelopeClass(mustString(payload, "envelope_class")) {
+				return errors.New("auto approval requires envelope_class and forbids decision_id and envelope_evaluation")
+			}
+		case "human":
+			if hasField(payload, "envelope_class") ||
+				mustString(payload, "decision_id") == "" {
+				return errors.New("human approval requires decision_id and forbids envelope_class")
+			}
+			if !hasField(payload, "envelope_evaluation") {
+				return errors.New("human approval requires envelope_evaluation")
+			}
+		default:
+			return errors.New("invalid amendment approval mode")
 		}
 		if mustBool(payload, "finalization") {
-			return errors.New("auto finalization is outside the supported projector")
+			return errors.New("finalization is outside the supported projector")
 		}
 		return sortedStringFields(payload, "superseded_attempt_ids", "obsoleted_decision_ids")
 	case EventExecutionStarted:
@@ -2391,6 +2507,11 @@ func fields(value map[string]any, required, optional []string) error {
 	return nil
 }
 
+func hasField(value map[string]any, name string) bool {
+	_, present := value[name]
+	return present
+}
+
 func sortedStringFields(payload map[string]any, names ...string) error {
 	for _, name := range names {
 		values := mustStrings(payload, name)
@@ -2451,6 +2572,15 @@ func optionalUint(value map[string]any, name string) (uint64, bool) {
 	}
 	number, _ := raw.(float64)
 	return uint64(number), true
+}
+
+func optionalStringPointer(value map[string]any, name string) *string {
+	raw, present := value[name]
+	if !present {
+		return nil
+	}
+	result, _ := raw.(string)
+	return &result
 }
 
 func validEnvelopeClass(value string) bool {

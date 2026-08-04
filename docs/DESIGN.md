@@ -2616,7 +2616,9 @@ plan.new_snapshot_hash      == prepare.new_snapshot_hash
 plan.new_snapshot_file_hash == prepare.new_snapshot_file_hash
 plan.superseded_attempt_ids == prepare.target_attempt_ids
 plan.mode                   == prepare.mode
-  and, per mode: decision_id present iff human; envelope_class present iff auto
+  and, per mode:
+    human: decision_id present and == prepare.decision_id; envelope_class absent
+    auto: decision_id absent; envelope_class present and == prepare.envelope_class
 ```
 
 Any inequality is `plan_invalidated`. Duplicating these fields is deliberate: the equality check is what

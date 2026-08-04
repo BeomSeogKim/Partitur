@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"sort"
 	"time"
 
@@ -198,46 +197,16 @@ func collectPrepare(root string, runID runstate.RunID, prepare runstate.PendingP
 	}
 }
 
-type preparePlan struct {
-	ProposalID           runstate.ProposalID  `json:"proposal_id"`
-	BaseRevision         uint64               `json:"base_revision"`
-	BaseHash             runstate.Hash        `json:"base_hash"`
-	NewRevision          uint64               `json:"new_revision"`
-	NewSnapshotHash      runstate.Hash        `json:"new_snapshot_hash"`
-	NewSnapshotFileHash  runstate.Hash        `json:"new_snapshot_file_hash"`
-	SupersededAttemptIDs []runstate.AttemptID `json:"superseded_attempt_ids"`
-	Mode                 string               `json:"mode"`
-	DecisionID           *string              `json:"decision_id"`
-	EnvelopeClass        *string              `json:"envelope_class"`
-}
-
 func preparePlanMatches(path string, prepare runstate.PendingPrepare) bool {
 	contents, err := os.ReadFile(path)
 	if err != nil || !fileMatches(path, prepare.PlanRecordHash) {
 		return false
 	}
-	var plan preparePlan
-	if json.Unmarshal(contents, &plan) != nil {
+	plan, err := runstate.DecodeApprovalPlan(contents)
+	if err != nil {
 		return false
 	}
-	if plan.ProposalID != prepare.ProposalID ||
-		plan.BaseRevision != prepare.BaseHead.Revision ||
-		plan.BaseHash != prepare.BaseHead.SemanticHash ||
-		plan.NewRevision != prepare.NewHead.Revision ||
-		plan.NewSnapshotHash != prepare.NewHead.SemanticHash ||
-		plan.NewSnapshotFileHash != prepare.NewHead.FileHash ||
-		!slices.Equal(plan.SupersededAttemptIDs, prepare.TargetAttemptIDs) ||
-		plan.Mode != prepare.Mode {
-		return false
-	}
-	switch plan.Mode {
-	case "human":
-		return plan.DecisionID != nil && plan.EnvelopeClass == nil
-	case "auto":
-		return plan.DecisionID == nil && plan.EnvelopeClass != nil && *plan.EnvelopeClass == prepare.EnvelopeClass
-	default:
-		return false
-	}
+	return plan.MatchesPrepare(prepare)
 }
 
 func fileMatches(path string, want runstate.Hash) bool {
