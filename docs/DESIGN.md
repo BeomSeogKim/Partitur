@@ -3690,13 +3690,14 @@ actual_impact = {
 
 `selector` is a **stable semantic selector**, not a raw numeric JSON Pointer: id-keyed
 collections are addressed by id (`/movements[id=build]/grants`), because a numeric pointer
-becomes ambiguous the moment a collection is reordered. Items are matched **by id** for
-deterministic content comparison, while semantic **sequence** is compared and hashed
-independently in declaration order (A.1) — so a reorder is neither absorbed into a content diff
-nor lost from the hash. An id-less array that differs in any way is recorded as a single
-`replace` of the whole field — one coarse selector, so a movement reorder is one `replace` of
-`/movements`. Where raw order is semantically meaningful, the schema carries an explicit
-order field rather than relying on position.
+becomes ambiguous the moment a collection is reordered. **Every score-AST collection whose A.1
+projection preserves declaration order is compared in two dimensions:** item content and sequence.
+For an id-keyed collection, item content changes are matched by id and recorded as `add`, `remove`,
+or `replace` at that item's semantic selector. A sequence difference records one coarse `replace`
+of the collection selector; when item content and sequence both differ, the impact records both.
+Thus a pure reorder records only the collection `replace` — a movement reorder at `/movements`, an
+output reorder at `/movements[id=build]/outputs` — and never a numeric position. An id-less array
+that differs in any way is likewise one coarse `replace` of its whole-field selector.
 
 Containment (`actual ⊆ claimed`) is component-wise: every actual `(selector, operation)`
 must appear in the claim (hashes are informative); patterns compare as exact strings with no
