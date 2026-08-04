@@ -20,7 +20,7 @@ func TestRenderPromptIncludesContractAndBrief(t *testing.T) {
 			Outputs:                 []protocol.OutputSpec{{ArtifactID: "report", Kind: "document"}},
 		},
 		Inputs:   []protocol.ArtifactRef{{ArtifactID: "design", Kind: "document", Path: "/input", Hash: "sha256:x"}},
-		Feedback: []protocol.Feedback{{PreviousAttemptID: "a-1", Kind: "task_failed", ArtifactID: "failure"}},
+		Feedback: []protocol.Feedback{{PreviousAttemptID: "a-1", Kind: "task_failed", ArtifactInstanceID: "failure@a-1", Path: "/feedback/failure", ContentHash: "sha256:failure"}},
 		ResolvedDecisions: []protocol.ResolvedDecision{
 			{
 				DecisionID: "q-1",

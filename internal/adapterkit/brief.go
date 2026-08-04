@@ -89,7 +89,7 @@ func RenderPrompt(request *protocol.ExecuteRequest) string {
 		feedback.WriteString("No prior-attempt feedback.")
 	} else {
 		for _, item := range request.Feedback {
-			fmt.Fprintf(&feedback, "- previous_attempt_id=%q kind=%q artifact_id=%q\n", item.PreviousAttemptID, item.Kind, item.ArtifactID)
+			fmt.Fprintf(&feedback, "- previous_attempt_id=%q kind=%q artifact_instance_id=%q path=%q hash=%q\n", item.PreviousAttemptID, item.Kind, item.ArtifactInstanceID, item.Path, item.ContentHash)
 		}
 	}
 	section("Feedback", strings.TrimSpace(feedback.String()))

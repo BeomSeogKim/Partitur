@@ -229,9 +229,17 @@ type AdapterObservation struct {
 	Enforcement             map[string]bool
 	NegotiatedFeatures      []string
 	TruncatedResolutions    []string
+	DeliveredFeedback       []DeliveredFeedback
 	AdvisoryDimensions      []string
 	ExecutionDependencyHash Hash
 	IdentityVersions        json.RawMessage
+}
+
+type DeliveredFeedback struct {
+	PreviousAttemptID  AttemptID
+	Kind               string
+	ArtifactInstanceID ArtifactInstanceID
+	ContentHash        Hash
 }
 
 type ArtifactRecord struct {

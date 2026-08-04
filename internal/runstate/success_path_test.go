@@ -488,6 +488,72 @@ func TestSuccessPathPayloadValidation(t *testing.T) {
 	}
 }
 
+func TestAdapterProbedProjectsDeliveredFeedback(t *testing.T) {
+	state := runningAttemptState(t)
+	payload := adapterProbedPayload()
+	payload["delivered_feedback"] = []any{map[string]any{
+		"previous_attempt_id":  "a0",
+		"kind":                 "acceptance_report",
+		"artifact_instance_id": "report@a0",
+		"content_hash":         "sha256:report",
+	}}
+	state = applyFixture(t, state, EventAdapterProbed, payload, attemptEnvelope)
+	if got := state.AdapterObservations["a1"].DeliveredFeedback; !reflect.DeepEqual(got, []DeliveredFeedback{{
+		PreviousAttemptID: "a0", Kind: "acceptance_report", ArtifactInstanceID: "report@a0", ContentHash: "sha256:report",
+	}}) {
+		t.Fatalf("delivered feedback = %#v", got)
+	}
+}
+
+func TestAdapterProbedDeliveredFeedbackGuards(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{
+			name: "absent required selection",
+			mutate: func(payload map[string]any) {
+				delete(payload, "delivered_feedback")
+			},
+			want: `required field "delivered_feedback" is absent`,
+		},
+		{
+			name: "missing tuple member",
+			mutate: func(payload map[string]any) {
+				payload["delivered_feedback"] = []any{map[string]any{
+					"previous_attempt_id":  "a0",
+					"kind":                 "acceptance_report",
+					"artifact_instance_id": "report@a0",
+				}}
+			},
+			want: `delivered_feedback: entry 0: required field "content_hash" is absent`,
+		},
+		{
+			name: "malformed tuple member",
+			mutate: func(payload map[string]any) {
+				payload["delivered_feedback"] = []any{map[string]any{
+					"previous_attempt_id":  "a0",
+					"kind":                 "acceptance_report",
+					"artifact_instance_id": "report@a0",
+					"content_hash":         12,
+				}}
+			},
+			want: "delivered_feedback: entry 0: content_hash must be a string",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := adapterProbedPayload()
+			test.mutate(payload)
+			err := ValidateEvent(fixtureEvent(EventAdapterProbed, payload, attemptEnvelope))
+			if !errors.Is(err, ErrInvalidEvent) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want invalid event containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestAcceptanceEvaluationRequiresVerifyingAttemptAndOpenEvaluation(t *testing.T) {
 	event := fixtureEvent(
 		EventAcceptanceEvaluationCompleted,
