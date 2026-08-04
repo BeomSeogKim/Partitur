@@ -251,6 +251,11 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 					decision = recovery.Plan(input)
 					continue
 				}
+				if errors.Is(err, runstore.ErrPrepareWaiting) {
+					result.Kinds = append(result.Kinds, action.Kind)
+					result.Outcome = OutcomeQuiescent
+					return result, nil
+				}
 				if errors.Is(err, ErrRunCancelledDuringRecovery) {
 					// As above: the action ran before it reported the cancellation.
 					result.Kinds = append(result.Kinds, action.Kind)
@@ -345,7 +350,9 @@ func actionRequiresDriver(action recovery.Action) bool {
 		recovery.ActionQuarantineOrphanLease,
 		recovery.ActionRefuseResume,
 		recovery.ActionReturnWaitingHuman,
-		recovery.ActionExecuteCancellation:
+		recovery.ActionExecuteCancellation,
+		recovery.ActionCompleteOrAbandonPrepare,
+		recovery.ActionSelectRevisionRestart:
 		return false
 	default:
 		return true
@@ -474,6 +481,10 @@ func haltDecision(decision recovery.Decision, err error) (recovery.Decision, boo
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltUnsupportedRunFormat}, true
 	case errors.Is(err, runstore.ErrMissingPinnedSnapshot):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingSnapshotFile}, true
+	case errors.Is(err, runstore.ErrMissingPreparePlan):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingPreparePlan}, true
+	case errors.Is(err, runstore.ErrPrepareLeaseEpochMismatch):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltPrepareLeaseEpochMismatch}, true
 	case errors.Is(err, runstore.ErrMissingResolvedCast):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingResolvedCast}, true
 	case errors.Is(err, workspace.ErrGitUnverifiable):

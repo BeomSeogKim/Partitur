@@ -413,22 +413,17 @@ func cancellationFixture(
 		if _, err := transaction.At("fixture.lease").CreateLease(true, lease); err != nil {
 			return err
 		}
-		if predicates.preparePending {
-			return appendCancellationFixturePrepare(t, transaction, runID, compiled, authorityEpoch)
-		}
 		if predicates.intervalOpen {
-			return appendCancellationFixtureInterval(t, transaction, runID)
+			if err := appendCancellationFixtureInterval(t, transaction, runID); err != nil {
+				return err
+			}
+		}
+		if predicates.preparePending {
+			return appendCancellationFixturePrepare(t, transaction, runID, compiled, authorityEpoch, lease)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
-	}
-	if predicates.preparePending && predicates.intervalOpen {
-		if err := store.Mutate(runID, "", func(transaction *runstore.Txn) error {
-			return appendCancellationFixtureInterval(t, transaction, runID)
-		}); err != nil {
-			t.Fatal(err)
-		}
 	}
 	return repository, environment, runID, store
 }
@@ -439,6 +434,7 @@ func appendCancellationFixturePrepare(
 	runID string,
 	baseScore *score.Score,
 	observedEpoch uint64,
+	lease runstore.Lease,
 ) error {
 	t.Helper()
 	nextSnapshot := resumeScore(2, "cancellation fixture pending prepare")
@@ -454,14 +450,41 @@ func appendCancellationFixturePrepare(
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := []byte("cancellation fixture plan\n")
+	envelope := "NARROW_PATHS"
+	plan, err := runstate.EncodeApprovalPlan(runstate.ApprovalPlan{
+		Schema:               runstate.ApprovalPlanSchema,
+		ProposalID:           "proposal-1",
+		Mode:                 "auto",
+		EnvelopeClass:        &envelope,
+		BaseRevision:         1,
+		BaseHash:             runstate.Hash(baseScoreHash),
+		ClassifierVersion:    1,
+		NewRevision:          2,
+		NewSnapshotHash:      runstate.Hash(nextScoreHash),
+		NewSnapshotFileHash:  runstate.Hash(cancellationFixtureHash(nextSnapshot)),
+		TypedDelta:           []any{},
+		ActualImpact:         map[string]any{"score_changes": []any{}, "authority": map[string]any{"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}}, "grants": []any{}, "side_effects": map[string]any{"added": []any{}, "removed": []any{}}}, "budget": map[string]any{}},
+		HeadMovements:        []runstate.HeadMovement{},
+		SupersededAttemptIDs: []runstate.AttemptID{},
+		ObsoletedDecisionIDs: []string{},
+		Finalization:         false,
+		IdentityVersions:     resumeIdentityVersions(),
+	})
+	if err != nil {
+		return err
+	}
+	sidecar, err := json.Marshal(map[string]any{"epoch": lease.Epoch, "token": lease.Token, "pid": lease.PID, "start_identity": cancellationFixtureStartIdentity(t, lease.Start)})
+	if err != nil {
+		return err
+	}
+	sidecar = append(sidecar, '\n')
 	if _, err := transaction.At("fixture.prepare.snapshot").PublishImmutable("scores/revision-2.yaml", nextSnapshot, runstore.Hash(cancellationFixtureHash(nextSnapshot))); err != nil {
 		return err
 	}
 	if _, err := transaction.At("fixture.prepare.plan").PublishImmutable("prepares/prepare-1.json", plan, runstore.Hash(cancellationFixtureHash(plan))); err != nil {
 		return err
 	}
-	if _, err := transaction.At("fixture.prepare.sidecar").PublishImmutable("driver.quiesced.prepare-1", []byte("quiesced\n"), runstore.Hash(cancellationFixtureHash([]byte("quiesced\n")))); err != nil {
+	if _, err := transaction.At("fixture.prepare.sidecar").PublishImmutable("driver.quiesced.prepare-1", sidecar, runstore.Hash(cancellationFixtureHash(sidecar))); err != nil {
 		return err
 	}
 	_, err = transaction.At("fixture.prepare.recorded").Append(runstate.Event{

@@ -32,6 +32,8 @@ type Result struct {
 	Outcome Outcome
 	Reason  string
 	Err     error
+
+	prepareAcknowledged bool
 }
 
 // StartedObserver is called exactly once after run.started is durable.

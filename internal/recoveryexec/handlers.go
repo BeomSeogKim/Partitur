@@ -66,6 +66,7 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionResumeCriterion:            resumeCriterion,
 		recovery.ActionRealizeRecordedDisposition: realizeRecordedDisposition,
 		recovery.ActionMaterializeSuccessor:       materializeSuccessor,
+		recovery.ActionSelectRevisionRestart:      selectRevisionRestart,
 		recovery.ActionAppendQuestionRequest:      appendQuestionRequest,
 		recovery.ActionSelectDecisionResume:       selectDecisionResume,
 		recovery.ActionAppendRunFailed:            appendRunFailed,
@@ -78,9 +79,20 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionRerunPostHocVerification:   rerunPostHocVerification,
 		recovery.ActionCaptureChangeSet:           captureChangeSet,
 		recovery.ActionExecuteCancellation:        executeCancellation,
+		recovery.ActionCompleteOrAbandonPrepare:   completeOrAbandonPrepare,
 		recovery.ActionAppendCompositionTerminal:  appendCompositionTerminal,
 		recovery.ActionRerunComposition:           rerunMovementComposition,
 	}
+}
+
+func completeOrAbandonPrepare(ctx context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for prepare commit")
+	}
+	if err := execution.Store.CompleteOrAbandonPrepare(ctx, execution.RunID); err != nil {
+		return err
+	}
+	return ErrRecoveryReplan
 }
 
 func executeCancellation(ctx context.Context, execution HandlerContext, _ recovery.Action) error {
@@ -741,25 +753,42 @@ func materializeSuccessor(ctx context.Context, execution HandlerContext, action 
 	if err != nil {
 		return err
 	}
-	causationType := runstate.EventAttemptFailed
-	if pending.Reason == "decision_resume" {
-		causationType = runstate.EventDecisionResolved
-	}
-	causationID, err := latestEventID(journal.Events, func(previous runstate.Event) bool {
-		if previous.AttemptID != pending.AttemptID {
-			return false
+	causationID := pending.CausationID
+	if causationID == "" {
+		causationType := runstate.EventAttemptFailed
+		if pending.Reason == "decision_resume" {
+			causationType = runstate.EventDecisionResolved
 		}
-		if causationType == runstate.EventDecisionResolved {
-			return previous.Type == causationType
+		causationID, err = latestEventID(journal.Events, func(previous runstate.Event) bool {
+			if previous.AttemptID != pending.AttemptID {
+				return false
+			}
+			if causationType == runstate.EventDecisionResolved {
+				return previous.Type == causationType
+			}
+			return previous.Type == runstate.EventAttemptFailed || previous.Type == runstate.EventAcceptanceFailed
+		})
+		if err != nil {
+			return err
 		}
-		return previous.Type == runstate.EventAttemptFailed || previous.Type == runstate.EventAcceptanceFailed
-	})
-	if err != nil {
-		return err
 	}
 	return executeRecoveredAttempt(
 		ctx, execution, input, string(pending.MovementID), performer.ID, pending.Reason, causationID,
 	)
+}
+
+func selectRevisionRestart(_ context.Context, _ HandlerContext, action recovery.Action) error {
+	if action.RevisionRestart == nil || action.PendingSuccessor == nil {
+		return errors.New("recovery revision restart selection is incomplete")
+	}
+	restart := action.RevisionRestart
+	pending := action.PendingSuccessor
+	if restart.MovementID == "" || restart.AttemptID == "" || restart.ApprovalEventID == "" || restart.Performer == "" ||
+		pending.MovementID != restart.MovementID || pending.AttemptID != restart.AttemptID || pending.Performer != restart.Performer ||
+		pending.Reason != "revision_restart" || pending.CausationID != restart.ApprovalEventID || action.Continuation != recovery.ContinuationC4 {
+		return errors.New("recovery revision restart selection is incomplete")
+	}
+	return nil
 }
 
 func appendQuestionRequest(_ context.Context, execution HandlerContext, action recovery.Action) error {

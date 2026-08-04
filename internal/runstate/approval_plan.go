@@ -56,6 +56,55 @@ func DecodeApprovalPlan(contents []byte) (ApprovalPlan, error) {
 	return plan, nil
 }
 
+// ApprovedPayload produces the complete amendment.approved payload from this
+// prepared plan. fencedEpoch is the commit-time authority overlay and is not
+// part of the persisted plan.
+func (plan ApprovalPlan) ApprovedPayload(fencedEpoch *uint64) (json.RawMessage, error) {
+	if plan.Schema != ApprovalPlanSchema {
+		return nil, fmt.Errorf("approval plan schema %q is not %q", plan.Schema, ApprovalPlanSchema)
+	}
+	payload := map[string]any{
+		"proposal_id":            plan.ProposalID,
+		"mode":                   plan.Mode,
+		"base_revision":          plan.BaseRevision,
+		"base_hash":              plan.BaseHash,
+		"classifier_version":     plan.ClassifierVersion,
+		"new_revision":           plan.NewRevision,
+		"new_snapshot_hash":      plan.NewSnapshotHash,
+		"new_snapshot_file_hash": plan.NewSnapshotFileHash,
+		"typed_delta":            plan.TypedDelta,
+		"actual_impact":          plan.ActualImpact,
+		"head_movements":         plan.HeadMovements,
+		"superseded_attempt_ids": plan.SupersededAttemptIDs,
+		"obsoleted_decision_ids": plan.ObsoletedDecisionIDs,
+		"finalization":           plan.Finalization,
+		"identity_versions":      plan.IdentityVersions,
+	}
+	if plan.EmittedID != nil {
+		payload["emitted_id"] = *plan.EmittedID
+	}
+	if plan.DecisionID != nil {
+		payload["decision_id"] = *plan.DecisionID
+	}
+	if plan.EnvelopeClass != nil {
+		payload["envelope_class"] = *plan.EnvelopeClass
+	}
+	if plan.CandidateID != nil {
+		payload["candidate_id"] = *plan.CandidateID
+	}
+	if plan.EnvelopeEvaluation != nil {
+		payload["envelope_evaluation"] = plan.EnvelopeEvaluation
+	}
+	if fencedEpoch != nil {
+		payload["fenced_epoch"] = *fencedEpoch
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
 // MatchesPrepare is the closed §6 predicate over fields shared by a plan and
 // its pending prepare.
 func (plan ApprovalPlan) MatchesPrepare(prepare PendingPrepare) bool {

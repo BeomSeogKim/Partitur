@@ -632,7 +632,8 @@ func TestLoadRunInputProjectsRevisionRestart(t *testing.T) {
 	if input.Score.Revision() != 2 {
 		t.Fatalf("current pinned score revision = %d, want 2", input.Score.Revision())
 	}
-	if got := input.Projection.RevisionRestarts; len(got) != 1 || got[0].MovementID != "write" {
+	if got := input.Projection.RevisionRestarts; len(got) != 1 || got[0].MovementID != "write" ||
+		got[0].AttemptID != "attempt-1" || got[0].ApprovalEventID == "" || got[0].Performer != "writer" {
 		t.Fatalf("revision restarts = %+v", got)
 	}
 	// The revision-1 composition failure crashed before its terminal. Once the
@@ -670,7 +671,7 @@ func TestRevisionRestartExclusions(t *testing.T) {
 			})},
 			{ScoreRevision: 2, MovementID: "write", AttemptID: "attempt-2", Type: runstate.EventPerformerSelected, Payload: recoveryPayload(t, map[string]any{})},
 		}
-		if got := replayFacts(events).revisionRestarts(state); len(got) != 0 {
+		if got := replayFacts(events).revisionRestarts(state, nil, nil); len(got) != 0 {
 			t.Fatalf("restart after revision-2 selection = %+v, want none", got)
 		}
 	})
@@ -684,7 +685,7 @@ func TestRevisionRestartExclusions(t *testing.T) {
 				"new_revision": 2, "finalization": true, "superseded_attempt_ids": []any{"attempt-1"},
 			})},
 		}
-		if got := replayFacts(events).revisionRestarts(state); len(got) != 0 {
+		if got := replayFacts(events).revisionRestarts(state, nil, nil); len(got) != 0 {
 			t.Fatalf("restart after finalization approval = %+v, want none", got)
 		}
 	})

@@ -119,6 +119,18 @@ func TestPlanC4RowsAndSchedulerOrder(t *testing.T) {
 	}
 }
 
+func TestPlanRevisionRestartCarriesItsSelectedSuccessorToC4(t *testing.T) {
+	decision := Plan(withRevisionRestart(baseInput()))
+	if decision.CaseID != CaseRevisionRestart || decision.Action == nil || decision.Action.Kind != ActionSelectRevisionRestart {
+		t.Fatalf("revision restart decision = %+v", decision)
+	}
+	pending := decision.Action.PendingSuccessor
+	if pending == nil || pending.MovementID != "movement" || pending.AttemptID != "attempt" || pending.Performer != "performer" ||
+		pending.Reason != "revision_restart" || pending.CausationID != "approval" || decision.Action.Continuation != ContinuationC4 {
+		t.Fatalf("revision restart action = %+v", decision.Action)
+	}
+}
+
 func TestPlanBetweenUnitAppliesLifecyclePrecedenceWithoutRecoveryObservations(t *testing.T) {
 	base := func() Projection {
 		input := baseInput()
@@ -1095,7 +1107,9 @@ func withRequestedRoutedAmendment(input Input) Input {
 }
 
 func withRevisionRestart(input Input) Input {
-	input.Projection.RevisionRestarts = []RevisionRestart{{MovementID: "movement"}}
+	input.Projection.RevisionRestarts = []RevisionRestart{{
+		MovementID: "movement", AttemptID: "attempt", ApprovalEventID: "approval", Performer: "performer",
+	}}
 	return input
 }
 

@@ -11,6 +11,7 @@ import (
 
 func TestApplyDoesNotAliasInputOnSuccessOrError(t *testing.T) {
 	input := NewState([]MovementSeed{{ID: "m1", Initial: MovementPending}})
+	input.Run = RunRunning
 	input.Acceptances["a1"] = Acceptance{
 		Started:             true,
 		PlannedCriterionIDs: []CriterionID{"c1"},
@@ -22,9 +23,7 @@ func TestApplyDoesNotAliasInputOnSuccessOrError(t *testing.T) {
 		IdentityVersions: json.RawMessage(`{"x":1}`),
 	}
 
-	success, err := Apply(input, fixtureEvent(EventMovementReady, map[string]any{}, func(event *Event) {
-		event.MovementID = "m1"
-	}))
+	success, err := Apply(input, fixtureEvent(EventCancelRequested, map[string]any{"requested_by": "cli"}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1005,6 +1004,35 @@ func TestAutoPrepareCancellationCombination(t *testing.T) {
 	}
 }
 
+func TestPendingPrepareRefusesOrdinaryLifecycleMutation(t *testing.T) {
+	state := runningAttemptState(t)
+	var err error
+	state, err = Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Apply(state, fixtureEvent(EventMovementReady, map[string]any{}, func(event *Event) { event.MovementID = "m1" }))
+	if !errors.Is(err, ErrIllegalTransition) || !strings.Contains(err.Error(), "prepare_pending") {
+		t.Fatalf("ordinary lifecycle mutation error = %v, want prepare_pending", err)
+	}
+	if _, err := Apply(state, fixtureEvent(EventCancelRequested, map[string]any{"requested_by": "cli"}, nil)); err != nil {
+		t.Fatalf("cancellation remains permitted while prepare pending: %v", err)
+	}
+}
+
+func TestPrepareRequiresCurrentObservedAuthorityAndMillisecondDeadline(t *testing.T) {
+	for _, mutate := range []func(map[string]any){
+		func(payload map[string]any) { payload["observed_authority_epoch"] = float64(1) },
+		func(payload map[string]any) { payload["quiesce_deadline"] = "2026-07-26T00:00:00Z" },
+	} {
+		payload := autoPreparePayload()
+		mutate(payload)
+		if _, err := Apply(runningAttemptState(t), fixtureEvent(EventAmendmentApprovalPrepared, payload, nil)); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("prepared payload error = %v, want ErrInvalidEvent", err)
+		}
+	}
+}
+
 func TestAutoApprovalCommitsPreparedHeadAndSupersedesExactAttempts(t *testing.T) {
 	state := runningAttemptState(t)
 	var err error
@@ -1217,7 +1245,7 @@ func TestAmendmentApprovedFencedEpochMatchesPreparedObservation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			state := runningAttemptState(t)
-			state.Authority.Epoch = test.stateEpoch
+			state.Authority.Epoch = test.observed
 			preparePayload := autoPreparePayload()
 			preparePayload["observed_authority_epoch"] = test.observed
 			var err error
@@ -1225,6 +1253,10 @@ func TestAmendmentApprovedFencedEpochMatchesPreparedObservation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The prepare itself must be valid at its observation epoch. These
+			// cases exercise the approval-side revalidation against a changed
+			// projected epoch without manufacturing an invalid prepare event.
+			state.Authority.Epoch = test.stateEpoch
 
 			approval := autoApprovalEvent()
 			var approvalPayload map[string]any

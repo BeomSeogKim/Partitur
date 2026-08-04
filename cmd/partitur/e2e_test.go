@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/score"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 )
 
@@ -204,6 +206,183 @@ func TestRunTerminalizesACancellationObservedMidExecute(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repository, ".partitur", "runs", runID, "driver.lease")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("driver.lease stat = %v, want absent", err)
 	}
+}
+
+func TestRunQuiescesWhenPrepareIsObservedMidExecute(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, runScore(), runCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+
+	marker := filepath.Join(t.TempDir(), "executing")
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":                      t.TempDir(),
+		"PATH":                      bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN":        vendor,
+		runVendorEnvironment:        "1",
+		runVendorOutcomeEnvironment: "block_until_killed",
+		runVendorMarkerEnvironment:  marker,
+	})
+	prepared := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(marker); err != nil {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
+			store, err := runstore.New(repository, faultpoint.Nop{})
+			if err != nil {
+				prepared <- err
+				return
+			}
+			runID, err := soleRunID(repository)
+			if err != nil {
+				prepared <- err
+				return
+			}
+			prepared <- appendRecoveryControlPrepare(store, runstate.RunID(runID), repository)
+			return
+		}
+		prepared <- errors.New("vendor never reported that it was executing")
+	}()
+	code, stdout, stderr := runCommandBinaryWithin(t, 60*time.Second, partitur, repository, environment, "run")
+	if err := <-prepared; err != nil {
+		t.Fatal(err)
+	}
+	runID := strings.TrimSpace(stdout)
+	if code != 0 || runID == "" || stderr != "" {
+		t.Fatalf("prepare-observed run: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.PendingPrepare == nil || input.Projection.State.OpenExecution != nil {
+		t.Fatalf("prepare acknowledgement state = %+v", input.Projection.State)
+	}
+	if _, err := os.Stat(filepath.Join(repository, ".partitur", "runs", runID, "driver.quiesced.prepare-control")); err != nil {
+		t.Fatalf("prepare sidecar: %v", err)
+	}
+	resumeEnvironment := fixtureOutcomeEnvironment(environment, "success")
+	resumeCode, resumeStdout, resumeStderr := runCommandBinaryWithin(t, 60*time.Second, partitur, repository, resumeEnvironment, "resume", runID)
+	if resumeCode != 0 || resumeStdout != "" || resumeStderr != "" {
+		t.Fatalf("prepare recovery handoff: exit=%d stdout=%q stderr=%q", resumeCode, resumeStdout, resumeStderr)
+	}
+	input, err = store.LoadRunInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.PendingPrepare != nil || input.Projection.State.ScoreHead.Revision != 2 || input.Projection.State.Run != runstate.RunSucceeded {
+		t.Fatalf("prepare recovery state = %+v", input.Projection.State)
+	}
+	journal, err := store.ReadJournal(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventPerformerSelected && event.ScoreRevision == 2 && bytes.Contains(event.Payload, []byte(`"reason":"revision_restart"`)) && event.CausationID != "" {
+			return
+		}
+	}
+	t.Fatalf("recovery never selected the revision restart: journal=%+v", journal.Events)
+}
+
+// appendRecoveryControlPrepare is a recovery/control fixture. It derives its
+// score and target attempts from the live run; it is not a live amend command.
+func appendRecoveryControlPrepare(store *runstore.Store, runID runstate.RunID, repository string) error {
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		return err
+	}
+	contents, err := os.ReadFile(filepath.Join(repository, "partitur.yaml"))
+	if err != nil {
+		return err
+	}
+	var document map[string]any
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return err
+	}
+	document["revision"] = float64(input.Projection.State.ScoreHead.Revision + 1)
+	document["goal"] = "recovery control fixture prepared revision"
+	nextContents, err := json.Marshal(document)
+	if err != nil {
+		return err
+	}
+	next, diagnostics := score.Compile(nextContents)
+	if len(diagnostics) != 0 {
+		return fmt.Errorf("control fixture score diagnostics: %v", diagnostics)
+	}
+	nextHash, err := next.Hash()
+	if err != nil {
+		return err
+	}
+	targets := make([]runstate.AttemptID, 0)
+	for id, attempt := range input.Projection.State.Attempts {
+		if attempt.State == runstate.AttemptStarting || attempt.State == runstate.AttemptRunning || attempt.State == runstate.AttemptVerifying {
+			targets = append(targets, id)
+		}
+	}
+	sort.Slice(targets, func(left, right int) bool { return targets[left] < targets[right] })
+	head := make([]runstate.HeadMovement, 0, len(next.Movements()))
+	for _, movement := range next.Movements() {
+		repoWrite := false
+		for _, grant := range movement.Grants {
+			repoWrite = repoWrite || grant == "repo_write"
+		}
+		head = append(head, runstate.HeadMovement{ID: runstate.MovementID(movement.ID), Initial: runstate.MovementPending, RepoWrite: repoWrite, HasDependencies: len(movement.Needs) != 0, Final: movement.ID == next.Execution().FinalMovementID})
+	}
+	envelope := "NARROW_PATHS"
+	plan := runstate.ApprovalPlan{Schema: runstate.ApprovalPlanSchema, ProposalID: "proposal-control", Mode: "auto", EnvelopeClass: &envelope,
+		BaseRevision: input.Projection.State.ScoreHead.Revision, BaseHash: input.Projection.State.ScoreHead.SemanticHash, ClassifierVersion: 1,
+		NewRevision: next.Revision(), NewSnapshotHash: runstate.Hash(nextHash), NewSnapshotFileHash: runstate.Hash(controlFixtureHash(nextContents)),
+		TypedDelta: []any{}, ActualImpact: map[string]any{"score_changes": []any{}, "authority": map[string]any{"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}}, "grants": []any{}, "side_effects": map[string]any{"added": []any{}, "removed": []any{}}}, "budget": map[string]any{}},
+		HeadMovements: head, SupersededAttemptIDs: targets, ObsoletedDecisionIDs: []string{}, Finalization: false, IdentityVersions: resumeIdentityVersions()}
+	planBytes, err := runstate.EncodeApprovalPlan(plan)
+	if err != nil {
+		return err
+	}
+	return store.Mutate(runID, "", func(transaction *runstore.Txn) error {
+		if _, err := transaction.At("control-fixture.snapshot").PublishImmutable(runstore.Path(fmt.Sprintf("scores/revision-%d.yaml", next.Revision())), nextContents, runstore.Hash(controlFixtureHash(nextContents))); err != nil {
+			return err
+		}
+		if _, err := transaction.At("control-fixture.plan").PublishImmutable("prepares/prepare-control.json", planBytes, runstore.Hash(controlFixtureHash(planBytes))); err != nil {
+			return err
+		}
+		payload, err := json.Marshal(map[string]any{"prepare_id": "prepare-control", "proposal_id": "proposal-control", "mode": "auto", "envelope_class": envelope,
+			"base_revision": plan.BaseRevision, "base_hash": plan.BaseHash, "new_revision": plan.NewRevision, "new_snapshot_hash": plan.NewSnapshotHash, "new_snapshot_file_hash": plan.NewSnapshotFileHash,
+			"plan_record_hash": controlFixtureHash(planBytes), "target_attempt_ids": targets, "observed_authority_epoch": input.Projection.State.Authority.Epoch,
+			"quiesce_deadline": time.Now().Add(time.Minute).UTC().Format("2006-01-02T15:04:05.000Z"), "classifier_version": 1, "identity_versions": resumeIdentityVersions()})
+		if err != nil {
+			return err
+		}
+		_, err = transaction.At("control-fixture.prepared").Append(runstate.Event{RunID: runID, ScoreRevision: plan.BaseRevision, Type: runstate.EventAmendmentApprovalPrepared, Payload: payload})
+		return err
+	})
+}
+
+func controlFixtureHash(contents []byte) string {
+	digest := sha256.Sum256(contents)
+	return fmt.Sprintf("sha256:%x", digest)
 }
 
 func eventKinds(events []runstate.Event) []runstate.EventType {
