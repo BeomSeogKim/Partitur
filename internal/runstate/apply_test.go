@@ -1151,6 +1151,28 @@ func TestAmendmentRejectedPatchHashFormIsConditional(t *testing.T) {
 	}
 }
 
+func TestCandidateIncompatibleConditionsAreClosed(t *testing.T) {
+	for _, condition := range []string{
+		"composition_changed",
+		"verification_episode_finished",
+		"verification_mode_changed",
+	} {
+		payload := amendmentRejectedPayload()
+		payload["reason"] = "candidate_incompatible"
+		payload["condition"] = condition
+		if err := ValidateEvent(fixtureEvent(EventAmendmentRejected, payload, nil)); err != nil {
+			t.Fatalf("ValidateEvent(%q) error = %v", condition, err)
+		}
+	}
+
+	payload := amendmentRejectedPayload()
+	payload["reason"] = "candidate_incompatible"
+	payload["condition"] = "succeeded_dependency_changed"
+	if err := ValidateEvent(fixtureEvent(EventAmendmentRejected, payload, nil)); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("ValidateEvent(unreachable condition) error = %v, want ErrInvalidEvent", err)
+	}
+}
+
 func TestHumanApprovalBindsPreparedDecision(t *testing.T) {
 	state := runningAttemptState(t)
 	prepare := autoPreparePayload()

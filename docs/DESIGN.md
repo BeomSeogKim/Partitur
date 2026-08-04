@@ -3753,19 +3753,16 @@ movement — cannot be approved in place. The paths out are cancelling the run a
 one, or amending something else. Changing `verification.expectation.intent` is always an
 execution-dependency change, because it is forwarded into briefs. An atomic
 invalidation-and-replay contract is future work.
+Because the A.5 projection carries `base_composition_hash`, this same check catches a change to
+how a succeeded movement's clean base was assembled — including an `identity` → `merge` transition
+when the first contributing writer enters a previously zero-contributor fan-in.
 
 **Candidate compatibility.** Once a candidate is recorded (§8), every approval must
 additionally satisfy:
 
 ```text
 candidate-compatible iff
-  1. no movement with a completed successful (non-superseded) attempt has a different
-     execution_dependency_hash under the patched score, and none is removed. Because that
-     projection carries base_composition_hash (A.5), a change to how a succeeded movement's
-     clean base was assembled is caught by this same condition — including an
-     `identity` → `merge` transition when the first contributing writer enters a previously
-     zero-contributor fan-in;
-  2. the candidate composition identity is unchanged —
+  1. the candidate composition identity is unchanged —
        candidate_composition_dependency_hash =
          H("partitur/candidate-composition", candidate_composition_projection)
                                                        # A.4 tagged identity | merge union
@@ -3778,11 +3775,11 @@ candidate-compatible iff
      `composition_mode: merge` and is incompatible even when that writer's change set is a no-op
      and `result_tree` remains equal to `base_tree`; removing the last writer is the inverse
      incompatible transition;
-  3. the patched score remains non-waived and its designated (or redesignated) final
+  2. the patched score remains non-waived and its designated (or redesignated) final
      movement has no completed successful attempt.
 
-failure reasons: succeeded_dependency_changed | composition_changed |
-                 verification_episode_finished | verification_mode_changed
+failure reasons: composition_changed | verification_episode_finished |
+                 verification_mode_changed
 ```
 
 `require ↔ waived` transitions are permitted only **before** a candidate is recorded. After
@@ -5041,8 +5038,8 @@ amendment.rejected {
                                   #   place its origin would be recorded
   reason,                         # closed enum, Appendix D
   condition?,                     # required iff reason = candidate_incompatible: one of
-                                  #   succeeded_dependency_changed | composition_changed |
-                                  #   verification_episode_finished | verification_mode_changed
+                                  #   composition_changed | verification_episode_finished |
+                                  #   verification_mode_changed
   base_revision, base_hash, classifier_version,
   # A validated patched AST exists only once step 6 has PASSED, so these are present for
   # failures at step 7 and later — not "from step 6 on", since `invalid_score` IS step 6 failing:
@@ -5824,8 +5821,8 @@ success verdict), `cancelled`, `superseded`, `budget_exhausted`, `recovered`.
 **`amendment.routed_human` reasons:** `draft_phase`, `auto_disabled`,
 `unclassified_change`, `recognized_non_monotone`, `runtime_scope_started`.
 
-**`candidate_incompatible` conditions** (§9): `succeeded_dependency_changed`,
-`composition_changed`, `verification_episode_finished`, `verification_mode_changed`.
+**`candidate_incompatible` conditions** (§9): `composition_changed`,
+`verification_episode_finished`, `verification_mode_changed`.
 
 **Envelope classes** (§9): `NARROW_PATHS`, `NARROW_GRANTS`, `BUDGET_DECREASE`.
 
