@@ -102,6 +102,25 @@ func TestPrepareACKControlDrainReferencesControlChannel(t *testing.T) {
 	}
 }
 
+func TestPrepareCommitNamesLeaseEpochMismatchHalt(t *testing.T) {
+	lines := recoveryDesignLines(t)
+	section := recoveryDocumentSection(t, lines,
+		"## 6. Run state model v0.2",
+		"## 7. Acceptance runner and CLI v0.2")
+	contents := strings.Join(strings.Fields(strings.Join(section, "\n")), " ")
+
+	const clause = "the right response is to halt `prepare_lease_epoch_mismatch`, not to guess which incarnation is authoritative."
+	if count := strings.Count(contents, clause); count != 1 {
+		t.Fatalf("prepare commit lease-epoch mismatch halt clause count=%d, want 1", count)
+	}
+	commit := strings.Index(contents, "3. **Commit.**")
+	planValidation := strings.Index(contents, "**Plan validation is a closed predicate**")
+	halt := strings.Index(contents, clause)
+	if commit == -1 || planValidation == -1 || halt <= commit || halt >= planValidation {
+		t.Fatalf("prepare commit lease-epoch mismatch halt must appear in the commit closing paragraph: commit=%d halt=%d plan_validation=%d", commit, halt, planValidation)
+	}
+}
+
 func TestExecutionStoppedControlReasonsAreAlwaysClamped(t *testing.T) {
 	lines := recoveryDesignLines(t)
 	section := recoveryDocumentSection(t, lines,
