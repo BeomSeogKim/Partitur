@@ -291,10 +291,7 @@ separate field whitelist:
 
 ```text
 candidate-compatible iff
-  1. no movement with a completed successful (non-superseded) attempt has a
-     different execution_dependency_hash under the patched score, and none is
-     removed  (identical to Decision 0001 §6);
-  2. the candidate composition identity is unchanged: the core recomputes, from the
+  1. the candidate composition identity is unchanged: the core recomputes, from the
      patched score and the recorded successful attempt/change-set mapping,
 
        candidate_composition_dependency_hash =
@@ -305,15 +302,14 @@ candidate-compatible iff
      and it must equal the hash recorded with the candidate. Changes that alter the
      composition — movement order, `needs`, contributor membership — are
      incompatible even if the resulting tree would coincidentally be identical;
-  3. the patched score remains non-waived, and its designated final movement (or
+  2. the patched score remains non-waived, and its designated final movement (or
      redesignated replacement) has no completed successful attempt. (Because the
      final movement is the terminal sink — §6 — its success makes the run terminal,
      so this condition is "the verification episode has not finished, and the gate
      mode is unchanged".)
 
 failure reasons (closed enum, recorded by amendment.rejected(candidate_incompatible)):
-  succeeded_dependency_changed | composition_changed |
-  verification_episode_finished | verification_mode_changed
+  composition_changed | verification_episode_finished | verification_mode_changed
 ```
 
 `require ↔ waived` transitions are permitted only **before** a candidate is recorded

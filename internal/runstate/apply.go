@@ -2505,7 +2505,7 @@ func validAmendmentRejectionReason(reason string) bool {
 
 func validCandidateIncompatibleCondition(condition string) bool {
 	switch condition {
-	case "succeeded_dependency_changed", "composition_changed", "verification_episode_finished", "verification_mode_changed":
+	case "composition_changed", "verification_episode_finished", "verification_mode_changed":
 		return true
 	default:
 		return false

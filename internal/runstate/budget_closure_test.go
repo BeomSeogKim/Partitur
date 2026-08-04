@@ -1,6 +1,8 @@
 package runstate
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -155,5 +157,70 @@ func TestExecutionStoppedControlReasonsAreAlwaysClamped(t *testing.T) {
 		if !strings.Contains(effect, clause) {
 			t.Fatalf("execution.stopped projection effect is missing clause %q", clause)
 		}
+	}
+}
+
+func TestCandidateIncompatibleConditionsExcludeExecutedDependencyChanges(t *testing.T) {
+	lines := recoveryDesignLines(t)
+	section := recoveryDocumentSection(t, lines,
+		"## 9. Amendments",
+		"# Appendix A — Canonical encoding and identity domains")
+	contents := strings.Join(strings.Fields(strings.Join(section, "\n")), " ")
+	if strings.Contains(contents, "succeeded_dependency_changed") {
+		t.Fatal("§9 retains unreachable candidate_incompatible condition succeeded_dependency_changed")
+	}
+
+	for _, clause := range []string{
+		"Because the A.5 projection carries `base_composition_hash`, this same check catches a change to how a succeeded movement's clean base was assembled",
+		"failure reasons: composition_changed | verification_episode_finished | verification_mode_changed",
+	} {
+		if !strings.Contains(contents, clause) {
+			t.Fatalf("§9 is missing candidate compatibility clause %q", clause)
+		}
+	}
+
+	appendixB := recoveryDocumentSection(t, lines,
+		"## B.5 Amendments",
+		"## B.6 Shipping")
+	appendixD := recoveryDocumentSection(t, lines,
+		"# Appendix D — Closed enums",
+		"# Appendix E — Ordered-step boundaries")
+	conditions := []string{
+		"composition_changed",
+		"verification_episode_finished",
+		"verification_mode_changed",
+	}
+	for name, text := range map[string]string{
+		"Appendix B": strings.Join(appendixB, "\n"),
+		"Appendix D": strings.Join(appendixD, "\n"),
+	} {
+		for _, condition := range conditions {
+			if !strings.Contains(text, condition) {
+				t.Fatalf("%s omits candidate_incompatible condition %q", name, condition)
+			}
+		}
+		if strings.Contains(text, "succeeded_dependency_changed") {
+			t.Fatalf("%s retains unreachable candidate_incompatible condition succeeded_dependency_changed", name)
+		}
+	}
+
+	decision, err := os.ReadFile(filepath.Join("..", "..", "docs", "decisions", "0002-verification-semantics.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisionSection := recoveryDocumentSection(t, strings.Split(string(decision), "\n"),
+		"### 7. Candidate compatibility — the shared judgment",
+		"### 8. `apply`, `promote-score`, and the checkout CAS")
+	decisionContents := strings.Join(strings.Fields(strings.Join(decisionSection, "\n")), " ")
+	if !strings.Contains(decisionContents, "composition_changed | verification_episode_finished | verification_mode_changed") {
+		t.Fatal("Decision 0002 does not retain the closed candidate_incompatible condition enum")
+	}
+	for _, condition := range conditions {
+		if !strings.Contains(decisionContents, condition) {
+			t.Fatalf("Decision 0002 omits candidate_incompatible condition %q", condition)
+		}
+	}
+	if strings.Contains(decisionContents, "succeeded_dependency_changed") {
+		t.Fatal("Decision 0002 retains unreachable candidate_incompatible condition succeeded_dependency_changed")
 	}
 }
