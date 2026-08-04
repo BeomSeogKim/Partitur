@@ -634,7 +634,7 @@ because re-validation replays the pipeline from the original operations (§1):
   operations,                       # the RFC 6902 array VERBATIM, as submitted
   reason,
   evidence?: [artifact_instance_id],
-  claimed_impact,
+  claimed_impact?,                # optional scope claim; §9 checks containment only when present
   requires_decision
 }
 ```
@@ -659,17 +659,17 @@ canonical hash of something that cannot be canonically encoded would be unimplem
                                    # representation of the YAML score (Appendix A)
   reason,
   evidence?: [artifact_instance_id],
-  claimed_impact: { ... }          # same shape as actual_impact, §9
+  claimed_impact?: { ... }         # same shape as actual_impact; optional scope claim (§9)
 }
 ```
 
 `claimed_impact` carries no authority: the core recomputes the authoritative
 `actual_impact` by **typed comparison of the two validated score ASTs** — never by
-inspecting the RFC 6902 operations or a generic JSON diff — and rejects the proposal if
-the claim is narrower on any component. The shape and the containment rules are defined
-in §9. Approved patches apply only to the run's snapshot chain (see §1 for promotion to
-the root score). The full admissibility pipeline, the auto-approval envelope, and the
-effects of approval on a running episode are §9.
+inspecting the RFC 6902 operations or a generic JSON diff. The shape and containment
+rules, including the optional scope claim, are defined in §9. Approved patches apply only
+to the run's snapshot chain (see §1 for promotion to the root score). The full
+admissibility pipeline, the auto-approval envelope, and the effects of approval on a
+running episode are §9.
 
 **Rules enforced by `partitur validate` (the score compiler).** All active rules are checked and
 reported together; validation is not short-circuited at the first error. Rule numbers are stable
@@ -3605,8 +3605,10 @@ wins:
 4. **Patch application** to the canonical JSON; any RFC 6902 error rejects.
 5. **No-op check** — canonical equality of before/after rejects.
 6. **Compiler validation** of the patched score (§2); invalid rejects.
-7. **Impact computation and claim containment** — a claim narrower than the actual impact on
-   any component rejects with `claim_narrower`.
+7. **Impact computation and claim containment** — when `claimed_impact` is present, a claim
+   narrower than the actual impact on any component rejects with `claim_narrower`; when it
+   is absent, no containment check applies. The optional claim is a proposer-supplied scope
+   assertion, not authority over the core-computed `actual_impact`.
 
 Then two **feasibility checks**, applying to *every* approval path, auto and human alike:
 
