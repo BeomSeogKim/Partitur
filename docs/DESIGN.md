@@ -2116,10 +2116,14 @@ the recovery rule below.
   | A wedged driver is fenced and cancelled (control channel, below) | `cancelled` | the canceller |
   | A wedged driver is fenced and **superseded** by an approved revision (§9) | `superseded` | the approving command |
   | A **responsive driver cancels itself** through the oracle's `(c)` (control channel, below) | `cancelled` | the driver, in the canceller role |
+  | A **responsive driver quiesces itself** for a prepared supersession (§6 step 2) | `superseded` | the driver, in the quiescing role |
 
-  The last row is the one case where the closer *is* the opener and the charge is still clamped, so
-  it is listed here rather than left to the ordinary rule below. It is not the missing-reference
-  situation the paragraph above describes — the driver has its monotonic reading — but the oracle's
+  The last two rows are the cases where the closer *is* the opener and the charge is still clamped, so
+  they are listed here rather than left to the ordinary rule below. They are not the missing-reference
+  situation the paragraph above describes — the driver has its monotonic reading. The responsive
+  supersession row and step 3's fenced close are distinct steps that can append
+  `execution.stopped {reason: superseded}`, so both use one shape: a reader must not have to
+  establish which step wrote it. For the responsive cancellation row, the oracle's
   `(c)` must produce one event shape whichever canceller runs it. Otherwise a single E.2 edge
   acquires two payloads and `execution.stopped {reason: cancelled}` cannot be read without first
   establishing who wrote it. Uniformity of the oracle's output is worth more here than the accuracy
@@ -2579,6 +2583,15 @@ The procedure:
    compare-and-swap — it cannot mean "rename only if the contents still hold this epoch and token".
    Without the brief lock, cancellation or reclamation races the check-to-rename interval. The
    approver still does not hold the lock while *waiting*, which is what the deadlock required.
+
+   **Control drain.** This ACK applies step 4's process-control and response-suppression drain
+   **by reference**, substituting the durable `amendment.approval_prepared` for
+   `cancel.requested` as the request and supersession for cancellation as the terminal intent. The
+   substitution begins at the observation boundary: from the moment the driver observes the durable
+   prepare — not from the moment it writes a protocol frame — it records no response-derived attempt
+   outcome. This is the drain only; the ACK does not execute the cancellation oracle.
+   `amendment.approved` is the single producer of the affected attempts' `attempt.superseded`
+   projection (B.5), so the response remains only a completeness marker.
 3. **Commit.** Re-acquire the lock and revalidate — in this order, so cancellation outranks approval
    exactly as it does in recovery (Appendix C.1): **`cancel.requested` absent**; the prepare still
    pending; the prewritten snapshot present with its recorded raw *and* semantic hashes and bound to the
@@ -4625,7 +4638,7 @@ movement.cancelled {}             # derived from run.cancelled
 | `attempt.cancelled` *derived* | — | source event_id + attempt_id | — | Attempt → `CANCELLED`; projected idempotently from `run.cancelled`, for the same reason |
 | `attempt.superseded` *derived* | — | source event_id + attempt_id | — | Attempt → `SUPERSEDED`; projected from `amendment.approved` (§9) |
 | `execution.started` | ✓ | `interval_id` | no interval open | Opens the (single) budget interval; carries `interval_id`, `phase`, `wall_start`, `remaining_at_start` (§6). Keyed on `interval_id` because one attempt legitimately opens several intervals |
-| `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration`. `charging: measured` requires the closer to **be** the process that opened it; every other closer uses `charging: clamped` and the deterministic formula of §6 — which covers recovery (`reason: recovered`) and a fenced supersession (`reason: superseded`) alike. **`reason: cancelled` is always `clamped`**, whether or not `(d)` fenced and whether or not the canceller running the oracle's `(c)` is the opener: §6 fixes one shape for that step across every canceller, so this is a property of the reason rather than of the closer. For an ordinary `adapter` close, §4 additionally requires the recorded session to be verified empty first |
+| `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration`. `charging: measured` requires the closer to **be** the process that opened it; every other closer uses `charging: clamped` and the deterministic formula of §6 — which covers recovery (`reason: recovered`) and a fenced supersession (`reason: superseded`) alike. **`reason: cancelled` and `reason: superseded` are always `clamped`**, whether a fence is taken and whether the closer is the opener: §6 fixes one shape for each control outcome across every close that can produce it, so this is a property of the reason rather than of the closer. For an ordinary `adapter` close, §4 additionally requires the recorded session to be verified empty first |
 
 **Payloads.**
 
@@ -6029,7 +6042,7 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 | Edge | Left | Right | Owning clause | Assertion across a crash |
 |---|---|---|---|---|
 | `supersede.swept_to_approved` | survivor sweep verified empty `B` | `amendment.approved` appended `R` | §6 step 3 commit table | The deadline and dead-owner branches sweep before fencing and approving, and **nothing else in this group attests that**: the edge below attests an interval close and the one after it an epoch advance, neither of which is the sweep. Without this edge an approval could follow an unswept survivor on either branch. Note it is the sweep that is unattested elsewhere, not the branch that is rare — both lower edges are absent only when the driver quiesced normally, which leaves the matching-sidecar branch and not this group at all |
-| `supersede.interval_stopped_to_approved` | `execution.stopped {reason: superseded}` appended `R` | `amendment.approved` appended `R` | §6 step 3 commit table | Same obligation as `cancel.interval_stopped_to_terminal`. It arises only on the branches where the approver closes the interval; a driver that quiesced normally closed its own in step 2 |
+| `supersede.interval_stopped_to_approved` | `execution.stopped {reason: superseded, charging: clamped}` appended `R` | `amendment.approved` appended `R` | §6 step 3 commit table | Same obligation as `cancel.interval_stopped_to_terminal`. It arises only on the branches where the approver closes the interval; a driver that quiesced normally closed its own in step 2 |
 | `supersede.fence_decided_to_approved` | fence branch taken with the lease still matching — no durable output `B` | `amendment.approved` carrying `fenced_epoch` appended `R` | §6 step 3 commit table | E.3's shape on the supersession path. Nothing durable records the advance until the approval carries it, so recovery must re-derive the same branch from the retained lease. The commit table gives this branch to a verifiably dead owner as well as a wedged one, which is why the field is keyed on *advancing the epoch* rather than on wedging |
 | `supersede.approved_to_lease_removed` | `amendment.approved` durable `R` | stale lease removed `R` | §6 step 3 commit table; C.1 stale-lease row | The journaled advance is what makes the lease stale, so removal follows the append and never precedes it. A lease stranded here is at a superseded epoch, so C.1's stale-lease row removes it and re-evaluates. Freezing this edge is what showed that row had to exist: the unscoped `owner_unverifiable` check halted on this state, which is provably safe |
 
