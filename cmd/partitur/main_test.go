@@ -1552,7 +1552,7 @@ func appendResumeApprovedSnapshot(t *testing.T, store *runstore.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated := resumeScore(2, "approved snapshot")
+	updated := resumeApprovedScore(2, "approved snapshot")
 	updatedScore, diagnostics := score.Compile(updated)
 	if len(diagnostics) != 0 {
 		t.Fatalf("updated score diagnostics=%v", diagnostics)
@@ -1578,6 +1578,7 @@ func appendResumeApprovedSnapshot(t *testing.T, store *runstore.Store) {
 			"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS", "base_revision": 1, "base_hash": initialHash,
 			"classifier_version": 1, "new_revision": 2, "new_snapshot_hash": updatedHash, "new_snapshot_file_hash": resumeHash(updated),
 			"typed_delta": []any{}, "actual_impact": map[string]any{"score_changes": []any{}, "authority": map[string]any{"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}}, "grants": []any{}, "side_effects": map[string]any{"added": []any{}, "removed": []any{}}}, "budget": map[string]any{}},
+			"head_movements":         []any{map[string]any{"id": "inspect", "initial": "PENDING", "repo_write": false, "has_dependencies": false, "final": false}},
 			"superseded_attempt_ids": []any{}, "obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": versions,
 		})
 		approval.ScoreRevision = 2
@@ -1658,6 +1659,10 @@ func resumeHash(value []byte) string {
 
 func resumeScore(revision int, goal string) []byte {
 	return []byte(fmt.Sprintf("score: \"0.2\"\nname: resume-fixture\nrevision: %d\nstatus: finalized\ngoal: %s\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts: {}\nmovements: []\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n", revision, goal))
+}
+
+func resumeApprovedScore(revision int, goal string) []byte {
+	return []byte(fmt.Sprintf("score: \"0.2\"\nname: resume-fixture\nrevision: %d\nstatus: finalized\ngoal: %s\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts:\n  reader:\n    capabilities: [repo_read]\nmovements:\n  - id: inspect\n    part: reader\n    grants: [repo_read]\n    instruction: inspect\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n", revision, goal))
 }
 
 func resumeAttemptScore() []byte {

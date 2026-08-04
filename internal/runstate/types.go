@@ -32,6 +32,16 @@ type MovementSeed struct {
 	Final           bool
 }
 
+// HeadMovement is the approved head's complete current-movement projection.
+// It is carried by amendment.approved and its persisted approval plan.
+type HeadMovement struct {
+	ID              MovementID    `json:"id"`
+	Initial         MovementState `json:"initial"`
+	RepoWrite       bool          `json:"repo_write"`
+	HasDependencies bool          `json:"has_dependencies"`
+	Final           bool          `json:"final"`
+}
+
 type RunLifecycle string
 
 const (
@@ -126,6 +136,7 @@ type PendingPrepare struct {
 	ID                     PrepareID
 	ProposalID             ProposalID
 	Mode                   string
+	DecisionID             *string
 	EnvelopeClass          string
 	BaseHead               ScoreHead
 	NewHead                ScoreHead
@@ -352,6 +363,7 @@ type Acceptance struct {
 type State struct {
 	Run                  RunLifecycle
 	Movements            map[MovementID]MovementState
+	MovementOrder        []MovementID
 	RepoWriteMovements   map[MovementID]bool
 	DependencyMovements  map[MovementID]bool
 	FinalMovements       map[MovementID]bool

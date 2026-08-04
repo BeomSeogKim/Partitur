@@ -37,6 +37,7 @@ func NewState(seed []MovementSeed) State {
 			panic(fmt.Sprintf("runstate: duplicate movement %q in seed", movement.ID))
 		}
 		state.Movements[movement.ID] = movement.Initial
+		state.MovementOrder = append(state.MovementOrder, movement.ID)
 		if movement.RepoWrite {
 			state.RepoWriteMovements[movement.ID] = true
 		}
@@ -53,6 +54,7 @@ func NewState(seed []MovementSeed) State {
 func cloneState(input State) State {
 	output := input
 	output.Movements = cloneMap(input.Movements)
+	output.MovementOrder = append([]MovementID(nil), input.MovementOrder...)
 	output.RepoWriteMovements = cloneMap(input.RepoWriteMovements)
 	output.DependencyMovements = cloneMap(input.DependencyMovements)
 	output.FinalMovements = cloneMap(input.FinalMovements)
@@ -125,6 +127,10 @@ func cloneState(input State) State {
 	}
 	if input.PendingPrepare != nil {
 		prepare := *input.PendingPrepare
+		if prepare.DecisionID != nil {
+			decisionID := *prepare.DecisionID
+			prepare.DecisionID = &decisionID
+		}
 		prepare.TargetAttemptIDs = append([]AttemptID(nil), input.PendingPrepare.TargetAttemptIDs...)
 		prepare.IdentityVersions = append([]byte(nil), input.PendingPrepare.IdentityVersions...)
 		output.PendingPrepare = &prepare

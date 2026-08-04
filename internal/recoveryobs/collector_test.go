@@ -232,22 +232,22 @@ func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 	planPath := filepath.Join(root, ".partitur", "runs", "run-1", "prepares", "prepare-1.json")
 	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml"), snapshot)
 
-	validPlan := func(pending runstate.PendingPrepare) preparePlan {
-		return preparePlan{
+	validPlan := func(pending runstate.PendingPrepare) runstate.ApprovalPlan {
+		return runstate.ApprovalPlan{
+			Schema:     runstate.ApprovalPlanSchema,
 			ProposalID: pending.ProposalID, BaseRevision: pending.BaseHead.Revision, BaseHash: pending.BaseHead.SemanticHash,
 			NewRevision: pending.NewHead.Revision, NewSnapshotHash: pending.NewHead.SemanticHash,
 			NewSnapshotFileHash: pending.NewHead.FileHash, SupersededAttemptIDs: pending.TargetAttemptIDs, Mode: pending.Mode,
-			EnvelopeClass: stringPointer(pending.EnvelopeClass),
+			DecisionID: pending.DecisionID, EnvelopeClass: stringPointer(pending.EnvelopeClass),
+			TypedDelta: []any{}, ActualImpact: collectorActualImpact(),
+			HeadMovements:        []runstate.HeadMovement{{ID: "m1", Initial: runstate.MovementPending}},
+			ObsoletedDecisionIDs: []string{}, Finalization: false, IdentityVersions: map[string]any{},
 		}
 	}
-	observe := func(t *testing.T, pending runstate.PendingPrepare, plan preparePlan) recovery.PrepareObservation {
+	observeContents := func(t *testing.T, pending runstate.PendingPrepare, contents []byte) recovery.PrepareObservation {
 		t.Helper()
-		writeJSONFile(t, planPath, plan)
-		bytes, err := os.ReadFile(planPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pending.PlanRecordHash = fileHash(bytes)
+		writeCollectorFile(t, planPath, contents)
+		pending.PlanRecordHash = fileHash(contents)
 		state := runstate.NewState(nil)
 		state.Run = runstate.RunRunning
 		state.PendingPrepare = &pending
@@ -257,6 +257,14 @@ func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 		}
 		return observations.Prepare
 	}
+	observe := func(t *testing.T, pending runstate.PendingPrepare, plan runstate.ApprovalPlan) recovery.PrepareObservation {
+		t.Helper()
+		contents, err := runstate.EncodeApprovalPlan(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return observeContents(t, pending, contents)
+	}
 
 	if observed := observe(t, prepare, validPlan(prepare)); !observed.PlanPresent || !observed.SnapshotPresent {
 		t.Fatalf("valid prepare observation = %+v", observed)
@@ -264,21 +272,21 @@ func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 
 	for _, test := range []struct {
 		name   string
-		mutate func(*preparePlan)
+		mutate func(*runstate.ApprovalPlan)
 	}{
-		{name: "proposal id", mutate: func(plan *preparePlan) { plan.ProposalID = "other-proposal" }},
-		{name: "base revision", mutate: func(plan *preparePlan) { plan.BaseRevision++ }},
-		{name: "base hash", mutate: func(plan *preparePlan) { plan.BaseHash = "sha256:other-base" }},
-		{name: "new revision", mutate: func(plan *preparePlan) { plan.NewRevision++ }},
-		{name: "new snapshot hash", mutate: func(plan *preparePlan) { plan.NewSnapshotHash = "sha256:other-snapshot" }},
-		{name: "new snapshot file hash", mutate: func(plan *preparePlan) { plan.NewSnapshotFileHash = "sha256:other-file" }},
-		{name: "target attempts", mutate: func(plan *preparePlan) { plan.SupersededAttemptIDs = []runstate.AttemptID{"other-attempt"} }},
-		{name: "mode", mutate: func(plan *preparePlan) {
+		{name: "proposal id", mutate: func(plan *runstate.ApprovalPlan) { plan.ProposalID = "other-proposal" }},
+		{name: "base revision", mutate: func(plan *runstate.ApprovalPlan) { plan.BaseRevision++ }},
+		{name: "base hash", mutate: func(plan *runstate.ApprovalPlan) { plan.BaseHash = "sha256:other-base" }},
+		{name: "new revision", mutate: func(plan *runstate.ApprovalPlan) { plan.NewRevision++ }},
+		{name: "new snapshot hash", mutate: func(plan *runstate.ApprovalPlan) { plan.NewSnapshotHash = "sha256:other-snapshot" }},
+		{name: "new snapshot file hash", mutate: func(plan *runstate.ApprovalPlan) { plan.NewSnapshotFileHash = "sha256:other-file" }},
+		{name: "target attempts", mutate: func(plan *runstate.ApprovalPlan) { plan.SupersededAttemptIDs = []runstate.AttemptID{"other-attempt"} }},
+		{name: "mode", mutate: func(plan *runstate.ApprovalPlan) {
 			plan.Mode, plan.DecisionID, plan.EnvelopeClass = "human", stringPointer("decision-1"), nil
 		}},
-		{name: "auto rejects decision id", mutate: func(plan *preparePlan) { plan.DecisionID = stringPointer("decision-1") }},
-		{name: "auto requires envelope class", mutate: func(plan *preparePlan) { plan.EnvelopeClass = nil }},
-		{name: "auto envelope class", mutate: func(plan *preparePlan) { plan.EnvelopeClass = stringPointer("NARROW_GRANTS") }},
+		{name: "auto rejects decision id", mutate: func(plan *runstate.ApprovalPlan) { plan.DecisionID = stringPointer("decision-1") }},
+		{name: "auto requires envelope class", mutate: func(plan *runstate.ApprovalPlan) { plan.EnvelopeClass = nil }},
+		{name: "auto envelope class", mutate: func(plan *runstate.ApprovalPlan) { plan.EnvelopeClass = stringPointer("NARROW_GRANTS") }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			plan := validPlan(prepare)
@@ -292,6 +300,7 @@ func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 
 	human := prepare
 	human.Mode = "human"
+	human.DecisionID = stringPointer("decision-1")
 	human.EnvelopeClass = ""
 	humanPlan := validPlan(human)
 	humanPlan.EnvelopeClass = nil
@@ -301,10 +310,12 @@ func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 	}
 	for _, test := range []struct {
 		name   string
-		mutate func(*preparePlan)
+		mutate func(*runstate.ApprovalPlan)
 	}{
-		{name: "human requires decision id", mutate: func(plan *preparePlan) { plan.DecisionID = nil }},
-		{name: "human rejects envelope class", mutate: func(plan *preparePlan) { plan.EnvelopeClass = stringPointer("NARROW_PATHS") }},
+		{name: "human requires decision id", mutate: func(plan *runstate.ApprovalPlan) { plan.DecisionID = nil }},
+		{name: "human rejects envelope class", mutate: func(plan *runstate.ApprovalPlan) { plan.EnvelopeClass = stringPointer("NARROW_PATHS") }},
+		{name: "human decision id before", mutate: func(plan *runstate.ApprovalPlan) { plan.DecisionID = stringPointer("decision-0") }},
+		{name: "human decision id after", mutate: func(plan *runstate.ApprovalPlan) { plan.DecisionID = stringPointer("decision-2") }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			plan := humanPlan
@@ -315,9 +326,41 @@ func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 			}
 		})
 	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*runstate.ApprovalPlan)
+	}{
+		{name: "schema missing", mutate: func(plan *runstate.ApprovalPlan) { plan.Schema = "" }},
+		{name: "schema unexpected", mutate: func(plan *runstate.ApprovalPlan) { plan.Schema = "partitur/approval-plan+json;v=2" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := validPlan(prepare)
+			test.mutate(&plan)
+			contents, err := json.Marshal(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed := observeContents(t, prepare, contents)
+			if observed.PlanPresent || !observed.SnapshotPresent {
+				t.Fatalf("prepare schema observation = %+v", observed)
+			}
+		})
+	}
 }
 
 func stringPointer(value string) *string { return &value }
+
+func collectorActualImpact() map[string]any {
+	return map[string]any{
+		"score_changes": []any{},
+		"authority": map[string]any{
+			"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}},
+			"grants":        []any{},
+			"side_effects":  map[string]any{"added": []any{}, "removed": []any{}},
+		},
+		"budget": map[string]any{},
+	}
+}
 
 func TestCollectDiscriminatesJournaledAdapterAndUnjournaledLaunches(t *testing.T) {
 	store := collectorStore(t)

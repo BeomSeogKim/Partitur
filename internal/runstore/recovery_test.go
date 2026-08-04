@@ -617,6 +617,10 @@ func TestLoadRunInputProjectsRevisionRestart(t *testing.T) {
 			"proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS", "base_revision": 1, "base_hash": baseHash,
 			"classifier_version": 1, "new_revision": 2, "new_snapshot_hash": updatedHash, "new_snapshot_file_hash": rawHash(updatedScore),
 			"typed_delta": []any{}, "actual_impact": recoveryActualImpact(), "superseded_attempt_ids": []any{"attempt-1"},
+			"head_movements": []any{
+				map[string]any{"id": "write", "initial": "PENDING", "repo_write": true, "has_dependencies": false, "final": false},
+				map[string]any{"id": "read", "initial": "PENDING", "repo_write": false, "has_dependencies": true, "final": false},
+			},
 			"obsoleted_decision_ids": []any{}, "finalization": false, "identity_versions": recoveryVersions(),
 		}),
 	})
