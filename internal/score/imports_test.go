@@ -14,8 +14,10 @@ func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 	allowed := map[string]bool{
 		"bytes":   true,
 		"errors":  true,
+		"fmt":     true,
 		"regexp":  true,
 		"slices":  true,
+		"sort":    true,
 		"strconv": true,
 		"strings": true,
 		"github.com/BeomSeogKim/Partitur/internal/canonical": true,

@@ -22,6 +22,13 @@ func Compile(src []byte) (*Score, []Diagnostic) {
 			Detail: "invalid_restricted_yaml",
 		}}
 	}
+	return CompileValue(value)
+}
+
+// CompileValue validates and defaults a canonical JSON value as a score. It is
+// the value-level counterpart to Compile, used when a proposal has already
+// been applied to the canonical score representation.
+func CompileValue(value any) (*Score, []Diagnostic) {
 
 	decoder := schemaDecoder{
 		partsComplete:          true,
