@@ -24,6 +24,21 @@ func TestAmendmentRejectionPatchHashFormsAreSpecified(t *testing.T) {
 	}
 }
 
+func TestClaimedImpactOptionalityIsSpecified(t *testing.T) {
+	lines := recoveryDesignLines(t)
+	contents := strings.Join(strings.Fields(strings.Join(lines, "\n")), " ")
+
+	for _, clause := range []string{
+		"claimed_impact?, # optional scope claim; §9 checks containment only when present",
+		"claimed_impact?: { ... } # same shape as actual_impact; optional scope claim (§9)",
+		"7. **Impact computation and claim containment** — when `claimed_impact` is present, a claim narrower than the actual impact on any component rejects with `claim_narrower`; when it is absent, no containment check applies. The optional claim is a proposer-supplied scope assertion, not authority over the core-computed `actual_impact`.",
+	} {
+		if count := strings.Count(contents, clause); count != 1 {
+			t.Fatalf("claimed-impact optionality clause count=%d, want 1: %q", count, clause)
+		}
+	}
+}
+
 func TestAmendmentEvaluatorReadinessIsNotProved(t *testing.T) {
 	lines := recoveryDesignLines(t)
 	contents := strings.Join(lines, "\n")
