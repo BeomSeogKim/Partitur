@@ -261,14 +261,15 @@ type CandidateContributor struct {
 }
 
 type ApplicationCandidate struct {
-	ID                        string
-	Revision                  uint64
-	BaseTree                  string
-	ResultTree                string
-	OrderedChangeSets         []string
-	Contributors              []CandidateContributor
-	CompositionDependencyHash Hash
-	IdentityVersions          json.RawMessage
+	ID                         string
+	Revision                   uint64
+	BaseTree                   string
+	ResultTree                 string
+	OrderedChangeSets          []string
+	Contributors               []CandidateContributor
+	CompositionDependencyHash  Hash
+	CompositionEnvironmentHash Hash
+	IdentityVersions           json.RawMessage
 }
 
 type ApplicationState string

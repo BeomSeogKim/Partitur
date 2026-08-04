@@ -44,11 +44,12 @@ type StartResult struct {
 
 // Candidate is the recorded application candidate.
 type Candidate struct {
-	ID                        string
-	BaseTree                  string
-	ResultTree                string
-	CompositionDependencyHash string
-	Receipt                   faultpoint.DurabilityReceipt
+	ID                         string
+	BaseTree                   string
+	ResultTree                 string
+	CompositionDependencyHash  string
+	CompositionEnvironmentHash string
+	Receipt                    faultpoint.DurabilityReceipt
 }
 
 // AttemptWorkspace is one fresh detached worktree plus its sibling output

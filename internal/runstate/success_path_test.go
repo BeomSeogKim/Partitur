@@ -3,6 +3,7 @@ package runstate
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -206,6 +207,63 @@ func TestApplicationCandidateRecordedGuards(t *testing.T) {
 		)
 		assertTransitionRejected(t, state, event)
 	})
+}
+
+func TestCandidateCompositionEnvironmentPayloadGuards(t *testing.T) {
+	merged := func() map[string]any {
+		payload := applicationCandidatePayload()
+		payload["contributors"] = []any{map[string]any{"movement_id": "writer", "change_set_id": "sha256:change"}}
+		payload["composition_environment_hash"] = "sha256:environment"
+		return payload
+	}
+	assertInvalid := func(t *testing.T, eventType EventType, payload map[string]any, want string) {
+		t.Helper()
+		if _, err := validatePayload(fixtureEvent(eventType, payload, nil)); !errors.Is(err, ErrInvalidEvent) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("validate payload error = %v, want %q", err, want)
+		}
+	}
+
+	t.Run("merged candidate requires environment hash", func(t *testing.T) {
+		payload := merged()
+		delete(payload, "composition_environment_hash")
+		assertInvalid(t, EventApplicationCandidateRecorded, payload, "merged candidate requires composition_environment_hash")
+	})
+
+	t.Run("identity candidate forbids environment hash", func(t *testing.T) {
+		payload := applicationCandidatePayload()
+		payload["composition_environment_hash"] = "sha256:environment"
+		assertInvalid(t, EventApplicationCandidateRecorded, payload, "identity candidate forbids composition_environment_hash")
+	})
+
+	t.Run("merged candidate rejects empty environment hash", func(t *testing.T) {
+		payload := merged()
+		payload["composition_environment_hash"] = ""
+		assertInvalid(t, EventApplicationCandidateRecorded, payload, "composition_environment_hash must be non-empty")
+	})
+
+	t.Run("folded candidate has the same guard", func(t *testing.T) {
+		payload := runSucceededPayload()
+		candidate := payload["candidate"].(map[string]any)
+		candidate["contributors"] = []any{map[string]any{"movement_id": "writer", "change_set_id": "sha256:change"}}
+		assertInvalid(t, EventRunSucceeded, payload, "merged candidate requires composition_environment_hash")
+	})
+}
+
+func TestRunSucceededProjectsRecordedCompositionEnvironment(t *testing.T) {
+	payload := runSucceededPayload()
+	candidate := payload["candidate"].(map[string]any)
+	candidate["contributors"] = []any{map[string]any{"movement_id": "writer", "change_set_id": "sha256:change"}}
+	candidate["composition_environment_hash"] = "sha256:environment"
+
+	state := NewState(nil)
+	state.Run = RunRunning
+	next, err := Apply(state, fixtureEvent(EventRunSucceeded, payload, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ApplicationCandidate == nil || next.ApplicationCandidate.CompositionEnvironmentHash != "sha256:environment" {
+		t.Fatalf("recorded environment hash = %#v", next.ApplicationCandidate)
+	}
 }
 
 func TestAcceptanceStartedRequiresVerificationPassed(t *testing.T) {

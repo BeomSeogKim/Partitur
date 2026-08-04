@@ -3769,7 +3769,9 @@ candidate-compatible iff
        candidate_composition_dependency_hash =
          H("partitur/candidate-composition", candidate_composition_projection)
                                                        # A.4 tagged identity | merge union
-     must equal the hash recorded with the candidate. Changes altering the composition —
+     The projection uses the `composition_environment_hash` recorded with that candidate,
+     never a live environment observation; its hash must equal the hash recorded with the
+     candidate. Changes altering the composition —
      movement order, `needs`, contributor membership — are incompatible even if the
      resulting tree would coincidentally be identical. In particular, adding the first writer
      to a zero-writer candidate changes `composition_mode: identity` to
@@ -4151,7 +4153,7 @@ a defect.
 | `partitur/acceptance-spec` | A.4.2 — the effective compiled acceptance plan. |
 | `partitur/change-set` | `{base_tree, result_tree}` |
 | `partitur/candidate` | `{base_tree, result_tree, ordered_change_sets: [change_set_id]}` — the **content-deduplicated applied** sequence (§8). |
-| `partitur/candidate-composition` | Tagged union: zero contributors ⇒ `{composition_mode: "identity", base_tree, contributors: [], composition_algorithm_version}`; one or more contributors ⇒ `{composition_mode: "merge", base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` with `contributors` non-empty. The tag and cardinality must agree. `identity` states that no merge ran, so an environment hash is forbidden rather than fabricated; `merge` records the **full pre-dedup ordered** sequence, so adding, removing, or reordering an identical or no-op writer stays detectable. |
+| `partitur/candidate-composition` | Tagged union: zero contributors ⇒ `{composition_mode: "identity", base_tree, contributors: [], composition_algorithm_version}`; one or more contributors ⇒ `{composition_mode: "merge", base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` with `contributors` non-empty. The tag and cardinality must agree. `identity` states that no merge ran, so an environment hash is forbidden rather than fabricated; `merge` records the **full pre-dedup ordered** sequence, so adding, removing, or reordering an identical or no-op writer stays detectable. A durable candidate carries this environment-hash input under the same condition, so a later comparison can reproduce this identity without observing a live environment. |
 | `partitur/movement-composition` | The same tagged union as `partitur/candidate-composition`, with `movement_id` added to both variants: zero contributors ⇒ `{composition_mode: "identity", movement_id, base_tree, contributors: [], composition_algorithm_version}`; one or more ⇒ `{composition_mode: "merge", movement_id, base_tree, contributors: [{movement_id, change_set_id}], composition_algorithm_version, composition_environment_hash}` with `contributors` non-empty. This is a movement's own fan-in (§5), including the reachable case where it has `needs` but every dependency is read-only. The candidate-level hash covers only the final composition, so without this a movement's clean base has no identity and a change to how it was assembled would be invisible. |
 | `partitur/composition-environment` | §5, exactly: `{git_version_string, object_format, argv, env, merge_renormalize, merge_config}` where `git_version_string` is `git --version` verbatim, `argv` is the ordered sequence of full merge argvs as executed, and `env` is the equally ordered sequence of the **allowlisted** subsets the core passes (each entry sorted key/value pairs). The order is the deterministic composition order of the executed contributing change sets, and entry *i* of each sequence describes the same invocation. `merge_config` is every `merge.*` key effective in the composition repository, sorted. Separate because both `composition_mode: merge` identities need it, and because the environment can change while every tree stays the same. It is absent from `composition_mode: identity`, where no merge invocation exists to describe. |
 | `partitur/composition-subject` | `{scope, target_id, contributors: [change_set_id], composition_algorithm_version, composition_environment_hash?}` — identifies *which* composition failed to yield a usable result, and is the third component of both non-success evidence keys — `composition.conflicted` and `composition.failed` (B.3). `contributors` is non-empty and ordered. `composition_environment_hash` is required iff at least one merge invocation executed; it is absent when the first merge subprocess could not start, because no invocation exists to describe (§5; Appendix D `spawn_failed`). The remaining fields distinguish such no-invocation failures by scope, target, ordered contributor sequence, and algorithm version — including, for example, a two-contributor composition from a five-contributor one. They intentionally do not distinguish two failed launch observations of that same composition which differ only in an unexecuted environment or sanitized diagnostic: no retry can produce a second outcome for that subject, and those observations are not different composition inputs. When present, the hash is required because the payloads do: the same contributors failing under a different Git configuration is a different fact, and omitting it would let one idempotency key acquire two differing payloads. Distinct from the two dependency hashes: those identify a **successful** composition's inputs, this identifies a composition that produced none. **The optionality changes the preimage shape, so this is projection version 2 for `partitur/composition-subject`: version 1 required the field unconditionally; version 2 omits it exactly when no invocation executed. This does not bump `partitur/composition-environment`, whose sequence wording states its existing preimage.** |
@@ -4581,6 +4583,8 @@ run.succeeded {                   # WAIVED PATH ONLY. On the non-waived path the
     candidate_composition_dependency_hash
                                   # partitur/candidate-composition; A.4's tagged identity | merge
                                   # projection, including the zero-writer candidate
+    composition_environment_hash? # partitur/composition-environment; required iff contributors
+                                  # are non-empty, forbidden for the identity branch
   },
   waiver: {reason},               # the recorded apply_gate waiver (§2). The candidate's binding
                                   #   revision is the envelope's score_revision — not repeated
@@ -4860,6 +4864,8 @@ application_candidate.recorded {
   candidate_composition_dependency_hash,
                                   # partitur/candidate-composition; A.4's tagged identity | merge
                                   # projection, including the zero-writer candidate
+  composition_environment_hash?  # partitur/composition-environment; required iff contributors
+                                  # are non-empty, forbidden for the identity branch
                                   # The initial binding is {candidate_id, score_revision} where
                                   #   score_revision comes from the ENVELOPE; recording this
                                   #   event IS the binding, and no separate binding event is ever
