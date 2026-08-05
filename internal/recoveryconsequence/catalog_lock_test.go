@@ -89,6 +89,137 @@ func TestCatalogAndRecoveryDispatchFailClosed(t *testing.T) {
 	}
 }
 
+// TestCatalogWitnessesArePlannerSelected makes the catalog lock prove more
+// than registration: every catalogued consequence is selected from replayed
+// planner input, with its action (and, where applicable, step order) intact.
+func TestCatalogWitnessesArePlannerSelected(t *testing.T) {
+	for _, witness := range catalogWitnesses() {
+		t.Run(string(witness.caseID), func(t *testing.T) {
+			decision := witness.plan(witness.input)
+			if decision.CaseID != witness.caseID || decision.Action == nil {
+				t.Fatalf("planner decision = %+v, want action for %s", decision, witness.caseID)
+			}
+			if decision.Action.Kind != witness.kind {
+				t.Fatalf("planner action kind = %s, want %s", decision.Action.Kind, witness.kind)
+			}
+			if !slices.Equal(decision.Action.Steps, witness.steps) {
+				t.Fatalf("planner steps = %v, want %v", decision.Action.Steps, witness.steps)
+			}
+		})
+	}
+}
+
+// TestEveryCataloguedConsequenceHasPlannerWitness is deliberately separate
+// from the selection assertions: a new handler key must add a concrete
+// planner witness before the catalog lock can pass.
+func TestEveryCataloguedConsequenceHasPlannerWitness(t *testing.T) {
+	witnessed := make([]recovery.CaseID, 0, len(catalogWitnesses()))
+	for _, witness := range catalogWitnesses() {
+		witnessed = append(witnessed, witness.caseID)
+	}
+	slices.Sort(witnessed)
+	if !slices.Equal(witnessed, Cases()) {
+		t.Fatalf("planner witness cases = %v, want catalog cases %v", witnessed, Cases())
+	}
+}
+
+type catalogWitness struct {
+	caseID recovery.CaseID
+	kind   recovery.ActionKind
+	steps  []recovery.ActionStep
+	input  recovery.Input
+	plan   func(recovery.Input) recovery.Decision
+}
+
+func catalogWitnesses() []catalogWitness {
+	return []catalogWitness{
+		{recovery.CaseBlockedProposalRoute, recovery.ActionAppendBlockedProposalRoute, nil, plannerInput(recovery.Projection{BlockedProposalRoutes: []recovery.BlockedProposalRoute{{ProposalID: "proposal-1", AttemptID: "attempt-1", ScoreRevision: 1}}}), recovery.Plan},
+		{recovery.CaseRoutedAmendment, recovery.ActionAppendRoutedRequest, nil, plannerInput(recovery.Projection{State: stateWithRoutedAmendment()}), recovery.Plan},
+		{recovery.CaseCompositionTerminal, recovery.ActionAppendCompositionTerminal, nil, plannerInput(recovery.Projection{CompositionTerminals: []recovery.CompositionTerminal{{Scope: "movement", TargetID: "write", Reason: "composition_conflicted", EvidenceEventID: "event-1", ScoreRevision: 1}}}), recovery.Plan},
+		{recovery.CaseRealizeDisposition, recovery.ActionRealizeRecordedDisposition, nil, attemptInput(runstate.AttemptFailed, func(attempt *recovery.AttemptRecovery) {
+			attempt.RecordedDisposition = &runstate.Disposition{Charged: "none", MovementTerminal: true, TerminalReason: "task_failed"}
+		}), recovery.PlanAttempt},
+		{recovery.CaseAppendQuestionRequest, recovery.ActionAppendQuestionRequest, nil, attemptInput(runstate.AttemptBlocked, func(attempt *recovery.AttemptRecovery) {
+			attempt.QuestionRequests = []recovery.QuestionRequest{{DecisionID: "question-1"}}
+		}), recovery.PlanAttempt},
+		{recovery.CaseMovementSucceeded, recovery.ActionAppendMovementSucceeded, nil, attemptInput(runstate.AttemptCompleted, nil), recovery.PlanAttempt},
+		{recovery.CaseRunFailed, recovery.ActionAppendRunFailed, nil, attemptInput(runstate.AttemptFailed, func(attempt *recovery.AttemptRecovery) {
+			attempt.MovementFailed = true
+			attempt.FailureDispositionRealized = true
+		}), recovery.PlanAttempt},
+		{recovery.CaseFinalGateRejected, recovery.ActionAppendFinalGateFailure, nil, attemptInput(runstate.AttemptFailed, func(attempt *recovery.AttemptRecovery) {
+			attempt.FinalGateRejected = true
+			attempt.FailureDispositionRealized = true
+		}), recovery.PlanAttempt},
+		{recovery.CaseAcceptanceFailed, recovery.ActionRealizeRecordedDisposition, nil, acceptanceInput(func(projection *recovery.Projection) {
+			projection.Acceptance = &recovery.AcceptanceRecovery{Failed: true}
+			projection.CurrentHeadAttempt.RecordedDisposition = &runstate.Disposition{Charged: "none", MovementTerminal: true, TerminalReason: "task_failed"}
+		}), recovery.PlanAcceptance},
+		{recovery.CaseCriterionFailed, recovery.ActionAppendAcceptanceFailure, []recovery.ActionStep{recovery.StepClassifyAcceptanceFailure}, acceptanceInput(func(projection *recovery.Projection) {
+			acceptance := projection.State.Acceptances["attempt-1"]
+			acceptance.PlannedCriterionIDs = []runstate.CriterionID{"criterion-1"}
+			acceptance.Criteria = map[runstate.CriterionID]runstate.CriterionRecord{"criterion-1": {Completed: true, Outcome: "FAIL"}}
+			projection.State.Acceptances["attempt-1"] = acceptance
+		}), recovery.PlanAcceptance},
+		{recovery.CaseCriteriaPassed, recovery.ActionAppendEvaluationCompleted, nil, acceptanceInput(func(projection *recovery.Projection) {
+			acceptance := projection.State.Acceptances["attempt-1"]
+			acceptance.PlannedCriterionIDs = []runstate.CriterionID{"criterion-1"}
+			acceptance.Criteria = map[runstate.CriterionID]runstate.CriterionRecord{"criterion-1": {Completed: true, Outcome: "PASS"}}
+			projection.State.Acceptances["attempt-1"] = acceptance
+		}), recovery.PlanAcceptance},
+		{recovery.CaseRequestHumanGate, recovery.ActionAppendHumanGateRequest, nil, evaluatedAcceptanceInput(recovery.GateRecovery{Required: true, DecisionID: "gate-1"}), recovery.PlanAcceptance},
+		{recovery.CaseHumanGateApproved, recovery.ActionAppendAcceptanceSuccess, []recovery.ActionStep{recovery.StepAppendAttemptCompleted, recovery.StepAppendMovementSucceeded}, evaluatedAcceptanceInput(recovery.GateRecovery{Required: true, Requested: true, Resolved: true, Approved: true, DecisionID: "gate-1"}), recovery.PlanAcceptance},
+		{recovery.CaseHumanGateRejected, recovery.ActionAppendGateRejectedFailure, nil, evaluatedAcceptanceInput(recovery.GateRecovery{Required: true, Requested: true, Resolved: true, DecisionID: "gate-1"}), recovery.PlanAcceptance},
+		{recovery.CaseGateFreeCompletion, recovery.ActionAppendAcceptanceSuccess, []recovery.ActionStep{recovery.StepAppendAttemptCompleted, recovery.StepAppendMovementSucceeded}, evaluatedAcceptanceInput(recovery.GateRecovery{}), recovery.PlanAcceptance},
+	}
+}
+
+func plannerInput(projection recovery.Projection) recovery.Input {
+	if projection.State.Movements == nil {
+		projection.State = basePlannerState()
+	}
+	return recovery.Input{Projection: projection}
+}
+
+func attemptInput(state runstate.AttemptState, configure func(*recovery.AttemptRecovery)) recovery.Input {
+	projection := recovery.Projection{State: basePlannerState(), CurrentHeadAttempt: &recovery.AttemptRecovery{AttemptID: "attempt-1", MovementID: "write", ScoreRevision: 1, State: state}}
+	if configure != nil {
+		configure(projection.CurrentHeadAttempt)
+	}
+	return recovery.Input{Projection: projection}
+}
+
+func acceptanceInput(configure func(*recovery.Projection)) recovery.Input {
+	projection := recovery.Projection{State: basePlannerState(), CurrentHeadAttempt: &recovery.AttemptRecovery{AttemptID: "attempt-1", MovementID: "write", ScoreRevision: 1, State: runstate.AttemptVerifying, AcceptanceStarted: true}}
+	projection.State.Acceptances["attempt-1"] = runstate.Acceptance{Started: true, SubjectTree: "git-sha1:subject", Criteria: map[runstate.CriterionID]runstate.CriterionRecord{}}
+	if configure != nil {
+		configure(&projection)
+	}
+	return recovery.Input{Projection: projection, Observations: recovery.Observations{AcceptanceSubject: recovery.SubjectMatched}}
+}
+
+func evaluatedAcceptanceInput(gate recovery.GateRecovery) recovery.Input {
+	input := acceptanceInput(nil)
+	acceptance := input.Projection.State.Acceptances["attempt-1"]
+	acceptance.EvaluationCompleted = true
+	input.Projection.State.Acceptances["attempt-1"] = acceptance
+	input.Projection.Acceptance = &recovery.AcceptanceRecovery{Gate: gate}
+	return input
+}
+
+func basePlannerState() runstate.State {
+	state := runstate.NewState([]runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
+	state.Run = runstate.RunRunning
+	state.ScoreHead.Revision = 1
+	return state
+}
+
+func stateWithRoutedAmendment() runstate.State {
+	state := basePlannerState()
+	state.RoutedAmendments["proposal-1"] = runstate.RoutedAmendment{ProposalID: "proposal-1", DecisionID: "decision-1"}
+	return state
+}
+
 func TestFrozenRoutePayloadRejectsRecordHashMismatch(t *testing.T) {
 	root := t.TempDir()
 	store, err := runstore.New(root, faultpoint.Nop{})

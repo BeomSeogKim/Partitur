@@ -1,0 +1,17 @@
+./access.go
+./compile.go
+./impact.go
+./patch.go
+./projection.go
+./rules.go
+./serialize.go
+./types.go
+./access_test.go
+./aggregation_test.go
+./amendment_ordering_contract_test.go
+./impact_test.go
+./imports_test.go
+./mutation_coverage_test.go
+./patch_test.go
+./projection_test.go
+./score_test.go

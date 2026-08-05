@@ -1,0 +1,4 @@
+./doc.go
+./node.go
+./plugin.go
+./yaml.go

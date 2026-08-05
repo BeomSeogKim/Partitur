@@ -1,0 +1,17 @@
+./client.go
+./doc.go
+./execute.go
+./execute_types.go
+./execute_wire.go
+./process.go
+./process_darwin.go
+./process_identity_darwin.go
+./types.go
+./wire.go
+./client_test.go
+./execute_test.go
+./execute_wire_test.go
+./imports_test.go
+./process_test.go
+./sigterm_conformance_test.go
+./wire_test.go

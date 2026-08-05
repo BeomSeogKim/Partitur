@@ -1,0 +1,8 @@
+./main.go
+./cancellation_fixture_test.go
+./cancellation_kill_matrix_test.go
+./completion_test.go
+./e2e_test.go
+./kill_harness_test.go
+./main_test.go
+./prepare_quiesce_harness_test.go

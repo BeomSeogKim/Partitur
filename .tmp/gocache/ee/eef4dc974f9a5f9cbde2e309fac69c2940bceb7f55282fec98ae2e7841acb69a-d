@@ -1,0 +1,14 @@
+./artifact.go
+./attempt.go
+./change_set.go
+./composition.go
+./git.go
+./id.go
+./movement_composition.go
+./recovery.go
+./start.go
+./types.go
+./artifact_test.go
+./composition_test.go
+./imports_test.go
+./workspace_test.go

@@ -1,0 +1,6 @@
+./brief.go
+./proc.go
+./proc_unix.go
+./redact.go
+./result.go
+./serve.go

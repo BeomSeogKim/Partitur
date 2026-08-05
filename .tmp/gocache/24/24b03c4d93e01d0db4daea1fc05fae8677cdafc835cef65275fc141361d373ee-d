@@ -1,0 +1,6 @@
+./adapter.go
+./doc.go
+./failure.go
+./redact.go
+./stream.go
+./adapter_test.go
