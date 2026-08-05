@@ -24,6 +24,7 @@ func TestMutationEvaluatorGuards(t *testing.T) {
 		{"cancellation outranks stale", "if input.State.CancelRequested {", "if false { // mutation", "TestEvaluatePipelineAndPolicy/lifecycle_wins_stale"},
 		{"reserved pointer refusal", "if touchesReserved(input.Operations) {", "if false { // mutation", "TestEvaluatePipelineAndPolicy/reserved_wins_before_patch"},
 		{"canonical no-op before compilation", "if bytes.Equal(baseBytes, patchedBytes) {", "if false && bytes.Equal(baseBytes, patchedBytes) { // mutation", "TestEvaluatePipelineAndPolicy/test_reserved_is_permitted"},
+		{"absent claim skips containment", "if input.HasClaimedImpact && !input.ClaimedImpact.Contains(impact) {", "if true || input.HasClaimedImpact && !input.ClaimedImpact.Contains(impact) { // mutation", "TestEvaluateAbsentClaimSkipsContainment"},
 		{"executed dependency feasibility", "} else if changed {", "} else if false && changed { // mutation", "TestEvaluateFeasibilityPrecedesPolicy"},
 		{"candidate feasibility", "} else if condition != \"\" {", "} else if false && condition != \"\" { // mutation", "TestEvaluateCandidateFinalityPrecedesPolicy"},
 		{"human guard audit-only", "if input.HumanDecision {", "if false { // mutation", "TestEvaluateHumanDecisionRecordsGuardWithoutRerouting"},

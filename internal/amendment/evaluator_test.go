@@ -51,7 +51,7 @@ func TestEvaluatePipelineAndPolicy(t *testing.T) {
 			if test.reason != "patch_error" && test.reason != "no_op" {
 				claim = claimFor(t, base, test.operations)
 			}
-			got, err := Evaluate(Input{State: current, Base: base, BaseRevision: base.Revision(), BaseHash: runstate.Hash(baseHash), Operations: test.operations, ClaimedImpact: claim})
+			got, err := Evaluate(Input{State: current, Base: base, BaseRevision: base.Revision(), BaseHash: runstate.Hash(baseHash), Operations: test.operations, ClaimedImpact: claim, HasClaimedImpact: test.reason != "patch_error" && test.reason != "no_op"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,12 +72,32 @@ func TestEvaluateClaimContainmentAndCandidatePrecedence(t *testing.T) {
 	state.Run = runstate.RunRunning
 	state.ScoreHead = runstate.ScoreHead{Revision: base.Revision(), SemanticHash: runstate.Hash(hash)}
 	operations := []any{op("replace", "/policy/budget/active_wall_clock_min", float64(9))}
-	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: base.Revision(), BaseHash: runstate.Hash(hash), Operations: operations})
+	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: base.Revision(), BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: score.Impact{}, HasClaimedImpact: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Reason != "claim_narrower" {
 		t.Fatalf("reason=%q, want claim_narrower", got.Reason)
+	}
+}
+
+func TestEvaluateAbsentClaimSkipsContainment(t *testing.T) {
+	base := testScore(t)
+	hash, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := runstate.NewState(nil)
+	state.Run = runstate.RunRunning
+	state.ScoreHead = runstate.ScoreHead{Revision: base.Revision(), SemanticHash: runstate.Hash(hash)}
+	operations := []any{op("replace", "/policy/budget/active_wall_clock_min", float64(9))}
+
+	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: base.Revision(), BaseHash: runstate.Hash(hash), Operations: operations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != Approved || got.Reason != "" || got.Class != BudgetDecrease {
+		t.Fatalf("outcome=%+v, want approved budget decrease without a claim", got)
 	}
 }
 
@@ -100,7 +120,7 @@ func TestEvaluateFeasibilityPrecedesPolicy(t *testing.T) {
 	}
 	attempt.RecordedHash = recorded
 	operations := []any{op("replace", "/movements/0/instruction", "changed")}
-	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), Attempts: []executiondep.Attempt{attempt}})
+	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true, Attempts: []executiondep.Attempt{attempt}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +153,7 @@ func TestEvaluateCandidateFinalityPrecedesPolicy(t *testing.T) {
 	}
 	attempt.RecordedHash = recorded
 	operations := []any{op("replace", "/policy/budget/active_wall_clock_min", float64(9))}
-	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), Attempts: []executiondep.Attempt{attempt}})
+	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true, Attempts: []executiondep.Attempt{attempt}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +173,7 @@ func TestEvaluateHumanDecisionRecordsGuardWithoutRerouting(t *testing.T) {
 	state.ScoreHead = runstate.ScoreHead{Revision: 1, SemanticHash: runstate.Hash(hash)}
 	state.Attempts["attempt-1"] = runstate.Attempt{MovementID: "inspect", State: runstate.AttemptRunning}
 	operations := []any{op("replace", "/policy/allowed_paths", []any{})}
-	input := Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations)}
+	input := Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true}
 	routed, err := Evaluate(input)
 	if err != nil {
 		t.Fatal(err)
