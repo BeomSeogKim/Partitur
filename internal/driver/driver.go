@@ -41,12 +41,13 @@ var (
 )
 
 type dependencies struct {
-	probe             faultpoint.Probe
-	client            AdapterExecutor
-	resolveTrampoline func() (string, error)
-	now               func() time.Time
-	newID             func() (string, error)
-	workspaceStart    func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error)
+	probe               faultpoint.Probe
+	client              AdapterExecutor
+	resolveTrampoline   func() (string, error)
+	now                 func() time.Time
+	newID               func() (string, error)
+	proposalDisposition ProposalDispositioner
+	workspaceStart      func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error)
 	// afterMovementFailed is a test-only interleaving hook. Production leaves it nil.
 	afterMovementFailed func()
 }
@@ -83,6 +84,7 @@ func executionDependenciesFrom(dependencies dependencies) ExecutionDependencies 
 		ResolveTrampoline:   dependencies.resolveTrampoline,
 		Now:                 dependencies.now,
 		NewID:               dependencies.newID,
+		ProposalDisposition: dependencies.proposalDisposition,
 		afterMovementFailed: dependencies.afterMovementFailed,
 	}
 }
@@ -745,17 +747,16 @@ func ExecuteAttempt(
 				)
 			case string(runstate.EventAttemptBlocked):
 				for _, decision := range observation.Raised {
-					if decision.Kind != protocol.EventProposal || decision.Proposal == nil || !decision.Proposal.RequiresDecision {
+					if decision.Kind != protocol.EventProposal || decision.Proposal == nil {
 						continue
 					}
-					unit, ok := recovery.UnimplementedActionOwner(recovery.ActionAppendRoutedRequest)
-					if !ok {
-						return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal has no routed-request owner")
+					if executionDependencies.ProposalDisposition == nil {
+						return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal has no amendment dispositioner")
 					}
-					return faultpoint.DurabilityReceipt{}, fmt.Errorf("waiting_human proposal requires unit %s", unit)
 				}
 				raised := make([]any, 0, len(observation.Raised))
 				pending := make([]string, 0, len(observation.Raised))
+				appendRoutes := make([]func(context.Context) error, 0, len(observation.Raised))
 				for _, decision := range observation.Raised {
 					switch decision.Kind {
 					case protocol.EventQuestion:
@@ -786,13 +787,29 @@ func ExecuteAttempt(
 						if err != nil {
 							return faultpoint.DurabilityReceipt{}, err
 						}
-						raised = append(raised, map[string]any{
+						disposition, err := executionDependencies.ProposalDisposition.PrepareAdapterProposal(ctx, AdapterProposal{
+							Store: store, Authority: authority, RunID: execution.RunID, ScoreRevision: execution.Score.Revision(), AttemptID: attempt.AttemptID,
+							MovementID: attempt.MovementID, PartID: movement.PartID, ProposalID: runstate.ProposalID(proposalID),
+							DecisionID: decisionID, Event: *decision.Proposal,
+						})
+						if err != nil {
+							return faultpoint.DurabilityReceipt{}, fmt.Errorf("prepare adapter proposal disposition: %w", err)
+						}
+						raisedProposal := map[string]any{
 							"decision_id": decisionID,
 							"emitted_id":  decision.Proposal.ID,
 							"kind":        "proposal",
 							"proposal_id": proposalID,
 							"blocking":    decision.Proposal.RequiresDecision,
-						})
+						}
+						if disposition.RouteDescriptor != nil {
+							raisedProposal["route"] = disposition.RouteDescriptor
+							if disposition.AppendRoute == nil {
+								return faultpoint.DurabilityReceipt{}, errors.New("routed proposal has no routed_human append")
+							}
+							appendRoutes = append(appendRoutes, disposition.AppendRoute)
+						}
+						raised = append(raised, raisedProposal)
 						if decision.Proposal.RequiresDecision {
 							pending = append(pending, decisionID)
 						}
@@ -801,10 +818,19 @@ func ExecuteAttempt(
 					}
 				}
 				slices.Sort(pending)
-				return appendEvent(runstate.EventAttemptBlocked, map[string]any{
+				receipt, err := appendEvent(runstate.EventAttemptBlocked, map[string]any{
 					"raised":               raised,
 					"pending_decision_ids": pending,
 				}, "attempt.blocked")
+				if err != nil {
+					return receipt, err
+				}
+				for _, appendRoute := range appendRoutes {
+					if err := appendRoute(ctx); err != nil {
+						return faultpoint.DurabilityReceipt{}, fmt.Errorf("append routed human: %w", err)
+					}
+				}
+				return receipt, nil
 			default:
 				return faultpoint.DurabilityReceipt{}, fmt.Errorf(
 					"unsupported execute outcome %q",

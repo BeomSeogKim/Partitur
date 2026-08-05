@@ -1525,7 +1525,7 @@ func TestExecuteAttemptRefusesProposalWaitingHumanUntilRoutedRequestExists(t *te
 		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
 		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
 	}, executionDependenciesFrom(dependencies))
-	if result.Outcome != OutcomeInterrupted || result.Err == nil || !strings.Contains(result.Err.Error(), "unit 4.2") {
+	if result.Outcome != OutcomeInterrupted || result.Err == nil || !strings.Contains(result.Err.Error(), "no amendment dispositioner") {
 		t.Fatalf("proposal waiting result = %+v", result)
 	}
 	journal, err := store.ReadJournal(started.RunID)
@@ -1596,6 +1596,7 @@ func TestExecuteAttemptPreservesRaisedWireOrderAndAllowsNonBlockingProposal(t *t
 	proposal := protocol.ProposalEvent{Type: protocol.EventProposal, ID: "proposal-1", Amendment: json.RawMessage(`{}`), RequiresDecision: false}
 	questionTwo := protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "question-1", Question: "Second?"}
 	dependencies := testDependencies()
+	dependencies.proposalDisposition = proposalDispositionFixture{}
 	dependencies.client = &waitingAdapterFixture{t: t, raised: []adapter.RaisedDecision{
 		{Kind: protocol.EventQuestion, Question: &questionOne},
 		{Kind: protocol.EventProposal, Proposal: &proposal},
@@ -1870,6 +1871,12 @@ type waitingAdapterFixture struct {
 	proposal *protocol.ProposalEvent
 	raised   []adapter.RaisedDecision
 	pending  []string
+}
+
+type proposalDispositionFixture struct{}
+
+func (proposalDispositionFixture) PrepareAdapterProposal(context.Context, AdapterProposal) (AdapterProposalDisposition, error) {
+	return AdapterProposalDisposition{}, nil
 }
 
 func (fixture *waitingAdapterFixture) Resolve(adapterID string) (string, error) {

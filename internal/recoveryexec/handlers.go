@@ -2,7 +2,6 @@ package recoveryexec
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +23,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/recoveryconsequence"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/successor"
@@ -31,6 +31,29 @@ import (
 )
 
 const recoverySweepGrace = 30 * time.Second
+
+var (
+	appendCompositionTerminal           = recoveryconsequence.AppendCompositionTerminal
+	appendAcceptanceEvaluationCompleted = recoveryconsequence.AppendAcceptanceEvaluationCompleted
+	appendHumanGateRequest              = recoveryconsequence.AppendHumanGateRequest
+	appendGateRejectedFailure           = recoveryconsequence.AppendGateRejectedFailure
+	realizeRecordedDisposition          = recoveryconsequence.RealizeRecordedDisposition
+	appendQuestionRequest               = recoveryconsequence.AppendQuestionRequest
+	appendBlockedProposalRoute          = recoveryconsequence.AppendBlockedProposalRoute
+	appendRoutedRequest                 = recoveryconsequence.AppendRoutedRequest
+	appendAcceptanceFailure             = recoveryconsequence.AppendAcceptanceFailure
+	appendAttemptCompleted              = recoveryconsequence.AppendAttemptCompleted
+	appendMovementSucceeded             = recoveryconsequence.AppendMovementSucceeded
+	appendRunFailed                     = recoveryconsequence.AppendRunFailed
+	recoveryPayload                     = recoveryconsequence.RecoveryPayload
+	appendEvent                         = recoveryconsequence.AppendEvent
+	latestEventID                       = recoveryconsequence.LatestEventID
+	actionMovement                      = recoveryconsequence.ActionMovement
+	withMovement                        = recoveryconsequence.WithMovement
+	classify                            = recoveryconsequence.Classify
+	dispositionPayload                  = recoveryconsequence.DispositionPayload
+	identityVersions                    = recoveryconsequence.IdentityVersions
+)
 
 func defaultSteps() map[recovery.ActionStep]StepHandler {
 	return map[recovery.ActionStep]StepHandler{
@@ -68,6 +91,8 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionMaterializeSuccessor:       materializeSuccessor,
 		recovery.ActionSelectRevisionRestart:      selectRevisionRestart,
 		recovery.ActionAppendQuestionRequest:      appendQuestionRequest,
+		recovery.ActionAppendBlockedProposalRoute: appendBlockedProposalRoute,
+		recovery.ActionAppendRoutedRequest:        appendRoutedRequest,
 		recovery.ActionSelectDecisionResume:       selectDecisionResume,
 		recovery.ActionAppendRunFailed:            appendRunFailed,
 		recovery.ActionAppendBudgetFailure:        appendMovementBudgetFailure,
@@ -121,80 +146,6 @@ func composeCandidate(_ context.Context, execution HandlerContext, _ recovery.Ac
 		return ErrRecoveryReplan
 	}
 	return err
-}
-
-func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
-		return errors.New("recovery composition terminal requires store, driver, and evidence")
-	}
-	terminal := action.CompositionTerminal
-	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
-	if err != nil {
-		return err
-	}
-	cause, err := latestEventID(journal.Events, func(event runstate.Event) bool {
-		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
-			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
-			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
-	})
-	if err != nil {
-		return err
-	}
-	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
-	if err != nil {
-		return err
-	}
-	err = execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
-		// C.1 cancellation is checked with the terminal append while the state
-		// lock and the existing lease predicate are both held.
-		if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
-			return ErrRecoveryReplan
-		}
-		if execution.afterCompositionEvidence != nil {
-			execution.afterCompositionEvidence()
-		}
-		var event runstate.Event
-		var address faultpoint.ReceiptAddress
-		switch terminal.Scope {
-		case "movement":
-			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
-			address = "recovery.movement.failed.composition"
-		case "candidate":
-			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason})}
-			address = "recovery.run.failed.composition"
-		default:
-			return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
-		}
-		if _, err := runstate.Apply(state, event); err != nil {
-			return err
-		}
-		_, err := transaction.At(address).Append(event)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	execution.Store.Reached(terminalPoint)
-	return nil
-}
-
-func compositionTerminalPoint(scope string) (faultpoint.PointID, error) {
-	switch scope {
-	case "movement":
-		return faultpoint.PointCompositionMovementTerminal, nil
-	case "candidate":
-		return faultpoint.PointCompositionCandidateTerminal, nil
-	default:
-		return "", fmt.Errorf("recovery composition terminal has invalid scope %q", scope)
-	}
-}
-
-func recoveryPayload(value any) json.RawMessage {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		panic(err)
-	}
-	return encoded
 }
 
 func rerunMovementComposition(_ context.Context, execution HandlerContext, action recovery.Action) error {
@@ -569,163 +520,6 @@ func closeRecoveredAcceptanceBudgetInterval(execution HandlerContext, action rec
 	})
 }
 
-func appendAcceptanceEvaluationCompleted(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" {
-		return errors.New("recovery acceptance completion requires store, driver, and attempt")
-	}
-	input, err := execution.Store.LoadRunInput(execution.RunID)
-	if err != nil {
-		return err
-	}
-	attempt, ok := input.Projection.State.Attempts[action.AttemptID]
-	if !ok {
-		return fmt.Errorf("recovery acceptance completion attempt %q is absent", action.AttemptID)
-	}
-	acceptanceState, ok := input.Projection.State.Acceptances[action.AttemptID]
-	if !ok || !acceptanceState.Started {
-		return fmt.Errorf("recovery acceptance completion for %q is absent", action.AttemptID)
-	}
-	for _, movement := range input.Score.Movements() {
-		if runstate.MovementID(movement.ID) != attempt.MovementID {
-			continue
-		}
-		plan, err := acceptance.Compile(movement)
-		if err != nil {
-			return err
-		}
-		outcomes := make([]acceptance.CriterionOutcome, 0, len(acceptanceState.PlannedCriterionIDs))
-		for _, criterionID := range acceptanceState.PlannedCriterionIDs {
-			criterion, ok := acceptanceState.Criteria[criterionID]
-			if !ok || !criterion.Completed || criterion.Outcome != "PASS" {
-				return fmt.Errorf("recovery acceptance criterion %q is not PASS", criterionID)
-			}
-			outcomes = append(outcomes, acceptance.CriterionOutcome{CriterionID: string(criterionID), Outcome: criterion.Outcome})
-		}
-		_, err = acceptance.CompleteStarted(plan, acceptance.Evaluation{
-			RunID: execution.Driver.RunID(), ScoreRevision: input.Projection.State.ScoreHead.Revision,
-			MovementID: attempt.MovementID, PartID: movement.PartID, AttemptID: action.AttemptID,
-			SubjectTree: acceptanceState.SubjectTree,
-			LookupArtifact: func(id runstate.ArtifactInstanceID) (runstate.ArtifactRecord, bool, error) {
-				state, err := execution.Driver.State()
-				if err != nil {
-					return runstate.ArtifactRecord{}, false, err
-				}
-				record, exists := state.Artifacts[id]
-				return record, exists, nil
-			},
-			Append: func(event runstate.Event) (faultpoint.DurabilityReceipt, error) {
-				return execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery.acceptance."+string(event.Type)))
-			},
-		}, outcomes)
-		return err
-	}
-	return fmt.Errorf("recovery acceptance completion movement %q is absent from pinned score", attempt.MovementID)
-}
-
-func appendHumanGateRequest(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" {
-		return errors.New("recovery human gate request requires store, driver, and attempt")
-	}
-	input, err := execution.Store.LoadRunInput(execution.RunID)
-	if err != nil {
-		return err
-	}
-	attempt, ok := input.Projection.State.Attempts[action.AttemptID]
-	if !ok {
-		return fmt.Errorf("recovery human gate attempt %q is absent", action.AttemptID)
-	}
-	var gateMode string
-	for _, movement := range input.Score.Movements() {
-		if runstate.MovementID(movement.ID) == attempt.MovementID {
-			gateMode = movement.Acceptance.HumanGate
-			break
-		}
-	}
-	if gateMode != "always" && gateMode != "on_contested" {
-		return fmt.Errorf("invalid human_gate %q", gateMode)
-	}
-	gateID, err := humanGateID(action.AttemptID)
-	if err != nil {
-		return err
-	}
-	decisionID, err := workspace.NewID()
-	if err != nil {
-		return fmt.Errorf("allocate human gate decision id: %w", err)
-	}
-	blocking := make([]any, len(action.BlockingFindings))
-	for index, finding := range action.BlockingFindings {
-		blocking[index] = map[string]any{"artifact_instance_id": finding.ArtifactInstanceID, "finding_id": finding.FindingID}
-	}
-	payload := map[string]any{
-		"decision_id": decisionID, "decision_type": "human_gate", "gate_id": gateID,
-		"gate_mode": gateMode, "subject_tree": action.SubjectTree, "blocking_findings": blocking,
-	}
-	if action.ReviewOutcome != "" {
-		payload["review_outcome"] = action.ReviewOutcome
-	}
-	err = appendEvent(execution, input.Projection.State, action, runstate.EventDecisionRequested, payload)
-	if err == nil {
-		execution.Store.Reached(faultpoint.PointHumanGateDecisionRequested)
-	}
-	return err
-}
-
-func appendGateRejectedFailure(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	movementID, err := actionMovement(state, action)
-	if err != nil {
-		return err
-	}
-	action.FailureReason = "human_gate_rejected"
-	return appendEvent(execution, state, withMovement(action, movementID), runstate.EventMovementFailed, map[string]any{
-		"reason": "human_gate_rejected", "decision_id": action.QuestionDecisionID,
-		"subject_tree": action.SubjectTree, "run_failed": state.FinalMovements[movementID],
-	})
-}
-
-func humanGateID(attemptID runstate.AttemptID) (string, error) {
-	encoded, err := canonical.Encode(map[string]any{"attempt_id": string(attemptID)})
-	if err != nil {
-		return "", fmt.Errorf("encode human gate id: %w", err)
-	}
-	digest := sha256.New()
-	_, _ = digest.Write([]byte("partitur/gate-id"))
-	_, _ = digest.Write([]byte{0})
-	_, _ = digest.Write(encoded)
-	return fmt.Sprintf("gat-%x", digest.Sum(nil)), nil
-}
-
-func realizeRecordedDisposition(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if action.RecordedDisposition == nil {
-		return errors.New("recovery recorded disposition is absent")
-	}
-	switch action.RecordedDisposition.Charged {
-	case "none":
-		if action.RecordedDisposition.TerminalReason == "" {
-			return errors.New("recovery terminal disposition has no reason")
-		}
-		state, err := execution.Driver.State()
-		if err != nil {
-			return err
-		}
-		failure := action
-		failure.FailureReason = action.RecordedDisposition.TerminalReason
-		return appendEvent(execution, state, failure, runstate.EventMovementFailed, map[string]any{
-			"reason": failure.FailureReason, "run_failed": false,
-		})
-	case "quality_retry", "fallback":
-		if action.PendingSuccessor == nil {
-			return errors.New("recovery recorded successor is absent")
-		}
-		return nil
-	default:
-		return fmt.Errorf("recovery recorded disposition has unknown charge %q", action.RecordedDisposition.Charged)
-	}
-}
-
 func materializeSuccessor(ctx context.Context, execution HandlerContext, action recovery.Action) error {
 	if execution.Store == nil || execution.Driver == nil || action.PendingSuccessor == nil {
 		return errors.New("recovery successor materialization requires store, driver, and pending successor")
@@ -789,51 +583,6 @@ func selectRevisionRestart(_ context.Context, _ HandlerContext, action recovery.
 		return errors.New("recovery revision restart selection is incomplete")
 	}
 	return nil
-}
-
-func appendQuestionRequest(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" || action.QuestionDecisionID == "" {
-		return errors.New("recovery question request requires store, driver, attempt, and decision")
-	}
-	journal, err := execution.Store.ReadJournal(execution.RunID)
-	if err != nil {
-		return err
-	}
-	for _, source := range journal.Events {
-		if source.Type != runstate.EventAttemptBlocked || source.AttemptID != action.AttemptID {
-			continue
-		}
-		var payload map[string]any
-		if err := json.Unmarshal(source.Payload, &payload); err != nil {
-			return err
-		}
-		raisedValues, ok := payload["raised"].([]any)
-		if !ok {
-			return fmt.Errorf("blocked attempt %q has invalid raised decisions", action.AttemptID)
-		}
-		for _, raw := range raisedValues {
-			raised, ok := raw.(map[string]any)
-			kind, _ := raised["kind"].(string)
-			decisionID, _ := raised["decision_id"].(string)
-			if !ok || kind != "question" || decisionID != action.QuestionDecisionID {
-				continue
-			}
-			emittedID, _ := raised["emitted_id"].(string)
-			question, _ := raised["question"].(string)
-			event := runstate.Event{
-				RunID: execution.RunID, ScoreRevision: source.ScoreRevision, MovementID: source.MovementID,
-				PartID: source.PartID, AttemptID: source.AttemptID, Type: runstate.EventDecisionRequested,
-				Payload: recoveryPayload(map[string]any{
-					"decision_id": action.QuestionDecisionID, "decision_type": "question",
-					"emitted_id": emittedID,
-					"question":   question,
-				}),
-			}
-			_, err := execution.Driver.Append(event, "recovery.decision.requested.question")
-			return err
-		}
-	}
-	return fmt.Errorf("recovery question %q is absent from blocked attempt %q", action.QuestionDecisionID, action.AttemptID)
 }
 
 func selectDecisionResume(_ context.Context, _ HandlerContext, action recovery.Action) error {
@@ -1207,69 +956,6 @@ func synthesizeCriterionError(_ context.Context, execution HandlerContext, actio
 	})
 }
 
-func appendAcceptanceFailure(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	disposition, err := classify(execution.Input, action, successor.FailureCase{AcceptanceReason: action.FailureReason})
-	if err != nil {
-		return err
-	}
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	acceptance, ok := state.Acceptances[action.AttemptID]
-	if !ok {
-		return fmt.Errorf("acceptance for %q is absent", action.AttemptID)
-	}
-	payload := map[string]any{"reason": action.FailureReason, "subject_tree": acceptance.SubjectTree, "disposition": dispositionPayload(disposition)}
-	if action.CriterionID != "" && action.FailureReason != "recovery_subject_mismatch" {
-		payload["failed_criterion_id"] = action.CriterionID
-	}
-	return appendEvent(execution, state, action, runstate.EventAcceptanceFailed, payload)
-}
-
-func appendAttemptCompleted(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	return appendEvent(execution, state, action, runstate.EventAttemptCompleted, map[string]any{})
-}
-
-func appendMovementSucceeded(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	movementID, err := actionMovement(state, action)
-	if err != nil {
-		return err
-	}
-	artifactIDs := make([]string, 0)
-	for id, artifact := range state.Artifacts {
-		if artifact.AttemptID == action.AttemptID {
-			artifactIDs = append(artifactIDs, string(id))
-		}
-	}
-	slices.Sort(artifactIDs)
-	versions, err := identityVersions()
-	if err != nil {
-		return err
-	}
-	payload := map[string]any{
-		"approved_artifact_instance_ids": artifactIDs,
-		"identity_versions":              versions,
-		"run_succeeded":                  state.FinalMovements[movementID],
-	}
-	if state.RepoWriteMovements[movementID] {
-		changeSet, ok := state.ChangeSets[action.AttemptID]
-		if !ok {
-			return fmt.Errorf("change set for repo-write attempt %q is absent", action.AttemptID)
-		}
-		payload["approved_change_set_id"] = changeSet.ChangeSetID
-	}
-	return appendEvent(execution, state, withMovement(action, movementID), runstate.EventMovementSucceeded, payload)
-}
-
 func appendMovementBudgetFailure(_ context.Context, execution HandlerContext, action recovery.Action) error {
 	state, err := execution.Driver.State()
 	if err != nil {
@@ -1285,22 +971,6 @@ func appendMovementBudgetFailure(_ context.Context, execution HandlerContext, ac
 		return err
 	}
 	execution.Store.Reached(faultpoint.PointLifecycleMovementFailed)
-	return nil
-}
-
-func appendRunFailed(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	reason := action.FailureReason
-	if reason == "" {
-		reason = "movement_failed"
-	}
-	if err := appendEvent(execution, state, action, runstate.EventRunFailed, map[string]any{"reason": reason}); err != nil {
-		return err
-	}
-	execution.Store.Reached(faultpoint.PointLifecycleRunFailed)
 	return nil
 }
 
@@ -1322,212 +992,6 @@ func removeUnjournaledLaunch(_ context.Context, execution HandlerContext, action
 		return err
 	}
 	return os.RemoveAll(directory)
-}
-
-func classify(input recovery.Input, action recovery.Action, failure successor.FailureCase) (runstate.Disposition, error) {
-	attempt := input.Projection.CurrentHeadAttempt
-	if attempt == nil || attempt.AttemptID != action.AttemptID {
-		return runstate.Disposition{}, errors.New("recovery classification facts do not match selected attempt")
-	}
-	facts := attempt.FailureClassification
-	visited := make(map[string]bool, len(facts.VisitedPerformers))
-	for _, performer := range facts.VisitedPerformers {
-		visited[performer] = true
-	}
-	visited[facts.CurrentPerformer] = true
-	hasUnvisitedFallback := false
-	for _, performer := range facts.Fallbacks {
-		if !visited[performer] {
-			hasUnvisitedFallback = true
-			break
-		}
-	}
-	return successor.Classify(successor.ClassificationInput{
-		Failure: failure, HasUnvisitedFallback: hasUnvisitedFallback,
-		RetriesConsumed: facts.RetriesConsumed, RetriesPerMovement: facts.RetriesPerMovement,
-		RemainingTimeMS: facts.RemainingTimeMS,
-	})
-}
-
-func appendEvent(execution HandlerContext, state runstate.State, action recovery.Action, eventType runstate.EventType, payload any) error {
-	if execution.Driver == nil {
-		return ErrAuthorityRequired
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	event := runstate.Event{
-		RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision,
-		AttemptID: action.AttemptID, Type: eventType, Payload: encoded,
-	}
-	if eventType != runstate.EventRunFailed && eventType != runstate.EventExecutionStopped {
-		movementID, err := actionMovement(state, action)
-		if err != nil {
-			return err
-		}
-		event.MovementID = movementID
-	} else {
-		event.AttemptID = ""
-	}
-	causationID, err := sourceAuthority(execution, state, action, eventType)
-	if err != nil {
-		return err
-	}
-	event.CausationID = causationID
-	_, err = execution.Driver.Append(event, faultpoint.ReceiptAddress("recovery."+string(eventType)))
-	return err
-}
-
-func sourceAuthority(execution HandlerContext, state runstate.State, action recovery.Action, eventType runstate.EventType) (string, error) {
-	if execution.Store == nil || execution.Driver == nil {
-		return "", errors.New("recovery executor requires store access for causation")
-	}
-	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
-	if err != nil {
-		return "", err
-	}
-	match := func(event runstate.Event) bool { return event.AttemptID == action.AttemptID }
-	switch eventType {
-	case runstate.EventDecisionRequested:
-		return latestEventID(journal.Events, func(event runstate.Event) bool {
-			return event.Type == runstate.EventAcceptanceEvaluationCompleted && match(event)
-		})
-	case runstate.EventExecutionStopped:
-		if state.OpenExecution == nil {
-			return "", errors.New("recovered interval source is absent")
-		}
-		return latestEventID(journal.Events, func(event runstate.Event) bool {
-			return event.Type == runstate.EventExecutionStarted && payloadString(event.Payload, "interval_id") == string(state.OpenExecution.ID)
-		})
-	case runstate.EventAttemptFailed:
-		source := runstate.EventPerformerSelected
-		switch action.FailureReason {
-		case "probe_terminated_incomplete":
-			source = runstate.EventAttemptStarted
-		case "attempt_terminated_incomplete":
-			source = runstate.EventAdapterProbed
-		case "worktree_lost":
-			source = runstate.EventPerformerCompleted
-		}
-		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == source && match(event) })
-	case runstate.EventCriterionCompleted:
-		return latestEventID(journal.Events, func(event runstate.Event) bool {
-			return event.Type == runstate.EventCriterionStarted && match(event) && payloadString(event.Payload, "criterion_id") == string(action.CriterionID)
-		})
-	case runstate.EventAcceptanceFailed:
-		if action.FailureReason == "recovery_subject_mismatch" {
-			return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == runstate.EventAcceptanceStarted && match(event) })
-		}
-		return latestEventID(journal.Events, func(event runstate.Event) bool {
-			return event.Type == runstate.EventCriterionCompleted && match(event) && payloadString(event.Payload, "criterion_id") == string(action.CriterionID)
-		})
-	case runstate.EventAttemptCompleted:
-		source := runstate.EventAcceptanceEvaluationCompleted
-		if execution.Input.Projection.Acceptance != nil && execution.Input.Projection.Acceptance.Gate.Required {
-			source = runstate.EventDecisionResolved
-		}
-		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == source && match(event) })
-	case runstate.EventMovementSucceeded:
-		return latestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == runstate.EventAttemptCompleted && match(event) })
-	case runstate.EventMovementFailed:
-		if action.FailureReason == "human_gate_rejected" {
-			return latestEventID(journal.Events, func(event runstate.Event) bool {
-				return event.Type == runstate.EventDecisionResolved && match(event) &&
-					payloadString(event.Payload, "decision_id") == action.QuestionDecisionID
-			})
-		}
-		if action.FailureReason == "budget_exhausted" {
-			return latestEventID(journal.Events, func(event runstate.Event) bool {
-				return event.Type == runstate.EventExecutionStopped && payloadString(event.Payload, "reason") == "budget_exhausted"
-			})
-		}
-		if source, err := latestEventID(journal.Events, func(event runstate.Event) bool {
-			return event.Type == runstate.EventAttemptFailed && match(event)
-		}); err == nil {
-			return source, nil
-		}
-		movementID, err := actionMovement(state, action)
-		if err != nil {
-			return "", err
-		}
-		return latestEventID(journal.Events, func(event runstate.Event) bool {
-			return event.Type == runstate.EventMovementStarted && event.MovementID == movementID
-		})
-	case runstate.EventRunFailed:
-		if action.FailureReason == "budget_exhausted" {
-			return latestEventID(journal.Events, func(event runstate.Event) bool {
-				return event.Type == runstate.EventExecutionStopped && payloadString(event.Payload, "reason") == "budget_exhausted"
-			})
-		}
-		if action.MovementID != "" || action.AttemptID != "" {
-			movementID, err := actionMovement(state, action)
-			if err != nil {
-				return "", err
-			}
-			return latestEventID(journal.Events, func(event runstate.Event) bool {
-				return event.Type == runstate.EventMovementFailed && event.MovementID == movementID
-			})
-		}
-		return latestEventID(journal.Events, func(event runstate.Event) bool {
-			return event.Type == runstate.EventMovementFailed
-		})
-	default:
-		return "", fmt.Errorf("no recovery causation source for %s", eventType)
-	}
-}
-
-func latestEventID(events []runstate.Event, matches func(runstate.Event) bool) (string, error) {
-	for index := len(events) - 1; index >= 0; index-- {
-		if matches(events[index]) {
-			return events[index].EventID, nil
-		}
-	}
-	return "", errors.New("recovery source authority is absent")
-}
-
-func payloadString(payload json.RawMessage, key string) string {
-	var value map[string]any
-	if json.Unmarshal(payload, &value) != nil {
-		return ""
-	}
-	result, _ := value[key].(string)
-	return result
-}
-
-func actionMovement(state runstate.State, action recovery.Action) (runstate.MovementID, error) {
-	if action.MovementID != "" {
-		return action.MovementID, nil
-	}
-	if attempt, ok := state.Attempts[action.AttemptID]; ok {
-		return attempt.MovementID, nil
-	}
-	return "", fmt.Errorf("movement for recovery action %s is absent", action.Kind)
-}
-
-func withMovement(action recovery.Action, movementID runstate.MovementID) recovery.Action {
-	action.MovementID = movementID
-	return action
-}
-
-func dispositionPayload(disposition runstate.Disposition) map[string]any {
-	payload := map[string]any{"charged": disposition.Charged, "movement_terminal": disposition.MovementTerminal}
-	if disposition.TerminalReason != "" {
-		payload["terminal_reason"] = disposition.TerminalReason
-	}
-	return payload
-}
-
-func identityVersions(domains ...canonical.Domain) (map[string]any, error) {
-	projections := make(map[string]any, len(domains))
-	for _, domain := range domains {
-		versions, err := canonical.CurrentVersions(domain)
-		if err != nil {
-			return nil, err
-		}
-		projections[string(domain)] = versions.Projection
-	}
-	return map[string]any{"canonical_encoding": canonical.CanonicalEncodingVersion, "projections": projections}, nil
 }
 
 func attemptLaunchDirectory(execution HandlerContext, attemptID runstate.AttemptID) (string, error) {

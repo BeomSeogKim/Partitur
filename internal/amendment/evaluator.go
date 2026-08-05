@@ -46,7 +46,10 @@ type Input struct {
 	// HasClaimedImpact distinguishes an absent optional claim from a present,
 	// deliberately empty claim. Only the latter participates in containment.
 	HasClaimedImpact bool
-	Attempts         []executiondep.Attempt
+	Attempts         executiondep.CollectedAttempts
+	// RequiresDecision selects the §9 approval-policy row that routes a
+	// proposal to a human even when it would otherwise be envelope-eligible.
+	RequiresDecision bool
 	// HumanDecision selects the decision-time §9 re-run. It preserves steps
 	// 1–9, but records envelope guards as audit facts instead of routing or
 	// blocking the already-deciding human.
@@ -135,6 +138,9 @@ func Evaluate(input Input) (Outcome, error) {
 	}
 	if amendmentPolicyChanged(impact) {
 		return Outcome{Kind: Routed, Reason: "recognized_non_monotone", Patched: patched, Impact: impact}, nil
+	}
+	if input.RequiresDecision {
+		return Outcome{Kind: Routed, Reason: "requires_decision", Patched: patched, Impact: impact}, nil
 	}
 	class := classify(impact)
 	if class == "" {
@@ -317,43 +323,8 @@ func movementOrDownstreamStarted(compiled *score.Score, state runstate.State, id
 	return false
 }
 
-func executedDependencyChanged(patched *score.Score, state runstate.State, attempts []executiondep.Attempt) (bool, error) {
-	byID := make(map[runstate.AttemptID]executiondep.Attempt, len(attempts))
-	for _, attempt := range attempts {
-		byID[attempt.ID] = attempt
-	}
-	for id, projected := range state.Attempts {
-		if projected.State != runstate.AttemptCompleted || state.Movements[projected.MovementID] != runstate.MovementSucceeded {
-			continue
-		}
-		if !scoreHasMovement(patched, projected.MovementID) {
-			return true, nil
-		}
-		attempt, ok := byID[id]
-		if !ok {
-			return false, fmt.Errorf("amendment: completed attempt %q has no collector input", id)
-		}
-		if attempt.RecordedHash == "" {
-			return false, fmt.Errorf("amendment: completed attempt %q has no recorded execution dependency hash", id)
-		}
-		same, err := executiondep.Equal(patched, attempt)
-		if err != nil {
-			return false, err
-		}
-		if !same {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func scoreHasMovement(compiled *score.Score, id runstate.MovementID) bool {
-	for _, movement := range compiled.Movements() {
-		if movement.ID == string(id) {
-			return true
-		}
-	}
-	return false
+func executedDependencyChanged(patched *score.Score, state runstate.State, attempts executiondep.CollectedAttempts) (bool, error) {
+	return attempts.Changed(patched, state)
 }
 
 func candidateCondition(patched *score.Score, state runstate.State) (string, error) {

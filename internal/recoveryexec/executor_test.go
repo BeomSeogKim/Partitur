@@ -1423,7 +1423,7 @@ func TestAppendCompositionTerminalSerializesCancellationAfterEvidence(t *testing
 	requestDone := make(chan error, 1)
 	err = appendCompositionTerminal(context.Background(), HandlerContext{
 		Store: store, Driver: authority, RunID: "run-1",
-		afterCompositionEvidence: func() {
+		AfterCompositionEvidence: func() {
 			go func() {
 				close(requestStarted)
 				requestDone <- store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
@@ -2921,45 +2921,6 @@ func TestExecutorRequiresAuthorityBeforeEffect(t *testing.T) {
 	_, err := executor.execute(context.Background(), recovery.Input{}, stepDecision(false, recovery.StepVerifyAcceptanceSubject))
 	if !errors.Is(err, ErrAuthorityRequired) || called {
 		t.Fatalf("error=%v called=%v", err, called)
-	}
-}
-
-func TestExecutorRejectsNamedUnimplementedActionsBeforeAuthority(t *testing.T) {
-	for action, unit := range recovery.UnimplementedActionOwners() {
-		t.Run(string(action), func(t *testing.T) {
-			store := acquirableRecoveryStore(t)
-			journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
-			before, err := os.ReadFile(journalPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			executor := &Executor{
-				Store: store,
-				RunID: "run-1",
-				Load: func(context.Context) (recovery.Input, error) {
-					return recovery.Input{}, nil
-				},
-			}
-			_, err = executor.execute(context.Background(), recovery.Input{}, recovery.Decision{
-				CaseID: "RC-test",
-				Action: &recovery.Action{Kind: action},
-			})
-			if !errors.Is(err, ErrUnreachableAction) || !strings.Contains(err.Error(), "unit "+unit) {
-				t.Fatalf("error=%v", err)
-			}
-			if executor.Driver != nil {
-				t.Fatal("named refusal acquired a driver")
-			}
-			if _, present, leaseErr := store.ReadLease("run-1"); leaseErr != nil || present {
-				t.Fatalf("lease present=%t error=%v", present, leaseErr)
-			}
-
-			after, err := os.ReadFile(journalPath)
-			if err != nil || !bytes.Equal(after, before) {
-				t.Fatalf("journal changed=%t error=%v", !bytes.Equal(after, before), err)
-			}
-		})
 	}
 }
 

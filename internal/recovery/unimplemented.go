@@ -4,10 +4,7 @@ package recovery
 // actions whose implementation belongs to a later unit. The unit assignments
 // are documentation whose authority is the project roadmap; completion is
 // blocked until this map is empty.
-var unimplementedActionOwners = map[ActionKind]string{
-	ActionAppendBlockedProposalRoute: "4.2",
-	ActionAppendRoutedRequest:        "4.2",
-}
+var unimplementedActionOwners = map[ActionKind]string{}
 
 // UnimplementedActionOwner returns the owning unit for one deferred recovery
 // action. Callers must refuse the action rather than manufacture durable state

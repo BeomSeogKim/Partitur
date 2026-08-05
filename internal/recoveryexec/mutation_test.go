@@ -36,7 +36,7 @@ func TestMutationRecoveryFinalGateRejectionEndsAtomically(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestRecoveryFinalGateRejectionEndsAtomically(t)
 	assertRecoveryMutationKilled(t, "TestRecoveryFinalGateRejectionEndsAtomically", goEnvironment,
-		"internal/recoveryexec/handlers.go", "\"subject_tree\": action.SubjectTree, \"run_failed\": state.FinalMovements[movementID]",
+		"internal/recoveryconsequence/consequence.go", "\"subject_tree\": action.SubjectTree, \"run_failed\": state.FinalMovements[movementID]",
 		"\"subject_tree\": action.SubjectTree, \"run_failed\": false")
 }
 
@@ -44,120 +44,18 @@ func TestMutationRecoveryNonFinalGateRejectionCascades(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestRecoveryNonFinalGateRejectionCascades(t)
 	assertRecoveryMutationKilled(t, "TestRecoveryNonFinalGateRejectionCascades", goEnvironment,
-		"internal/recoveryexec/handlers.go", "\"subject_tree\": action.SubjectTree, \"run_failed\": state.FinalMovements[movementID]",
+		"internal/recoveryconsequence/consequence.go", "\"subject_tree\": action.SubjectTree, \"run_failed\": state.FinalMovements[movementID]",
 		"\"subject_tree\": action.SubjectTree, \"run_failed\": true")
 }
 
 func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestAppendCompositionTerminalSerializesCancellationAfterEvidence(t)
-	assertRecoveryMutationKilled(t, "TestAppendCompositionTerminalSerializesCancellationAfterEvidence", goEnvironment, "internal/recoveryexec/handlers.go", `func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
-		return errors.New("recovery composition terminal requires store, driver, and evidence")
-	}
-	terminal := action.CompositionTerminal
-	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
-	if err != nil {
-		return err
-	}
-	cause, err := latestEventID(journal.Events, func(event runstate.Event) bool {
-		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
-			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
-			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
-	})
-	if err != nil {
-		return err
-	}
-	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
-	if err != nil {
-		return err
-	}
-	err = execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
-		// C.1 cancellation is checked with the terminal append while the state
-		// lock and the existing lease predicate are both held.
-		if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
-			return ErrRecoveryReplan
-		}
-		if execution.afterCompositionEvidence != nil {
-			execution.afterCompositionEvidence()
-		}
-		var event runstate.Event
-		var address faultpoint.ReceiptAddress
-		switch terminal.Scope {
-		case "movement":
-			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
-			address = "recovery.movement.failed.composition"
-		case "candidate":
-			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason})}
-			address = "recovery.run.failed.composition"
-		default:
-			return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
-		}
-		if _, err := runstate.Apply(state, event); err != nil {
-			return err
-		}
-		_, err := transaction.At(address).Append(event)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	execution.Store.Reached(terminalPoint)
-	return nil
-}`,
-		`func appendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
-	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
-		return errors.New("recovery composition terminal requires store, driver, and evidence")
-	}
-	terminal := action.CompositionTerminal
-	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
-	if err != nil {
-		return err
-	}
-	cause, err := latestEventID(journal.Events, func(event runstate.Event) bool {
-		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
-			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
-			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
-	})
-	if err != nil {
-		return err
-	}
-	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
-	if err != nil {
-		return err
-	}
-	state, err := execution.Driver.State()
-	if err != nil {
-		return err
-	}
-	if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
-		return ErrRecoveryReplan
-	}
-	if execution.afterCompositionEvidence != nil {
-		execution.afterCompositionEvidence()
-	}
-	time.Sleep(50 * time.Millisecond)
-	var event runstate.Event
-	var address faultpoint.ReceiptAddress
-	switch terminal.Scope {
-	case "movement":
-		event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
-		address = "recovery.movement.failed.composition"
-	case "candidate":
-		event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: recoveryPayload(map[string]any{"reason": terminal.Reason})}
-		address = "recovery.run.failed.composition"
-	default:
-		return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
-	}
-	if _, err := runstate.Apply(state, event); err != nil {
-		return err
-	}
-	if _, err := execution.Driver.Append(event, address); err != nil {
-		return err
-	}
-	execution.Store.Reached(terminalPoint)
-	return nil
-}`)
+	assertRecoveryMutationKilled(t, "TestAppendCompositionTerminalSerializesCancellationAfterEvidence", goEnvironment, "internal/recoveryconsequence/consequence.go", `if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
+			return ErrReplan
+		}`, `if false {
+			return ErrReplan
+		}`)
 }
 
 func mutationGoEnvironment(t *testing.T) mutationtest.GoEnvironment {
