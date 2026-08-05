@@ -1,4 +1,0 @@
-./faultpoint.go
-./probe_noop.go
-./mutation_test.go
-./probe_noop_test.go

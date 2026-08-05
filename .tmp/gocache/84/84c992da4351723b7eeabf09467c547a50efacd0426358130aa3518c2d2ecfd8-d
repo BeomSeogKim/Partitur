@@ -1,5 +1,0 @@
-./collector.go
-./executiondep.go
-./collector_test.go
-./executiondep_test.go
-./mutation_test.go

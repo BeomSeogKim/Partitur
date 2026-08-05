@@ -1,5 +1,0 @@
-./procid.go
-./procid_darwin.go
-./terminate_unix.go
-./procid_test.go
-./terminate_test.go

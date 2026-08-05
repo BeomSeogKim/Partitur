@@ -1,7 +1,0 @@
-./planner.go
-./unimplemented.go
-./appendix_d_test.go
-./imports_test.go
-./planner_test.go
-./selection_oracle_test.go
-./totality_test.go

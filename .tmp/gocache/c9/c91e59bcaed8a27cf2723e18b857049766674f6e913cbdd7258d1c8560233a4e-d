@@ -1,8 +1,0 @@
-./access.go
-./compile.go
-./impact.go
-./patch.go
-./projection.go
-./rules.go
-./serialize.go
-./types.go
