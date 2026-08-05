@@ -2615,10 +2615,11 @@ step list:
   *replays* a plan rather than recomputing one.
 - **Durable consequences close before a prepare can exist.** Under the state lock, a command that
   has reached approval intent first closes every already-determined, non-supersedable consequence
-  selected by `RC-RESUME-011`, `019`, `020`, `021`–`023`, `025`, `026`, `028`–`030`, `037`,
+  selected by `RC-RESUME-011`, `019`, `020`, `021`–`023`, `025`, `026`, `028`–`030`, `049`, `037`,
   `039`, `040`, and `047`. These are recorded failures or completed verdicts awaiting their §3.1 or lifecycle
-  consequence, composition evidence awaiting its terminal, and durable sources awaiting mandatory
-  `decision.requested` authority. The command applies those Appendix C cases idempotently until none
+  consequence, composition evidence awaiting its terminal, durable sources awaiting mandatory
+  `decision.requested` authority, and frozen blocking-proposal routes awaiting their required
+  `amendment.routed_human` manifestation. The command applies those Appendix C cases idempotently until none
   matches, then re-establishes §9 steps 1–9 and approval intent against the resulting projection
   before writing a snapshot or plan. A consequence that selects a retry or fallback remains pending
   until the between-unit scheduler records its `performer.selected`; prepare cannot step around it.
