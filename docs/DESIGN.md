@@ -1420,6 +1420,24 @@ in memory for a human:
   Amendment events are keyed by `proposal_id` (Appendix B), so without this two attempts each
   emitting `p-1` would collide on one amendment identity, and the second proposal would appear to
   be a repeat of the first.
+- **Non-blocking proposal disposition.** A `proposal` with `requires_decision: false` is handled
+  when its notification arrives, under the repository state lock and **before** the adapter's final
+  `performer.completed` result is recorded. The notification itself is not durable authority:
+  after the §9 pipeline its disposition is the first durable fact about that proposal:
+
+  1. a rejection appends `amendment.rejected`; this does not fail or block the attempt, so a later
+     successful adapter result still records `performer.completed` and follows its ordinary
+     lifecycle;
+  2. a human route first writes and flushes the immutable proposal record, then appends
+     `amendment.routed_human`; or
+  3. an auto approval enters §6's durable-consequence closure and, only if the re-established
+     outcome remains approval, completes §6's prepare, quiesce, and shared commit transaction.
+
+  Thus a sole non-blocking proposal is never lost merely because its adapter completes rather than
+  blocks, and it does not acquire a second `attempt.blocked` source. Notifications are handled in
+  wire order. Once one establishes a pending prepare, §6's mutation barrier and control drain own
+  subsequent response-derived output; a notification not yet made durable has no independent
+  journal fact.
 - **Resolution makes execution eligible; it never launches it.** The two decision kinds
   resolve differently and neither starts an adapter:
   - A *question* resolves through `decision.resolved`.
@@ -2525,6 +2543,17 @@ the duration of the drain* — it takes it only briefly to make the move a compa
 **No second fencing event is needed**, which is why §9's single-transition rule survives: the prepare
 is a control request that changes nothing, and a wedge discovered at timeout is carried by the one
 approval event that was going to be appended anyway.
+
+**Auto-approver hand-off.** The driver and approver are distinct *authority roles*, not necessarily
+distinct processes. For an auto approval reached while a live driver is handling an adapter
+notification, that invocation performs steps 1 and 2 normally. Once step 2 has moved its matching
+lease to the quiesced sidecar, it has relinquished driver authority and must invoke the shared
+step-3 commit table as the approver before it returns. A matching sidecar takes the matching-sidecar
+row; it is not the table's `Wait` row and does not project `WAITING_HUMAN`. Thus the ordinary path
+appends `amendment.approved` (or yields to cancellation) without requiring `resume`. Only a crash
+after the lease move and before that call leaves the pending prepare for `RC-RESUME-007`, which
+re-enters the same table. An actor must never commit while it still holds driver authority or while
+holding the state lock from step 1.
 
 Two design choices make the interval between prepare and commit safe, and they matter more than the
 step list:
