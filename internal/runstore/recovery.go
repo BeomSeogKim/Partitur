@@ -101,12 +101,12 @@ func (store *Store) ReclaimDeadRecoveryDriver(runID runstate.RunID, expected Lea
 		if _, err := transaction.At(receiptDriverLease).CreateLease(true, acquired); err != nil {
 			return err
 		}
-		store.probe.Reached(faultpoint.PointAuthorityLeaseCreated)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	store.probe.Reached(faultpoint.PointAuthorityLeaseCreated)
 	return &Driver{store: store, runID: runID, seed: movementSeed(input.Score), lease: acquired}, nil
 }
 

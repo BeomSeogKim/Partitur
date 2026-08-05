@@ -8,8 +8,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/cast"
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -63,6 +65,47 @@ func TestReclaimDeadRecoveryDriverAllowsOnlyOneConcurrentWinner(t *testing.T) {
 	}
 	if state.Authority.Epoch != 2 {
 		t.Fatalf("authority epoch = %d, want 2", state.Authority.Epoch)
+	}
+}
+
+func TestReclaimDeadRecoveryDriverReleasesStateLockBeforeLeaseCreatedBoundary(t *testing.T) {
+	store := recoveryStore(t)
+	dead := appendDeadRecoveryLease(t, store)
+	paused := make(chan struct{})
+	release := make(chan struct{})
+	store.probe = blockingPointProbe{
+		point: faultpoint.PointAuthorityLeaseCreated, paused: paused, release: release,
+	}
+
+	reclaimed := make(chan error, 1)
+	go func() {
+		_, err := store.ReclaimDeadRecoveryDriver("run-1", dead.Identity())
+		reclaimed <- err
+	}()
+	select {
+	case <-paused:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reclaim did not reach authority.lease_created")
+	}
+
+	mutated := make(chan error, 1)
+	go func() {
+		mutated <- store.Mutate("run-1", "", func(*Txn) error { return nil })
+	}()
+	var mutationErr error
+	select {
+	case mutationErr = <-mutated:
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-reclaimed
+		t.Fatal("reclaim retained the state lock at authority.lease_created")
+	}
+	close(release)
+	if err := <-reclaimed; err != nil {
+		t.Fatalf("reclaim error = %v", err)
+	}
+	if mutationErr != nil {
+		t.Fatalf("parent mutation error = %v", mutationErr)
 	}
 }
 
@@ -824,6 +867,20 @@ func distinctStartIdentity(t *testing.T, identity runstate.StartIdentity) runsta
 		t.Fatalf("unsupported start identity %T", identity)
 		return nil
 	}
+}
+
+type blockingPointProbe struct {
+	point   faultpoint.PointID
+	paused  chan<- struct{}
+	release <-chan struct{}
+}
+
+func (probe blockingPointProbe) Reached(point faultpoint.PointID) {
+	if point != probe.point {
+		return
+	}
+	close(probe.paused)
+	<-probe.release
 }
 
 func appendFailedAttempt(t *testing.T, store *Store) {
