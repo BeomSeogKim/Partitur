@@ -3684,6 +3684,35 @@ change the state read by an existing guard — for example, materializing a reco
 overtake a consequence the journal has already fixed merely because the earlier observation would
 have passed.
 
+**Barrier re-evaluation outcome.** Re-establishment reuses the original proposal — its operations,
+base revision and hash, claimed impact, origin, and `requires_decision` binding — rather than
+rebasing or reconstructing it from a typed delta. It has exactly these outcomes before any snapshot
+or plan is written:
+
+1. A rejection appends `amendment.rejected`; when the proposal was routed, it carries and closes
+   that routed decision id. If closure has terminalized the run, this is the step-1 `run_terminal`
+   rejection and follows that terminal source in journal order. It records the disposition without
+   reopening the run or creating a decision when none was routed; `amendment.rejected` is legal from
+   a terminal run state (B.5), and `RC-RESUME-002` subsequently performs the unchanged terminal
+   cleanup.
+2. An auto-path result that now routes writes the original immutable proposal record and flushes it,
+   then appends `amendment.routed_human` with the re-evaluated reason and impact. It retains its
+   proposal identity and `requires_decision` binding, but it does not retain a pending decision:
+   none existed on the auto path. For an adapter proposal, the route uses the `decision_id` already
+   derived from `(attempt_id, emitted_id)` (A.4.3); for an origin with no emitted id, routing
+   allocates the decision id under A.4.3 at this point. In either case `amendment.routed_human` is
+   the first durable decision authority. The record precedes the route for the same reason it does
+   on an initially routed proposal (§1); a later recovery can re-create only the request, never
+   reconstruct or silently rebase the proposal.
+3. Only an approval outcome writes the snapshot and persisted approval plan, then appends
+   `amendment.approval_prepared`.
+
+The re-evaluation retains its approval path. A human decision still recomputes envelope guards only
+for its audit record and therefore either rejects or proceeds to preparation; it never routes that
+same deciding human again. An auto path may route when closure changes an existing policy or guard
+input. In either case, no prewritten snapshot, plan, or unreferenced proposal record may reserve the
+next revision path before this outcome is known.
+
 **Typed comparison, never a JSON diff.** Neither classification nor impact computation
 inspects RFC 6902 operations or a generic diff — array-index ambiguity would make the same
 before/after pair yield different results per diff algorithm. The core compares the two
