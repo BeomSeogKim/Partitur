@@ -56,6 +56,13 @@ the receipt has been returned. A `B` endpoint has **no durable operation to brac
 controlled through the neutral probe, which blocks the actor at the named point. Every edge carrying
 a `B` is therefore one the harness cannot hang off an fsync at all.
 
+A `B` point is a crash rendezvous, not a general parent-mutation handoff. If the emitter has not
+returned from its `Store.Mutate` or `Driver.Mutate`, that actor still owns the state lock and a
+fixture must terminate or release it before another actor mutates. The prepare fixtures rely on the
+specific stronger guarantee of `authority.lease_created`: both acquisition and dead-owner reclaim
+emit it only after their mutation returns, so the parent may append the prepare while the live driver
+is paused there.
+
 ### Prepare and quiesce
 
 | Edge | Blocks on | Driven by | Precondition to reach |
@@ -168,9 +175,9 @@ unreachable: it records only that this gate has no fixture for the stated Append
 |---|---|---|---|
 | `prepare.snapshot_to_plan` | not reached by this gate's cuts | §6 step 1; §9; E.2 | No prepare/approval subprocess fixture |
 | `prepare.plan_to_prepared` | not reached by this gate's cuts | §6 step 1; B.5; E.2 | No prepare/approval subprocess fixture |
-| `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | The gate's probe blocks only `BoundaryReached` points, so the parent cannot append a prepare while the live child is paused. The prepare must carry the driver's `observed_authority_epoch`, which is allocated when that driver acquires, so it cannot be written before the run starts either |
-| `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | Same parent-injection gap as the row above; the left endpoint is reachable only inside a live driver already draining a durable prepare |
-| `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | The left endpoint is a `DurabilityReceipt`, and receipts are not probe notifications, so the gate cannot suspend after the lease move and before the approver takes the lock |
+| `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | No prepare/quiesce crash subprocess fixture yet. The harness can now pause a live driver after authority acquisition while its parent appends the prepare with that driver's observed epoch; the B3 core fixture owns the two-sided cuts |
+| `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No prepare/quiesce crash subprocess fixture yet. The same parent-injected live driver reaches the sessions-swept boundary while draining the durable prepare; the B3 core fixture owns the two-sided cuts |
+| `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No prepare/quiesce crash subprocess fixture yet. A post-compare-move boundary now brackets the durable sidecar before an approver reaches the existing commit-lock boundary; the B3 core fixture owns the two-sided cuts |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
 | `proposal.published_to_routed` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-035`; E.2 | No routed-proposal subprocess fixture |
 | `proposal.routed_to_decision_requested` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-037`; E.2 | No routed-proposal subprocess fixture |

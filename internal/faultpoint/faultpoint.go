@@ -48,6 +48,7 @@ type PointID string
 const (
 	PointPrepareObserved                  PointID = "prepare.observed"
 	PointQuiesceSessionsSwept             PointID = "quiesce.sessions_swept"
+	PointQuiesceLeaseMoved                PointID = "quiesce.lease_moved"
 	PointQuiesceCommitLockHeld            PointID = "quiesce.commit_lock_held"
 	PointCancelSessionsSwept              PointID = "cancel.sessions_swept"
 	PointCancelSnapshotQuarantined        PointID = "cancel.snapshot_quarantined"

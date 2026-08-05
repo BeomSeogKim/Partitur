@@ -67,8 +67,11 @@ func (store *Store) AcknowledgePrepare(ctx context.Context, driver *Driver, prep
 			current.Authority.Epoch != driver.lease.Epoch {
 			return ErrLeaseConflict
 		}
-		_, err = transaction.At("prepare.ack.lease").CompareMoveLease(driver.lease.Identity(), Path("driver.quiesced."+string(prepareID)))
-		return err
+		if _, err := transaction.At("prepare.ack.lease").CompareMoveLease(driver.lease.Identity(), Path("driver.quiesced."+string(prepareID))); err != nil {
+			return err
+		}
+		store.probe.Reached(faultpoint.PointQuiesceLeaseMoved)
+		return nil
 	})
 }
 

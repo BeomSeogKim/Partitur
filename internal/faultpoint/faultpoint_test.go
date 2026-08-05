@@ -598,6 +598,7 @@ func TestBoundaryPointIDsAreSemanticAndUnique(t *testing.T) {
 	points := []PointID{
 		PointPrepareObserved,
 		PointQuiesceSessionsSwept,
+		PointQuiesceLeaseMoved,
 		PointQuiesceCommitLockHeld,
 		PointCancelSessionsSwept,
 		PointCancelSnapshotQuarantined,
