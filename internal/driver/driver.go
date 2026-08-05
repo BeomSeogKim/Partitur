@@ -1291,22 +1291,24 @@ func ExecuteAttempt(
 		return stopped(result, err)
 	}
 	artifactIDs := artifactIDs(state, attempt.AttemptID)
-	movementVersions, err := identityVersions()
-	if err != nil {
-		return interrupted(result, err)
-	}
 	payload := map[string]any{
 		"approved_artifact_instance_ids": artifactIDs,
-		"identity_versions":              movementVersions,
 		"run_succeeded":                  state.FinalMovements[attempt.MovementID],
 	}
+	domains := []canonical.Domain(nil)
 	if state.RepoWriteMovements[attempt.MovementID] {
 		changeSet, ok := state.ChangeSets[attempt.AttemptID]
 		if !ok {
 			return interrupted(result, errors.New("driver: repo-write attempt has no recorded change set"))
 		}
 		payload["approved_change_set_id"] = changeSet.ChangeSetID
+		domains = append(domains, canonical.DomainChangeSet)
 	}
+	movementVersions, err := identityVersions(domains...)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	payload["identity_versions"] = movementVersions
 	if _, err := appendEvent(runstate.EventMovementSucceeded, payload, "movement.succeeded"); err != nil {
 		return stopped(result, err)
 	}

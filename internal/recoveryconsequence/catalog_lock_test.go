@@ -123,12 +123,71 @@ func TestEveryCataloguedConsequenceHasPlannerWitness(t *testing.T) {
 	}
 }
 
+// TestEveryCataloguedConsequenceHasJournalEffectWitness locks the lower
+// contract layer separately from planner selection. Each witness names the
+// constructed state, the exact appended event sequence, the design-fixed
+// payload fields, and the test that applies and asserts that effect. Keeping
+// references to established effect tests avoids duplicating their fixtures.
+func TestEveryCataloguedConsequenceHasJournalEffectWitness(t *testing.T) {
+	witnessed := make([]recovery.CaseID, 0, len(journalEffectWitnesses()))
+	for _, witness := range journalEffectWitnesses() {
+		if witness.state == "" || len(witness.events) == 0 || len(witness.fields) == 0 {
+			t.Fatalf("journal effect witness for %s is incomplete: %+v", witness.caseID, witness)
+		}
+		contents, err := os.ReadFile(filepath.Join(witness.testFile))
+		if err != nil {
+			t.Fatalf("read journal effect witness %s for %s: %v", witness.testFile, witness.caseID, err)
+		}
+		if !strings.Contains(string(contents), "func "+witness.testName+"(") {
+			t.Fatalf("journal effect witness for %s references missing %s in %s", witness.caseID, witness.testName, witness.testFile)
+		}
+		witnessed = append(witnessed, witness.caseID)
+	}
+	slices.Sort(witnessed)
+	if !slices.Equal(witnessed, Cases()) {
+		t.Fatalf("journal effect witness cases = %v, want catalog cases %v", witnessed, Cases())
+	}
+}
+
 type catalogWitness struct {
 	caseID recovery.CaseID
 	kind   recovery.ActionKind
 	steps  []recovery.ActionStep
 	input  recovery.Input
 	plan   func(recovery.Input) recovery.Decision
+}
+
+type journalEffectWitness struct {
+	caseID   recovery.CaseID
+	state    string
+	events   []runstate.EventType
+	fields   []string
+	testFile string
+	testName string
+}
+
+func journalEffectWitnesses() []journalEffectWitness {
+	const (
+		amendmentTests = "../amendmentexec/dispositioner_test.go"
+		recoveryTests  = "../recoveryexec/executor_test.go"
+	)
+	return []journalEffectWitness{
+		{recovery.CaseBlockedProposalRoute, "attempt.blocked with a frozen blocking proposal route", []runstate.EventType{runstate.EventAmendmentRoutedHuman}, []string{"proposal_record_hash", "decision_id", "blocking"}, amendmentTests, "TestRecoveryCompletesFrozenBlockingProposalRouteThenRequest"},
+		{recovery.CaseRoutedAmendment, "durable amendment.routed_human without its decision.requested", []runstate.EventType{runstate.EventDecisionRequested}, []string{"decision_id", "decision_type", "proposal_id", "routed_reason", "blocking", "emitted_id"}, amendmentTests, "TestRecoveryCompletesFrozenBlockingProposalRouteThenRequest"},
+		{recovery.CaseCompositionTerminal, "durable movement composition failure without its terminal", []runstate.EventType{runstate.EventMovementFailed}, []string{"reason", "run_failed", "causation_id"}, recoveryTests, "TestAppendCompositionTerminalKeepsEvidenceStateNeutralUntilTerminal"},
+		{recovery.CaseRealizeDisposition, "attempt.failed with recorded terminal disposition", []runstate.EventType{runstate.EventMovementFailed}, []string{"reason", "run_failed", "causation_id"}, recoveryTests, "TestDefaultHandlersAppendRecoveredAttemptFailureToRealStore"},
+		{recovery.CaseAppendQuestionRequest, "attempt.blocked with an unrequested raised question", []runstate.EventType{runstate.EventDecisionRequested}, []string{"decision_id", "decision_type", "emitted_id", "question"}, recoveryTests, "TestAppendQuestionRequestDerivesOnlyFromBlockedSource"},
+		{recovery.CaseMovementSucceeded, "attempt.completed without movement.succeeded", []runstate.EventType{runstate.EventMovementSucceeded}, []string{"approved_artifact_instance_ids", "approved_change_set_id", "identity_versions", "run_succeeded"}, recoveryTests, "TestRCResume019MatchesLiveMovementSuccessPayload"},
+		{recovery.CaseRunFailed, "movement.failed while the run is nonterminal", []runstate.EventType{runstate.EventRunFailed}, []string{"reason", "causation_id"}, recoveryTests, "TestDefaultDirectKindsAppendToRealStore"},
+		{recovery.CaseFinalGateRejected, "resolved rejected final human gate", []runstate.EventType{runstate.EventMovementFailed}, []string{"reason", "decision_id", "subject_tree", "run_failed"}, recoveryTests, "TestRecoveryFinalGateRejectionEndsAtomically"},
+		{recovery.CaseAcceptanceFailed, "durable acceptance.failed with an unrealized disposition", []runstate.EventType{runstate.EventMovementFailed}, []string{"reason", "run_failed", "causation_id"}, recoveryTests, "TestRecoveryNonFinalGateRejectionCascades"},
+		{recovery.CaseCriterionFailed, "completed failing criterion without acceptance.failed", []runstate.EventType{runstate.EventAcceptanceFailed}, []string{"reason", "subject_tree", "failed_criterion_id", "disposition"}, recoveryTests, "TestExecutorRecoversIncompleteCriterionAfterSweep"},
+		{recovery.CaseCriteriaPassed, "all planned criteria passed without acceptance.evaluation_completed", []runstate.EventType{runstate.EventAcceptanceEvaluationCompleted}, []string{"subject_tree", "acceptance_spec_hash", "criterion_outcomes", "identity_versions"}, recoveryTests, "TestRCResume033ReachesAcceptanceEvaluationCompletedAfterSelectedCriterion"},
+		{recovery.CaseRequestHumanGate, "evaluated acceptance with a missing required human-gate request", []runstate.EventType{runstate.EventDecisionRequested}, []string{"decision_id", "decision_type", "gate_id", "gate_mode", "subject_tree", "blocking_findings"}, recoveryTests, "TestRecoveryFinalGateRejectionEndsAtomically"},
+		{recovery.CaseHumanGateApproved, "approved required human gate after evaluation", []runstate.EventType{runstate.EventAttemptCompleted, runstate.EventMovementSucceeded}, []string{"approved_artifact_instance_ids", "identity_versions", "run_succeeded"}, recoveryTests, "TestDefaultAcceptanceHandlersAppendToRealStore"},
+		{recovery.CaseHumanGateRejected, "resolved rejected non-final human gate", []runstate.EventType{runstate.EventMovementFailed}, []string{"reason", "decision_id", "subject_tree", "run_failed"}, recoveryTests, "TestRecoveryNonFinalGateRejectionCascades"},
+		{recovery.CaseGateFreeCompletion, "evaluated acceptance with no human gate", []runstate.EventType{runstate.EventAttemptCompleted, runstate.EventMovementSucceeded}, []string{"approved_artifact_instance_ids", "identity_versions", "run_succeeded"}, recoveryTests, "TestDefaultAcceptanceHandlersAppendToRealStore"},
+	}
 }
 
 func catalogWitnesses() []catalogWitness {

@@ -308,7 +308,7 @@ func TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *testing.
 	}
 	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
 	for _, event := range []runstate.Event{
-		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventChangeSetRecorded, Payload: handlerPayload(t, map[string]any{"change_set_id": "sha256:write", "base_tree": input.BaseTree, "result_tree": "git-sha1:missing-tree", "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(fixture.runID) + "/attempts/" + string(fixture.attemptID) + "/changeset", "identity_versions": versions})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventChangeSetRecorded, Payload: handlerPayload(t, map[string]any{"change_set_id": "sha256:write", "base_tree": input.BaseTree, "result_tree": "git-sha1:missing-tree", "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(fixture.runID) + "/attempts/" + string(fixture.attemptID) + "/changeset", "identity_versions": changeSetIdentityVersions()})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventVerificationPassed, Payload: handlerPayload(t, map[string]any{})},
 		{RunID: fixture.runID, ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{"interval_id": "acceptance-write", "phase": "acceptance", "wall_start": "2026-07-30T00:00:00.000Z", "remaining_at_start": 600000})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventAcceptanceStarted, Payload: handlerPayload(t, map[string]any{"subject_tree": "git-sha1:missing-tree", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{"tests"}, "identity_versions": versions})},
@@ -317,7 +317,7 @@ func TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *testing.
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventAcceptanceEvaluationCompleted, Payload: handlerPayload(t, map[string]any{"subject_tree": "git-sha1:missing-tree", "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{map[string]any{"criterion_id": "tests", "criterion_spec_hash": "sha256:criterion", "outcome": "PASS"}}, "identity_versions": versions})},
 		{RunID: fixture.runID, ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: handlerPayload(t, map[string]any{"interval_id": "acceptance-write", "reason": "normal", "charging": "measured", "charged_duration": 1})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventAttemptCompleted, Payload: handlerPayload(t, map[string]any{})},
-		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventMovementSucceeded, Payload: handlerPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": "sha256:write", "identity_versions": versions, "run_succeeded": false})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventMovementSucceeded, Payload: handlerPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": "sha256:write", "identity_versions": changeSetIdentityVersions(), "run_succeeded": false})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", Type: runstate.EventMovementReady, Payload: handlerPayload(t, map[string]any{})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", Type: runstate.EventMovementStarted, Payload: handlerPayload(t, map[string]any{})},
 	} {
@@ -483,7 +483,7 @@ func completeRecoveryWriter(t *testing.T, fixture recoveryChangeSetFixtureState)
 	dependencyTree := "git-sha1:" + recoveryGitText(t, fixture.store.RepositoryRoot(), "rev-parse", "HEAD^{tree}")
 	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
 	for _, event := range []runstate.Event{
-		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventChangeSetRecorded, Payload: handlerPayload(t, map[string]any{"change_set_id": "sha256:write", "base_tree": input.BaseTree, "result_tree": dependencyTree, "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(fixture.runID) + "/attempts/" + string(fixture.attemptID) + "/changeset", "identity_versions": versions})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventChangeSetRecorded, Payload: handlerPayload(t, map[string]any{"change_set_id": "sha256:write", "base_tree": input.BaseTree, "result_tree": dependencyTree, "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(fixture.runID) + "/attempts/" + string(fixture.attemptID) + "/changeset", "identity_versions": changeSetIdentityVersions()})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventVerificationPassed, Payload: handlerPayload(t, map[string]any{})},
 		{RunID: fixture.runID, ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{"interval_id": "acceptance-write", "phase": "acceptance", "wall_start": "2026-07-30T00:00:00.000Z", "remaining_at_start": 600000})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventAcceptanceStarted, Payload: handlerPayload(t, map[string]any{"subject_tree": dependencyTree, "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{"tests"}, "identity_versions": versions})},
@@ -492,7 +492,7 @@ func completeRecoveryWriter(t *testing.T, fixture recoveryChangeSetFixtureState)
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventAcceptanceEvaluationCompleted, Payload: handlerPayload(t, map[string]any{"subject_tree": dependencyTree, "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{map[string]any{"criterion_id": "tests", "criterion_spec_hash": "sha256:criterion", "outcome": "PASS"}}, "identity_versions": versions})},
 		{RunID: fixture.runID, ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: handlerPayload(t, map[string]any{"interval_id": "acceptance-write", "reason": "normal", "charging": "measured", "charged_duration": 1})},
 		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventAttemptCompleted, Payload: handlerPayload(t, map[string]any{})},
-		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventMovementSucceeded, Payload: handlerPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": "sha256:write", "identity_versions": versions, "run_succeeded": false})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", AttemptID: fixture.attemptID, Type: runstate.EventMovementSucceeded, Payload: handlerPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": "sha256:write", "identity_versions": changeSetIdentityVersions(), "run_succeeded": false})},
 	} {
 		if _, err := fixture.driver.Append(event, faultpoint.ReceiptAddress("test.recovery_successor."+string(event.Type))); err != nil {
 			t.Fatal(err)
@@ -1739,12 +1739,20 @@ func TestRecoveryNonFinalGateRejectionCascades(t *testing.T) {
 }
 
 func TestRCResume019MatchesLiveMovementSuccessPayload(t *testing.T) {
-	for _, final := range []bool{false, true} {
-		t.Run(fmt.Sprintf("final=%t", final), func(t *testing.T) {
+	for _, test := range []struct {
+		name, changeSetID string
+		final, repoWrite  bool
+	}{
+		{name: "writer", changeSetID: "sha256:write", repoWrite: true},
+		{name: "final reader", final: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			store, driver := handlerStoreWithSeeds(t, true, []runstate.MovementSeed{{
-				ID: "write", Initial: runstate.MovementPending, Final: final,
+				ID: "write", Initial: runstate.MovementPending, Final: test.final, RepoWrite: test.repoWrite,
 			}})
-			appendHandlerCandidate(t, driver)
+			if !test.repoWrite {
+				appendHandlerCandidate(t, driver)
+			}
 			advanceHandlerAcceptance(t, driver, false)
 			if _, err := driver.Append(runstate.Event{
 				RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1",
@@ -1769,16 +1777,23 @@ func TestRCResume019MatchesLiveMovementSuccessPayload(t *testing.T) {
 			if err := json.Unmarshal(journal.Events[len(journal.Events)-1].Payload, &got); err != nil {
 				t.Fatal(err)
 			}
+			projections := map[string]any{}
+			if test.repoWrite {
+				projections[string(canonical.DomainChangeSet)] = float64(canonical.ProjectionVersionChangeSet)
+			}
 			want := map[string]any{
 				"approved_artifact_instance_ids": []any{},
-				"identity_versions":              map[string]any{"canonical_encoding": float64(1), "projections": map[string]any{}},
-				"run_succeeded":                  final,
+				"identity_versions":              map[string]any{"canonical_encoding": float64(1), "projections": projections},
+				"run_succeeded":                  test.final,
+			}
+			if test.repoWrite {
+				want["approved_change_set_id"] = test.changeSetID
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("RC-RESUME-019 payload = %#v, want live payload %#v", got, want)
 			}
-			if state.FinalMovements["write"] != final {
-				t.Fatalf("seeded finality = %#v, want %t", state.FinalMovements, final)
+			if state.FinalMovements["write"] != test.final {
+				t.Fatalf("seeded finality = %#v, want %t", state.FinalMovements, test.final)
 			}
 		})
 	}
@@ -2191,6 +2206,17 @@ func advanceHandlerAcceptanceWithProcesses(t *testing.T, driver *runstore.Driver
 	appendDriverEvent(runstate.EventAttemptStarted, map[string]any{"attempt_number": 1, "adapter_process": adapterProcess, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{}, "shell": false, "network": false}, "identity_versions": versions})
 	appendDriverEvent(runstate.EventAdapterProbed, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})
 	appendDriverEvent(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false})
+	state, err := driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RepoWriteMovements["write"] {
+		appendDriverEvent(runstate.EventChangeSetRecorded, map[string]any{
+			"change_set_id": "sha256:write", "base_tree": "git-sha1:base", "result_tree": "git-sha1:result",
+			"commit": "git-sha1:commit", "ref": "refs/partitur/runs/run-1/attempts/attempt-1/changeset",
+			"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{string(canonical.DomainChangeSet): canonical.ProjectionVersionChangeSet}},
+		})
+	}
 	appendDriverEvent(runstate.EventVerificationPassed, map[string]any{})
 	planned := []any{}
 	if criterion {
@@ -2709,6 +2735,13 @@ func handlerPayload(t *testing.T, value any) json.RawMessage {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+func changeSetIdentityVersions() map[string]any {
+	return map[string]any{
+		"canonical_encoding": 1,
+		"projections":        map[string]any{string(canonical.DomainChangeSet): canonical.ProjectionVersionChangeSet},
+	}
 }
 
 func assertLastEventType(t *testing.T, store *runstore.Store, want runstate.EventType) {

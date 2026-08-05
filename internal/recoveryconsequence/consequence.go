@@ -587,18 +587,21 @@ func AppendMovementSucceeded(_ context.Context, execution HandlerContext, action
 		}
 	}
 	slices.Sort(artifactIDs)
-	versions, err := IdentityVersions()
-	if err != nil {
-		return err
-	}
-	payload := map[string]any{"approved_artifact_instance_ids": artifactIDs, "identity_versions": versions, "run_succeeded": state.FinalMovements[movementID]}
+	domains := []canonical.Domain(nil)
+	payload := map[string]any{"approved_artifact_instance_ids": artifactIDs, "run_succeeded": state.FinalMovements[movementID]}
 	if state.RepoWriteMovements[movementID] {
 		changeSet, ok := state.ChangeSets[action.AttemptID]
 		if !ok {
 			return fmt.Errorf("change set for repo-write attempt %q is absent", action.AttemptID)
 		}
 		payload["approved_change_set_id"] = changeSet.ChangeSetID
+		domains = append(domains, canonical.DomainChangeSet)
 	}
+	versions, err := IdentityVersions(domains...)
+	if err != nil {
+		return err
+	}
+	payload["identity_versions"] = versions
 	return AppendEvent(execution, state, WithMovement(action, movementID), runstate.EventMovementSucceeded, payload)
 }
 
