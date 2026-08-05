@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -51,11 +52,134 @@ func TestMutationRecoveryNonFinalGateRejectionCascades(t *testing.T) {
 func TestMutationAppendCompositionTerminalSerializesCancellationAfterEvidence(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestAppendCompositionTerminalSerializesCancellationAfterEvidence(t)
-	assertRecoveryMutationKilled(t, "TestAppendCompositionTerminalSerializesCancellationAfterEvidence", goEnvironment, "internal/recoveryconsequence/consequence.go", `if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
+	assertRecoveryMutationKilledWithReplacements(t, "TestAppendCompositionTerminalSerializesCancellationAfterEvidence", goEnvironment, "internal/recoveryconsequence/consequence.go", compositionTerminalSerializationMutations())
+}
+
+func TestMutationAppendCompositionTerminalInterleaveSurvivesDurableCancellation(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestAppendCompositionTerminalYieldsToDurableCancellation(t)
+	assertRecoveryMutationSurvivesWithReplacements(t, "TestAppendCompositionTerminalYieldsToDurableCancellation", goEnvironment, "internal/recoveryconsequence/consequence.go", compositionTerminalSerializationMutations())
+}
+
+type recoveryMutationReplacement struct {
+	before string
+	after  string
+}
+
+func compositionTerminalSerializationMutations() []recoveryMutationReplacement {
+	return []recoveryMutationReplacement{
+		{
+			before: "\t\"slices\"\n",
+			after:  "\t\"slices\"\n\t\"time\"\n",
+		},
+		{
+			before: `func AppendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
+		return errors.New("recovery composition terminal requires store, driver, and evidence")
+	}
+	terminal := action.CompositionTerminal
+	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
+	if err != nil {
+		return err
+	}
+	cause, err := LatestEventID(journal.Events, func(event runstate.Event) bool {
+		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
+			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
+			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
+	})
+	if err != nil {
+		return err
+	}
+	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
+	if err != nil {
+		return err
+	}
+	err = execution.Driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
+		if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
 			return ErrReplan
-		}`, `if false {
-			return ErrReplan
-		}`)
+		}
+		if execution.AfterCompositionEvidence != nil {
+			execution.AfterCompositionEvidence()
+		}
+		var event runstate.Event
+		var address faultpoint.ReceiptAddress
+		switch terminal.Scope {
+		case "movement":
+			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: RecoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
+			address = "recovery.movement.failed.composition"
+		case "candidate":
+			event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: RecoveryPayload(map[string]any{"reason": terminal.Reason})}
+			address = "recovery.run.failed.composition"
+		default:
+			return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
+		}
+		if _, err := runstate.Apply(state, event); err != nil {
+			return err
+		}
+		_, err := transaction.At(address).Append(event)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	execution.Store.Reached(terminalPoint)
+	return nil
+}`,
+			after: `func AppendCompositionTerminal(_ context.Context, execution HandlerContext, action recovery.Action) error {
+	if execution.Store == nil || execution.Driver == nil || action.CompositionTerminal == nil {
+		return errors.New("recovery composition terminal requires store, driver, and evidence")
+	}
+	terminal := action.CompositionTerminal
+	journal, err := execution.Store.ReadJournal(execution.Driver.RunID())
+	if err != nil {
+		return err
+	}
+	cause, err := LatestEventID(journal.Events, func(event runstate.Event) bool {
+		return (event.Type == runstate.EventCompositionConflicted || event.Type == runstate.EventCompositionFailed) &&
+			event.EventID == terminal.EvidenceEventID && event.ScoreRevision == terminal.ScoreRevision &&
+			payloadString(event.Payload, "scope") == terminal.Scope && payloadString(event.Payload, "target_id") == terminal.TargetID
+	})
+	if err != nil {
+		return err
+	}
+	terminalPoint, err := compositionTerminalPoint(terminal.Scope)
+	if err != nil {
+		return err
+	}
+	state, err := execution.Driver.State()
+	if err != nil {
+		return err
+	}
+	if state.CancelRequested || terminal.ScoreRevision != state.ScoreHead.Revision {
+		return ErrReplan
+	}
+	if execution.AfterCompositionEvidence != nil {
+		execution.AfterCompositionEvidence()
+	}
+	time.Sleep(50 * time.Millisecond)
+	var event runstate.Event
+	var address faultpoint.ReceiptAddress
+	switch terminal.Scope {
+	case "movement":
+		event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, MovementID: runstate.MovementID(terminal.TargetID), Type: runstate.EventMovementFailed, CausationID: cause, Payload: RecoveryPayload(map[string]any{"reason": terminal.Reason, "run_failed": false})}
+		address = "recovery.movement.failed.composition"
+	case "candidate":
+		event = runstate.Event{RunID: execution.Driver.RunID(), ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventRunFailed, CausationID: cause, Payload: RecoveryPayload(map[string]any{"reason": terminal.Reason})}
+		address = "recovery.run.failed.composition"
+	default:
+		return fmt.Errorf("recovery composition terminal has invalid scope %q", terminal.Scope)
+	}
+	if _, err := runstate.Apply(state, event); err != nil {
+		return err
+	}
+	if _, err := execution.Driver.Append(event, address); err != nil {
+		return err
+	}
+	execution.Store.Reached(terminalPoint)
+	return nil
+}`,
+		},
+	}
 }
 
 func mutationGoEnvironment(t *testing.T) mutationtest.GoEnvironment {
@@ -68,6 +192,21 @@ func mutationGoEnvironment(t *testing.T) mutationtest.GoEnvironment {
 }
 
 func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName, before, after string) {
+	t.Helper()
+	assertRecoveryMutationOutcome(t, mutationtest.Killed, testName, goEnvironment, sourceName, []recoveryMutationReplacement{{before: before, after: after}})
+}
+
+func assertRecoveryMutationKilledWithReplacements(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName string, replacements []recoveryMutationReplacement) {
+	t.Helper()
+	assertRecoveryMutationOutcome(t, mutationtest.Killed, testName, goEnvironment, sourceName, replacements)
+}
+
+func assertRecoveryMutationSurvivesWithReplacements(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName string, replacements []recoveryMutationReplacement) {
+	t.Helper()
+	assertRecoveryMutationOutcome(t, mutationtest.Survived, testName, goEnvironment, sourceName, replacements)
+}
+
+func assertRecoveryMutationOutcome(t *testing.T, want mutationtest.Outcome, testName string, goEnvironment mutationtest.GoEnvironment, sourceName string, replacements []recoveryMutationReplacement) {
 	t.Helper()
 	lockMutationSource(t)
 	_, currentFile, _, ok := runtime.Caller(0)
@@ -85,8 +224,10 @@ func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment m
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count := strings.Count(string(contents), before); count == 0 {
-		t.Fatalf("mutation anchor %q is absent from %s", before, sourcePath)
+	for _, replacement := range replacements {
+		if count := strings.Count(string(contents), replacement.before); count == 0 {
+			t.Fatalf("mutation anchor %q is absent from %s", replacement.before, sourcePath)
+		}
 	}
 	backup, err := os.CreateTemp(t.TempDir(), "partitur-mutation-backup-")
 	if err != nil {
@@ -120,7 +261,10 @@ func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment m
 	if err := copyFile(backupPath, sourcePath); err != nil {
 		t.Fatal(err)
 	}
-	mutated := strings.ReplaceAll(string(contents), before, after)
+	mutated := string(contents)
+	for _, replacement := range replacements {
+		mutated = strings.ReplaceAll(mutated, replacement.before, replacement.after)
+	}
 	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +272,11 @@ func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment m
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(applied), after) || strings.Contains(string(applied), before) {
-		t.Fatalf("mutation was not applied to %s before the child test ran", sourcePath)
+	for _, replacement := range replacements {
+		if !strings.Contains(string(applied), replacement.after) ||
+			(!strings.Contains(replacement.after, replacement.before) && strings.Contains(string(applied), replacement.before)) {
+			t.Fatalf("mutation was not applied to %s before the child test ran", sourcePath)
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	result := mutationtest.Run(ctx, mutationtest.Child{
@@ -148,13 +295,21 @@ func assertRecoveryMutationKilled(t *testing.T, testName string, goEnvironment m
 		t.Fatalf("mutation restore comparison failed: %v\n%s", err, output)
 	}
 	switch result.Outcome {
-	case mutationtest.Killed:
+	case want:
 		return
 	case mutationtest.Survived:
-		t.Fatalf("mutation survived: %s still passed after %q became %q\n%s", testName, before, after, result.Diagnostic())
+		t.Fatalf("mutation survived: %s still passed after %q\n%s", testName, mutationReplacementSummary(replacements), result.Diagnostic())
 	default:
 		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
 	}
+}
+
+func mutationReplacementSummary(replacements []recoveryMutationReplacement) string {
+	parts := make([]string, 0, len(replacements))
+	for _, replacement := range replacements {
+		parts = append(parts, strconv.Quote(replacement.before)+" became "+strconv.Quote(replacement.after))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func copyMutationRepository(destination, source string) error {
