@@ -28,3 +28,6 @@ service-account*.json
 
 # Partitur run state (local execution data — see docs/DESIGN.md §1)
 .partitur/runs/
+
+# Delegated-agent scratch caches (GOCACHE etc.) — never committed
+.tmp/

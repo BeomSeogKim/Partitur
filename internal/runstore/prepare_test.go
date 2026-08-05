@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
@@ -38,15 +40,151 @@ func TestCompleteOrAbandonPrepareCommitsUnfencedPlan(t *testing.T) {
 	}
 }
 
-func TestCompleteOrAbandonPrepareFailsClosedWithoutLegacyDeadline(t *testing.T) {
+func TestCompleteOrAbandonPrepareClassifiesSilenceLimitPrepare(t *testing.T) {
 	start, err := procid.Read(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
 	}
 	dead := Lease{Epoch: 1, Token: "dead-prepare", PID: os.Getpid(), Start: distinctStartIdentity(t, start)}
 	store, _ := preparedCommitStore(t, &dead)
-	if err := store.CompleteOrAbandonPrepare(context.Background(), "run-1"); err == nil {
-		t.Fatal("legacy deadline commit path accepted a silence-limit prepare")
+	if err := store.CompleteOrAbandonPrepare(context.Background(), "run-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAcknowledgePrepareKeepsReceiptsAliveDuringSweep(t *testing.T) {
+	store, driver, prepare := preparedAcknowledgementDriver(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store.quiesceReceiptCadence = 5 * time.Millisecond
+	store.sweepSessions = func(ctx context.Context, _ runstate.State) error {
+		close(started)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	acknowledged := make(chan error, 1)
+	go func() { acknowledged <- store.AcknowledgePrepare(context.Background(), driver, prepare.ID) }()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("quiesce sweep did not start")
+	}
+	mutated := make(chan error, 1)
+	go func() { mutated <- store.Mutate("run-1", "", func(*Txn) error { return nil }) }()
+	select {
+	case err := <-mutated:
+		if err != nil {
+			t.Fatalf("concurrent state mutation = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-acknowledged
+		t.Fatal("quiesce sweep retained the state lock")
+	}
+	for deadline := time.After(2 * time.Second); ; {
+		if quiesceReceiptRounds(t, store) >= 3 {
+			break
+		}
+		select {
+		case <-deadline:
+			close(release)
+			<-acknowledged
+			t.Fatal("long quiesce sweep did not emit receipts at the configured cadence")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	close(release)
+	if err := <-acknowledged; err != nil {
+		t.Fatal(err)
+	}
+	assertContiguousQuiesceReceipts(t, store)
+}
+
+func TestAcknowledgePrepareRefusesReceiptAfterQuiescedSidecar(t *testing.T) {
+	store, driver, prepare := preparedAcknowledgementDriver(t)
+	if err := store.AcknowledgePrepare(context.Background(), driver, prepare.ID); err != nil {
+		t.Fatal(err)
+	}
+	err := store.AcknowledgePrepare(context.Background(), driver, prepare.ID)
+	if !errors.Is(err, runstate.ErrIllegalTransition) || !strings.Contains(err.Error(), "prepare_pending") {
+		t.Fatalf("receipt after sidecar error = %v, want prepare_pending refusal", err)
+	}
+}
+
+func TestPrepareCommitUsesLatestDurableReceiptWithoutRecoveryRefresh(t *testing.T) {
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := Lease{Epoch: 1, Token: "live-receipt", PID: os.Getpid(), Start: start}
+	store, prepare := preparedCommitStore(t, &lease)
+	appendQuiesceReceiptEvent(t, store, prepare.ID, 1)
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := input.Projection.State.PendingPrepare.LatestQuiesceObservedAt
+	if latest == "" {
+		t.Fatal("durable receipt was not replayed")
+	}
+	observedAt, err := time.Parse(time.RFC3339Nano, latest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareCommitNow = func() time.Time { return observedAt.Add(59 * time.Second) }
+	t.Cleanup(func() { prepareCommitNow = time.Now })
+	next, _, err := classifyPreparedCommit(t, store, func(state *runstate.State) {
+		state.PendingPrepare.PreparedAt = observedAt.Add(-2 * time.Minute).Format(time.RFC3339Nano)
+	})
+	if err != nil || next != prepareCommitWaiting {
+		t.Fatalf("receipt-backed pre-expiry classification = %v, %v", next, err)
+	}
+	resumed, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resumed.Projection.State.PendingPrepare.LatestQuiesceObservedAt; got != latest {
+		t.Fatalf("resume refreshed durable receipt from %q to %q", latest, got)
+	}
+	prepareCommitNow = func() time.Time { return observedAt.Add(61 * time.Second) }
+	next, _, err = classifyPreparedCommit(t, store, nil)
+	if err != nil || next != prepareCommitFence {
+		t.Fatalf("receipt-backed post-expiry classification = %v, %v", next, err)
+	}
+}
+
+func TestCompleteOrAbandonPrepareSweepsBeforeSilenceFence(t *testing.T) {
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := Lease{Epoch: 1, Token: "gone-after-silence", PID: os.Getpid(), Start: distinctStartIdentity(t, start)}
+	store, _ := preparedCommitStore(t, &lease)
+	store.sweepSessions = func(context.Context, runstate.State) error { return errors.New("sweep failed") }
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedAt, err := time.Parse(time.RFC3339Nano, input.Projection.State.PendingPrepare.PreparedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareCommitNow = func() time.Time { return preparedAt.Add(61 * time.Second) }
+	t.Cleanup(func() { prepareCommitNow = time.Now })
+	err = store.CompleteOrAbandonPrepare(context.Background(), "run-1")
+	if err == nil || !strings.Contains(err.Error(), "sweep failed") {
+		t.Fatalf("silence fence error = %v, want sweep failure", err)
+	}
+	input, err = store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.PendingPrepare == nil {
+		t.Fatal("silence fence committed without its required sweep")
 	}
 }
 
@@ -147,37 +285,40 @@ func TestPrepareCommitClassifiesEveryNonFenceTableRow(t *testing.T) {
 			t.Fatalf("sidecar commit points = %v", probe.points)
 		}
 	})
-	t.Run("unverifiable owner without legacy deadline fails closed", func(t *testing.T) {
+	t.Run("unverifiable owner before silence expiry waits", func(t *testing.T) {
 		lease := Lease{Epoch: 1, Token: "unverifiable", PID: os.Getpid(), Start: otherPlatformStartIdentity()}
 		store, _ := preparedCommitStore(t, &lease)
 		next, _, err := classifyPreparedCommit(t, store, nil)
-		if next != prepareCommitDone || err == nil {
-			t.Fatalf("unverifiable silence-limit classification = %v, %v", next, err)
+		if next != prepareCommitWaiting || err != nil {
+			t.Fatalf("unverifiable pre-expiry classification = %v, %v", next, err)
 		}
 	})
-	t.Run("matching owner before deadline waits", func(t *testing.T) {
+	t.Run("matching owner before silence expiry waits", func(t *testing.T) {
 		start, err := procid.Read(os.Getpid())
 		if err != nil {
 			t.Fatal(err)
 		}
 		lease := Lease{Epoch: 1, Token: "live", PID: os.Getpid(), Start: start}
-		store, prepare := preparedCommitStore(t, &lease)
-		prepare.QuiesceDeadline = "2999-01-01T00:00:00.000Z"
-		next, _, err := classifyPreparedCommit(t, store, func(state *runstate.State) { state.PendingPrepare.QuiesceDeadline = prepare.QuiesceDeadline })
+		store, _ := preparedCommitStore(t, &lease)
+		next, _, err := classifyPreparedCommit(t, store, nil)
 		if err != nil || next != prepareCommitWaiting {
 			t.Fatalf("waiting commit classification = %v, %v", next, err)
 		}
 	})
-	t.Run("matching owner without legacy deadline fails closed", func(t *testing.T) {
+	t.Run("matching owner after silence expiry fences", func(t *testing.T) {
 		start, err := procid.Read(os.Getpid())
 		if err != nil {
 			t.Fatal(err)
 		}
 		lease := Lease{Epoch: 1, Token: "expired", PID: os.Getpid(), Start: start}
 		store, _ := preparedCommitStore(t, &lease)
-		next, _, err := classifyPreparedCommit(t, store, nil)
-		if err == nil || next != prepareCommitDone {
-			t.Fatalf("silence-limit matching owner classification = %v, %v", next, err)
+		prepareCommitNow = func() time.Time { return time.Now() }
+		t.Cleanup(func() { prepareCommitNow = time.Now })
+		next, _, err := classifyPreparedCommit(t, store, func(state *runstate.State) {
+			state.PendingPrepare.PreparedAt = time.Now().Add(-61 * time.Second).UTC().Format(time.RFC3339Nano)
+		})
+		if err != nil || next != prepareCommitFence {
+			t.Fatalf("silence-expired matching owner classification = %v, %v", next, err)
 		}
 	})
 	t.Run("base head changed abandons", func(t *testing.T) {
@@ -227,6 +368,76 @@ func classifyPreparedCommit(t *testing.T, store *Store, mutate func(*runstate.St
 		return classifyErr
 	})
 	return next, lease, err
+}
+
+func preparedAcknowledgementDriver(t *testing.T) (*Store, *Driver, runstate.PendingPrepare) {
+	t.Helper()
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := Lease{Epoch: 1, Token: "quiesce-driver", PID: os.Getpid(), Start: start}
+	store, prepare := preparedCommitStore(t, &lease)
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, &Driver{store: store, runID: "run-1", seed: movementSeed(input.Score), lease: lease}, prepare
+}
+
+func appendQuiesceReceiptEvent(t *testing.T, store *Store, prepareID runstate.PrepareID, round uint64) {
+	t.Helper()
+	if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		payload := recoveryPayload(t, map[string]any{"prepare_id": string(prepareID), "sweep_round": round})
+		_, err := transaction.At("test.quiesce-observed").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventAmendmentQuiesceObserved, Payload: payload,
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func quiesceReceiptRounds(t *testing.T, store *Store) int {
+	t.Helper()
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAmendmentQuiesceObserved {
+			count++
+		}
+	}
+	return count
+}
+
+func assertContiguousQuiesceReceipts(t *testing.T, store *Store) {
+	t.Helper()
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := uint64(1)
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventAmendmentQuiesceObserved {
+			continue
+		}
+		var payload struct {
+			SweepRound uint64 `json:"sweep_round"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.SweepRound != want {
+			t.Fatalf("quiesce receipt round = %d, want %d", payload.SweepRound, want)
+		}
+		want++
+	}
+	if want < 4 {
+		t.Fatalf("quiesce receipt count = %d, want at least 3", want-1)
+	}
 }
 
 func otherPlatformStartIdentity() runstate.StartIdentity {
@@ -289,7 +500,7 @@ func preparedCommitStore(t *testing.T, lease *Lease) (*Store, runstate.PendingPr
 		BaseHead:       base.Projection.State.ScoreHead,
 		NewHead:        runstate.ScoreHead{Revision: plan.NewRevision, SemanticHash: plan.NewSnapshotHash, FileHash: plan.NewSnapshotFileHash},
 		PlanRecordHash: Hash(rawHash(planBytes)), ObservedAuthorityEpoch: observedEpoch,
-		QuiesceDeadline: "2000-01-01T00:00:00.000Z", ClassifierVersion: plan.ClassifierVersion,
+		QuiesceSilenceLimitMS: 60_000, ClassifierVersion: plan.ClassifierVersion,
 		TargetAttemptIDs: []runstate.AttemptID{},
 	}
 	if err := store.Mutate("run-1", "", func(transaction *Txn) error {

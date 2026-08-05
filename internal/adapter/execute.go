@@ -892,7 +892,8 @@ func reach(probe faultpoint.Probe, point faultpoint.PointID) {
 
 func validateExecuteReceipt(receipt faultpoint.DurabilityReceipt, eventType string) error {
 	mutation := receipt.Mutation
-	if mutation.Kind != faultpoint.JournalAppend || mutation.EventType != eventType ||
+	preparedAutoApproval := eventType == string(runstate.EventAttemptBlocked) && mutation.EventType == string(runstate.EventAmendmentApprovalPrepared)
+	if mutation.Kind != faultpoint.JournalAppend || (!preparedAutoApproval && mutation.EventType != eventType) ||
 		mutation.EventID == "" || mutation.Sequence == 0 ||
 		mutation.Timestamp == "" || mutation.Path == "" {
 		return fmt.Errorf("invalid execute durability receipt: want durable %s journal append", eventType)

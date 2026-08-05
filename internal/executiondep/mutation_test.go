@@ -44,6 +44,68 @@ func TestMutationV3RecordedTupleGuards(t *testing.T) {
 	}
 }
 
+func TestMutationCollectedAttemptGuards(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []struct {
+		name, before, after, test string
+	}{
+		{"completed successful predicate", "attempt.State == runstate.AttemptCompleted && state.Movements[attempt.MovementID] == runstate.MovementSucceeded", "attempt.State != runstate.AttemptCompleted && state.Movements[attempt.MovementID] == runstate.MovementSucceeded // mutation", "TestEligibleIsExactlyCompletedSuccessful"},
+		{"actual cast adapter extension", "performer.Extensions[adapterID]", "map[string]any{}[adapterID]", "TestCollectUsesJournaledActualAdapterInputs"},
+		{"selection-time input instance", "state.MovementResults[producers[artifactID]]", "state.MovementResults[\"mutation-missing-producer\"]", "TestCollectUsesJournaledActualAdapterInputs"},
+		{"recorded probe hash", "value.attempt.RecordedHash = runstate.Hash(observed)", "_ = observed\n\tvalue.attempt.RecordedHash = \"\"", "TestCollectUsesJournaledActualAdapterInputs"},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			assertCollectorMutationKilled(t, environment, mutation.before, mutation.after, mutation.test)
+		})
+	}
+}
+
+func assertCollectorMutationKilled(t *testing.T, environment mutationtest.GoEnvironment, before, after, testName string) {
+	t.Helper()
+	_, current, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve executiondep test source directory")
+	}
+	repository := filepath.Clean(filepath.Join(filepath.Dir(current), "..", ".."))
+	copyRoot := filepath.Join(t.TempDir(), "partitur")
+	if err := copyRepository(copyRoot, repository); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(copyRoot, "internal", "executiondep", "collector.go")
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(contents), before); count != 1 {
+		t.Fatalf("mutation anchor count=%d, want 1 for %q", count, before)
+	}
+	if err := os.WriteFile(source, []byte(strings.Replace(string(contents), before, after, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mutated, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mutated), after) || strings.Contains(string(mutated), before) {
+		t.Fatal("mutation did not apply")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         filepath.Join(copyRoot, "internal", "executiondep"),
+		Package:     ".",
+		TestPattern: testName,
+		TestNames:   []string{testName},
+		Environment: environment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1"),
+	})
+	if result.Outcome != mutationtest.Killed {
+		t.Fatalf("mutation survived: %s", result.Diagnostic())
+	}
+}
+
 func assertMutationKilled(t *testing.T, environment mutationtest.GoEnvironment, before, after, testName string) {
 	t.Helper()
 	_, current, _, ok := runtime.Caller(0)

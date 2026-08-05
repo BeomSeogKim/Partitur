@@ -27,6 +27,7 @@ func TestMutationEvaluatorGuards(t *testing.T) {
 		{"absent claim skips containment", "if input.HasClaimedImpact && !input.ClaimedImpact.Contains(impact) {", "if true || input.HasClaimedImpact && !input.ClaimedImpact.Contains(impact) { // mutation", "TestEvaluateAbsentClaimSkipsContainment"},
 		{"executed dependency feasibility", "} else if changed {", "} else if false && changed { // mutation", "TestEvaluateFeasibilityPrecedesPolicy"},
 		{"candidate feasibility", "} else if condition != \"\" {", "} else if false && condition != \"\" { // mutation", "TestEvaluateCandidateFinalityPrecedesPolicy"},
+		{"requires decision policy row", "if input.RequiresDecision {", "if false { // mutation", "TestEvaluatePipelineAndPolicy/requires_decision_routes_otherwise_eligible_amendment"},
 		{"human guard audit-only", "if input.HumanDecision {", "if false { // mutation", "TestEvaluateHumanDecisionRecordsGuardWithoutRerouting"},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/recoveryconsequence"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
@@ -18,7 +19,7 @@ import (
 
 var (
 	ErrIncompleteExecutor  = errors.New("recovery executor is incomplete")
-	ErrAuthorityRequired   = errors.New("recovery executor requires established driver authority")
+	ErrAuthorityRequired   = recoveryconsequence.ErrAuthorityRequired
 	ErrInvalidDecision     = errors.New("recovery executor received invalid decision")
 	ErrUnreachableAction   = errors.New("recovery action is unreachable in this slice")
 	ErrUnreachableStep     = errors.New("recovery action step is unreachable in this slice")
@@ -32,7 +33,7 @@ var (
 	// executor replans so C.1's terminal row supplies the outcome, rather than a second
 	// exit path inventing one.
 	ErrRunCancelledDuringRecovery = errors.New("recovery attempt was cancelled and terminalized")
-	ErrRecoveryReplan             = errors.New("recovery action must replan before mutation")
+	ErrRecoveryReplan             = recoveryconsequence.ErrReplan
 )
 
 // LoadInput returns a fresh, fully observed recovery input. It is called again
@@ -40,19 +41,9 @@ var (
 // iteration policy of its own.
 type LoadInput func(context.Context) (recovery.Input, error)
 
-// HandlerContext gives one effect handler the selected action's run-owned
-// inputs and the authority it must use for durable mutation. It deliberately
-// contains no live judgement callback: classification facts come from Input.
-type HandlerContext struct {
-	Store  *runstore.Store
-	Driver *runstore.Driver
-	RunID  runstate.RunID
-	Input  recovery.Input
-
-	// afterCompositionEvidence is a deterministic interleave seam for package
-	// tests. Production contexts leave it nil.
-	afterCompositionEvidence func()
-}
+// HandlerContext is the shared context for recovery and amendment
+// consequences. The implementation lives below both callers.
+type HandlerContext = recoveryconsequence.HandlerContext
 
 // StepHandler performs one planner-selected, order-sensitive recovery step.
 // A handler that mutates durable state must use Context.Driver for that
@@ -132,14 +123,6 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		}
 
 		action := *decision.Action
-		// A named unimplemented zero-step action is a refusal, not a recovery
-		// effect. It must not acquire a driver or append an authority event.
-		// Nonempty Steps select step dispatch before kind handling below.
-		if len(action.Steps) == 0 {
-			if unit, ok := recovery.UnimplementedActionOwner(action.Kind); ok {
-				return result, fmt.Errorf("%w: %s is owned by unit %s", ErrUnreachableAction, action.Kind, unit)
-			}
-		}
 		if action.Kind == recovery.ActionReclaimAuthority || (actionRequiresDriver(action) && executor.Driver == nil) {
 			if err := executor.acquireAuthority(input); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
@@ -175,7 +158,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 		cancelledMidStep := false
 		if len(action.Steps) != 0 {
 			for index, step := range action.Steps {
-				handler, ok := executor.stepHandler(step)
+				handler, ok := executor.stepHandler(decision.CaseID, step)
 				if !ok || handler == nil {
 					return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
 				}
@@ -227,7 +210,7 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			}
 		} else {
 			handlerContext := HandlerContext{Store: executor.Store, Driver: executor.Driver, RunID: executor.RunID, Input: input}
-			handler, ok := executor.kindHandler(action.Kind)
+			handler, ok := executor.kindHandler(decision.CaseID, action.Kind)
 			if !ok {
 				return result, fmt.Errorf("%w: %s", ErrUnreachableAction, action.Kind)
 			}
@@ -459,7 +442,12 @@ func (executor *Executor) authorizeDriver() error {
 	return nil
 }
 
-func (executor *Executor) stepHandler(step recovery.ActionStep) (StepHandler, bool) {
+func (executor *Executor) stepHandler(caseID recovery.CaseID, step recovery.ActionStep) (StepHandler, bool) {
+	if recoveryconsequence.Handles(caseID) {
+		return func(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+			return recoveryconsequence.ApplyStep(ctx, execution, caseID, action, step)
+		}, true
+	}
 	if executor.Steps != nil {
 		handler, ok := executor.Steps[step]
 		return handler, ok
@@ -468,7 +456,12 @@ func (executor *Executor) stepHandler(step recovery.ActionStep) (StepHandler, bo
 	return handler, ok
 }
 
-func (executor *Executor) kindHandler(kind recovery.ActionKind) (StepHandler, bool) {
+func (executor *Executor) kindHandler(caseID recovery.CaseID, kind recovery.ActionKind) (StepHandler, bool) {
+	if recoveryconsequence.Handles(caseID) {
+		return func(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+			return recoveryconsequence.Apply(ctx, execution, caseID, action)
+		}, true
+	}
 	handler, ok := defaultKinds()[kind]
 	return handler, ok
 }
@@ -487,6 +480,8 @@ func haltDecision(decision recovery.Decision, err error) (recovery.Decision, boo
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltPrepareLeaseEpochMismatch}, true
 	case errors.Is(err, runstore.ErrMissingResolvedCast):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingResolvedCast}, true
+	case errors.Is(err, recoveryconsequence.ErrMissingProposalRecord):
+		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltMissingProposalRecord}, true
 	case errors.Is(err, workspace.ErrGitUnverifiable):
 		return recovery.Decision{CaseID: decision.CaseID, Halt: recovery.HaltGitUnverifiable}, true
 	case errors.Is(err, runstate.ErrSweepUnverifiable):

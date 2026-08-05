@@ -1,11 +1,18 @@
 package amendment
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/executiondep"
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
@@ -37,6 +44,7 @@ func TestEvaluatePipelineAndPolicy(t *testing.T) {
 			state.Attempts["a"] = runstate.Attempt{MovementID: "inspect", State: runstate.AttemptRunning}
 		}, Routed, "runtime_scope_started", NarrowPaths},
 		{"policy change routes nonmonotone", []any{op("replace", "/policy/amendment/auto", "off")}, nil, Routed, "recognized_non_monotone", ""},
+		{"requires decision routes otherwise eligible amendment", []any{op("replace", "/policy/budget/active_wall_clock_min", float64(9))}, nil, Routed, "requires_decision", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			current := state
@@ -51,7 +59,7 @@ func TestEvaluatePipelineAndPolicy(t *testing.T) {
 			if test.reason != "patch_error" && test.reason != "no_op" {
 				claim = claimFor(t, base, test.operations)
 			}
-			got, err := Evaluate(Input{State: current, Base: base, BaseRevision: base.Revision(), BaseHash: runstate.Hash(baseHash), Operations: test.operations, ClaimedImpact: claim, HasClaimedImpact: test.reason != "patch_error" && test.reason != "no_op"})
+			got, err := Evaluate(Input{State: current, Base: base, BaseRevision: base.Revision(), BaseHash: runstate.Hash(baseHash), Operations: test.operations, ClaimedImpact: claim, HasClaimedImpact: test.reason != "patch_error" && test.reason != "no_op", RequiresDecision: test.reason == "requires_decision"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,15 +120,8 @@ func TestEvaluateFeasibilityPrecedesPolicy(t *testing.T) {
 	state.ScoreHead = runstate.ScoreHead{Revision: base.Revision(), SemanticHash: runstate.Hash(hash)}
 	state.Movements["inspect"] = runstate.MovementSucceeded
 	state.Attempts["attempt-1"] = runstate.Attempt{MovementID: "inspect", State: runstate.AttemptCompleted}
-	versions := json.RawMessage(`{"canonical_encoding":1,"projections":{"partitur/acceptance-spec":1,"partitur/criterion-spec":1,"partitur/execution-dependency":3}}`)
-	attempt := executiondep.Attempt{ID: "attempt-1", MovementID: "inspect", AdapterID: "adapter", Model: "model", IdentityVersions: versions}
-	recorded, err := executiondep.Recompute(base, attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	attempt.RecordedHash = recorded
 	operations := []any{op("replace", "/movements/0/instruction", "changed")}
-	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true, Attempts: []executiondep.Attempt{attempt}})
+	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true, Attempts: successfulCollectedAttempts(t, base)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,15 +146,8 @@ func TestEvaluateCandidateFinalityPrecedesPolicy(t *testing.T) {
 	state.Movements["inspect"] = runstate.MovementSucceeded
 	state.Attempts["attempt-1"] = runstate.Attempt{MovementID: "inspect", State: runstate.AttemptCompleted}
 	state.ApplicationCandidate = &runstate.ApplicationCandidate{BaseTree: "git-sha1:base", CompositionDependencyHash: runstate.Hash(candidateHash)}
-	versions := json.RawMessage(`{"canonical_encoding":1,"projections":{"partitur/acceptance-spec":1,"partitur/criterion-spec":1,"partitur/execution-dependency":3}}`)
-	attempt := executiondep.Attempt{ID: "attempt-1", MovementID: "inspect", AdapterID: "adapter", Model: "model", IdentityVersions: versions}
-	recorded, err := executiondep.Recompute(base, attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	attempt.RecordedHash = recorded
 	operations := []any{op("replace", "/policy/budget/active_wall_clock_min", float64(9))}
-	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true, Attempts: []executiondep.Attempt{attempt}})
+	got, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true, Attempts: successfulCollectedAttempts(t, base)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +208,116 @@ func claimFor(t *testing.T, base *score.Score, operations []any) score.Impact {
 		t.Fatal(err)
 	}
 	return impact
+}
+
+// successfulCollectedAttempts states a durable journal fixture. It deliberately
+// does not construct executiondep.Attempt: only the collector may do that.
+func successfulCollectedAttempts(t *testing.T, base *score.Score) executiondep.CollectedAttempts {
+	t.Helper()
+	root := t.TempDir()
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoreBytes, err := base.ProjectionBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoreHash, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	castBytes, err := json.Marshal(map[string]any{
+		"cast": "0.1",
+		"performers": map[string]any{
+			"worker": map[string]any{
+				"adapter": "adapter", "model": "model",
+				"extensions": map[string]any{"adapter": map[string]any{"fixture": "cast-entry"}},
+			},
+		},
+		"bindings": map[string]any{"reader": map[string]any{"performer": "worker"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, diagnostics := cast.Resolve([]cast.Layer{{Origin: "fixture", Data: castBytes}})
+	if len(diagnostics) != 0 {
+		t.Fatalf("cast diagnostics=%v", diagnostics)
+	}
+	castHash, err := resolved.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRoot := filepath.Join(root, ".partitur", "runs", "run-1")
+	if err := os.MkdirAll(filepath.Join(runRoot, "scores"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "scores", "revision-1.yaml"), scoreBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "resolved-cast.yaml"), castBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{
+		"partitur/execution-dependency": 3, "partitur/acceptance-spec": 1, "partitur/criterion-spec": 1,
+	}}
+	fileHash := func(value []byte) string {
+		digest := sha256.Sum256(value)
+		return fmt.Sprintf("sha256:%x", digest)
+	}
+	appendEvent := func(eventType runstate.EventType, payload any, movementID runstate.MovementID, attemptID runstate.AttemptID) {
+		t.Helper()
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+			_, err := transaction.At("test/journal").Append(runstate.Event{
+				RunID: "run-1", ScoreRevision: 1, MovementID: movementID, AttemptID: attemptID, Type: eventType, Payload: encoded,
+			})
+			return err
+		})
+		if err != nil {
+			t.Fatalf("append %s: %v", eventType, err)
+		}
+	}
+	appendEvent(runstate.EventRunStarted, map[string]any{
+		"base_commit": "git-sha1:commit", "base_tree": "git-sha1:tree", "score_hash": scoreHash,
+		"score_file_hash": fileHash(scoreBytes), "resolved_cast_hash": castHash, "identity_versions": versions,
+	}, "", "")
+	appendEvent(runstate.EventMovementReady, map[string]any{}, "inspect", "")
+	appendEvent(runstate.EventMovementStarted, map[string]any{}, "inspect", "")
+	appendEvent(runstate.EventPerformerSelected, map[string]any{
+		"reason": "initial", "performer_id": "worker", "adapter_id": "adapter", "model": "model",
+	}, "inspect", "attempt-1")
+	appendEvent(runstate.EventAttemptStarted, map[string]any{
+		"attempt_number":    1,
+		"adapter_process":   map[string]any{"pid": 10, "session_id": 10, "start_identity": map[string]any{"platform": "linux", "boot_id": "boot", "start_ticks": "12"}},
+		"granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"src/**"}, "shell": false, "network": false},
+		"identity_versions": versions,
+	}, "inspect", "attempt-1")
+	appendEvent(runstate.EventAdapterProbed, map[string]any{
+		"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false},
+		"enforcement":         map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true},
+		"negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{},
+		"execution_dependency_hash": "sha256:37d055caec501c006b189ca69a199446d8a1477db5db16b0bdaf015a08e0e0c0", "identity_versions": versions,
+	}, "inspect", "attempt-1")
+	appendEvent(runstate.EventArtifactRecorded, map[string]any{"logical_output_id": "report", "kind": "artifact", "content_hash": "sha256:report", "size_bytes": 1, "source_path": "report"}, "inspect", "attempt-1")
+	appendEvent(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false}, "inspect", "attempt-1")
+	appendEvent(runstate.EventVerificationPassed, map[string]any{}, "inspect", "attempt-1")
+	appendEvent(runstate.EventApplicationCandidateRecorded, map[string]any{
+		"candidate_id": "candidate", "base_tree": "git-sha1:tree", "result_tree": "git-sha1:tree", "ordered_change_sets": []any{}, "contributors": []any{}, "candidate_composition_dependency_hash": "sha256:candidate", "identity_versions": versions,
+	}, "", "")
+	appendEvent(runstate.EventAcceptanceStarted, map[string]any{"subject_tree": "git-sha1:tree", "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{}, "identity_versions": versions}, "inspect", "attempt-1")
+	appendEvent(runstate.EventAcceptanceEvaluationCompleted, map[string]any{"subject_tree": "git-sha1:tree", "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{}, "identity_versions": versions}, "inspect", "attempt-1")
+	appendEvent(runstate.EventAttemptCompleted, map[string]any{}, "inspect", "attempt-1")
+	appendEvent(runstate.EventMovementSucceeded, map[string]any{"approved_artifact_instance_ids": []any{"report@attempt-1"}, "identity_versions": versions, "run_succeeded": true}, "inspect", "attempt-1")
+
+	collected, err := executiondep.Collect(store, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return collected
 }
 
 func testScore(t *testing.T) *score.Score {

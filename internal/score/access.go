@@ -13,6 +13,14 @@ func (s *Score) Revision() uint64 {
 	return uint64(s.document.Revision)
 }
 
+// Status returns the validated score lifecycle status.
+func (s *Score) Status() string {
+	if s == nil {
+		return ""
+	}
+	return s.document.Status
+}
+
 // Parts returns effective parts sorted by id. Every returned slice is a copy.
 func (s *Score) Parts() []PartView {
 	if s == nil {

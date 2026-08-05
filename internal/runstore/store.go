@@ -1,6 +1,7 @@
 package runstore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -20,9 +22,11 @@ var (
 )
 
 type Store struct {
-	root  string
-	probe faultpoint.Probe
-	fs    fsOperations
+	root                  string
+	probe                 faultpoint.Probe
+	fs                    fsOperations
+	sweepSessions         func(context.Context, runstate.State) error
+	quiesceReceiptCadence time.Duration
 }
 
 // New constructs a store rooted at repositoryRoot.
@@ -41,7 +45,10 @@ func New(repositoryRoot string, probe faultpoint.Probe) (*Store, error) {
 	if !info.IsDir() {
 		return nil, errors.New("repository root is not a directory")
 	}
-	return &Store{root: root, probe: probe, fs: realFS{}}, nil
+	return &Store{
+		root: root, probe: probe, fs: realFS{},
+		sweepSessions: sweepRecordedSessions, quiesceReceiptCadence: quiesceReceiptCadence,
+	}, nil
 }
 
 type Txn struct {

@@ -1187,6 +1187,37 @@ func TestLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	}
 }
 
+func TestCompleteAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t *testing.T) {
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+
+	result := completeAutoApprovalAndContinue(context.Background(), Result{RunID: started.RunID}, store, nil, ExecutionDependencies{})
+	if result.Outcome != OutcomeInterrupted || result.Err == nil || result.Err.Error() != "driver: auto approval still holds driver authority" {
+		t.Fatalf("complete result = %+v, want normal-authority refusal before commit", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAmendmentApproved {
+			t.Fatalf("normal-authority call committed approval: %+v", event)
+		}
+	}
+}
+
 func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
 	t.Run("final movement uses recorded candidate", func(t *testing.T) {
 		preparation, store, authority, started, _, _ := candidateFanInCleanFixture(t)
@@ -1525,7 +1556,7 @@ func TestExecuteAttemptRefusesProposalWaitingHumanUntilRoutedRequestExists(t *te
 		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
 		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
 	}, executionDependenciesFrom(dependencies))
-	if result.Outcome != OutcomeInterrupted || result.Err == nil || !strings.Contains(result.Err.Error(), "unit 4.2") {
+	if result.Outcome != OutcomeInterrupted || result.Err == nil || !strings.Contains(result.Err.Error(), "no amendment dispositioner") {
 		t.Fatalf("proposal waiting result = %+v", result)
 	}
 	journal, err := store.ReadJournal(started.RunID)
@@ -1596,6 +1627,7 @@ func TestExecuteAttemptPreservesRaisedWireOrderAndAllowsNonBlockingProposal(t *t
 	proposal := protocol.ProposalEvent{Type: protocol.EventProposal, ID: "proposal-1", Amendment: json.RawMessage(`{}`), RequiresDecision: false}
 	questionTwo := protocol.QuestionEvent{Type: protocol.EventQuestion, ID: "question-1", Question: "Second?"}
 	dependencies := testDependencies()
+	dependencies.proposalDisposition = proposalDispositionFixture{}
 	dependencies.client = &waitingAdapterFixture{t: t, raised: []adapter.RaisedDecision{
 		{Kind: protocol.EventQuestion, Question: &questionOne},
 		{Kind: protocol.EventProposal, Proposal: &proposal},
@@ -1870,6 +1902,12 @@ type waitingAdapterFixture struct {
 	proposal *protocol.ProposalEvent
 	raised   []adapter.RaisedDecision
 	pending  []string
+}
+
+type proposalDispositionFixture struct{}
+
+func (proposalDispositionFixture) PrepareAdapterProposal(context.Context, AdapterProposal) (AdapterProposalDisposition, error) {
+	return AdapterProposalDisposition{}, nil
 }
 
 func (fixture *waitingAdapterFixture) Resolve(adapterID string) (string, error) {
@@ -2909,7 +2947,7 @@ func fanInFixtureWithNoOpWriterTrees(t *testing.T, conflict bool, firstID, secon
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAttemptStarted, Payload: testPayload(t, attemptStartedPayload)},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAdapterProbed, Payload: testPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": true, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventPerformerCompleted, Payload: testPayload(t, map[string]any{"session_hint_stored": false})},
-			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventChangeSetRecorded, Payload: testPayload(t, map[string]any{"change_set_id": changeSetID, "base_tree": input.BaseTree, "result_tree": tree, "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(started.RunID) + "/attempts/" + attemptID + "/changeset", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventChangeSetRecorded, Payload: testPayload(t, map[string]any{"change_set_id": changeSetID, "base_tree": input.BaseTree, "result_tree": tree, "commit": input.BaseCommit, "ref": "refs/partitur/runs/" + string(started.RunID) + "/attempts/" + attemptID + "/changeset", "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{string(canonical.DomainChangeSet): canonical.ProjectionVersionChangeSet}}})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventVerificationPassed, Payload: testPayload(t, map[string]any{})},
 			{RunID: started.RunID, ScoreRevision: 1, Type: runstate.EventExecutionStarted, Payload: testPayload(t, map[string]any{"interval_id": "acceptance-" + attemptID, "phase": "acceptance", "wall_start": "2026-07-30T00:00:00.000Z", "remaining_at_start": 600000})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAcceptanceStarted, Payload: testPayload(t, map[string]any{"subject_tree": tree, "acceptance_spec_hash": "sha256:acceptance", "planned_criterion_ids": []any{"tests"}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
@@ -2918,7 +2956,7 @@ func fanInFixtureWithNoOpWriterTrees(t *testing.T, conflict bool, firstID, secon
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAcceptanceEvaluationCompleted, Payload: testPayload(t, map[string]any{"subject_tree": tree, "acceptance_spec_hash": "sha256:acceptance", "criterion_outcomes": []any{map[string]any{"criterion_id": "tests", "criterion_spec_hash": "sha256:criterion", "outcome": "PASS"}}, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}})},
 			{RunID: started.RunID, ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: testPayload(t, map[string]any{"interval_id": "acceptance-" + attemptID, "reason": "normal", "charging": "measured", "charged_duration": 1})},
 			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventAttemptCompleted, Payload: testPayload(t, map[string]any{})},
-			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventMovementSucceeded, Payload: testPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": changeSetID, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}, "run_succeeded": false})},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: runstate.MovementID(movementID), AttemptID: runstate.AttemptID(attemptID), Type: runstate.EventMovementSucceeded, Payload: testPayload(t, map[string]any{"approved_artifact_instance_ids": []any{}, "approved_change_set_id": changeSetID, "identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{string(canonical.DomainChangeSet): canonical.ProjectionVersionChangeSet}}, "run_succeeded": false})},
 		} {
 			if _, err := authority.Append(event, faultpoint.ReceiptAddress("test.fan_in."+string(event.Type))); err != nil {
 				t.Fatal(err)

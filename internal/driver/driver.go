@@ -26,6 +26,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/recoveryobs"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
@@ -41,14 +42,18 @@ var (
 )
 
 type dependencies struct {
-	probe             faultpoint.Probe
-	client            AdapterExecutor
-	resolveTrampoline func() (string, error)
-	now               func() time.Time
-	newID             func() (string, error)
-	workspaceStart    func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error)
+	probe               faultpoint.Probe
+	client              AdapterExecutor
+	resolveTrampoline   func() (string, error)
+	now                 func() time.Time
+	newID               func() (string, error)
+	proposalDisposition ProposalDispositioner
+	workspaceStart      func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error)
+	acquireDriver       func(*runstore.Store, runstate.RunID, []runstate.MovementSeed) (*runstore.Driver, error)
 	// afterMovementFailed is a test-only interleaving hook. Production leaves it nil.
 	afterMovementFailed func()
+	// afterPrepareAcknowledged is a test-only interleaving hook. Production leaves it nil.
+	afterPrepareAcknowledged func()
 }
 
 func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {
@@ -78,12 +83,15 @@ func DefaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies 
 
 func executionDependenciesFrom(dependencies dependencies) ExecutionDependencies {
 	return ExecutionDependencies{
-		Probe:               dependencies.probe,
-		Client:              dependencies.client,
-		ResolveTrampoline:   dependencies.resolveTrampoline,
-		Now:                 dependencies.now,
-		NewID:               dependencies.newID,
-		afterMovementFailed: dependencies.afterMovementFailed,
+		Probe:                    dependencies.probe,
+		Client:                   dependencies.client,
+		ResolveTrampoline:        dependencies.resolveTrampoline,
+		Now:                      dependencies.now,
+		NewID:                    dependencies.newID,
+		ProposalDisposition:      dependencies.proposalDisposition,
+		afterMovementFailed:      dependencies.afterMovementFailed,
+		AfterPrepareAcknowledged: dependencies.afterPrepareAcknowledged,
+		AcquireDriver:            dependencies.acquireDriver,
 	}
 }
 
@@ -140,7 +148,7 @@ func run(
 	wake := make(chan os.Signal, 1)
 	signal.Notify(wake, syscall.SIGUSR1)
 	defer signal.Stop(wake)
-	authority, err := store.AcquireDriver(startResult.RunID, seeds)
+	authority, err := acquireDriver(dependencies, store, startResult.RunID, seeds)
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -304,6 +312,128 @@ func liveRunLoop(
 			return interrupted(result, fmt.Errorf("driver: unsupported live scheduler action %s", decision.Action.Kind))
 		}
 	}
+}
+
+// completeAutoApprovalAndContinue crosses the §6 authority boundary after a
+// successful quiesce acknowledgement. The shared table owns the approval; the
+// live episode then performs a normal new-epoch acquisition and hands C.1's
+// fixed successor straight to C.4.
+func completeAutoApprovalAndContinue(
+	ctx context.Context,
+	result Result,
+	store *runstore.Store,
+	control *cancellation.Watcher,
+	executionDependencies ExecutionDependencies,
+) Result {
+	if _, present, err := store.ReadLease(result.RunID); err != nil {
+		return stopped(result, err)
+	} else if present {
+		return stopped(result, errors.New("driver: auto approval still holds driver authority"))
+	}
+	if err := store.CompleteOrAbandonPrepare(ctx, result.RunID); err != nil {
+		return stopped(result, err)
+	}
+	input, err := store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if input.Projection.State.Run == runstate.RunCancelled {
+		result.Outcome = OutcomeCancelled
+		result.Reason = ""
+		result.Err = nil
+		return result
+	}
+	if input.Projection.State.CancelRequested {
+		return executeAutoApprovalCancellation(ctx, result, control)
+	}
+	authority, err := acquireDriver(dependenciesFromExecution(executionDependencies), store, result.RunID, movementSeeds(input.Score))
+	if err != nil {
+		return interrupted(result, err)
+	}
+	defer func() {
+		if !releasesDriverLease(result.Outcome) {
+			return
+		}
+		if err := authority.Release(); err != nil && result.Err == nil {
+			result = interrupted(result, err)
+		}
+	}()
+	freshControl, err := cancellation.Watch(store, result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	defer freshControl.Stop()
+	input, err = store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if input.Projection.State.CancelRequested {
+		return executeAutoApprovalCancellation(ctx, result, freshControl)
+	}
+	observations, err := recoveryobs.Collect(store, result.RunID, input.Projection)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if identity := observations.Lease.Identity; identity != nil && authority.MatchesLease(runstore.LeaseIdentity{
+		Epoch: identity.Epoch, Token: identity.Token, PID: identity.PID, Start: identity.Start,
+	}) {
+		observations.Lease.Owner = recovery.OwnerCurrentDriver
+	}
+	decision := recovery.Plan(recovery.Input{Projection: input.Projection, Observations: observations})
+	if decision.Action != nil && decision.Action.Kind == recovery.ActionExecuteCancellation {
+		return executeAutoApprovalCancellation(ctx, result, freshControl)
+	}
+	if decision.CaseID != recovery.CaseRevisionRestart || decision.Action == nil ||
+		decision.Action.Kind != recovery.ActionSelectRevisionRestart || decision.Action.PendingSuccessor == nil ||
+		decision.Action.Continuation != recovery.ContinuationC4 {
+		return interrupted(result, errors.New("driver: post-auto-commit C.1 did not select revision restart"))
+	}
+	pending := *decision.Action.PendingSuccessor
+	input.Projection.Scheduler.PendingSuccessor = &pending
+	c4 := recovery.PlanScheduler(recovery.Input{Projection: input.Projection, Observations: observations})
+	if c4.Action == nil || c4.Action.Kind != recovery.ActionMaterializeSuccessor ||
+		c4.Action.PendingSuccessor == nil || *c4.Action.PendingSuccessor != pending {
+		return interrupted(result, errors.New("driver: post-auto-commit C.4 did not receive C.1 successor"))
+	}
+	run, err := workspace.ReconstructRun(store, authority, input)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	dependencies := dependenciesFromExecution(executionDependencies)
+	continued := liveMaterializeSuccessor(ctx, result, store, authority, freshControl, dependencies, input)
+	if continued.Outcome != OutcomeSucceeded {
+		return continued
+	}
+	return liveRunLoop(ctx, continued, run, store, authority, freshControl, dependencies)
+}
+
+func executeAutoApprovalCancellation(ctx context.Context, result Result, control *cancellation.Watcher) Result {
+	if err := control.Execute(ctx); err != nil {
+		if errors.Is(err, runstate.ErrSweepUnverifiable) {
+			return halted(result, "sweep_unverifiable", err)
+		}
+		return stopped(result, err)
+	}
+	result.Outcome = OutcomeCancelled
+	result.Reason = ""
+	result.Err = nil
+	return result
+}
+
+func dependenciesFromExecution(execution ExecutionDependencies) dependencies {
+	return dependencies{
+		probe: execution.Probe, client: execution.Client, resolveTrampoline: execution.ResolveTrampoline,
+		now: execution.Now, newID: execution.NewID, proposalDisposition: execution.ProposalDisposition,
+		afterMovementFailed: execution.afterMovementFailed, afterPrepareAcknowledged: execution.AfterPrepareAcknowledged,
+		acquireDriver: execution.AcquireDriver,
+	}
+}
+
+func acquireDriver(dependencies dependencies, store *runstore.Store, runID runstate.RunID, seeds []runstate.MovementSeed) (*runstore.Driver, error) {
+	if dependencies.acquireDriver != nil {
+		return dependencies.acquireDriver(store, runID, seeds)
+	}
+	return store.AcquireDriver(runID, seeds)
 }
 
 func liveInitialSelection(
@@ -624,6 +754,7 @@ func ExecuteAttempt(
 		return appendEvent(runstate.EventAttemptStarted, payload, "attempt.started")
 	}
 	var observationErr error
+	approvalPrepared := false
 	adapterChargedMS := int64(0)
 	classifyFailureWithRemaining := func(failure successor.FailureCase, remainingOverride int64) (runstate.Disposition, error) {
 		input, err := store.LoadRunInput(execution.RunID)
@@ -744,18 +875,27 @@ func ExecuteAttempt(
 					"attempt.failed",
 				)
 			case string(runstate.EventAttemptBlocked):
+				autoProposal := false
 				for _, decision := range observation.Raised {
-					if decision.Kind != protocol.EventProposal || decision.Proposal == nil || !decision.Proposal.RequiresDecision {
+					if decision.Kind != protocol.EventProposal || decision.Proposal == nil {
 						continue
 					}
-					unit, ok := recovery.UnimplementedActionOwner(recovery.ActionAppendRoutedRequest)
-					if !ok {
-						return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal has no routed-request owner")
+					if executionDependencies.ProposalDisposition == nil {
+						return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal has no amendment dispositioner")
 					}
-					return faultpoint.DurabilityReceipt{}, fmt.Errorf("waiting_human proposal requires unit %s", unit)
+					autoProposal = autoProposal || !decision.Proposal.RequiresDecision
+				}
+				// An auto prepare raises the mutation barrier instead of appending the
+				// attempt.blocked source. It therefore cannot share an adapter outcome
+				// with another raised question or proposal whose durable source would be
+				// skipped by that barrier transition.
+				if guard, ok := executionDependencies.ProposalDisposition.(AutoProposalShapeGuard); ok && guard.RequiresSingleRaisedForAuto() && autoProposal && len(observation.Raised) != 1 {
+					return faultpoint.DurabilityReceipt{}, errors.New("auto approval prepare requires exactly one raised proposal")
 				}
 				raised := make([]any, 0, len(observation.Raised))
 				pending := make([]string, 0, len(observation.Raised))
+				appendRoutes := make([]func(context.Context) error, 0, len(observation.Raised))
+				var prepared *faultpoint.DurabilityReceipt
 				for _, decision := range observation.Raised {
 					switch decision.Kind {
 					case protocol.EventQuestion:
@@ -786,13 +926,35 @@ func ExecuteAttempt(
 						if err != nil {
 							return faultpoint.DurabilityReceipt{}, err
 						}
-						raised = append(raised, map[string]any{
+						disposition, err := executionDependencies.ProposalDisposition.PrepareAdapterProposal(ctx, AdapterProposal{
+							Store: store, Authority: authority, RunID: execution.RunID, ScoreRevision: execution.Score.Revision(), AttemptID: attempt.AttemptID,
+							MovementID: attempt.MovementID, PartID: movement.PartID, ProposalID: runstate.ProposalID(proposalID),
+							DecisionID: decisionID, Event: *decision.Proposal,
+						})
+						if err != nil {
+							return faultpoint.DurabilityReceipt{}, fmt.Errorf("prepare adapter proposal disposition: %w", err)
+						}
+						raisedProposal := map[string]any{
 							"decision_id": decisionID,
 							"emitted_id":  decision.Proposal.ID,
 							"kind":        "proposal",
 							"proposal_id": proposalID,
 							"blocking":    decision.Proposal.RequiresDecision,
-						})
+						}
+						if disposition.RouteDescriptor != nil {
+							raisedProposal["route"] = disposition.RouteDescriptor
+							if disposition.AppendRoute == nil {
+								return faultpoint.DurabilityReceipt{}, errors.New("routed proposal has no routed_human append")
+							}
+							appendRoutes = append(appendRoutes, disposition.AppendRoute)
+						}
+						if disposition.PreparedReceipt != nil {
+							if prepared != nil {
+								return faultpoint.DurabilityReceipt{}, errors.New("auto approval prepare requires exactly one raised proposal")
+							}
+							prepared = disposition.PreparedReceipt
+						}
+						raised = append(raised, raisedProposal)
 						if decision.Proposal.RequiresDecision {
 							pending = append(pending, decisionID)
 						}
@@ -800,11 +962,24 @@ func ExecuteAttempt(
 						return faultpoint.DurabilityReceipt{}, fmt.Errorf("unsupported raised decision %q", decision.Kind)
 					}
 				}
+				if prepared != nil {
+					approvalPrepared = true
+					return *prepared, nil
+				}
 				slices.Sort(pending)
-				return appendEvent(runstate.EventAttemptBlocked, map[string]any{
+				receipt, err := appendEvent(runstate.EventAttemptBlocked, map[string]any{
 					"raised":               raised,
 					"pending_decision_ids": pending,
 				}, "attempt.blocked")
+				if err != nil {
+					return receipt, err
+				}
+				for _, appendRoute := range appendRoutes {
+					if err := appendRoute(ctx); err != nil {
+						return faultpoint.DurabilityReceipt{}, fmt.Errorf("append routed human: %w", err)
+					}
+				}
+				return receipt, nil
 			default:
 				return faultpoint.DurabilityReceipt{}, fmt.Errorf(
 					"unsupported execute outcome %q",
@@ -854,6 +1029,36 @@ func ExecuteAttempt(
 		Recorder:       recorder,
 	})
 	cancel()
+	if approvalPrepared {
+		if err != nil {
+			return stopped(result, err)
+		}
+		if cancelled, handled := cancellationResult(ctx, result, control); handled {
+			return cancelled
+		}
+		state, stateErr := authority.State()
+		if stateErr != nil {
+			return stopped(result, stateErr)
+		}
+		if state.PendingPrepare == nil {
+			return stopped(result, errors.New("driver: auto approval prepare is no longer pending"))
+		}
+		store.Reached(faultpoint.PointPrepareObserved)
+		if acknowledgeErr := store.AcknowledgePrepare(ctx, authority, state.PendingPrepare.ID); acknowledgeErr != nil {
+			if cancelled, handled := cancellationResult(ctx, result, control); handled {
+				return cancelled
+			}
+			return stopped(result, acknowledgeErr)
+		}
+		if cancelled, handled := cancellationResult(ctx, result, control); handled {
+			return cancelled
+		}
+		result.prepareAcknowledged = true
+		if executionDependencies.AfterPrepareAcknowledged != nil {
+			executionDependencies.AfterPrepareAcknowledged()
+		}
+		return completeAutoApprovalAndContinue(ctx, result, store, control, executionDependencies)
+	}
 	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}
@@ -1086,22 +1291,24 @@ func ExecuteAttempt(
 		return stopped(result, err)
 	}
 	artifactIDs := artifactIDs(state, attempt.AttemptID)
-	movementVersions, err := identityVersions()
-	if err != nil {
-		return interrupted(result, err)
-	}
 	payload := map[string]any{
 		"approved_artifact_instance_ids": artifactIDs,
-		"identity_versions":              movementVersions,
 		"run_succeeded":                  state.FinalMovements[attempt.MovementID],
 	}
+	domains := []canonical.Domain(nil)
 	if state.RepoWriteMovements[attempt.MovementID] {
 		changeSet, ok := state.ChangeSets[attempt.AttemptID]
 		if !ok {
 			return interrupted(result, errors.New("driver: repo-write attempt has no recorded change set"))
 		}
 		payload["approved_change_set_id"] = changeSet.ChangeSetID
+		domains = append(domains, canonical.DomainChangeSet)
 	}
+	movementVersions, err := identityVersions(domains...)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	payload["identity_versions"] = movementVersions
 	if _, err := appendEvent(runstate.EventMovementSucceeded, payload, "movement.succeeded"); err != nil {
 		return stopped(result, err)
 	}
@@ -1948,10 +2155,6 @@ func liveMaterializeSuccessor(
 	dependencies dependencies,
 	input runstore.RunInput,
 ) Result {
-	current := input.Projection.CurrentHeadAttempt
-	if current == nil {
-		return interrupted(result, errors.New("driver: pending successor has no current attempt"))
-	}
 	pending := input.Projection.Scheduler.PendingSuccessor
 	if pending == nil {
 		return interrupted(result, errors.New("driver: charged disposition has no pending successor"))
@@ -1973,9 +2176,13 @@ func liveMaterializeSuccessor(
 	if !ok {
 		return interrupted(result, fmt.Errorf("driver: pending successor performer %q is absent from resolved cast", pending.Performer))
 	}
-	causationID, err := latestFailureEventID(store, result.RunID, pending.AttemptID)
-	if err != nil {
-		return interrupted(result, err)
+	causationID := pending.CausationID
+	if causationID == "" {
+		var err error
+		causationID, err = latestFailureEventID(store, result.RunID, pending.AttemptID)
+		if err != nil {
+			return interrupted(result, err)
+		}
 	}
 	base, err := PrepareSuccessorBase(store, authority, input, pending.MovementID, input.Projection.Scheduler.RemainingTime, dependencies.now, dependencies.newID)
 	if err != nil {
