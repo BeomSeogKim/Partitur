@@ -18,13 +18,18 @@ import (
 const (
 	preparePlanAddress    = faultpoint.ReceiptAddress("prepare.commit.plan")
 	prepareSidecarAddress = faultpoint.ReceiptAddress("prepare.commit.sidecar")
+	quiesceReceiptAddress = faultpoint.ReceiptAddress("prepare.quiesce_observed")
+	// The cadence leaves scheduler and append time below §6's 10000 ms maximum.
+	quiesceReceiptCadence = 9 * time.Second
 )
+
+var prepareCommitNow = time.Now
 
 // AcknowledgePrepare performs the driver's §6 step-2 quiesce acknowledgement.
 // Process control happens before the short compare-move transaction; callers
 // retain their driver authority until the move succeeds.
 func (store *Store) AcknowledgePrepare(ctx context.Context, driver *Driver, prepareID runstate.PrepareID) error {
-	if store == nil || driver == nil || driver.store == nil || store.root != driver.store.root || prepareID == "" {
+	if store == nil || driver == nil || driver.store == nil || prepareID == "" {
 		return errors.New("prepare acknowledgement requires its owning driver")
 	}
 	store = driver.store
@@ -35,9 +40,37 @@ func (store *Store) AcknowledgePrepare(ctx context.Context, driver *Driver, prep
 	if state.PendingPrepare == nil || state.PendingPrepare.ID != prepareID || state.CancelRequested {
 		return ErrLeaseConflict
 	}
-	if err := sweepRecordedSessions(ctx, state); err != nil {
+	round := state.PendingPrepare.LatestQuiesceRound
+	if err := store.appendQuiesceReceipt(driver, prepareID, round+1); err != nil {
 		return err
 	}
+	sweepContext, cancelSweep := context.WithCancel(ctx)
+	defer cancelSweep()
+	swept := make(chan error, 1)
+	go func() { swept <- store.sweep(sweepContext, state) }()
+	ticker := time.NewTicker(store.quiesceCadence())
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-swept:
+			if err != nil {
+				return err
+			}
+			if err := store.appendQuiesceReceipt(driver, prepareID, round+2); err != nil {
+				return err
+			}
+			goto sessionsSwept
+		case <-ticker.C:
+			round++
+			if err := store.appendQuiesceReceipt(driver, prepareID, round+1); err != nil {
+				cancelSweep()
+				<-swept
+				return err
+			}
+		}
+	}
+
+sessionsSwept:
 	store.probe.Reached(faultpoint.PointQuiesceSessionsSwept)
 	if state.OpenExecution != nil {
 		err := driver.Mutate(func(transaction *Txn, current runstate.State) error {
@@ -72,6 +105,68 @@ func (store *Store) AcknowledgePrepare(ctx context.Context, driver *Driver, prep
 		}
 		store.probe.Reached(faultpoint.PointQuiesceLeaseMoved)
 		return nil
+	})
+}
+
+func (store *Store) quiesceCadence() time.Duration {
+	if store.quiesceReceiptCadence <= 0 || store.quiesceReceiptCadence > quiesceReceiptCadence {
+		return quiesceReceiptCadence
+	}
+	return store.quiesceReceiptCadence
+}
+
+func (store *Store) sweep(ctx context.Context, state runstate.State) error {
+	if store.sweepSessions != nil {
+		return store.sweepSessions(ctx, state)
+	}
+	return sweepRecordedSessions(ctx, state)
+}
+
+func (store *Store) appendQuiesceReceipt(driver *Driver, prepareID runstate.PrepareID, round uint64) error {
+	return store.Mutate(driver.runID, "", func(transaction *Txn) error {
+		state, err := transaction.project(driver.seed)
+		if err != nil {
+			return err
+		}
+		if state.PendingPrepare == nil || state.PendingPrepare.ID != prepareID || state.CancelRequested {
+			return ErrLeaseConflict
+		}
+		if _, present, err := transaction.readLeaseAt(Path("driver.quiesced." + string(prepareID))); err != nil {
+			return err
+		} else if present {
+			return fmt.Errorf("%w: amendment.quiesce_observed: prepare_pending", runstate.ErrIllegalTransition)
+		}
+		if state.Authority.Epoch != driver.lease.Epoch || state.Authority.Owner == nil ||
+			state.Authority.Owner.PID != driver.lease.PID || !startIdentitiesEqual(state.Authority.Owner.Start, driver.lease.Start) {
+			return ErrLeaseConflict
+		}
+		lease, present, err := transaction.ReadLease()
+		if err != nil {
+			return err
+		}
+		if !present || !leaseMatches(lease, driver.lease.Identity()) {
+			return ErrLeaseConflict
+		}
+		match := lease.MatchOwner()
+		if match.Status == procid.Unverifiable {
+			return fmt.Errorf("%w: %v", ErrLeaseOwnerUnverifiable, match.Err)
+		}
+		if match.Status != procid.MatchingAndLive {
+			return ErrLeaseConflict
+		}
+		if state.PendingPrepare.LatestQuiesceRound+1 != round {
+			return fmt.Errorf("%w: amendment.quiesce_observed sweep round", runstate.ErrIllegalTransition)
+		}
+		payload, err := json.Marshal(map[string]any{"prepare_id": string(prepareID), "sweep_round": round})
+		if err != nil {
+			return err
+		}
+		event := runstate.Event{RunID: driver.runID, ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventAmendmentQuiesceObserved, Payload: payload}
+		if _, err := runstate.Apply(state, event); err != nil {
+			return err
+		}
+		_, err = transaction.At(quiesceReceiptAddress).Append(event)
+		return err
 	})
 }
 
@@ -110,7 +205,7 @@ func (store *Store) CompleteOrAbandonPrepare(ctx context.Context, runID runstate
 	case prepareCommitDone:
 		return nil
 	case prepareCommitFence:
-		if err := sweepRecordedSessions(ctx, sweepState); err != nil {
+		if err := store.sweep(ctx, sweepState); err != nil {
 			return err
 		}
 		store.probe.Reached(faultpoint.PointSupersedeSessionsSwept)
@@ -179,21 +274,34 @@ func (transaction *Txn) classifyPrepareCommit(state runstate.State) (prepareComm
 	if !leaseMatchesPrepare(lease, state, *prepare) {
 		return prepareCommitDone, Lease{}, ErrPrepareLeaseEpochMismatch
 	}
-	deadline, err := time.Parse("2006-01-02T15:04:05.000Z", prepare.QuiesceDeadline)
+	silenceExpired, err := prepareSilenceExpired(*prepare)
 	if err != nil {
-		return prepareCommitDone, Lease{}, fmt.Errorf("invalid prepare quiesce deadline: %w", err)
+		return prepareCommitDone, Lease{}, err
 	}
 	match := lease.MatchOwner()
 	if match.Status == procid.Unverifiable {
-		if time.Now().Before(deadline) {
+		if !silenceExpired {
 			return prepareCommitWaiting, lease, nil
 		}
 		return prepareCommitDone, Lease{}, fmt.Errorf("%w: %v", ErrLeaseOwnerUnverifiable, match.Err)
 	}
-	if match.Status == procid.MatchingAndLive && time.Now().Before(deadline) {
+	if match.Status == procid.MatchingAndLive && !silenceExpired {
 		return prepareCommitWaiting, lease, nil
 	}
 	return prepareCommitFence, lease, nil
+}
+
+func prepareSilenceExpired(prepare runstate.PendingPrepare) (bool, error) {
+	baseline := prepare.PreparedAt
+	if prepare.LatestQuiesceObservedAt != "" {
+		baseline = prepare.LatestQuiesceObservedAt
+	}
+	observedAt, err := time.Parse(time.RFC3339Nano, baseline)
+	if err != nil {
+		return false, fmt.Errorf("invalid prepare quiesce receipt timestamp: %w", err)
+	}
+	limit := time.Duration(prepare.QuiesceSilenceLimitMS) * time.Millisecond
+	return !prepareCommitNow().Before(observedAt.Add(limit)), nil
 }
 
 func (store *Store) commitFencedPrepare(runID runstate.RunID, seed []runstate.MovementSeed, expected Lease) error {

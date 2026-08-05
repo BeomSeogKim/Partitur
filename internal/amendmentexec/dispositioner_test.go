@@ -183,23 +183,22 @@ func TestDispositionerPreparesAutoApproval(t *testing.T) {
 	}
 }
 
-func TestDispositionerRefusesAutoPrepareWithoutQuiesceDeadlinePolicy(t *testing.T) {
+func TestDispositionerUsesFixedQuiesceSilenceLimit(t *testing.T) {
 	preparation, store, authority, started := dispositionFixture(t)
 	defer authority.Release()
 	hash, err := preparation.Score.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = New().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
-	if !errors.Is(err, ErrQuiesceDeadlineUnspecified) {
-		t.Fatalf("auto prepare error = %v, want ErrQuiesceDeadlineUnspecified", err)
+	if _, err = New().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}})); err != nil {
+		t.Fatal(err)
 	}
 	input, err := store.LoadRunInput(started.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.Projection.State.PendingPrepare != nil {
-		t.Fatalf("unspecified policy left a pending prepare: %+v", input.Projection.State.PendingPrepare)
+	if input.Projection.State.PendingPrepare == nil || input.Projection.State.PendingPrepare.QuiesceSilenceLimitMS != quiesceSilenceLimitMillis {
+		t.Fatalf("fixed-silence prepare = %+v", input.Projection.State.PendingPrepare)
 	}
 }
 
@@ -230,6 +229,31 @@ func TestDriverAutoPrepareFailsClosedWithoutWaitingHuman(t *testing.T) {
 	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash}, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: testDispositioner()})
 	if result.Outcome != driver.OutcomeInterrupted || !errors.Is(result.Err, driver.ErrAutoApprovalCommitPending) {
 		t.Fatalf("execute result = %+v, want explicit unimplemented interruption", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rounds []uint64
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventAmendmentQuiesceObserved {
+			continue
+		}
+		payload := eventPayload(t, event)
+		rounds = append(rounds, uint64(payload["sweep_round"].(float64)))
+	}
+	if !reflect.DeepEqual(rounds, []uint64{1, 2}) {
+		t.Fatalf("auto prepare quiesce receipts = %v, want [1 2]", rounds)
+	}
+	quiesced, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quiesced.Projection.State.PendingPrepare == nil {
+		t.Fatal("auto prepare did not remain pending at the commit boundary")
+	}
+	if _, err := os.Stat(filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "driver.quiesced."+string(quiesced.Projection.State.PendingPrepare.ID))); err != nil {
+		t.Fatalf("auto prepare sidecar = %v", err)
 	}
 }
 
@@ -466,9 +490,7 @@ func adapterProposal(store *runstore.Store, authority *runstore.Driver, runID ru
 }
 
 func testDispositioner() ProposalDispositioner {
-	dispositioner := New()
-	dispositioner.QuiesceDeadline = func(now time.Time) (time.Time, error) { return now.Add(time.Minute), nil }
-	return dispositioner
+	return New()
 }
 
 func dispositionFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {

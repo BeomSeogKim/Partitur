@@ -906,8 +906,29 @@ func ExecuteAttempt(
 		if err != nil {
 			return stopped(result, err)
 		}
-		// Part (b) owns quiesce acknowledgement and commit. Do not let the
-		// normal watcher path acknowledge this prepare in the producing turn.
+		if cancelled, handled := cancellationResult(ctx, result, control); handled {
+			return cancelled
+		}
+		state, stateErr := authority.State()
+		if stateErr != nil {
+			return stopped(result, stateErr)
+		}
+		if state.PendingPrepare == nil {
+			return stopped(result, errors.New("driver: auto approval prepare is no longer pending"))
+		}
+		store.Reached(faultpoint.PointPrepareObserved)
+		if acknowledgeErr := store.AcknowledgePrepare(ctx, authority, state.PendingPrepare.ID); acknowledgeErr != nil {
+			if cancelled, handled := cancellationResult(ctx, result, control); handled {
+				return cancelled
+			}
+			return stopped(result, acknowledgeErr)
+		}
+		if cancelled, handled := cancellationResult(ctx, result, control); handled {
+			return cancelled
+		}
+		result.prepareAcknowledged = true
+		// Part (b2) owns the commit-table invocation and continuation. The
+		// acknowledged prepare remains an explicit fail-closed boundary here.
 		return interrupted(result, ErrAutoApprovalCommitPending)
 	}
 	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {

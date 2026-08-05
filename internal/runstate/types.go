@@ -146,12 +146,9 @@ type PendingPrepare struct {
 	PreparedAt              string
 	LatestQuiesceRound      uint64
 	LatestQuiesceObservedAt string
-	// QuiesceDeadline is retained for the not-yet-migrated live dispositioner.
-	// It is not populated by the approval-prepared event schema.
-	QuiesceDeadline   string
-	TargetAttemptIDs  []AttemptID
-	ClassifierVersion uint64
-	IdentityVersions  json.RawMessage
+	TargetAttemptIDs        []AttemptID
+	ClassifierVersion       uint64
+	IdentityVersions        json.RawMessage
 }
 
 type PendingDecision struct {

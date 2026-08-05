@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/amendment"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
@@ -28,12 +27,14 @@ import (
 )
 
 var (
-	ErrPreparePending             = errors.New("amendment approval prepare is already pending")
-	ErrBarrierDidNotConverge      = errors.New("amendment durable-consequence barrier did not converge")
-	ErrQuiesceDeadlineUnspecified = errors.New("amendment quiesce deadline policy is unspecified")
+	ErrPreparePending        = errors.New("amendment approval prepare is already pending")
+	ErrBarrierDidNotConverge = errors.New("amendment durable-consequence barrier did not converge")
 )
 
-const defaultBarrierLimit = 64
+const (
+	defaultBarrierLimit       = 64
+	quiesceSilenceLimitMillis = 60_000
+)
 
 var errBarrierRecheck = errors.New("amendment barrier requires another locked recheck")
 
@@ -41,15 +42,13 @@ var errBarrierRecheck = errors.New("amendment barrier requires another locked re
 // proposals. It is stateless so later origins can use the same consequence
 // boundary without inventing another approval-policy implementation.
 type ProposalDispositioner struct {
-	Now             func() time.Time
-	NewID           func() (string, error)
-	QuiesceDeadline func(time.Time) (time.Time, error)
-	barrierLimit    int
+	NewID        func() (string, error)
+	barrierLimit int
 	// afterBarrier is a test-only interleave seam. Production leaves it nil.
 	afterBarrier func()
 }
 
-func New() ProposalDispositioner { return ProposalDispositioner{Now: time.Now, NewID: workspace.NewID} }
+func New() ProposalDispositioner { return ProposalDispositioner{NewID: workspace.NewID} }
 
 // RequiresSingleRaisedForAuto prevents a prepare from suppressing the durable
 // source event for another raised adapter decision.
@@ -272,10 +271,6 @@ func barrierDecision(input recovery.Input) recovery.Decision {
 }
 
 func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.Txn, state runstate.State, proposal driver.AdapterProposal, input submission, outcome amendment.Outcome, versions map[string]any, disposition *driver.AdapterProposalDisposition) error {
-	now := dispositioner.Now
-	if now == nil {
-		now = time.Now
-	}
 	newID := dispositioner.NewID
 	if newID == nil {
 		newID = workspace.NewID
@@ -283,10 +278,6 @@ func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.T
 	prepareID, err := newID()
 	if err != nil {
 		return fmt.Errorf("allocate prepare id: %w", err)
-	}
-	deadline, err := dispositioner.quiesceDeadline(now())
-	if err != nil {
-		return err
 	}
 	prepared, err := preparedScore(outcome.Patched, state.ScoreHead.Revision+1)
 	if err != nil {
@@ -329,8 +320,8 @@ func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.T
 		"base_revision": input.BaseRevision, "base_hash": string(input.BaseHash), "new_revision": plan.NewRevision,
 		"new_snapshot_hash": semanticHash, "new_snapshot_file_hash": fileHash, "plan_record_hash": rawHash(planBytes),
 		"target_attempt_ids": attemptStrings(plan.SupersededAttemptIDs), "observed_authority_epoch": state.Authority.Epoch,
-		"quiesce_deadline":   deadline.UTC().Format("2006-01-02T15:04:05.000Z"),
-		"classifier_version": canonical.AmendmentClassifierVersion, "identity_versions": versions,
+		"quiesce_silence_limit_ms": quiesceSilenceLimitMillis,
+		"classifier_version":       canonical.AmendmentClassifierVersion, "identity_versions": versions,
 	}
 	event, err := amendmentEvent(proposal, runstate.EventAmendmentApprovalPrepared, payload)
 	if err != nil {
@@ -342,20 +333,6 @@ func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.T
 	}
 	disposition.PreparedReceipt = &receipt
 	return nil
-}
-
-func (dispositioner ProposalDispositioner) quiesceDeadline(now time.Time) (time.Time, error) {
-	if dispositioner.QuiesceDeadline == nil {
-		return time.Time{}, ErrQuiesceDeadlineUnspecified
-	}
-	deadline, err := dispositioner.QuiesceDeadline(now)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("compute quiesce deadline: %w", err)
-	}
-	if !deadline.After(now) {
-		return time.Time{}, errors.New("quiesce deadline must be after prepare time")
-	}
-	return deadline, nil
 }
 
 func preparedScore(patched *score.Score, revision uint64) (*score.Score, error) {
