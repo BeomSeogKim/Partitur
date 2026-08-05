@@ -202,7 +202,7 @@ func TestDispositionerUsesFixedQuiesceSilenceLimit(t *testing.T) {
 	}
 }
 
-func TestDriverAutoPrepareFailsClosedWithoutWaitingHuman(t *testing.T) {
+func TestDriverAutoApprovalCommitsAndContinuesWithoutWaitingHuman(t *testing.T) {
 	preparation, store, authority, started := dispositionFixture(t)
 	defer authority.Release()
 	attempt, err := started.Run.CreateAttempt("inspect")
@@ -218,17 +218,25 @@ func TestDriverAutoPrepareFailsClosedWithoutWaitingHuman(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := workspace.RecordRecoveredZeroWriterCandidate(store, authority, input); err != nil {
+		t.Fatal(err)
+	}
+	input, err = store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hash, err := preparation.Score.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
+	client := &autoThenInterruptedExecutor{first: waitingProposalExecutor{t: t, baseHash: hash}}
 	result := driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
 		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
 		Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
 		PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
-	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash}, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: testDispositioner()})
-	if result.Outcome != driver.OutcomeInterrupted || !errors.Is(result.Err, driver.ErrAutoApprovalCommitPending) {
-		t.Fatalf("execute result = %+v, want explicit unimplemented interruption", result)
+	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: client, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: testDispositioner()})
+	if result.Outcome != driver.OutcomeInterrupted || !errors.Is(result.Err, errContinuedAutoApproval) || client.calls != 2 {
+		t.Fatalf("execute result = %+v calls=%d, want second revision attempt interruption", result, client.calls)
 	}
 	journal, err := store.ReadJournal(started.RunID)
 	if err != nil {
@@ -249,12 +257,179 @@ func TestDriverAutoPrepareFailsClosedWithoutWaitingHuman(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if quiesced.Projection.State.PendingPrepare == nil {
-		t.Fatal("auto prepare did not remain pending at the commit boundary")
+	if quiesced.Projection.State.PendingPrepare != nil || quiesced.Projection.State.ScoreHead.Revision != 2 {
+		t.Fatalf("auto approval state = %+v, want committed revision 2", quiesced.Projection.State)
 	}
-	if _, err := os.Stat(filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "driver.quiesced."+string(quiesced.Projection.State.PendingPrepare.ID))); err != nil {
-		t.Fatalf("auto prepare sidecar = %v", err)
+	journal, err = store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
 	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAmendmentApproved {
+			if _, present := eventPayload(t, event)["fenced_epoch"]; present {
+				t.Fatalf("matching-sidecar approval unexpectedly fenced: %+v", event)
+			}
+		}
+		if event.Type == runstate.EventPerformerSelected && event.ScoreRevision == 2 {
+			payload := eventPayload(t, event)
+			if payload["reason"] != "revision_restart" {
+				t.Fatalf("revision-2 selection = %#v", payload)
+			}
+		}
+	}
+}
+
+func TestDriverAutoApprovalFreshAcquisitionFailureKeepsCommittedApprovalForResume(t *testing.T) {
+	preparation, store, authority, started, attempt, input, hash := autoApprovalAttemptFixture(t)
+	defer authority.Release()
+	acquireErr := errors.New("fresh driver acquisition failed")
+	result := driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
+		Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
+		PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+	}, driver.ExecutionDependencies{
+		Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash},
+		ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID,
+		ProposalDisposition: testDispositioner(),
+		AcquireDriver: func(*runstore.Store, runstate.RunID, []runstate.MovementSeed) (*runstore.Driver, error) {
+			return nil, acquireErr
+		},
+	})
+	if result.Outcome != driver.OutcomeInterrupted || !errors.Is(result.Err, acquireErr) {
+		t.Fatalf("execute result = %+v, want interrupted fresh-acquisition failure", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := journal.Events[len(journal.Events)-1]; last.Type != runstate.EventAmendmentApproved {
+		t.Fatalf("journal head = %s, want durable amendment.approved after fresh-acquisition failure", last.Type)
+	}
+	committed, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.Projection.State.PendingPrepare != nil || committed.Projection.State.ScoreHead.Revision != 2 {
+		t.Fatalf("post-acquisition-failure state = %+v, want committed revision 2", committed.Projection.State)
+	}
+
+	_, _ = recoveryExecutor(store, started.RunID).Execute(context.Background())
+	journal, err = store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasRevisionRestartSelection(t, journal.Events, 2) {
+		t.Fatal("resume did not perform the committed approval's revision-restart continuation")
+	}
+}
+
+func TestDriverAutoApprovalCancellationAfterCommitBeforeFreshAcquisition(t *testing.T) {
+	preparation, store, authority, started, attempt, input, hash := autoApprovalAttemptFixture(t)
+	defer authority.Release()
+	acknowledged := false
+	result := driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
+		Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
+		PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+	}, driver.ExecutionDependencies{
+		Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash},
+		ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID,
+		ProposalDisposition:      testDispositioner(),
+		AfterPrepareAcknowledged: func() { acknowledged = true },
+		AcquireDriver: func(store *runstore.Store, runID runstate.RunID, seeds []runstate.MovementSeed) (*runstore.Driver, error) {
+			if !acknowledged {
+				t.Fatal("fresh acquisition began before the acknowledged-prepare seam")
+			}
+			if err := store.RequestCancellation(runID); err != nil {
+				t.Fatal(err)
+			}
+			return store.AcquireDriver(runID, seeds)
+		},
+	})
+	if result.Outcome != driver.OutcomeCancelled || result.Err != nil {
+		t.Fatalf("execute result = %+v, want cancellation after committed approval", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, cancelled := -1, -1
+	for index, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventAmendmentApproved:
+			approved = index
+		case runstate.EventRunCancelled:
+			cancelled = index
+		}
+	}
+	if approved < 0 || cancelled <= approved {
+		t.Fatalf("approval/cancellation order = approved:%d cancelled:%d, want committed approval before cancellation", approved, cancelled)
+	}
+	if hasRevisionRestartSelection(t, journal.Events, 2) {
+		t.Fatal("cancellation after commit continued into revision restart")
+	}
+}
+
+func TestRecoveryCommitsPrepareAfterCrashBetweenLeaseMoveAndCommit(t *testing.T) {
+	preparation, store, authority, started, attempt, input, hash := autoApprovalAttemptFixture(t)
+	defer authority.Release()
+	crash := errors.New("crash after lease move")
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != crash {
+				t.Fatalf("panic = %#v, want crash after lease move", recovered)
+			}
+		}()
+		_ = driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
+			RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
+			Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
+			PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+		}, driver.ExecutionDependencies{
+			Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash},
+			ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID,
+			ProposalDisposition: testDispositioner(), AfterPrepareAcknowledged: func() { panic(crash) },
+		})
+	}()
+	precrash, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if precrash.Projection.State.PendingPrepare == nil {
+		t.Fatal("crash did not retain the pending prepare for RC-RESUME-007")
+	}
+	prepareID := precrash.Projection.State.PendingPrepare.ID
+	planBytes, err := os.ReadFile(filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "prepares", string(prepareID)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := runstate.DecodeApprovalPlan(planBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recoveryExecutor(store, started.RunID).Execute(context.Background()); err == nil {
+		t.Fatal("recovery did not reach the recovered continuation adapter boundary")
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventAmendmentApproved {
+			continue
+		}
+		want, err := plan.ApprovedPayload(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(event.Payload) != string(want) {
+			t.Fatalf("recovered approval payload = %s, want prepared unfenced plan %s", event.Payload, want)
+		}
+		if _, fenced := eventPayload(t, event)["fenced_epoch"]; fenced {
+			t.Fatalf("recovered approval unexpectedly fenced: %+v", event)
+		}
+		return
+	}
+	t.Fatal("RC-RESUME-007 did not commit amendment.approved after the lease-move crash")
 }
 
 func TestDispositionerBarrierClosesEachCataloguedConsequenceBeforePrepare(t *testing.T) {
@@ -541,6 +716,46 @@ func dispositionFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *
 	return preparation, store, authority, started
 }
 
+func autoApprovalAttemptFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, *workspace.AttemptWorkspace, runstore.RunInput, string) {
+	t.Helper()
+	preparation, store, authority, started := dispositionFixture(t)
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: eventType, Payload: []byte(`{}`)}, faultpoint.ReceiptAddress("test."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.RecordRecoveredZeroWriterCandidate(store, authority, input); err != nil {
+		t.Fatal(err)
+	}
+	input, err = store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return preparation, store, authority, started, attempt, input, hash
+}
+
+func hasRevisionRestartSelection(t *testing.T, events []runstate.Event, revision uint64) bool {
+	t.Helper()
+	for _, event := range events {
+		if event.Type == runstate.EventPerformerSelected && event.ScoreRevision == revision && eventPayload(t, event)["reason"] == "revision_restart" {
+			return true
+		}
+	}
+	return false
+}
+
 func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 	movements := compiled.Movements()
 	result := make([]runstate.MovementSeed, 0, len(movements))
@@ -567,6 +782,25 @@ type waitingProposalExecutor struct {
 	t                *testing.T
 	baseHash         string
 	requiresDecision bool
+}
+
+var errContinuedAutoApproval = errors.New("continued auto approval attempt")
+
+type autoThenInterruptedExecutor struct {
+	first waitingProposalExecutor
+	calls int
+}
+
+func (fixture *autoThenInterruptedExecutor) Resolve(adapterID string) (string, error) {
+	return fixture.first.Resolve(adapterID)
+}
+
+func (fixture *autoThenInterruptedExecutor) Execute(ctx context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	fixture.calls++
+	if fixture.calls == 1 {
+		return fixture.first.Execute(ctx, plan)
+	}
+	return adapter.ExecuteReport{}, errContinuedAutoApproval
 }
 
 func (waitingProposalExecutor) Resolve(string) (string, error) { return "/fixture/adapter", nil }

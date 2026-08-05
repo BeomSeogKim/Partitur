@@ -132,6 +132,15 @@ func TestMutationLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	assertDriverMutationKilled(t, "TestLiveFanInCreatesTargetAtPinnedBaseCommit", goEnvironment, "driver.go", "attempt, err = run.CreateAttemptAtBase(movement.ID, baseCommit)", "attempt, err = run.CreateAttempt(movement.ID)")
 }
 
+func TestMutationAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestCompleteAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t)
+	// The mutant keeps `present` in the condition so the mutated copy still
+	// compiles — dropping it makes the binding unused, which Go rejects, and a
+	// build failure is a non-result rather than a killed mutant.
+	assertDriverMutationKilled(t, "TestCompleteAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains", goEnvironment, "driver.go", "} else if present {", "} else if present && false { // mutation: normal driver authority ignored")
+}
+
 func TestMutationExecutionDependencyHashBindsDeliveredArtifactID(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestExecutionDependencyHashBindsDeliveredArtifactInstance(t)

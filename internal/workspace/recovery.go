@@ -232,30 +232,45 @@ func CreateRecoveredAttemptAtBase(
 	input runstore.RunInput,
 	movementID, baseCommit string,
 ) (*AttemptWorkspace, error) {
-	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" {
-		return nil, errors.New("workspace: incomplete recovered attempt input")
-	}
-	git, err := newSystemGit()
+	run, err := ReconstructRun(store, driver, input)
 	if err != nil {
-		return nil, err
-	}
-	run := &Run{
-		id:             driver.RunID(),
-		repositoryRoot: store.RepositoryRoot(),
-		scoreRevision:  input.Projection.State.ScoreHead.Revision,
-		baseCommit:     recoveryGitObject(input.BaseCommit),
-		movements:      input.Score.Movements(),
-		store:          store,
-		git:            git,
-		newID:          newUUIDv7,
-	}
-	if err := run.BindDriver(driver); err != nil {
 		return nil, err
 	}
 	if baseCommit == "" {
 		baseCommit = run.baseCommit
 	}
 	return run.CreateAttemptAtBase(movementID, baseCommit)
+}
+
+// ReconstructRun restores the run-owned workspace handle from durable input
+// after a recovery or a fresh post-quiesce authority acquisition.
+func ReconstructRun(
+	store *runstore.Store,
+	driver *runstore.Driver,
+	input runstore.RunInput,
+) (*Run, error) {
+	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" || input.BaseTree == "" {
+		return nil, errors.New("workspace: incomplete recovered run input")
+	}
+	git, err := newSystemGit()
+	if err != nil {
+		return nil, err
+	}
+	run := &Run{
+		id:                driver.RunID(),
+		repositoryRoot:    store.RepositoryRoot(),
+		scoreRevision:     input.Projection.State.ScoreHead.Revision,
+		baseCommit:        recoveryGitObject(input.BaseCommit),
+		baseTreeQualified: input.BaseTree,
+		movements:         input.Score.Movements(),
+		store:             store,
+		git:               git,
+		newID:             newUUIDv7,
+	}
+	if err := run.BindDriver(driver); err != nil {
+		return nil, err
+	}
+	return run, nil
 }
 
 // CaptureRecoveredChangeSet captures the authoritative existing worktree for

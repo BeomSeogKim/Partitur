@@ -1187,6 +1187,37 @@ func TestLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	}
 }
 
+func TestCompleteAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t *testing.T) {
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+
+	result := completeAutoApprovalAndContinue(context.Background(), Result{RunID: started.RunID}, store, nil, ExecutionDependencies{})
+	if result.Outcome != OutcomeInterrupted || result.Err == nil || result.Err.Error() != "driver: auto approval still holds driver authority" {
+		t.Fatalf("complete result = %+v, want normal-authority refusal before commit", result)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAmendmentApproved {
+			t.Fatalf("normal-authority call committed approval: %+v", event)
+		}
+	}
+}
+
 func TestLiveExecuteAttemptReaderAcceptanceSubjectUsesBuildTree(t *testing.T) {
 	t.Run("final movement uses recorded candidate", func(t *testing.T) {
 		preparation, store, authority, started, _, _ := candidateFanInCleanFixture(t)

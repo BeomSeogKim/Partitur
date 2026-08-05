@@ -94,6 +94,11 @@ type ExecutionDependencies struct {
 	ProposalDisposition ProposalDispositioner
 	// afterMovementFailed is a test-only interleaving hook. Production leaves it nil.
 	afterMovementFailed func()
+	// AfterPrepareAcknowledged is a test-only hook between the durable lease
+	// move and the shared approval table. Production leaves it nil.
+	AfterPrepareAcknowledged func()
+	// AcquireDriver is a test-only fresh-acquisition seam. Production leaves it nil.
+	AcquireDriver func(*runstore.Store, runstate.RunID, []runstate.MovementSeed) (*runstore.Driver, error)
 }
 
 // ProposalDispositioner prepares the already-specified durable consequence of
