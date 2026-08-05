@@ -95,7 +95,7 @@ func TestWatcherObservesPendingPrepareWithoutStoppingCancellationWatch(t *testin
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	prepare := `{"event_id":"prepared","seq":1,"ts":"2026-07-29T00:00:00.000Z","run_id":"run-1","score_revision":1,"type":"amendment.approval_prepared","payload":{"prepare_id":"prepare-1","proposal_id":"proposal-1","mode":"auto","envelope_class":"NARROW_PATHS","base_revision":1,"base_hash":"sha256:base","new_revision":2,"new_snapshot_hash":"sha256:new","new_snapshot_file_hash":"sha256:file","plan_record_hash":"sha256:plan","target_attempt_ids":[],"observed_authority_epoch":0,"quiesce_deadline":"2026-07-29T00:00:00.000Z","classifier_version":1,"identity_versions":{"canonical_encoding":1,"projections":{}}}}` + "\n"
+	prepare := `{"event_id":"prepared","seq":1,"ts":"2026-07-29T00:00:00.000Z","run_id":"run-1","score_revision":1,"type":"amendment.approval_prepared","payload":{"prepare_id":"prepare-1","proposal_id":"proposal-1","mode":"auto","envelope_class":"NARROW_PATHS","base_revision":1,"base_hash":"sha256:base","new_revision":2,"new_snapshot_hash":"sha256:new","new_snapshot_file_hash":"sha256:file","plan_record_hash":"sha256:plan","target_attempt_ids":[],"observed_authority_epoch":0,"quiesce_silence_limit_ms":60000,"classifier_version":1,"identity_versions":{"canonical_encoding":1,"projections":{}}}}` + "\n"
 	if err := os.WriteFile(path, []byte(prepare), 0o600); err != nil {
 		t.Fatal(err)
 	}

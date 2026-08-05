@@ -38,25 +38,15 @@ func TestCompleteOrAbandonPrepareCommitsUnfencedPlan(t *testing.T) {
 	}
 }
 
-func TestCompleteOrAbandonPrepareFencesDeadMatchingLease(t *testing.T) {
+func TestCompleteOrAbandonPrepareFailsClosedWithoutLegacyDeadline(t *testing.T) {
 	start, err := procid.Read(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
 	}
 	dead := Lease{Epoch: 1, Token: "dead-prepare", PID: os.Getpid(), Start: distinctStartIdentity(t, start)}
 	store, _ := preparedCommitStore(t, &dead)
-	if err := store.CompleteOrAbandonPrepare(context.Background(), "run-1"); err != nil {
-		t.Fatal(err)
-	}
-	input, err := store.LoadRunInput("run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if input.Projection.State.Authority.Epoch != 2 || input.Projection.State.PendingPrepare != nil {
-		t.Fatalf("fenced approval state = %+v", input.Projection.State.Authority)
-	}
-	if _, present, err := store.ReadLease("run-1"); err != nil || present {
-		t.Fatalf("lease present=%t err=%v, want removed", present, err)
+	if err := store.CompleteOrAbandonPrepare(context.Background(), "run-1"); err == nil {
+		t.Fatal("legacy deadline commit path accepted a silence-limit prepare")
 	}
 }
 
@@ -157,12 +147,12 @@ func TestPrepareCommitClassifiesEveryNonFenceTableRow(t *testing.T) {
 			t.Fatalf("sidecar commit points = %v", probe.points)
 		}
 	})
-	t.Run("unverifiable owner after deadline halts", func(t *testing.T) {
+	t.Run("unverifiable owner without legacy deadline fails closed", func(t *testing.T) {
 		lease := Lease{Epoch: 1, Token: "unverifiable", PID: os.Getpid(), Start: otherPlatformStartIdentity()}
 		store, _ := preparedCommitStore(t, &lease)
 		next, _, err := classifyPreparedCommit(t, store, nil)
-		if next != prepareCommitDone || !errors.Is(err, ErrLeaseOwnerUnverifiable) {
-			t.Fatalf("unverifiable commit classification = %v, %v", next, err)
+		if next != prepareCommitDone || err == nil {
+			t.Fatalf("unverifiable silence-limit classification = %v, %v", next, err)
 		}
 	})
 	t.Run("matching owner before deadline waits", func(t *testing.T) {
@@ -178,7 +168,7 @@ func TestPrepareCommitClassifiesEveryNonFenceTableRow(t *testing.T) {
 			t.Fatalf("waiting commit classification = %v, %v", next, err)
 		}
 	})
-	t.Run("matching owner after deadline fences", func(t *testing.T) {
+	t.Run("matching owner without legacy deadline fails closed", func(t *testing.T) {
 		start, err := procid.Read(os.Getpid())
 		if err != nil {
 			t.Fatal(err)
@@ -186,8 +176,8 @@ func TestPrepareCommitClassifiesEveryNonFenceTableRow(t *testing.T) {
 		lease := Lease{Epoch: 1, Token: "expired", PID: os.Getpid(), Start: start}
 		store, _ := preparedCommitStore(t, &lease)
 		next, _, err := classifyPreparedCommit(t, store, nil)
-		if err != nil || next != prepareCommitFence {
-			t.Fatalf("expired matching owner classification = %v, %v", next, err)
+		if err == nil || next != prepareCommitDone {
+			t.Fatalf("silence-limit matching owner classification = %v, %v", next, err)
 		}
 	})
 	t.Run("base head changed abandons", func(t *testing.T) {
@@ -314,7 +304,7 @@ func preparedCommitStore(t *testing.T, lease *Lease) (*Store, runstate.PendingPr
 			"base_revision": prepare.BaseHead.Revision, "base_hash": string(prepare.BaseHead.SemanticHash), "new_revision": prepare.NewHead.Revision,
 			"new_snapshot_hash": string(prepare.NewHead.SemanticHash), "new_snapshot_file_hash": string(prepare.NewHead.FileHash),
 			"plan_record_hash": string(prepare.PlanRecordHash), "target_attempt_ids": []any{}, "observed_authority_epoch": prepare.ObservedAuthorityEpoch,
-			"quiesce_deadline": prepare.QuiesceDeadline, "classifier_version": prepare.ClassifierVersion, "identity_versions": recoveryVersions(),
+			"quiesce_silence_limit_ms": 60_000, "classifier_version": prepare.ClassifierVersion, "identity_versions": recoveryVersions(),
 		})
 		if err != nil {
 			return err

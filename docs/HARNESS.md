@@ -69,7 +69,8 @@ is paused there.
 |---|---|---|---|
 | `prepare.snapshot_to_plan` | R → R | approver | approval intent established (§9 policy, not merely admissibility) |
 | `prepare.plan_to_prepared` | R → R | approver | as above |
-| `prepare.prepared_to_observed` | R → **B** | approver, then driver | a driver holding the lease that has not yet polled |
+| `prepare.prepared_to_observed` | R → R | approver, then driver | a driver holding the lease that has not yet written its first receipt |
+| `quiesce.observed_to_swept` | R → **B** | driver | a durable quiesce receipt before that receipt's sweep completes |
 | `quiesce.swept_to_lease_moved` | **B** → R | driver | a pending prepare the driver has observed |
 | `quiesce.lease_moved_to_commit_lock` | R → **B** | driver, then approver | sidecar written, approver not yet re-entered |
 | `prepare.quarantined_to_abandoned` | R → R | approver or canceller | an abandonment on each reason: `cancelled`, `base_head_changed`, `plan_invalidated` |
@@ -107,13 +108,13 @@ tests**; these edges do not require it as a separate predicate branch.
 
 ### Supersession fencing
 
-Reached through the commit table's deadline and dead-owner branches — a driver that does not
+Reached through the commit table's silence-expiry and dead-owner branches — a driver that does not
 acknowledge, or one that dies mid-drain.
 
 | Edge | Blocks on | Driven by | Cases required |
 |---|---|---|---|
-| `supersede.swept_to_approved` | **B** → R | approver | both branches — deadline expired with a wedged owner, and an owner verifiably gone. The sweep is attested by no other edge in this group, so it is exercised on each |
-| `supersede.interval_stopped_to_approved` | R → R | approver | an interval still open, on **both** branches. A dead owner can leave one open just as a wedged one can, so this is not a deadline-only case |
+| `supersede.swept_to_approved` | **B** → R | approver | both branches — silence expired with a wedged owner, and an owner verifiably gone. The sweep is attested by no other edge in this group, so it is exercised on each |
+| `supersede.interval_stopped_to_approved` | R → R | approver | an interval still open, on **both** branches. A dead owner can leave one open just as a wedged one can, so this is not a silence-expiry-only case |
 | `supersede.fence_decided_to_approved` | **B** → R | approver | lease still matching, on both branches. The commit table gives the fencing path to a verifiably dead owner as well as a wedged one |
 | `supersede.approved_to_lease_removed` | R → R | approver | as above |
 
@@ -178,6 +179,7 @@ unreachable: it records only that this gate has no fixture for the stated Append
 | `prepare.snapshot_to_plan` | not reached by this gate's cuts | §6 step 1; §9; E.2 | No prepare/approval subprocess fixture |
 | `prepare.plan_to_prepared` | not reached by this gate's cuts | §6 step 1; B.5; E.2 | No prepare/approval subprocess fixture |
 | `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | No prepare/quiesce crash subprocess fixture yet. The harness can now pause a live driver after authority acquisition while its parent appends the prepare with that driver's observed epoch; the B3 core fixture owns the two-sided cuts |
+| `quiesce.observed_to_swept` | not reached by this gate's cuts | §6 step 2; B.5; E.2 | No quiesce-receipt subprocess fixture yet. The durable receipt is projected and replayable, but no live driver emits it in this norm slice |
 | `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No prepare/quiesce crash subprocess fixture yet. The same parent-injected live driver reaches the sessions-swept boundary while draining the durable prepare; the B3 core fixture owns the two-sided cuts |
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No prepare/quiesce crash subprocess fixture yet. A post-compare-move boundary now brackets the durable sidecar before an approver reaches the existing commit-lock boundary; the B3 core fixture owns the two-sided cuts |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |

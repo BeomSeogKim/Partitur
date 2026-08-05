@@ -48,7 +48,6 @@ func TestPackageDirectImportAllowlist(t *testing.T) {
 		"math",
 		"slices",
 		"strconv",
-		"time",
 	}
 	if !slices.Equal(imports, want) {
 		t.Fatalf("direct imports = %v, want exact allowlist %v", imports, want)

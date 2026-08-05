@@ -3334,7 +3334,7 @@ func preparedCancellationStore(t *testing.T) (*runstore.Store, *runstore.Driver)
 		"prepare_id": "prepare-1", "proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
 		"base_revision": 1, "base_hash": baseHash, "new_revision": 2, "new_snapshot_hash": secondHash,
 		"new_snapshot_file_hash": hashFixture(secondSnapshot), "plan_record_hash": hashFixture(plan), "target_attempt_ids": []any{},
-		"observed_authority_epoch": 1, "quiesce_deadline": "2026-07-30T00:00:00.000Z", "classifier_version": 1,
+		"observed_authority_epoch": 1, "quiesce_silence_limit_ms": 60_000, "classifier_version": 1,
 		"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
 	})}
 	if _, err := driver.Append(prepared, "test.prepare"); err != nil {
