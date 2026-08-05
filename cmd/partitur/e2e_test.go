@@ -371,7 +371,7 @@ func appendRecoveryControlPrepare(store *runstore.Store, runID runstate.RunID, r
 		payload, err := json.Marshal(map[string]any{"prepare_id": "prepare-control", "proposal_id": "proposal-control", "mode": "auto", "envelope_class": envelope,
 			"base_revision": plan.BaseRevision, "base_hash": plan.BaseHash, "new_revision": plan.NewRevision, "new_snapshot_hash": plan.NewSnapshotHash, "new_snapshot_file_hash": plan.NewSnapshotFileHash,
 			"plan_record_hash": controlFixtureHash(planBytes), "target_attempt_ids": targets, "observed_authority_epoch": input.Projection.State.Authority.Epoch,
-			"quiesce_deadline": time.Now().Add(time.Minute).UTC().Format("2006-01-02T15:04:05.000Z"), "classifier_version": 1, "identity_versions": resumeIdentityVersions()})
+			"quiesce_silence_limit_ms": 60_000, "classifier_version": 1, "identity_versions": resumeIdentityVersions()})
 		if err != nil {
 			return err
 		}

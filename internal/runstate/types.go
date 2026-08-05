@@ -133,19 +133,25 @@ type AuthorityOwner struct {
 }
 
 type PendingPrepare struct {
-	ID                     PrepareID
-	ProposalID             ProposalID
-	Mode                   string
-	DecisionID             *string
-	EnvelopeClass          string
-	BaseHead               ScoreHead
-	NewHead                ScoreHead
-	PlanRecordHash         Hash
-	ObservedAuthorityEpoch uint64
-	QuiesceDeadline        string
-	TargetAttemptIDs       []AttemptID
-	ClassifierVersion      uint64
-	IdentityVersions       json.RawMessage
+	ID                      PrepareID
+	ProposalID              ProposalID
+	Mode                    string
+	DecisionID              *string
+	EnvelopeClass           string
+	BaseHead                ScoreHead
+	NewHead                 ScoreHead
+	PlanRecordHash          Hash
+	ObservedAuthorityEpoch  uint64
+	QuiesceSilenceLimitMS   uint64
+	PreparedAt              string
+	LatestQuiesceRound      uint64
+	LatestQuiesceObservedAt string
+	// QuiesceDeadline is retained for the not-yet-migrated live dispositioner.
+	// It is not populated by the approval-prepared event schema.
+	QuiesceDeadline   string
+	TargetAttemptIDs  []AttemptID
+	ClassifierVersion uint64
+	IdentityVersions  json.RawMessage
 }
 
 type PendingDecision struct {
@@ -453,6 +459,7 @@ const (
 	EventExecutionStarted               EventType = "execution.started"
 	EventExecutionStopped               EventType = "execution.stopped"
 	EventAmendmentApprovalPrepared      EventType = "amendment.approval_prepared"
+	EventAmendmentQuiesceObserved       EventType = "amendment.quiesce_observed"
 	EventAmendmentApprovalAbandoned     EventType = "amendment.approval_abandoned"
 	EventAmendmentRoutedHuman           EventType = "amendment.routed_human"
 	EventAmendmentApproved              EventType = "amendment.approved"

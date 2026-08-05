@@ -1570,7 +1570,7 @@ func appendResumeApprovedSnapshot(t *testing.T, store *runstore.Store) {
 			"prepare_id": "prepare-1", "proposal_id": "proposal-1", "mode": "auto", "envelope_class": "NARROW_PATHS",
 			"base_revision": 1, "base_hash": initialHash, "new_revision": 2, "new_snapshot_hash": updatedHash,
 			"new_snapshot_file_hash": resumeHash(updated), "plan_record_hash": "sha256:plan", "target_attempt_ids": []any{},
-			"observed_authority_epoch": 0, "quiesce_deadline": "2026-07-28T00:00:00.000Z", "classifier_version": 1, "identity_versions": versions,
+			"observed_authority_epoch": 0, "quiesce_silence_limit_ms": 60_000, "classifier_version": 1, "identity_versions": versions,
 		})); err != nil {
 			return err
 		}

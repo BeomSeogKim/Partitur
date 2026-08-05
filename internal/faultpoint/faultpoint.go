@@ -9,6 +9,7 @@ const (
 	EdgePrepareSnapshotToPlan                            EdgeID = "prepare.snapshot_to_plan"
 	EdgePreparePlanToPrepared                            EdgeID = "prepare.plan_to_prepared"
 	EdgePreparePreparedToObserved                        EdgeID = "prepare.prepared_to_observed"
+	EdgeQuiesceObservedToSwept                           EdgeID = "quiesce.observed_to_swept"
 	EdgeQuiesceSweptToLeaseMoved                         EdgeID = "quiesce.swept_to_lease_moved"
 	EdgeQuiesceLeaseMovedToCommitLock                    EdgeID = "quiesce.lease_moved_to_commit_lock"
 	EdgePrepareQuarantinedToAbandoned                    EdgeID = "prepare.quarantined_to_abandoned"

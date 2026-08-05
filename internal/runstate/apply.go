@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 )
 
 var (
@@ -68,6 +67,8 @@ func IdempotencyKey(event Event) (string, error) {
 		return mustString(payload, "interval_id"), nil
 	case EventAmendmentApprovalPrepared, EventAmendmentApprovalAbandoned:
 		return mustString(payload, "prepare_id"), nil
+	case EventAmendmentQuiesceObserved:
+		return mustString(payload, "prepare_id") + "\x00" + fmt.Sprintf("%d", mustUint(payload, "sweep_round")), nil
 	case EventAmendmentApproved:
 		return mustString(payload, "proposal_id"), nil
 	case EventAuthorityGranted:
@@ -699,10 +700,6 @@ func Apply(input State, event Event) (State, error) {
 		if mustUint(payload, "observed_authority_epoch") != state.Authority.Epoch {
 			return state, invalid(event, "observed_authority_epoch does not match current authority")
 		}
-		deadline, err := time.Parse("2006-01-02T15:04:05.000Z", mustString(payload, "quiesce_deadline"))
-		if err != nil || deadline.Format("2006-01-02T15:04:05.000Z") != mustString(payload, "quiesce_deadline") {
-			return state, invalid(event, "quiesce_deadline must be RFC 3339 milliseconds")
-		}
 		targetAttemptIDs := mustStrings(payload, "target_attempt_ids")
 		if !slices.Equal(targetAttemptIDs, cancellableAttemptIDs(state)) {
 			return state, invalid(event, "target_attempt_ids do not match the pre-event projection")
@@ -725,11 +722,31 @@ func Apply(input State, event Event) (State, error) {
 			},
 			PlanRecordHash:         Hash(mustString(payload, "plan_record_hash")),
 			ObservedAuthorityEpoch: mustUint(payload, "observed_authority_epoch"),
-			QuiesceDeadline:        mustString(payload, "quiesce_deadline"),
+			QuiesceSilenceLimitMS:  mustUint(payload, "quiesce_silence_limit_ms"),
+			PreparedAt:             event.Timestamp,
 			TargetAttemptIDs:       toAttemptIDs(targetAttemptIDs),
 			ClassifierVersion:      mustUint(payload, "classifier_version"),
 			IdentityVersions:       identityVersions,
 		}
+	case EventAmendmentQuiesceObserved:
+		if state.PendingPrepare == nil || state.PendingPrepare.ID != PrepareID(mustString(payload, "prepare_id")) {
+			return state, transition(event, "matching prepare is not pending")
+		}
+		round := mustUint(payload, "sweep_round")
+		if round == 0 {
+			return state, invalid(event, "quiesce sweep_round must start at one")
+		}
+		if round == state.PendingPrepare.LatestQuiesceRound {
+			break
+		}
+		if round < state.PendingPrepare.LatestQuiesceRound {
+			return state, transition(event, "quiesce sweep_round is stale")
+		}
+		if round != state.PendingPrepare.LatestQuiesceRound+1 {
+			return state, invalid(event, "quiesce sweep_round must advance by exactly one")
+		}
+		state.PendingPrepare.LatestQuiesceRound = round
+		state.PendingPrepare.LatestQuiesceObservedAt = event.Timestamp
 	case EventAmendmentApprovalAbandoned:
 		if state.PendingPrepare == nil ||
 			state.PendingPrepare.ID != PrepareID(mustString(payload, "prepare_id")) ||
@@ -935,7 +952,7 @@ func Apply(input State, event Event) (State, error) {
 func preparePendingMutation(eventType EventType) bool {
 	switch eventType {
 	case EventExecutionStopped, EventCancelRequested,
-		EventAmendmentApprovalAbandoned, EventAmendmentApproved:
+		EventAmendmentQuiesceObserved, EventAmendmentApprovalAbandoned, EventAmendmentApproved:
 		return true
 	default:
 		return false
@@ -1422,7 +1439,9 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventExecutionStopped:
 		return []string{"interval_id", "reason", "charging", "charged_duration"}, []string{"observed_at"}, true
 	case EventAmendmentApprovalPrepared:
-		return []string{"prepare_id", "proposal_id", "mode", "base_revision", "base_hash", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "target_attempt_ids", "observed_authority_epoch", "quiesce_deadline", "classifier_version", "identity_versions"}, []string{"decision_id", "envelope_class"}, true
+		return []string{"prepare_id", "proposal_id", "mode", "base_revision", "base_hash", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "target_attempt_ids", "observed_authority_epoch", "quiesce_silence_limit_ms", "classifier_version", "identity_versions"}, []string{"decision_id", "envelope_class"}, true
+	case EventAmendmentQuiesceObserved:
+		return []string{"prepare_id", "sweep_round"}, nil, true
 	case EventAmendmentApprovalAbandoned:
 		return []string{"prepare_id", "proposal_id", "reason", "base_revision", "base_hash", "classifier_version"}, nil, true
 	case EventAmendmentRoutedHuman:
@@ -2086,10 +2105,13 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		strings = append([]string{"interval_id", "reason", "charging"}, optionalNames(payload, "observed_at")...)
 		integers = []string{"charged_duration"}
 	case EventAmendmentApprovalPrepared:
-		strings = append([]string{"prepare_id", "proposal_id", "mode", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "quiesce_deadline"}, optionalNames(payload, "decision_id", "envelope_class")...)
+		strings = append([]string{"prepare_id", "proposal_id", "mode", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash"}, optionalNames(payload, "decision_id", "envelope_class")...)
 		arrays = []string{"target_attempt_ids"}
 		objects = []string{"identity_versions"}
-		integers = []string{"base_revision", "new_revision", "observed_authority_epoch", "classifier_version"}
+		integers = []string{"base_revision", "new_revision", "observed_authority_epoch", "quiesce_silence_limit_ms", "classifier_version"}
+	case EventAmendmentQuiesceObserved:
+		strings = []string{"prepare_id"}
+		integers = []string{"sweep_round"}
 	case EventAmendmentApprovalAbandoned:
 		strings = []string{"prepare_id", "proposal_id", "reason", "base_hash"}
 		integers = []string{"base_revision", "classifier_version"}
@@ -2356,6 +2378,9 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 			}
 		default:
 			return errors.New("invalid amendment prepare mode")
+		}
+		if mustUint(payload, "quiesce_silence_limit_ms") != 60_000 {
+			return errors.New("quiesce_silence_limit_ms must be 60000")
 		}
 		return sortedStringFields(payload, "target_attempt_ids")
 	case EventAmendmentApproved:
@@ -2811,7 +2836,7 @@ var registryEvents = map[EventType]bool{
 	"application_candidate.recorded": true, "acceptance.started": true, "criterion.started": true,
 	"criterion.completed": true, "acceptance.failed": true, "acceptance.evaluation_completed": true,
 	"decision.requested": true, "decision.resolved": true, "decision.obsoleted": true,
-	"amendment.rejected": true, "amendment.approval_prepared": true,
+	"amendment.rejected": true, "amendment.approval_prepared": true, "amendment.quiesce_observed": true,
 	"amendment.approval_abandoned": true, "amendment.routed_human": true,
 	"amendment.approved": true, "amendment.human_rejected": true,
 	"apply.started": true, "apply.completed": true, "apply.failed": true,

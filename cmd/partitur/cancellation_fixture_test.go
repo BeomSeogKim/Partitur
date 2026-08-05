@@ -494,7 +494,7 @@ func appendCancellationFixturePrepare(
 			"base_revision": 1, "base_hash": baseScoreHash, "new_revision": 2, "new_snapshot_hash": nextScoreHash,
 			"new_snapshot_file_hash": cancellationFixtureHash(nextSnapshot), "plan_record_hash": cancellationFixtureHash(plan),
 			"target_attempt_ids": []any{}, "observed_authority_epoch": observedEpoch,
-			"quiesce_deadline": "2026-07-29T00:00:00.000Z", "classifier_version": 1,
+			"quiesce_silence_limit_ms": 60_000, "classifier_version": 1,
 			"identity_versions": resumeIdentityVersions(),
 		}),
 	})

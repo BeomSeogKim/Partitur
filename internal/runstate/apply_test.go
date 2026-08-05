@@ -128,15 +128,15 @@ func TestUnregisteredEventFailsAsInvalid(t *testing.T) {
 	}
 }
 
-func TestEScopedSupportedEventSetHasFortyNineTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasFiftyTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 49 {
-		t.Fatalf("supported event count = %d, want 49", count)
+	if count != 50 {
+		t.Fatalf("supported event count = %d, want 50", count)
 	}
 	for _, eventType := range []EventType{EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded, EventDecisionObsoleted} {
 		if isSupportedEvent(eventType) {
@@ -1071,7 +1071,8 @@ func TestAutoPrepareCancellationCombination(t *testing.T) {
 		t.Fatal(err)
 	}
 	if state.PendingPrepare == nil ||
-		state.PendingPrepare.QuiesceDeadline != "2026-07-26T00:00:00.000Z" ||
+		state.PendingPrepare.QuiesceSilenceLimitMS != 60_000 ||
+		state.PendingPrepare.PreparedAt != "2026-07-26T00:00:00.000Z" ||
 		!reflect.DeepEqual(state.PendingPrepare.TargetAttemptIDs, []AttemptID{"a1"}) {
 		t.Fatalf("pending prepare = %+v", state.PendingPrepare)
 	}
@@ -1119,10 +1120,62 @@ func TestPendingPrepareRefusesOrdinaryLifecycleMutation(t *testing.T) {
 	}
 }
 
-func TestPrepareRequiresCurrentObservedAuthorityAndMillisecondDeadline(t *testing.T) {
+func TestQuiesceObservationProjectsLatestReceiptAndRequiresContiguousRounds(t *testing.T) {
+	state, err := Apply(runningAttemptState(t), fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := func(round uint64, timestamp string) Event {
+		return fixtureEvent(EventAmendmentQuiesceObserved, map[string]any{
+			"prepare_id": "prepare-1", "sweep_round": round,
+		}, func(event *Event) { event.Timestamp = timestamp })
+	}
+	state, err = Apply(state, receipt(1, "2026-07-26T00:00:01.000Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.PendingPrepare.LatestQuiesceRound != 1 || state.PendingPrepare.LatestQuiesceObservedAt != "2026-07-26T00:00:01.000Z" {
+		t.Fatalf("latest quiesce receipt = %+v", state.PendingPrepare)
+	}
+	state, err = Apply(state, receipt(1, "2026-07-26T00:00:02.000Z"))
+	if err != nil {
+		t.Fatalf("duplicate receipt: %v", err)
+	}
+	if state.PendingPrepare.LatestQuiesceObservedAt != "2026-07-26T00:00:01.000Z" {
+		t.Fatalf("duplicate reset receipt timestamp: %+v", state.PendingPrepare)
+	}
+	if _, err := Apply(state, receipt(3, "2026-07-26T00:00:03.000Z")); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("gap receipt error = %v, want ErrInvalidEvent", err)
+	}
+	if _, err := Apply(state, receipt(0, "2026-07-26T00:00:03.000Z")); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("zero receipt error = %v, want ErrInvalidEvent", err)
+	}
+	state, err = Apply(state, receipt(2, "2026-07-26T00:00:03.000Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(state, receipt(1, "2026-07-26T00:00:04.000Z")); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("stale receipt error = %v, want ErrIllegalTransition", err)
+	}
+	key, err := IdempotencyKey(receipt(2, "2026-07-26T00:00:03.000Z"))
+	if err != nil || key != "prepare-1\x002" {
+		t.Fatalf("receipt idempotency key = %q, %v", key, err)
+	}
+}
+
+func TestQuiesceObservationPayloadForbidsProducerTimestamp(t *testing.T) {
+	event := fixtureEvent(EventAmendmentQuiesceObserved, map[string]any{
+		"prepare_id": "prepare-1", "sweep_round": 1, "observed_at": "2026-07-26T00:00:01.000Z",
+	}, nil)
+	if err := ValidateEvent(event); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("producer timestamp error = %v, want ErrInvalidEvent", err)
+	}
+}
+
+func TestPrepareRequiresCurrentObservedAuthorityAndExactSilenceLimit(t *testing.T) {
 	for _, mutate := range []func(map[string]any){
 		func(payload map[string]any) { payload["observed_authority_epoch"] = float64(1) },
-		func(payload map[string]any) { payload["quiesce_deadline"] = "2026-07-26T00:00:00Z" },
+		func(payload map[string]any) { payload["quiesce_silence_limit_ms"] = float64(59_999) },
 	} {
 		payload := autoPreparePayload()
 		mutate(payload)
@@ -1791,7 +1844,7 @@ func autoPreparePayload() map[string]any {
 		"plan_record_hash":         "sha256:plan",
 		"target_attempt_ids":       []any{"a1"},
 		"observed_authority_epoch": 0,
-		"quiesce_deadline":         "2026-07-26T00:00:00.000Z",
+		"quiesce_silence_limit_ms": 60_000,
 		"classifier_version":       1,
 		"identity_versions":        testIdentityVersions(),
 	}

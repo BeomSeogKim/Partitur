@@ -135,6 +135,45 @@ func TestMutationRoutedProposalE2RowsStayPinned(t *testing.T) {
 	}
 }
 
+func TestMutationQuiesceReceiptRequiresContiguousRounds(t *testing.T) {
+	goEnvironment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyRoot := copyRunstateMutationRepository(t)
+	sourcePath := filepath.Join(copyRoot, "internal", "runstate", "apply.go")
+	contents, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := "\t\tif round != state.PendingPrepare.LatestQuiesceRound+1 {\n"
+	if count := strings.Count(string(contents), anchor); count != 1 {
+		t.Fatalf("mutation anchor count = %d, want 1", count)
+	}
+	mutated := strings.Replace(string(contents), anchor, "\t\tif false {\n", 1)
+	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         filepath.Join(copyRoot, "internal", "runstate"),
+		Package:     ".",
+		TestPattern: "TestQuiesceObservationProjectsLatestReceiptAndRequiresContiguousRounds",
+		TestNames:   []string{"TestQuiesceObservationProjectsLatestReceiptAndRequiresContiguousRounds"},
+		Environment: goEnvironment.ChildEnvironment(os.Environ()),
+	})
+	cancel()
+	switch result.Outcome {
+	case mutationtest.Killed:
+		return
+	case mutationtest.Survived:
+		t.Fatalf("mutation survived: quiesce receipt gaps are no longer refused\n%s", result.Diagnostic())
+	default:
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
+	}
+}
+
 func copyRunstateMutationRepository(t *testing.T) string {
 	t.Helper()
 	_, currentFile, _, ok := runtime.Caller(0)
