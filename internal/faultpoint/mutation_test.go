@@ -63,6 +63,54 @@ func TestMutationBoundaryPointIDsRequireCompleteRegistry(t *testing.T) {
 	}
 }
 
+func TestMutationAppendixEEdgeIDsRequireCompleteRegistry(t *testing.T) {
+	goEnvironment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve faultpoint test source directory")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	copyRoot := filepath.Join(t.TempDir(), "partitur-mutation-copy")
+	if err := copyFaultpointMutationRepository(copyRoot, repositoryRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcePath := filepath.Join(copyRoot, "internal", "faultpoint", "faultpoint.go")
+	contents, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := "\tEdgeProposalBlockedRouteToRouted                     EdgeID = \"proposal.blocked_route_to_routed\"\n"
+	if count := strings.Count(string(contents), anchor); count != 1 {
+		t.Fatalf("mutation anchor count = %d, want 1", count)
+	}
+	mutated := strings.Replace(string(contents), anchor, "", 1)
+	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         filepath.Join(copyRoot, "internal", "faultpoint"),
+		Package:     ".",
+		TestPattern: "TestAppendixEEdgeIDsAreCompleteAndUnique",
+		TestNames:   []string{"TestAppendixEEdgeIDsAreCompleteAndUnique"},
+		Environment: goEnvironment.ChildEnvironment(os.Environ(), "GOFLAGS=-tags=faultprobe"),
+	})
+	cancel()
+	switch result.Outcome {
+	case mutationtest.Killed:
+		return
+	case mutationtest.Survived:
+		t.Fatalf("mutation survived: missing EdgeID constant did not fail the completeness lock\n%s", result.Diagnostic())
+	default:
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
+	}
+}
+
 func TestMutationProbeNotifyFailureDoesNotContinue(t *testing.T) {
 	goEnvironment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {

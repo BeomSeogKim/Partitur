@@ -304,12 +304,18 @@ same discipline as artifacts and snapshots, for the same reason — the file mus
 event that makes it authoritative:
 
 - Write to a temporary file → compute `sha256` and durably flush → atomic rename into
-  `proposals/<proposal-id>.json` → append `amendment.routed_human` (fsynced) carrying
-  `proposal_record_hash`.
-- On recovery, a proposal file with **no** `amendment.routed_human` is quarantined: nothing ever
-  referred to it. An `amendment.routed_human` whose file is **missing**, or whose bytes do not hash
-  to the recorded value, is a recovery halt (`missing_proposal_record`) — the run cannot honour a
-  pending human decision it can no longer re-validate.
+  `proposals/<proposal-id>.json` before the first durable reference. That reference is ordinarily
+  `amendment.routed_human` (fsynced) carrying `proposal_record_hash`. For a blocking adapter
+  proposal, it is instead the route descriptor in the terminal `attempt.blocked`; that descriptor
+  carries the same hash and the already-decided route payload, and `amendment.routed_human` follows
+  it (§4).
+- On recovery, a proposal file with neither `amendment.routed_human` nor a matching blocking
+  `attempt.blocked` route descriptor is quarantined: nothing authoritative referred to it. A
+  descriptor is an authoritative reference only when its proposal id and raw hash match the file;
+  then `RC-RESUME-049` completes its missing `amendment.routed_human` without re-evaluating the
+  proposal. An `amendment.routed_human` or route descriptor whose file is **missing**, or whose
+  bytes do not hash to its recorded value, is a recovery halt (`missing_proposal_record`) — the run
+  cannot honour or reconstruct that decision.
 - `amendment.routed_human` and its `decision.requested` are separate appends. On recovery, a
   `routed_human` with no matching `decision.requested` appends it idempotently, keyed on
   `decision_id`; `routed_human` is the source authority, so the decision is fully determined by it.
@@ -1396,12 +1402,21 @@ in memory for a human:
   source.** `attempt.blocked` carries the complete set of raised decisions *with their content* —
   question text, proposal ids, types, and blocking flags. A question's `decision.requested` derives
   from that recorded `raised` entry. A proposal's request derives only from
-  `amendment.routed_human`, which owns the routing facts §1 requires; `attempt.blocked` records only
-  that the attempt raised and, where applicable, blocked on the proposal. Recording question
-  requests as independent appends first would mean a crash after the first question lost the
-  second one's text, while deriving a proposal request from both events would give it competing
-  authorities. Appendix C closes either source-to-request cut idempotently before treating the run
-  as intentionally waiting.
+  `amendment.routed_human`, which owns the routing facts §1 requires. Recording question requests
+  as independent appends first would mean a crash after the first question lost the second one's
+  text, while deriving a proposal request from both events would give it competing authorities.
+
+  A blocking proposal that passes §9 steps 1–9 is a route: before the one `attempt.blocked` append,
+  the core writes its immutable record and freezes the route descriptor in that proposal's `raised`
+  entry. It then appends `amendment.routed_human` from that descriptor, in raised order, and the
+  ordinary routed-to-request rule follows. The descriptor is **not** a second request source:
+  `amendment.routed_human` remains the sole authority for `decision.requested`. It is instead the
+  durable source-to-route cut: if a crash lands after `attempt.blocked` and before the route,
+  `RC-RESUME-049` verifies the named record and appends the exact frozen route; only then can
+  `RC-RESUME-037` append the request. A proposal rejected at steps 1–9 appends its amendment terminal
+  with the derived `decision_id` before `attempt.blocked` and has no route descriptor. Thus no
+  blocked attempt is left with a decision that no terminal can close, and no recovery has to
+  evaluate or silently rebase a notification.
 - An unresolved blocking decision projects the movement and the run to `WAITING_HUMAN` (§6) — a
   projection of the outstanding decision, not a separately appended state event.
 - **Emitted ids are attempt-scoped, so neither `decision_id` nor `proposal_id` is the emitted
@@ -3686,6 +3701,7 @@ Only then does the **approval policy** apply:
 | `base.status == draft` | route to human (`draft_phase`) |
 | `base.policy.amendment.auto == off` | route to human (`auto_disabled`) |
 | Patch changes `policy.amendment` semantics | route to human (`recognized_non_monotone`) |
+| `requires_decision == true` | route to human (`requires_decision`) |
 | Otherwise (`auto == envelope`) | typed classification + state guards, below |
 
 When a human later decides a routed proposal, the core re-runs steps 1–9 **under the lock at
@@ -3695,7 +3711,10 @@ only*: they never re-route or block a human approval — routing a guard failure
 deciding human would loop. Rejection is permanent; a corrected proposal is a new proposal.
 The proposal's origin (adapter or CLI) never affects any rule — with the single, explicit
 exception that only the core may construct the reserved `/status` finalization amendment, which
-still always requires human approval.
+still always requires human approval. `requires_decision` is not origin: it is the proposal's
+declared need for a human decision, so it selects the route row above and cannot enter the auto
+transaction. The decision-time re-run still follows the already-routed human path; it does not
+apply the routing table again.
 
 A CLI-originated proposal captures the selected run's snapshot `base_revision` and `base_hash`
 before taking the §9 admission lock, and retains them through any later human decision. It never
@@ -4835,18 +4854,25 @@ performer.completed {             # appended ONLY for outcome `completed` — se
 
 attempt.completed {}              # acceptance and any gate already recorded the evidence
 
-attempt.blocked {                 # the SOURCE event for the whole handshake (§4). Every
-                                  #   decision.requested below is DERIVED from it, so a crash
-                                  #   between appends can never lose a question's text
+attempt.blocked {                 # the SOURCE event for question requests and, for one blocking
+                                  #   proposal, the durable source-to-route cut (§4). A proposal
+                                  #   request still derives only from routed_human.
   raised: [                       # wire-arrival order; decision_id values unique; complete set, content included
       {decision_id, emitted_id, kind: "question",  question, blocking: true}
-    | {decision_id, emitted_id, kind: "proposal",  proposal_id, blocking}
-                                  #   A proposal entry records that the attempt BLOCKED on it —
-                                  #   nothing more. Its decision.requested is derived from
-                                  #   `amendment.routed_human` (§1), which alone carries
-                                  #   `routed_reason`, `decision_type`, and the record hash, and
-                                  #   which only exists once the proposal passes admissibility.
-                                  #   Two source events would otherwise compete for one decision
+    | {decision_id, emitted_id, kind: "proposal", proposal_id, blocking,
+       route?: { proposal_record_hash, reason, decision_type, base_revision, base_hash,
+                 classifier_version, typed_delta, actual_impact, identity_versions,
+                 envelope_evaluation? }}
+                                  #   `route` is REQUIRED exactly when a BLOCKING proposal passed
+                                  #   §9 steps 1–9. It duplicates the later routed_human payload
+                                  #   except fields already on this entry, so RC-RESUME-049 can
+                                  #   append that event without re-evaluation. It is absent for a
+                                  #   step-1–9 rejection and for a non-blocking proposal, which
+                                  #   has its own notification-time disposition. The route descriptor
+                                  #   never authorizes decision.requested: routed_human alone does.
+                                  #   `attempt.blocked` has no event-level identity_versions: the
+                                  #   descriptor's copy is the frozen routed_human evaluation tuple,
+                                  #   distinct from adapter.probed's attempt execution tuple.
   ],
   pending_decision_ids: [decision_id]    # sorted; MUST equal exactly the ids in `raised` whose
                                   #   `blocking` is true — the adapter's reported set is validated
@@ -5488,7 +5514,7 @@ it to one of the two §8 surfaces above. `open` entries point to the stable gap 
 | event | `adapter.probed` | direct | `RC-RESUME-015` | covered |
 | event | `performer.completed` | direct | `RC-RESUME-016`, `RC-RESUME-017` | covered |
 | event | `attempt.completed` | direct | `RC-RESUME-019` | covered |
-| event | `attempt.blocked` | direct | `RC-RESUME-040`, `RC-RESUME-048` | covered |
+| event | `attempt.blocked` | direct | `RC-RESUME-040`, `RC-RESUME-048`, `RC-RESUME-049` | covered |
 | event | `attempt.failed` | direct | `RC-RESUME-039` | covered |
 | event | `attempt.cancelled` | structural | `RC-RESUME-002` | covered |
 | event | `attempt.superseded` | structural | `RC-RESUME-042` | covered |
@@ -5590,6 +5616,7 @@ The rows:
 | `RC-RESUME-008` | An authority-granted current epoch has no live owner: its `driver.lease` is absent, or its current-epoch lease owner is verifiably dead | Re-establish authority per §6, then re-evaluate. When the lease is absent — including after a committed matching-sidecar approval — this is ordinary fresh acquisition at the next epoch, not dead-owner reclaim: the recorded prior owner cannot pass a driver-authorized mutation CAS, even if its process still exists. When the current lease owner is dead, reclaim that exact lease per §6 |
 | `RC-RESUME-009` | `root_snapshot_divergence` — the root score claims the snapshot's revision with a different semantic hash | Halt (§1). Resume is impossible until an operator resolves it |
 | `RC-RESUME-010` | A run-level snapshot, artifact, proposal record, ref, `resolved-cast.yaml`, or attempt-started review-subject input named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
+| `RC-RESUME-049` | Current-head `attempt.blocked` contains a blocking proposal's route descriptor, its named immutable record verifies, and matching `amendment.routed_human` is absent | Append `amendment.routed_human` idempotently from the **frozen descriptor** and record; do not re-run §9, infer an operations hash, or manufacture a request. The preceding `attempt.blocked` is already terminal, so the next re-evaluation reaches `RC-RESUME-037` for the separate route-to-request cut. This row is the sole exception to §1's orphan cleanup: the blocked descriptor, not an unreferenced file, is its durable routing authority |
 | `RC-RESUME-037` | `amendment.routed_human` durable, its matching `decision.requested` absent | Apply §1's source-to-request rule idempotently, then re-evaluate C.1. The routed event fixes the request payload; recovery does not re-run routing or infer it from `attempt.blocked` |
 | `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). The same C.1 selection is used by a live post-auto-commit continuation; C.4 receives only its fixed pending successor and does not rediscover revision history. Do not enter C.2 or C.3 for an attempt from the superseded revision |
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
@@ -5614,7 +5641,7 @@ Its source/request and intentional-wait cuts are closed below.
 | Recovery case | Last durable state | Recovery action |
 |---|---|---|
 | `RC-RESUME-039` | Current-head `attempt.failed` durable, its recorded §3.1 Arm 2 consequence absent | Realize that recorded disposition exactly once per §3.1's second arm, reading no current budget or admissibility state. A `none` consequence appends the prescribed `movement.failed` and re-evaluates from C.1. A `quality_retry` or `fallback` consequence selects the recorded pending successor and exits C.2 to the between-unit scheduler; this row does not append `performer.selected` or launch it |
-| `RC-RESUME-040` | Current-head `attempt.blocked` has a `question` in `raised` whose matching `decision.requested` is absent | Append the first missing request idempotently from the recorded source, in `raised` order, then re-evaluate this row. Proposal requests never match this row; their sole source is `amendment.routed_human` and `RC-RESUME-037` owns that cut |
+| `RC-RESUME-040` | Current-head `attempt.blocked` has a `question` in `raised` whose matching `decision.requested` is absent | Append the first missing request idempotently from the recorded source, in `raised` order, then re-evaluate this row. Proposal requests never match this row; `RC-RESUME-049` first materializes a missing routed source from a blocking proposal's frozen descriptor, and `RC-RESUME-037` then owns that source-to-request cut |
 | `RC-RESUME-041` | Current-head `attempt.blocked`, every request required by a durable source is durable, no blocking decision remains unresolved, the movement and run remain nonterminal, and the score head is the attempt's revision | Select the `decision_resume` continuation §4 already fixes, preserving the blocked attempt's performer and fallback position as §3.1 requires, then hand its materialization to C.4. A terminal run is owned by `RC-RESUME-002`; an approved revision is owned by `RC-RESUME-042`; finalization that completed the draft movement returns to C.1/C.4. Those are the decision-obsoletion branches, so this row never turns obsoletion into an invented same-revision retry |
 | `RC-RESUME-048` | Current-head `attempt.blocked`, every request required by a durable source is durable, and at least one blocking decision unresolved | Append nothing and return the quiescent `WAITING_HUMAN` result §6 and §7 already define. No adapter or criterion process remains: `attempt.blocked` is terminal and §4's execute-completion boundary precedes it |
 | `RC-RESUME-013` | `performer.selected`, no `attempt.started` | **No adapter body was ever released** (§4 gate). Run §4's shared bounded handoff stabilization rather than classifying its first sample. If it yields a matching identity, verify and sweep that session. If it yields marker-free, rely only on the stated **no released mutator survives** property — an unreleased trampoline may still be in its pre-marker window but contains no adapter code. Either halt outcome stops this row. Only after a published session is verified empty or the marker is observed free, close any open `adapter` interval `recovered`/`clamped`; then append `attempt.failed {kind: task_failed, reason: attempt_never_started, disposition}` and realize it per §3.1's second arm |
@@ -5703,7 +5730,7 @@ cut; it does not mean the implementation may ignore a value that could change th
 | `integrity` | `valid`, `repair`, `halt`, `irrelevant` | Replay repair may proceed, but an untrusted authoritative input must halt before mutation |
 | `owner` | `clear`, `stale`, `orphan`, `unverifiable`, `live`, `unowned`, `irrelevant` | Lease cleanup, refusal, halt, and authority reclamation are distinct results |
 | `control` | `none`, `cancel`, `prepare`, `irrelevant` | Cancellation and a pending prepare outrank ordinary lifecycle continuation |
-| `consequence` | `none`, `interval`, `request`, `revision`, `disposition`, `composition_terminal`, `lifecycle_terminal`, `irrelevant` | Already-determined durable consequences must close before new work |
+| `consequence` | `none`, `interval`, `route`, `request`, `revision`, `disposition`, `composition_terminal`, `lifecycle_terminal`, `irrelevant` | Already-determined durable consequences must close before new work; a frozen blocking-proposal route precedes its separate request |
 | `unit` | `none`, `attempt`, `acceptance`, `movement_composition`, `candidate_composition`, `application`, `promotion` | It separates attempt/criterion recovery, between-unit composition, and the two shipping projections |
 | `phase` | `idle`, `tail_repair`, `orphan_cleanup`, `control_cleanup`, `finalization_rebuild`, `root_divergence`, `missing_reference`, `interval_open`, `revision_changed`, `selected`, `started`, `probed`, `performed`, `verified`, `acceptance_ready`, `completed`, `failed`, `blocked`, `acceptance_empty`, `criterion_pending`, `criterion_running`, `criterion_failed`, `criterion_next`, `criteria_passed`, `evaluated`, `gate_free`, `gate_open`, `gate_approved`, `gate_rejected`, `ready`, `running`, `interrupted`, `recoverable`, `refused` | The last durable phase selects the idempotent continuation within a unit |
 | `decision` | `none`, `unresolved`, `released`, `irrelevant` | An unresolved blocking decision selects quiescence; a released one selects a new attempt |
@@ -5752,6 +5779,7 @@ them in prose. A combination not generated by this table is outside the declared
 | `RS-035` | resume | active | valid | clear | none | none | acceptance | acceptance_empty | none | available | safe |
 | `RS-036` | resume | active | valid | clear | none | none | attempt | started,probed | none | available | safe,sweep_unverifiable |
 | `RS-037` | resume | active | valid | clear | none | none | acceptance | criterion_running | none | available | safe,sweep_unverifiable |
+| `RS-038` | resume | active | valid | clear | none | route | attempt | blocked | none | available | safe |
 
 The **recovery action selection expansion** is independent of that reachability declaration. A
 cell is either one axis value, a comma-separated set, or `*`. Lower numeric precedence wins.
@@ -5774,6 +5802,7 @@ win at least one cut.
 | `RA-012` | 50 | `RC-RESUME-006` | resume | active | valid,halt | clear,unowned | cancel | * | * | * | * | * | safe | Execute the §6 cancellation oracle |
 | `RA-013` | 50 | `RC-RESUME-007` | resume | active | valid,halt | clear,unowned | prepare | none | none | idle,root_divergence,missing_reference | none | available | safe | Complete or abandon the prepare |
 | `RA-014` | 60 | `RC-RESUME-008` | resume | active | valid | unowned | none | none | none | idle | none | available | safe | Reclaim authority |
+| `RA-060` | 70 | `RC-RESUME-049` | resume | active | valid | clear | none | route | attempt | blocked | none | available | safe | Append the frozen blocking-proposal route |
 | `RA-015` | 70 | `RC-RESUME-037` | resume | active | valid | clear | none | request | none | blocked | none | available | safe | Append the derived request |
 | `RA-016` | 70 | `RC-RESUME-040` | resume | active | valid | clear | none | request | attempt | blocked | none,unresolved | available | safe | Append the missing question request |
 | `RA-017` | 70 | `RC-RESUME-039` | resume | active | valid | clear | none | disposition | attempt | failed | none | available | safe | Realize the recorded attempt disposition |
@@ -5918,7 +5947,8 @@ success verdict), `cancelled`, `superseded`, `budget_exhausted`, `recovered`.
 **`amendment.approval_abandoned` reasons** (§6): `base_head_changed`, `plan_invalidated`, `cancelled`.
 
 **`amendment.routed_human` reasons:** `draft_phase`, `auto_disabled`,
-`unclassified_change`, `recognized_non_monotone`, `runtime_scope_started`.
+`unclassified_change`, `recognized_non_monotone`, `runtime_scope_started`,
+`requires_decision`.
 
 **`candidate_incompatible` conditions** (§9): `composition_changed`,
 `verification_episode_finished`, `verification_mode_changed`.
@@ -6130,7 +6160,7 @@ requires, not the number of review rounds that have run.
 
 ## E.2 The catalog
 
-`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-four
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-six
 have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
 
 **Prepare and quiesce**
@@ -6148,7 +6178,9 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 
 | Edge | Left | Right | Owning clause | Assertion across a crash |
 |---|---|---|---|---|
-| `proposal.published_to_routed` | proposal record published `R` | `amendment.routed_human` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-035` | A proposal record with no routing event is unreferenced and quarantined; recovery never manufactures a route from an orphan record |
+| `proposal.published_to_blocked_route` | blocking-proposal record published `R` | matching `attempt.blocked` route descriptor appended `R` | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035` | A record without either a routed event or its matching blocked descriptor is unreferenced and quarantined; a descriptor names and raw-hash-binds the only record from which `RC-RESUME-049` may recover a route |
+| `proposal.blocked_route_to_routed` | blocking `attempt.blocked` route descriptor appended `R` | matching `amendment.routed_human` appended `R` | §4 blocking handshake; C.1 `RC-RESUME-049` | Recovery verifies the descriptor-named immutable record and appends the frozen route idempotently; it never re-runs §9 or derives a route from an unreferenced record |
+| `proposal.published_to_routed` | proposal record published `R` | `amendment.routed_human` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-035`, `RC-RESUME-049` | An ordinary routed record has no other durable reference and is quarantined when its route is absent; the blocking-descriptor exception is confined to the two rows above |
 | `proposal.routed_to_decision_requested` | `amendment.routed_human` appended `R` | matching `decision.requested` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-037` | Recovery appends the request idempotently from the routed event; it never re-runs routing or infers the request from `attempt.blocked` |
 
 **Cancellation** — `(a)`–`(f)` are §6's labels and are not restated here.

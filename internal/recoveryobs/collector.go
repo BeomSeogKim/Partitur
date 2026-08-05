@@ -179,6 +179,23 @@ func collectReferences(root string, runID runstate.RunID, state runstate.State, 
 			if revision, ok := uintValue(payload, "new_revision"); ok {
 				references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceSnapshot, Present: scoreMatches(filepath.Join(root, ".partitur", "runs", string(runID), "scores", fmt.Sprintf("revision-%d.yaml", revision)), runstate.Hash(stringValue(payload, "new_snapshot_file_hash")), runstate.Hash(stringValue(payload, "new_snapshot_hash")))})
 			}
+		case runstate.EventAttemptBlocked:
+			raisedValues, ok := payload["raised"].([]any)
+			if !ok {
+				continue
+			}
+			for _, raised := range raisedValues {
+				entry, ok := raised.(map[string]any)
+				if !ok || stringValue(entry, "kind") != "proposal" {
+					continue
+				}
+				route, ok := entry["route"].(map[string]any)
+				if !ok {
+					continue
+				}
+				proposalID := stringValue(entry, "proposal_id")
+				references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceProposalRecord, Present: fileMatches(filepath.Join(root, ".partitur", "runs", string(runID), "proposals", proposalID+".json"), runstate.Hash(stringValue(route, "proposal_record_hash")))})
+			}
 		case runstate.EventAmendmentRoutedHuman:
 			proposalID := stringValue(payload, "proposal_id")
 			references = append(references, recovery.ReferenceObservation{Kind: recovery.ReferenceProposalRecord, Present: fileMatches(filepath.Join(root, ".partitur", "runs", string(runID), "proposals", proposalID+".json"), runstate.Hash(stringValue(payload, "proposal_record_hash")))})

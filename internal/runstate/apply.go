@@ -338,6 +338,9 @@ func Apply(input State, event Event) (State, error) {
 		if _, probed := state.AdapterObservations[event.AttemptID]; !probed {
 			return state, transition(event, "adapter is not probed")
 		}
+		if err := validateBlockedProposalRoutes(state, payload["raised"].([]any)); err != nil {
+			return state, invalid(event, err.Error())
+		}
 		attempt.State = AttemptBlocked
 		state.Attempts[event.AttemptID] = attempt
 	case EventAttemptFailed:
@@ -615,6 +618,10 @@ func Apply(input State, event Event) (State, error) {
 	case EventAmendmentRejected:
 		if decisionID, ok := payload["decision_id"].(string); ok {
 			delete(state.PendingDecisions, decisionID)
+			if state.rejectedAmendments == nil {
+				state.rejectedAmendments = make(map[string]ProposalID)
+			}
+			state.rejectedAmendments[decisionID] = ProposalID(mustString(payload, "proposal_id"))
 		}
 		delete(state.RoutedAmendments, ProposalID(mustString(payload, "proposal_id")))
 		refreshWaitingHuman(&state)
@@ -2445,7 +2452,11 @@ func validateRaisedDecisions(values []any) error {
 		default:
 			return fmt.Errorf("raised[%d].kind is invalid", index)
 		}
-		if err := fields(decision, required, nil); err != nil {
+		optional := []string(nil)
+		if kind == "proposal" {
+			optional = []string{"route"}
+		}
+		if err := fields(decision, required, optional); err != nil {
 			return fmt.Errorf("raised[%d]: %w", index, err)
 		}
 		strings := []string{"decision_id", "emitted_id"}
@@ -2457,11 +2468,84 @@ func validateRaisedDecisions(values []any) error {
 		if err := namedTypes(decision, strings, nil, nil, []string{"blocking"}, nil); err != nil {
 			return fmt.Errorf("raised[%d]: %w", index, err)
 		}
+		if route, present := decision["route"]; present {
+			value, ok := route.(map[string]any)
+			if !ok {
+				return fmt.Errorf("raised[%d].route must be an object", index)
+			}
+			if err := validateBlockedProposalRoute(value); err != nil {
+				return fmt.Errorf("raised[%d].route: %w", index, err)
+			}
+		}
 		decisionID := mustString(decision, "decision_id")
 		if seen[decisionID] {
 			return errors.New("raised decision_id must be unique")
 		}
 		seen[decisionID] = true
+	}
+	return nil
+}
+
+func validateBlockedProposalRoute(route map[string]any) error {
+	if err := fields(route,
+		[]string{"proposal_record_hash", "reason", "decision_type", "base_revision", "base_hash", "classifier_version", "typed_delta", "actual_impact", "identity_versions"},
+		[]string{"envelope_evaluation"},
+	); err != nil {
+		return err
+	}
+	if err := namedTypes(route,
+		[]string{"proposal_record_hash", "reason", "decision_type", "base_hash"},
+		append([]string{"actual_impact", "identity_versions"}, optionalNames(route, "envelope_evaluation")...),
+		[]string{"typed_delta"}, nil,
+		[]string{"base_revision", "classifier_version"},
+	); err != nil {
+		return err
+	}
+	if !validAmendmentRouteReason(mustString(route, "reason")) {
+		return errors.New("invalid amendment routing reason")
+	}
+	if mustString(route, "decision_type") != "amendment" {
+		return errors.New("blocking proposal route must be an amendment")
+	}
+	if err := validateTypedDelta(route["typed_delta"].([]any)); err != nil {
+		return err
+	}
+	if err := validateActualImpact(mustObject(route, "actual_impact")); err != nil {
+		return err
+	}
+	if err := validateIdentityVersions(mustObject(route, "identity_versions")); err != nil {
+		return err
+	}
+	if evaluation, present := route["envelope_evaluation"]; present {
+		if err := validateEnvelopeEvaluation(evaluation.(map[string]any)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateBlockedProposalRoutes(state State, values []any) error {
+	for index, raw := range values {
+		decision := raw.(map[string]any)
+		if mustString(decision, "kind") != "proposal" {
+			continue
+		}
+		decisionID := mustString(decision, "decision_id")
+		proposalID := ProposalID(mustString(decision, "proposal_id"))
+		_, routed := decision["route"]
+		rejectedProposal, rejected := state.rejectedAmendments[decisionID]
+		if rejected && rejectedProposal != proposalID {
+			return fmt.Errorf("raised[%d] rejection decision_id binds proposal %q, not %q", index, rejectedProposal, proposalID)
+		}
+		if !mustBool(decision, "blocking") {
+			if routed {
+				return fmt.Errorf("raised[%d] non-blocking proposal must not carry route", index)
+			}
+			continue
+		}
+		if routed == rejected {
+			return fmt.Errorf("raised[%d] blocking proposal must carry route exactly when it has no prior amendment rejection", index)
+		}
 	}
 	return nil
 }
@@ -2514,7 +2598,7 @@ func validCandidateIncompatibleCondition(condition string) bool {
 
 func validAmendmentRouteReason(reason string) bool {
 	switch reason {
-	case "draft_phase", "auto_disabled", "unclassified_change", "recognized_non_monotone", "runtime_scope_started":
+	case "draft_phase", "auto_disabled", "unclassified_change", "recognized_non_monotone", "runtime_scope_started", "requires_decision":
 		return true
 	default:
 		return false

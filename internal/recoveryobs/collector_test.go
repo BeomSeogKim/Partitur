@@ -348,6 +348,29 @@ func TestCollectBindsEveryPendingPrepareFieldToItsPlan(t *testing.T) {
 	}
 }
 
+func TestCollectReferencesBindsBlockedProposalRouteRecord(t *testing.T) {
+	store := collectorStore(t)
+	root := store.RepositoryRoot()
+	const runID runstate.RunID = "run-1"
+	proposal := []byte("blocking proposal")
+	writeCollectorFile(t, filepath.Join(root, ".partitur", "runs", string(runID), "proposals", "proposal-1.json"), proposal)
+
+	events := []runstate.Event{{
+		Type: runstate.EventAttemptBlocked,
+		Payload: rawJSON(t, map[string]any{"raised": []any{map[string]any{
+			"kind": "proposal", "proposal_id": "proposal-1",
+			"route": map[string]any{"proposal_record_hash": fileHash(proposal)},
+		}}}),
+	}}
+	observations, err := collectReferences(root, runID, runstate.NewState(nil), events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].Kind != recovery.ReferenceProposalRecord || !observations[0].Present {
+		t.Fatalf("blocked route observations = %#v, want verified proposal record", observations)
+	}
+}
+
 func stringPointer(value string) *string { return &value }
 
 func collectorActualImpact() map[string]any {

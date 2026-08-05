@@ -33,7 +33,7 @@ type appendixStepBranch struct {
 // non-wildcard discriminant is materialized by the case fixture below.
 func TestAppendixC41SelectsThisPlanner(t *testing.T) {
 	rows := appendixC41ActionRows(t)
-	const declaredActiveRows = 57
+	const declaredActiveRows = 58
 	if len(rows) != declaredActiveRows {
 		t.Fatalf("C.4.1 active action rows = %d, want declared active set %d", len(rows), declaredActiveRows)
 	}
@@ -368,6 +368,8 @@ func appendixC41Cut(t *testing.T, row appendixActionRow) (Input, func(Input) Dec
 		return withRootDivergence(baseInput()), Plan
 	case CaseMissingReference:
 		return withMissingReference(baseInput(), ReferenceArtifact), Plan
+	case CaseBlockedProposalRoute:
+		return withMissingBlockedProposalRoute(baseInput()), Plan
 	case CaseRoutedAmendment:
 		return withMissingRoutedRequest(baseInput()), Plan
 	case CaseRevisionRestart:
@@ -468,6 +470,8 @@ func assertAppendixC41CutMatches(t *testing.T, row appendixActionRow) {
 		actual["integrity"], actual["phase"] = "halt", "root_divergence"
 	case CaseMissingReference:
 		actual["integrity"], actual["phase"] = "halt", "missing_reference"
+	case CaseBlockedProposalRoute:
+		actual["consequence"], actual["unit"], actual["phase"] = "route", "attempt", "blocked"
 	case CaseRoutedAmendment:
 		actual["consequence"], actual["phase"] = "request", "blocked"
 	case CaseRevisionRestart:

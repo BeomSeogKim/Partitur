@@ -38,13 +38,13 @@ var unitIdentifier = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
 
 func TestRecoveryActionKindCompleteness(t *testing.T) {
 	declared := actionKindsFromPlannerSource(t, filepath.Join("..", "recovery", "planner.go"))
-	if len(declared) != 45 {
-		t.Fatalf("planner ActionKind count = %d, want 45", len(declared))
+	if len(declared) != 46 {
+		t.Fatalf("planner ActionKind count = %d, want 46", len(declared))
 	}
 
 	owners := recovery.UnimplementedActionOwners()
-	if len(owners) != 1 {
-		t.Fatalf("named unimplemented action count = %d, want 1", len(owners))
+	if len(owners) != 2 {
+		t.Fatalf("named unimplemented action count = %d, want 2", len(owners))
 	}
 	for kind, unit := range owners {
 		if !unitIdentifier.MatchString(unit) {
@@ -95,8 +95,8 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 			t.Fatalf("ActionKind %q has multiple classification buckets: %v", kind, buckets)
 		}
 	}
-	if bucketCounts["defaultKinds"] != 32 || bucketCounts["Steps"] != 8 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 1 {
-		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 32, 8, 3, 1, 1", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
+	if bucketCounts["defaultKinds"] != 32 || bucketCounts["Steps"] != 8 || bucketCounts["continuation"] != 3 || bucketCounts["pre-dispatch special case"] != 1 || bucketCounts["named owner"] != 2 {
+		t.Fatalf("classification counts = defaultKinds:%d Steps:%d continuation:%d pre-dispatch:%d named-owner:%d, want 32, 8, 3, 1, 2", bucketCounts["defaultKinds"], bucketCounts["Steps"], bucketCounts["continuation"], bucketCounts["pre-dispatch special case"], bucketCounts["named owner"])
 	}
 }
 

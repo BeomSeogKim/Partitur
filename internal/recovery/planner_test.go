@@ -131,6 +131,17 @@ func TestPlanRevisionRestartCarriesItsSelectedSuccessorToC4(t *testing.T) {
 	}
 }
 
+func TestPlanBlockedProposalRouteCarriesTheFrozenRouteSelector(t *testing.T) {
+	decision := Plan(withMissingBlockedProposalRoute(baseInput()))
+	if decision.CaseID != CaseBlockedProposalRoute || decision.Action == nil || decision.Action.Kind != ActionAppendBlockedProposalRoute || !decision.Action.Replan {
+		t.Fatalf("blocked proposal route decision = %+v", decision)
+	}
+	route := decision.Action.BlockedProposalRoute
+	if route == nil || route.ProposalID != "proposal" || route.AttemptID != "attempt" || route.ScoreRevision != 0 {
+		t.Fatalf("blocked proposal route selector = %+v", route)
+	}
+}
+
 func TestPlanBetweenUnitAppliesLifecyclePrecedenceWithoutRecoveryObservations(t *testing.T) {
 	base := func() Projection {
 		input := baseInput()
@@ -368,6 +379,12 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 			adjacent: baseInput(),
 		},
 		{
+			name:     "blocking proposal route without its routed event",
+			input:    withMissingBlockedProposalRoute(baseInput()),
+			wantCase: CaseBlockedProposalRoute, wantKind: ActionAppendBlockedProposalRoute, replan: true,
+			adjacent: baseInput(),
+		},
+		{
 			name:     "routed amendment without its request",
 			input:    withMissingRoutedRequest(baseInput()),
 			wantCase: CaseRoutedAmendment, wantKind: ActionAppendRoutedRequest, replan: true,
@@ -415,7 +432,7 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 	for _, caseID := range []CaseID{
 		CaseOpenExecution, CaseTerminal, CaseStaleLease, CaseOrphanLease, CaseOwnerUnverifiable, CaseLiveOwner,
 		CaseCancellation, CasePendingPrepare, CaseReclaimAuthority, CaseRootSnapshotDivergence,
-		CaseMissingReference, CaseRoutedAmendment, CaseRevisionRestart, CaseCompositionTerminal,
+		CaseMissingReference, CaseBlockedProposalRoute, CaseRoutedAmendment, CaseRevisionRestart, CaseCompositionTerminal,
 		CaseContinue,
 	} {
 		if !seen[caseID] {
@@ -542,6 +559,11 @@ func TestPlanC1Precedence(t *testing.T) {
 			want:  CaseRootSnapshotDivergence,
 		},
 		{
+			name:  "missing reference outranks blocked proposal route",
+			input: withMissingReference(withMissingBlockedProposalRoute(baseInput()), ReferenceArtifact),
+			want:  CaseMissingReference,
+		},
+		{
 			name:  "missing reference outranks routed amendment",
 			input: withMissingReference(withMissingRoutedRequest(baseInput()), ReferenceArtifact),
 			want:  CaseMissingReference,
@@ -579,6 +601,12 @@ func TestPlanC1ReplanActionsClearTheirOwnSelectionCut(t *testing.T) {
 			input:  withLease(baseInput(), LeaseObservation{Exists: true, Readable: true, Epoch: 2}, 1),
 			next:   withAuthority(baseInput(), 1),
 			caseID: CaseOrphanLease,
+		},
+		{
+			name:   "blocking proposal route append",
+			input:  withMissingBlockedProposalRoute(baseInput()),
+			next:   baseInput(),
+			caseID: CaseBlockedProposalRoute,
 		},
 		{
 			name:   "routed request append",
@@ -1097,6 +1125,13 @@ func withMissingRoutedRequest(input Input) Input {
 		"proposal": {ProposalID: "proposal", DecisionID: "decision"},
 	}
 	input.Projection.State.PendingDecisions = map[string]runstate.PendingDecision{}
+	return input
+}
+
+func withMissingBlockedProposalRoute(input Input) Input {
+	input.Projection.BlockedProposalRoutes = []BlockedProposalRoute{{
+		ProposalID: "proposal", AttemptID: "attempt", ScoreRevision: input.Projection.State.ScoreHead.Revision,
+	}}
 	return input
 }
 
