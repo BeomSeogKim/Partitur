@@ -22,6 +22,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/criterionexec"
+	"github.com/BeomSeogKim/Partitur/internal/executiondep"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
@@ -542,10 +543,6 @@ func ExecuteAttempt(
 		return stopped(result, err)
 	}
 
-	executionVersions, err := identityVersions(canonical.DomainExecutionDependency)
-	if err != nil {
-		return interrupted(result, err)
-	}
 	attemptDomains := []canonical.Domain(nil)
 	if baseCompositionHash != "" {
 		attemptDomains = append(attemptDomains, canonical.DomainMovementComposition)
@@ -559,6 +556,7 @@ func ExecuteAttempt(
 	}
 	var advisory []string
 	var executionHash string
+	var executionVersions map[string]any
 	recordProbe := func(probe protocol.ProbeResult) (faultpoint.DurabilityReceipt, error) {
 		advisory, err = admitProbe(
 			movement,
@@ -575,7 +573,7 @@ func ExecuteAttempt(
 		if err != nil {
 			return faultpoint.DurabilityReceipt{}, err
 		}
-		executionHash, err = executionDependencyHash(
+		executionHash, executionVersions, err = executionDependencyIdentity(
 			execution.Score,
 			movement,
 			part,
@@ -1493,6 +1491,38 @@ func executionDependencyHash(
 	resolutions []protocol.ResolvedDecision,
 	feedback []protocol.Feedback,
 ) (string, error) {
+	hash, _, err := executionDependencyIdentity(
+		compiled,
+		movement,
+		part,
+		performer,
+		grants,
+		global,
+		acceptanceHash,
+		baseCompositionHash,
+		inputs,
+		resolutions,
+		feedback,
+	)
+	return hash, err
+}
+
+// executionDependencyIdentity derives the recorded tuple from the A.5 value
+// itself. This keeps adapter.probed tied to the domains the projection reached,
+// rather than to a second list maintained beside the producer.
+func executionDependencyIdentity(
+	compiled *score.Score,
+	movement score.MovementView,
+	part score.PartView,
+	performer cast.PerformerView,
+	grants protocol.Grants,
+	global map[string]any,
+	acceptanceHash runstate.Hash,
+	baseCompositionHash string,
+	inputs []protocol.ArtifactRef,
+	resolutions []protocol.ResolvedDecision,
+	feedback []protocol.Feedback,
+) (string, map[string]any, error) {
 	value, err := executionDependencyProjection(
 		compiled,
 		movement,
@@ -1507,9 +1537,21 @@ func executionDependencyHash(
 		feedback,
 	)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return canonical.Hash(canonical.DomainExecutionDependency, value)
+	hash, err := canonical.Hash(canonical.DomainExecutionDependency, value)
+	if err != nil {
+		return "", nil, err
+	}
+	domains, err := executiondep.V3ProjectionDomains(value)
+	if err != nil {
+		return "", nil, err
+	}
+	versions, err := identityVersions(domains...)
+	if err != nil {
+		return "", nil, err
+	}
+	return hash, versions, nil
 }
 
 func executionDependencyProjection(
