@@ -43,7 +43,10 @@ type Input struct {
 	BaseHash      runstate.Hash
 	Operations    []any
 	ClaimedImpact score.Impact
-	Attempts      []executiondep.Attempt
+	// HasClaimedImpact distinguishes an absent optional claim from a present,
+	// deliberately empty claim. Only the latter participates in containment.
+	HasClaimedImpact bool
+	Attempts         []executiondep.Attempt
 	// HumanDecision selects the decision-time §9 re-run. It preserves steps
 	// 1–9, but records envelope guards as audit facts instead of routing or
 	// blocking the already-deciding human.
@@ -104,7 +107,7 @@ func Evaluate(input Input) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	if !input.ClaimedImpact.Contains(impact) {
+	if input.HasClaimedImpact && !input.ClaimedImpact.Contains(impact) {
 		return Outcome{Kind: Rejected, Reason: "claim_narrower", Patched: patched, Impact: impact}, nil
 	}
 	if changed, err := executedDependencyChanged(patched, input.State, input.Attempts); err != nil {
