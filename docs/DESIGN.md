@@ -4030,6 +4030,16 @@ requires quoting, no flow collections, no anchors or aliases, LF endings, one tr
 *root* score is never reformatted by the core — only `promote-score` writes it, and it writes the
 snapshot's exact bytes.
 
+**Empty collections are the one flow exception, and it is forced.** Block YAML has no empty-mapping
+or empty-sequence form, and the canonical projection reaches both: `open_questions` defaults to
+`[]` (§2), a movement may declare no `needs`, and a score may carry an explicit `extensions: {}`.
+Read without this rule, "no flow collections" makes those values unwritable rather than
+canonically written. So a canonical empty mapping is emitted as `{}` and a canonical empty sequence
+as `[]`, with no interior whitespace, and only where the value is actually empty. No non-empty
+mapping or sequence may use flow syntax, and no other spelling of an empty collection is canonical
+— a serializer that emitted `{ }`, omitted the key, or wrote a null in its place would produce
+different bytes for the same score, which is what the fixed serializer exists to prevent.
+
 **The plan is the invariant part plus an enumerated overlay.** `prepares/<prepare-id>.json` cannot
 literally contain the whole approval, because `fenced_epoch` is decided at commit — so it carries
 `{schema: "partitur/approval-plan+json;v=1", …}` with every field fixed at prepare time, and commit
