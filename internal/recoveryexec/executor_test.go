@@ -3352,6 +3352,125 @@ func preparedSnapshotHash(t *testing.T) string {
 	return hashFixture([]byte(strings.Replace(string(first), "revision: 1", "revision: 2", 1)))
 }
 
+func TestRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot(t *testing.T) {
+	store := acquirableRecoveryStore(t)
+	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+	snapshot := []byte("unreferenced pre-prepare snapshot")
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("fixture.orphan_snapshot").PublishImmutable("scores/revision-2.yaml", snapshot, runstore.Hash(hashFixture(snapshot)))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Executor{Store: store, RunID: "run-1"}).acquireAuthority(recovery.Input{Projection: input.Projection}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(runRoot, "scores", "revision-2.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unreferenced snapshot remains at immutable path: %v", err)
+	}
+	quarantined := filepath.Join(runRoot, "quarantine", "unreferenced_prepare_snapshot", strings.TrimPrefix(hashFixture(snapshot), "sha256:"), "revision-2.yaml")
+	if contents, err := os.ReadFile(quarantined); err != nil || !bytes.Equal(contents, snapshot) {
+		t.Fatalf("quarantined snapshot contents=%q error=%v", contents, err)
+	}
+}
+
+func TestRecoveryPreprocessingRemovesUnreferencedPreparePlan(t *testing.T) {
+	store := acquirableRecoveryStore(t)
+	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("fixture.orphan_plan").PublishImmutable("prepares/orphan.json", []byte("orphan plan"), runstore.Hash(hashFixture([]byte("orphan plan"))))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Executor{Store: store, RunID: "run-1"}).acquireAuthority(recovery.Input{Projection: input.Projection}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"prepares/orphan.json"} {
+		if _, err := os.Stat(filepath.Join(runRoot, path)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("orphan artifact %s remains: %v", path, err)
+		}
+	}
+}
+
+func TestRecoveryPreprocessingRemovesTerminalPreparePlan(t *testing.T) {
+	store, driver := preparedCancellationStore(t)
+	if err := driver.Release(); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := input.Projection.State.PendingPrepare
+	if prepare == nil {
+		t.Fatal("fixture has no pending prepare")
+	}
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("fixture.terminal_prepare").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: prepare.BaseHead.Revision, Type: runstate.EventAmendmentApprovalAbandoned,
+			Payload: handlerPayload(t, map[string]any{
+				"prepare_id": string(prepare.ID), "proposal_id": string(prepare.ProposalID), "reason": "plan_invalidated",
+				"base_revision": prepare.BaseHead.Revision, "base_hash": string(prepare.BaseHead.SemanticHash), "classifier_version": prepare.ClassifierVersion,
+			}),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input, err = store.LoadRunInput("run-1")
+	if err != nil || input.Projection.State.PendingPrepare != nil {
+		t.Fatalf("terminal prepare state=%+v error=%v", input.Projection.State.PendingPrepare, err)
+	}
+	if err := (&Executor{Store: store, RunID: "run-1"}).acquireAuthority(recovery.Input{Projection: input.Projection}); err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "prepares", "prepare-1.json")
+	if _, err := os.Stat(plan); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal prepare plan remains: %v", err)
+	}
+}
+
+func TestRecoveryPreprocessingRetainsPendingPrepareArtifacts(t *testing.T) {
+	store, driver := preparedCancellationStore(t)
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := input.Projection.State.PendingPrepare
+	if prepare == nil {
+		t.Fatal("fixture has no pending prepare")
+	}
+	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+	if err := driver.Mutate(func(transaction *runstore.Txn, _ runstate.State) error {
+		_, err := transaction.At("fixture.concurrent_orphan_plan").PublishImmutable("prepares/orphan.json", []byte("orphan plan"), runstore.Hash(hashFixture([]byte("orphan plan"))))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
+		return transaction.At("test.retain_pending_prepare_artifacts").RemoveUnreferencedPrepareArtifacts(state.PendingPrepare)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"scores/revision-2.yaml", "prepares/prepare-1.json"} {
+		if _, err := os.Stat(filepath.Join(runRoot, path)); err != nil {
+			t.Fatalf("pending prepare artifact %s missing: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(runRoot, "prepares", "orphan.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("concurrent orphan prepare plan remains: %v", err)
+	}
+}
+
 func TestReclaimAuthorityIsTheOnlyAuthorityBoundary(t *testing.T) {
 	for _, action := range []recovery.ActionKind{
 		recovery.ActionTerminalCleanup,

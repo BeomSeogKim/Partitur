@@ -33,6 +33,30 @@ func TestMutationRecoveryFanInSuccessorMaterializesAtComposedBase(t *testing.T) 
 	assertRecoveryMutationKilled(t, "TestRecoveryFanInSuccessorMaterializesAtComposedBase", goEnvironment, filepath.Join("internal", "recoveryexec", "handlers.go"), "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)", "workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)")
 }
 
+func TestMutationRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot", goEnvironment,
+		filepath.Join("internal", "runstore", "prepare_artifact_cleanup.go"), "\t\tif !ok || referenced[revision] {\n", "\t\tif !ok || referenced[revision] || true {\n")
+}
+
+func TestMutationRecoveryPreprocessingRemovesOrphanPreparePlans(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingRemovesUnreferencedPreparePlan", goEnvironment,
+		filepath.Join("internal", "runstore", "prepare_artifact_cleanup.go"), "\t\tif pending != nil && entry.Name() == string(pending.ID)+\".json\" {\n", "\t\tif true {\n")
+}
+
+func TestMutationRecoveryPreprocessingRequiresPendingPrepareForPlanRetention(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingRetainsPendingPrepareArtifacts", goEnvironment,
+		filepath.Join("internal", "runstore", "prepare_artifact_cleanup.go"), "\t\tif pending != nil && entry.Name() == string(pending.ID)+\".json\" {\n", "\t\tif false && entry.Name() == string(pending.ID)+\".json\" {\n")
+}
+
+func TestMutationRecoveryPreprocessingRequiresMatchingPendingPlanID(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingRetainsPendingPrepareArtifacts", goEnvironment,
+		filepath.Join("internal", "runstore", "prepare_artifact_cleanup.go"), "\t\tif pending != nil && entry.Name() == string(pending.ID)+\".json\" {\n", "\t\tif pending != nil && true {\n")
+}
+
 func TestMutationRecoveryFinalGateRejectionEndsAtomically(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestRecoveryFinalGateRejectionEndsAtomically(t)

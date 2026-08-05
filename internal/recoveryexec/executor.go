@@ -319,9 +319,12 @@ func (executor *Executor) acquireAuthority(input recovery.Input) error {
 	}
 	executor.Driver = driver
 	if err := executor.Store.Mutate(executor.RunID, "", func(transaction *runstore.Txn) error {
-		return transaction.At("recovery.cleanup_review_subject_inputs").RemoveUnreferencedReviewSubjectInputs()
+		if err := transaction.At("recovery.cleanup_review_subject_inputs").RemoveUnreferencedReviewSubjectInputs(); err != nil {
+			return err
+		}
+		return transaction.At("recovery.cleanup_prepare_artifacts").RemoveUnreferencedPrepareArtifacts(input.Projection.State.PendingPrepare)
 	}); err != nil {
-		return fmt.Errorf("cleanup unreferenced review subject inputs: %w", err)
+		return fmt.Errorf("cleanup unreferenced recovery artifacts: %w", err)
 	}
 	return nil
 }
