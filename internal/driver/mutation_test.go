@@ -190,6 +190,13 @@ func TestMutationExecutionDependencyHashBindsScoreBaseForMayPropose(t *testing.T
 	}`)
 }
 
+func TestMutationAdapterProbedRecordsReachedA5Closure(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestExecuteAttemptRefusesProposalWaitingHumanUntilRoutedRequestExists(t)
+	assertDriverMutationKilled(t, "TestExecuteAttemptRefusesProposalWaitingHumanUntilRoutedRequestExists", goEnvironment, "driver.go", `domains, err := executiondep.V3ProjectionDomains(value)`, `domains := []canonical.Domain{canonical.DomainExecutionDependency} // mutation: A.5 inner closure omitted
+	_ = executiondep.V3ProjectionDomains`)
+}
+
 func TestMutationExecutionDependencyHashBindsDraftPhase(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestExecutionDependencyHashBindsDraftPhase(t)

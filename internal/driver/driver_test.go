@@ -21,6 +21,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
+	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
@@ -1530,6 +1531,27 @@ func TestExecuteAttemptRefusesProposalWaitingHumanUntilRoutedRequestExists(t *te
 	journal, err := store.ReadJournal(started.RunID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	foundProbe := false
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventAdapterProbed {
+			continue
+		}
+		foundProbe = true
+		payload := decodeDriverPayload(t, event)
+		versions := payload["identity_versions"].(map[string]any)["projections"].(map[string]any)
+		want := map[string]any{
+			string(canonical.DomainExecutionDependency): float64(canonical.ProjectionVersionExecutionDependency),
+			string(canonical.DomainAcceptanceSpec):      float64(canonical.ProjectionVersionAcceptanceSpec),
+			string(canonical.DomainCriterionSpec):       float64(canonical.ProjectionVersionCriterionSpec),
+			string(canonical.DomainScore):               float64(canonical.ProjectionVersionScore),
+		}
+		if !reflect.DeepEqual(versions, want) {
+			t.Fatalf("adapter.probed A.5 versions = %#v, want %#v", versions, want)
+		}
+	}
+	if !foundProbe {
+		t.Fatal("adapter.probed is absent")
 	}
 	for _, event := range journal.Events {
 		if event.Type == runstate.EventAttemptBlocked {

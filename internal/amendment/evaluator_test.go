@@ -92,7 +92,7 @@ func TestEvaluateFeasibilityPrecedesPolicy(t *testing.T) {
 	state.ScoreHead = runstate.ScoreHead{Revision: base.Revision(), SemanticHash: runstate.Hash(hash)}
 	state.Movements["inspect"] = runstate.MovementSucceeded
 	state.Attempts["attempt-1"] = runstate.Attempt{MovementID: "inspect", State: runstate.AttemptCompleted}
-	versions := json.RawMessage(`{"canonical_encoding":1,"projections":{"partitur/execution-dependency":3}}`)
+	versions := json.RawMessage(`{"canonical_encoding":1,"projections":{"partitur/acceptance-spec":1,"partitur/criterion-spec":1,"partitur/execution-dependency":3}}`)
 	attempt := executiondep.Attempt{ID: "attempt-1", MovementID: "inspect", AdapterID: "adapter", Model: "model", IdentityVersions: versions}
 	recorded, err := executiondep.Recompute(base, attempt)
 	if err != nil {
@@ -125,7 +125,7 @@ func TestEvaluateCandidateFinalityPrecedesPolicy(t *testing.T) {
 	state.Movements["inspect"] = runstate.MovementSucceeded
 	state.Attempts["attempt-1"] = runstate.Attempt{MovementID: "inspect", State: runstate.AttemptCompleted}
 	state.ApplicationCandidate = &runstate.ApplicationCandidate{BaseTree: "git-sha1:base", CompositionDependencyHash: runstate.Hash(candidateHash)}
-	versions := json.RawMessage(`{"canonical_encoding":1,"projections":{"partitur/execution-dependency":3}}`)
+	versions := json.RawMessage(`{"canonical_encoding":1,"projections":{"partitur/acceptance-spec":1,"partitur/criterion-spec":1,"partitur/execution-dependency":3}}`)
 	attempt := executiondep.Attempt{ID: "attempt-1", MovementID: "inspect", AdapterID: "adapter", Model: "model", IdentityVersions: versions}
 	recorded, err := executiondep.Recompute(base, attempt)
 	if err != nil {
