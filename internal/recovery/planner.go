@@ -23,6 +23,7 @@ const (
 	CaseReclaimAuthority       CaseID = "RC-RESUME-008"
 	CaseRootSnapshotDivergence CaseID = "RC-RESUME-009"
 	CaseMissingReference       CaseID = "RC-RESUME-010"
+	CaseBlockedProposalRoute   CaseID = "RC-RESUME-049"
 	CaseRoutedAmendment        CaseID = "RC-RESUME-037"
 	CaseRevisionRestart        CaseID = "RC-RESUME-042"
 	CaseCompositionTerminal    CaseID = "RC-RESUME-011"
@@ -175,6 +176,15 @@ type RevisionRestart struct {
 	AttemptID       runstate.AttemptID
 	ApprovalEventID string
 	Performer       string
+}
+
+// BlockedProposalRoute is the replay-derived authority for RC-RESUME-049.
+// It exists only for a blocking proposal whose attempt.blocked route descriptor
+// is durable but whose matching amendment.routed_human is not.
+type BlockedProposalRoute struct {
+	ProposalID    runstate.ProposalID
+	AttemptID     runstate.AttemptID
+	ScoreRevision uint64
 }
 
 // CompositionTerminal is replay-derived evidence waiting for the terminal
@@ -348,13 +358,14 @@ type AcceptanceRecovery struct {
 // evidence-only and derived recovery state without making the planner inspect
 // the journal itself.
 type Projection struct {
-	State                runstate.State
-	RevisionRestarts     []RevisionRestart
-	CompositionTerminals []CompositionTerminal
-	CompositionRecovery  *CompositionRecovery
-	CurrentHeadAttempt   *AttemptRecovery
-	Acceptance           *AcceptanceRecovery
-	Scheduler            Scheduler
+	State                 runstate.State
+	BlockedProposalRoutes []BlockedProposalRoute
+	RevisionRestarts      []RevisionRestart
+	CompositionTerminals  []CompositionTerminal
+	CompositionRecovery   *CompositionRecovery
+	CurrentHeadAttempt    *AttemptRecovery
+	Acceptance            *AcceptanceRecovery
+	Scheduler             Scheduler
 }
 
 // Observations are all non-journal inputs used by C.1 and C.2.
@@ -390,6 +401,7 @@ const (
 	ActionExecuteCancellation        ActionKind = "execute_cancellation_oracle"
 	ActionCompleteOrAbandonPrepare   ActionKind = "complete_or_abandon_prepare"
 	ActionReclaimAuthority           ActionKind = "reclaim_authority"
+	ActionAppendBlockedProposalRoute ActionKind = "append_blocked_proposal_route"
 	ActionAppendRoutedRequest        ActionKind = "append_routed_request"
 	ActionSelectRevisionRestart      ActionKind = "select_revision_restart"
 	ActionAppendCompositionTerminal  ActionKind = "append_composition_terminal"
@@ -460,25 +472,26 @@ const (
 // Action is a pure description for the recovery executor. Replan means the
 // executor must apply this one action and invoke Plan again from the top.
 type Action struct {
-	Kind                ActionKind
-	Replan              bool
-	RoutedProposalID    runstate.ProposalID
-	RevisionRestart     *RevisionRestart
-	CompositionTerminal *CompositionTerminal
-	PendingSuccessor    *PendingSuccessor
-	AttemptID           runstate.AttemptID
-	QuestionDecisionID  string
-	CriterionID         runstate.CriterionID
-	MovementID          runstate.MovementID
-	SubjectTree         string
-	ReviewOutcome       string
-	BlockingFindings    []runstate.FindingReference
-	FailureKind         string
-	FailureReason       string
-	RecordedDisposition *runstate.Disposition
-	CandidateCarrying   bool
-	Steps               []ActionStep
-	Continuation        Continuation
+	Kind                 ActionKind
+	Replan               bool
+	BlockedProposalRoute *BlockedProposalRoute
+	RoutedProposalID     runstate.ProposalID
+	RevisionRestart      *RevisionRestart
+	CompositionTerminal  *CompositionTerminal
+	PendingSuccessor     *PendingSuccessor
+	AttemptID            runstate.AttemptID
+	QuestionDecisionID   string
+	CriterionID          runstate.CriterionID
+	MovementID           runstate.MovementID
+	SubjectTree          string
+	ReviewOutcome        string
+	BlockingFindings     []runstate.FindingReference
+	FailureKind          string
+	FailureReason        string
+	RecordedDisposition  *runstate.Disposition
+	CandidateCarrying    bool
+	Steps                []ActionStep
+	Continuation         Continuation
 }
 
 // Decision always carries exactly one Appendix C case. It contains either an
@@ -559,6 +572,11 @@ func Plan(input Input) Decision {
 	}
 	if reason, ok := firstMissingReferenceReason(input.Observations.References); ok {
 		return halt(CaseMissingReference, reason)
+	}
+	if route, ok := firstBlockedProposalRoute(input.Projection.BlockedProposalRoutes); ok {
+		decision := action(CaseBlockedProposalRoute, ActionAppendBlockedProposalRoute, true)
+		decision.Action.BlockedProposalRoute = &route
+		return decision
 	}
 	if proposalID, ok := firstMissingRoutedRequest(state); ok {
 		decision := action(CaseRoutedAmendment, ActionAppendRoutedRequest, true)
@@ -1188,6 +1206,15 @@ func firstMissingRoutedRequest(state runstate.State) (runstate.ProposalID, bool)
 		}
 	}
 	return selected, selected != ""
+}
+
+func firstBlockedProposalRoute(routes []BlockedProposalRoute) (BlockedProposalRoute, bool) {
+	for _, route := range routes {
+		if route.ProposalID != "" && route.AttemptID != "" {
+			return route, true
+		}
+	}
+	return BlockedProposalRoute{}, false
 }
 
 func firstRevisionRestart(restarts []RevisionRestart) (RevisionRestart, bool) {

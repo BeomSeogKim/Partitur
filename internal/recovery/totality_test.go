@@ -17,7 +17,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 	type spec struct {
 		surface surface
 
-		terminal, staleLease, cancelled, openExecution, rootDivergence, missingReference, missingRouted, revisionRestart, compositionTerminal bool
+		terminal, staleLease, cancelled, openExecution, rootDivergence, missingReference, missingBlockedRoute, missingRouted, revisionRestart, compositionTerminal bool
 
 		phase                                       runstate.AttemptState
 		probe, failureRealized, blocking, staleHead bool
@@ -69,6 +69,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		{name: "open execution interval", values: forSurface(surfaceC1, func(input spec) spec { input.openExecution = true; return input })},
 		{name: "root snapshot", values: forSurface(surfaceC1, func(input spec) spec { input.rootDivergence = true; return input })},
 		{name: "event-named reference", values: forSurface(surfaceC1, func(input spec) spec { input.missingReference = true; return input })},
+		{name: "blocking proposal route", values: forSurface(surfaceC1, func(input spec) spec { input.missingBlockedRoute = true; return input })},
 		{name: "routed request", values: forSurface(surfaceC1, func(input spec) spec { input.missingRouted = true; return input })},
 		{name: "revision restart", values: forSurface(surfaceC1, func(input spec) spec { input.revisionRestart = true; return input })},
 		{name: "composition terminal", values: forSurface(surfaceC1, func(input spec) spec { input.compositionTerminal = true; return input })},
@@ -145,8 +146,8 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		{name: "C.4 budget boundary", values: forSurface(surfaceC4, func(input spec) spec { input.schedulerBudgetExhausted = true; return input })},
 		{name: "C.4 pending successor", values: forSurface(surfaceC4, func(input spec) spec { input.pendingSuccessor = true; return input })},
 	}
-	if len(axes) < 29 {
-		t.Fatalf("declared recovery axes = %d, want at least 29", len(axes))
+	if len(axes) < 30 {
+		t.Fatalf("declared recovery axes = %d, want at least 30", len(axes))
 	}
 
 	materialize := func(spec spec) Input {
@@ -169,6 +170,9 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 			}
 			if spec.missingReference {
 				input = withMissingReference(input, ReferenceArtifact)
+			}
+			if spec.missingBlockedRoute {
+				input = withMissingBlockedProposalRoute(input)
 			}
 			if spec.missingRouted {
 				input = withMissingRoutedRequest(input)
@@ -327,7 +331,7 @@ func TestPlanTotalOverDeclaredAxes(t *testing.T) {
 		t.Fatalf("declared recovery combinations = %d, want at least 28000", count)
 	}
 	for _, caseID := range []CaseID{
-		CaseOpenExecution, CaseTerminal, CaseStaleLease,
+		CaseOpenExecution, CaseTerminal, CaseStaleLease, CaseBlockedProposalRoute,
 		CaseUnstartedAttempt, CaseIncompleteAttempt, CasePostHocVerification,
 		CaseFirstCriterion, CaseCriteriaPassed, CaseHumanGateApproved, CaseUnjournaledLaunch,
 		CaseBudgetExhausted, CaseRecoveredComposition, CaseScheduler,

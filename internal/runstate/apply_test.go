@@ -327,6 +327,105 @@ func TestAttemptBlockedRaisedSequenceAcceptsWireOrderButRejectsDuplicateID(t *te
 	}
 }
 
+func TestAttemptBlockedBlockingProposalRouteMatchesPriorEvaluation(t *testing.T) {
+	blocked := func(route any) Event {
+		proposal := map[string]any{
+			"decision_id": "proposal-decision", "emitted_id": "proposal-emitted", "kind": "proposal",
+			"proposal_id": "proposal-1", "blocking": true,
+		}
+		if route != nil {
+			proposal["route"] = route
+		}
+		return fixtureEvent(EventAttemptBlocked, map[string]any{
+			"raised":               []any{proposal},
+			"pending_decision_ids": []any{"proposal-decision"},
+		}, attemptEnvelope)
+	}
+
+	t.Run("passed proposal carries frozen route", func(t *testing.T) {
+		state, err := Apply(probedAttemptState(t), blocked(blockingProposalRoutePayload()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Attempts["a1"].State != AttemptBlocked {
+			t.Fatalf("attempt state = %s, want BLOCKED", state.Attempts["a1"].State)
+		}
+	})
+
+	t.Run("rejected proposal has no route", func(t *testing.T) {
+		state := probedAttemptState(t)
+		rejected := amendmentRejectedPayload()
+		rejected["decision_id"] = "proposal-decision"
+		var err error
+		state, err = Apply(state, fixtureEvent(EventAmendmentRejected, rejected, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Apply(state, blocked(nil)); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	for _, test := range []struct {
+		name  string
+		state func(*testing.T) State
+		route any
+	}{
+		{
+			name:  "passed proposal without route",
+			state: probedAttemptState,
+		},
+		{
+			name: "rejected proposal with route",
+			state: func(t *testing.T) State {
+				state := probedAttemptState(t)
+				rejected := amendmentRejectedPayload()
+				rejected["decision_id"] = "proposal-decision"
+				next, err := Apply(state, fixtureEvent(EventAmendmentRejected, rejected, nil))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return next
+			},
+			route: blockingProposalRoutePayload(),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Apply(test.state(t), blocked(test.route)); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("error = %v, want ErrInvalidEvent", err)
+			}
+		})
+	}
+
+	t.Run("non-blocking proposal route is invalid", func(t *testing.T) {
+		state := probedAttemptState(t)
+		event := blocked(blockingProposalRoutePayload())
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		payload["raised"].([]any)[0].(map[string]any)["blocking"] = false
+		payload["pending_decision_ids"] = []any{}
+		event.Payload = mustPayload(t, payload)
+		if _, err := Apply(state, event); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("error = %v, want ErrInvalidEvent", err)
+		}
+	})
+
+	t.Run("route descriptor rejects unknown fields", func(t *testing.T) {
+		event := blocked(blockingProposalRoutePayload())
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		payload["raised"].([]any)[0].(map[string]any)["route"].(map[string]any)["unexpected"] = true
+		event.Payload = mustPayload(t, payload)
+		if err := ValidateEvent(event); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("error = %v, want ErrInvalidEvent", err)
+		}
+	})
+}
+
 func TestMovementFailedHumanGateAtomicallyFailsWaitingFinalMovement(t *testing.T) {
 	state := verifyingAttemptState(t)
 	state.Run = RunWaitingHuman
@@ -1704,6 +1803,14 @@ func blockedPayload() map[string]any {
 			"decision_id": "d1", "emitted_id": "q1", "kind": "question", "question": "Continue?", "blocking": true,
 		}},
 		"pending_decision_ids": []any{"d1"},
+	}
+}
+
+func blockingProposalRoutePayload() map[string]any {
+	return map[string]any{
+		"proposal_record_hash": "sha256:proposal", "reason": "requires_decision", "decision_type": "amendment",
+		"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+		"typed_delta": []any{}, "actual_impact": emptyActualImpact(), "identity_versions": testIdentityVersions(),
 	}
 }
 

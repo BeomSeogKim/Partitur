@@ -734,6 +734,25 @@ func TestRevisionRestartExclusions(t *testing.T) {
 	})
 }
 
+func TestReplayFactsProjectsOnlyUnroutedBlockedProposalRoutes(t *testing.T) {
+	blocked := runstate.Event{
+		ScoreRevision: 2, AttemptID: "attempt-2", Type: runstate.EventAttemptBlocked,
+		Payload: recoveryPayload(t, map[string]any{"raised": []any{map[string]any{
+			"kind": "proposal", "proposal_id": "proposal-2",
+			"route": map[string]any{"proposal_record_hash": "sha256:proposal"},
+		}}}),
+	}
+	facts := replayFacts([]runstate.Event{blocked})
+	if got := facts.blockedProposalRoutes(2); len(got) != 1 || got[0].ProposalID != "proposal-2" || got[0].AttemptID != "attempt-2" {
+		t.Fatalf("unrouted blocked proposal routes = %+v, want proposal-2/attempt-2", got)
+	}
+
+	routed := runstate.Event{Type: runstate.EventAmendmentRoutedHuman, Payload: recoveryPayload(t, map[string]any{"proposal_id": "proposal-2"})}
+	if got := replayFacts([]runstate.Event{blocked, routed}).blockedProposalRoutes(2); len(got) != 0 {
+		t.Fatalf("routed blocking proposal remains in RC-RESUME-049 facts = %+v", got)
+	}
+}
+
 func TestCompositionRecoveryIgnoresSupersededRevisionClose(t *testing.T) {
 	state := runstate.NewState([]runstate.MovementSeed{{ID: "write", Initial: runstate.MovementPending}})
 	state.Run = runstate.RunRunning

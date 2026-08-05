@@ -270,10 +270,11 @@ func (store *Store) loadResolvedCast(runID runstate.RunID, payload map[string]an
 func recoveryProjection(state runstate.State, events []runstate.Event, pinned *score.Score, resolved *cast.Cast) recovery.Projection {
 	facts := replayFacts(events)
 	projection := recovery.Projection{
-		State:                state,
-		RevisionRestarts:     facts.revisionRestarts(state, pinned, resolved),
-		CompositionTerminals: facts.compositionTerminals(events, state.ScoreHead.Revision),
-		Scheduler:            schedulerFromScore(state, pinned),
+		State:                 state,
+		BlockedProposalRoutes: facts.blockedProposalRoutes(state.ScoreHead.Revision),
+		RevisionRestarts:      facts.revisionRestarts(state, pinned, resolved),
+		CompositionTerminals:  facts.compositionTerminals(events, state.ScoreHead.Revision),
+		Scheduler:             schedulerFromScore(state, pinned),
 	}
 	projection.CompositionRecovery = facts.compositionRecovery(state, projection.Scheduler)
 	current := facts.currentHeadAttempt(state)
@@ -371,6 +372,7 @@ type replayFact struct {
 	visitedPerformers map[runstate.MovementID][]string
 	retriesConsumed   map[runstate.MovementID]int
 	reviewOutcomes    map[runstate.AttemptID]recovery.GateRecovery
+	blockedRoutes     []recovery.BlockedProposalRoute
 }
 
 type revisionApproval struct {
@@ -414,6 +416,20 @@ func replayFacts(events []runstate.Event) replayFact {
 			facts.performers[event.AttemptID] = performer
 			facts.visitedPerformers[event.MovementID] = append(facts.visitedPerformers[event.MovementID], performer)
 		case runstate.EventAttemptBlocked:
+			for _, raised := range arrayValue(payload, "raised") {
+				entry, ok := raised.(map[string]any)
+				if !ok || stringValue(entry, "kind") != "proposal" {
+					continue
+				}
+				if _, ok := entry["route"].(map[string]any); !ok {
+					continue
+				}
+				facts.blockedRoutes = append(facts.blockedRoutes, recovery.BlockedProposalRoute{
+					ProposalID:    runstate.ProposalID(stringValue(entry, "proposal_id")),
+					AttemptID:     event.AttemptID,
+					ScoreRevision: event.ScoreRevision,
+				})
+			}
 			attempt := facts.attempts[event.AttemptID]
 			if attempt == nil {
 				continue
@@ -431,6 +447,14 @@ func replayFacts(events []runstate.Event) replayFact {
 			if stringValue(payload, "decision_type") == "question" {
 				if reference, ok := requests[stringValue(payload, "decision_id")]; ok {
 					facts.attempts[reference.attemptID].QuestionRequests[reference.index].Durable = true
+				}
+			}
+		case runstate.EventAmendmentRoutedHuman:
+			proposalID := runstate.ProposalID(stringValue(payload, "proposal_id"))
+			for index, route := range facts.blockedRoutes {
+				if route.ProposalID == proposalID {
+					facts.blockedRoutes = append(facts.blockedRoutes[:index], facts.blockedRoutes[index+1:]...)
+					break
 				}
 			}
 		case runstate.EventChangeSetRecorded:
@@ -505,6 +529,16 @@ func replayFacts(events []runstate.Event) replayFact {
 		}
 	}
 	return facts
+}
+
+func (facts replayFact) blockedProposalRoutes(revision uint64) []recovery.BlockedProposalRoute {
+	routes := make([]recovery.BlockedProposalRoute, 0, len(facts.blockedRoutes))
+	for _, route := range facts.blockedRoutes {
+		if route.ScoreRevision == revision {
+			routes = append(routes, route)
+		}
+	}
+	return routes
 }
 
 func (facts replayFact) failureClassification(

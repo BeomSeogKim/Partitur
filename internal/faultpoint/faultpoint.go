@@ -12,6 +12,8 @@ const (
 	EdgeQuiesceSweptToLeaseMoved                         EdgeID = "quiesce.swept_to_lease_moved"
 	EdgeQuiesceLeaseMovedToCommitLock                    EdgeID = "quiesce.lease_moved_to_commit_lock"
 	EdgePrepareQuarantinedToAbandoned                    EdgeID = "prepare.quarantined_to_abandoned"
+	EdgeProposalPublishedToBlockedRoute                  EdgeID = "proposal.published_to_blocked_route"
+	EdgeProposalBlockedRouteToRouted                     EdgeID = "proposal.blocked_route_to_routed"
 	EdgeProposalPublishedToRouted                        EdgeID = "proposal.published_to_routed"
 	EdgeProposalRoutedToDecisionRequested                EdgeID = "proposal.routed_to_decision_requested"
 	EdgeCancelSweptToTerminal                            EdgeID = "cancel.swept_to_terminal"

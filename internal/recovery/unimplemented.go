@@ -5,7 +5,8 @@ package recovery
 // are documentation whose authority is the project roadmap; completion is
 // blocked until this map is empty.
 var unimplementedActionOwners = map[ActionKind]string{
-	ActionAppendRoutedRequest: "4.2",
+	ActionAppendBlockedProposalRoute: "4.2",
+	ActionAppendRoutedRequest:        "4.2",
 }
 
 // UnimplementedActionOwner returns the owning unit for one deferred recovery

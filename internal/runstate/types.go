@@ -404,6 +404,7 @@ type State struct {
 	ResolvedHumanGates   map[AttemptID]HumanGateResolution
 	RoutedAmendments     map[ProposalID]RoutedAmendment
 	CancelRequested      bool
+	rejectedAmendments   map[string]ProposalID
 	appliedEvents        map[string]appliedEvent
 }
 
