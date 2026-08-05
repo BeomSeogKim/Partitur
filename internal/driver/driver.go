@@ -38,6 +38,7 @@ var (
 	ErrAttemptSelectionInconsistent = errors.New("attempt selection is inconsistent with the pinned score or resolved cast.")
 	ErrCapability                   = errors.New("capability_unavailable")
 	ErrEnforcement                  = errors.New("enforcement_unavailable")
+	ErrAutoApprovalCommitPending    = errors.New("amendment approval prepared; quiesce and commit are not implemented")
 )
 
 type dependencies struct {
@@ -626,6 +627,7 @@ func ExecuteAttempt(
 		return appendEvent(runstate.EventAttemptStarted, payload, "attempt.started")
 	}
 	var observationErr error
+	approvalPrepared := false
 	adapterChargedMS := int64(0)
 	classifyFailureWithRemaining := func(failure successor.FailureCase, remainingOverride int64) (runstate.Disposition, error) {
 		input, err := store.LoadRunInput(execution.RunID)
@@ -746,6 +748,7 @@ func ExecuteAttempt(
 					"attempt.failed",
 				)
 			case string(runstate.EventAttemptBlocked):
+				autoProposal := false
 				for _, decision := range observation.Raised {
 					if decision.Kind != protocol.EventProposal || decision.Proposal == nil {
 						continue
@@ -753,10 +756,19 @@ func ExecuteAttempt(
 					if executionDependencies.ProposalDisposition == nil {
 						return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal has no amendment dispositioner")
 					}
+					autoProposal = autoProposal || !decision.Proposal.RequiresDecision
+				}
+				// An auto prepare raises the mutation barrier instead of appending the
+				// attempt.blocked source. It therefore cannot share an adapter outcome
+				// with another raised question or proposal whose durable source would be
+				// skipped by that barrier transition.
+				if guard, ok := executionDependencies.ProposalDisposition.(AutoProposalShapeGuard); ok && guard.RequiresSingleRaisedForAuto() && autoProposal && len(observation.Raised) != 1 {
+					return faultpoint.DurabilityReceipt{}, errors.New("auto approval prepare requires exactly one raised proposal")
 				}
 				raised := make([]any, 0, len(observation.Raised))
 				pending := make([]string, 0, len(observation.Raised))
 				appendRoutes := make([]func(context.Context) error, 0, len(observation.Raised))
+				var prepared *faultpoint.DurabilityReceipt
 				for _, decision := range observation.Raised {
 					switch decision.Kind {
 					case protocol.EventQuestion:
@@ -809,6 +821,12 @@ func ExecuteAttempt(
 							}
 							appendRoutes = append(appendRoutes, disposition.AppendRoute)
 						}
+						if disposition.PreparedReceipt != nil {
+							if prepared != nil {
+								return faultpoint.DurabilityReceipt{}, errors.New("auto approval prepare requires exactly one raised proposal")
+							}
+							prepared = disposition.PreparedReceipt
+						}
 						raised = append(raised, raisedProposal)
 						if decision.Proposal.RequiresDecision {
 							pending = append(pending, decisionID)
@@ -816,6 +834,10 @@ func ExecuteAttempt(
 					default:
 						return faultpoint.DurabilityReceipt{}, fmt.Errorf("unsupported raised decision %q", decision.Kind)
 					}
+				}
+				if prepared != nil {
+					approvalPrepared = true
+					return *prepared, nil
 				}
 				slices.Sort(pending)
 				receipt, err := appendEvent(runstate.EventAttemptBlocked, map[string]any{
@@ -880,6 +902,14 @@ func ExecuteAttempt(
 		Recorder:       recorder,
 	})
 	cancel()
+	if approvalPrepared {
+		if err != nil {
+			return stopped(result, err)
+		}
+		// Part (b) owns quiesce acknowledgement and commit. Do not let the
+		// normal watcher path acknowledge this prepare in the producing turn.
+		return interrupted(result, ErrAutoApprovalCommitPending)
+	}
 	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
 	}

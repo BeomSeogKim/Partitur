@@ -3,6 +3,7 @@ package amendmentexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,7 +34,7 @@ func TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	disposition, err := New().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, true, []any{map[string]any{"op": "replace", "path": "/revision", "value": float64(2)}}))
+	disposition, err := testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, true, []any{map[string]any{"op": "replace", "path": "/revision", "value": float64(2)}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +53,11 @@ func TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked(t *testing.T) 
 	if payload["decision_id"] != "dec-1" || payload["reason"] != "reserved_field" {
 		t.Fatalf("rejection payload = %#v", payload)
 	}
+	for _, path := range []string{"scores/revision-2.yaml", "prepares"} {
+		if _, err := os.Stat(filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), path)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rejection reserved preparation path %s: %v", path, err)
+		}
+	}
 }
 
 func TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource(t *testing.T) {
@@ -61,7 +67,7 @@ func TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	disposition, err := New().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, true, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
+	disposition, err := testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, true, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +123,7 @@ func TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource(t *testing.T) {
 		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
 		Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
 		PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
-	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash}, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: New()})
+	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash, requiresDecision: true}, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: testDispositioner()})
 	if result.Outcome != driver.OutcomeWaitingHuman || result.Err != nil {
 		t.Fatalf("execute result = %+v", result)
 	}
@@ -130,7 +136,54 @@ func TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource(t *testing.T) {
 	}
 }
 
-func TestDispositionerRefusesAutoApprovalExplicitly(t *testing.T) {
+func TestDispositionerPreparesAutoApproval(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disposition, err := testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition.PreparedReceipt == nil || disposition.PreparedReceipt.Mutation.EventType != string(runstate.EventAmendmentApprovalPrepared) {
+		t.Fatalf("auto disposition = %#v, want approval_prepared receipt", disposition)
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.PendingPrepare == nil {
+		t.Fatal("auto approval did not leave a pending prepare")
+	}
+	prepare := input.Projection.State.PendingPrepare
+	planBytes, err := os.ReadFile(filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "prepares", string(prepare.ID)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := runstate.DecodeApprovalPlan(planBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.MatchesPrepare(*prepare) {
+		t.Fatalf("plan does not match pending prepare: plan=%+v prepare=%+v", plan, *prepare)
+	}
+	snapshot, err := os.ReadFile(filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "scores", "revision-2.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, diagnostics := score.Compile(snapshot)
+	if len(diagnostics) != 0 || compiled.Revision() != 2 {
+		t.Fatalf("prepared snapshot = revision %d diagnostics %v\n%s", compiled.Revision(), diagnostics, snapshot)
+	}
+	_, err = testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
+	if !errors.Is(err, ErrPreparePending) {
+		t.Fatalf("second auto prepare error = %v, want ErrPreparePending", err)
+	}
+}
+
+func TestDispositionerRefusesAutoPrepareWithoutQuiesceDeadlinePolicy(t *testing.T) {
 	preparation, store, authority, started := dispositionFixture(t)
 	defer authority.Release()
 	hash, err := preparation.Score.Hash()
@@ -138,8 +191,129 @@ func TestDispositionerRefusesAutoApprovalExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = New().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
-	if err != ErrAutoApprovalUnimplemented {
-		t.Fatalf("auto approval error = %v, want %v", err, ErrAutoApprovalUnimplemented)
+	if !errors.Is(err, ErrQuiesceDeadlineUnspecified) {
+		t.Fatalf("auto prepare error = %v, want ErrQuiesceDeadlineUnspecified", err)
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.PendingPrepare != nil {
+		t.Fatalf("unspecified policy left a pending prepare: %+v", input.Projection.State.PendingPrepare)
+	}
+}
+
+func TestDriverAutoPrepareFailsClosedWithoutWaitingHuman(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: eventType, Payload: []byte(`{}`)}, faultpoint.ReceiptAddress("test."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
+		Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
+		PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash}, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: testDispositioner()})
+	if result.Outcome != driver.OutcomeInterrupted || !errors.Is(result.Err, driver.ErrAutoApprovalCommitPending) {
+		t.Fatalf("execute result = %+v, want explicit unimplemented interruption", result)
+	}
+}
+
+func TestDispositionerBarrierClosesEachCataloguedConsequenceBeforePrepare(t *testing.T) {
+	store, authority, started := interruptedBlockingProposalFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := input.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disposition, err := testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition.PreparedReceipt == nil {
+		t.Fatalf("disposition = %#v, want prepared receipt", disposition)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, routed, requested := blockingRouteEvents(t, journal.Events)
+	if routed.Type != runstate.EventAmendmentRoutedHuman || requested.Type != runstate.EventDecisionRequested {
+		t.Fatalf("barrier did not close route then request: routed=%+v requested=%+v", routed, requested)
+	}
+	if last := journal.Events[len(journal.Events)-1]; last.Type != runstate.EventAmendmentApprovalPrepared {
+		t.Fatalf("last event = %s, want approval prepare after barrier closure", last.Type)
+	}
+}
+
+func TestDispositionerBarrierLimitRejectsASecondSelectedConsequence(t *testing.T) {
+	store, authority, started := interruptedBlockingProposalFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := input.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispositioner := testDispositioner()
+	dispositioner.barrierLimit = 1
+	_, err = dispositioner.PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
+	if !errors.Is(err, ErrBarrierDidNotConverge) {
+		t.Fatalf("barrier error = %v, want ErrBarrierDidNotConverge", err)
+	}
+}
+
+func TestDispositionerReestablishesApprovalIntentAfterBarrierInterleave(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispositioner := testDispositioner()
+	var interleaveErr error
+	dispositioner.afterBarrier = func() {
+		dispositioner.afterBarrier = nil
+		for _, event := range []runstate.Event{
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementReady, Payload: []byte(`{}`)},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementStarted, Payload: []byte(`{}`)},
+			{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", AttemptID: "retry-1", Type: runstate.EventPerformerSelected, Payload: []byte(`{"reason":"quality_retry","performer_id":"worker","adapter_id":"fixture","model":"fixture"}`)},
+		} {
+			if _, err := authority.Append(event, faultpoint.ReceiptAddress("test.reestablish."+string(event.Type))); err != nil {
+				interleaveErr = err
+				return
+			}
+		}
+	}
+	disposition, err := dispositioner.PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/allowed_paths", "value": []any{}}}))
+	if interleaveErr != nil {
+		t.Fatal(interleaveErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition.RouteDescriptor == nil || disposition.RouteDescriptor["reason"] != "runtime_scope_started" || disposition.PreparedReceipt != nil {
+		t.Fatalf("re-established disposition = %#v, want runtime_scope_started route", disposition)
 	}
 }
 
@@ -206,7 +380,7 @@ var errInterruptedRouteAppend = fmt.Errorf("fixture crash after attempt.blocked"
 type interruptedRouteDispositioner struct{}
 
 func (interruptedRouteDispositioner) PrepareAdapterProposal(ctx context.Context, proposal driver.AdapterProposal) (driver.AdapterProposalDisposition, error) {
-	disposition, err := New().PrepareAdapterProposal(ctx, proposal)
+	disposition, err := testDispositioner().PrepareAdapterProposal(ctx, proposal)
 	if err != nil || disposition.AppendRoute == nil {
 		return disposition, err
 	}
@@ -238,7 +412,7 @@ func interruptedBlockingProposalFixture(t *testing.T) (*runstore.Store, *runstor
 		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
 		Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
 		PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
-	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash}, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: interruptedRouteDispositioner{}})
+	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: waitingProposalExecutor{t: t, baseHash: hash, requiresDecision: true}, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: interruptedRouteDispositioner{}})
 	if result.Err == nil || result.Err.Error() == "" {
 		t.Fatalf("interrupted route result = %+v, want append failure after attempt.blocked", result)
 	}
@@ -289,6 +463,12 @@ func adapterProposal(store *runstore.Store, authority *runstore.Driver, runID ru
 		panic(err)
 	}
 	return driver.AdapterProposal{Store: store, Authority: authority, RunID: runID, AttemptID: "attempt-1", MovementID: "inspect", PartID: "reader", ProposalID: "prp-1", DecisionID: "dec-1", Event: protocol.ProposalEvent{ID: "emitted-1", Amendment: amendment, RequiresDecision: requiresDecision}}
+}
+
+func testDispositioner() ProposalDispositioner {
+	dispositioner := New()
+	dispositioner.QuiesceDeadline = func(now time.Time) (time.Time, error) { return now.Add(time.Minute), nil }
+	return dispositioner
 }
 
 func dispositionFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
@@ -362,8 +542,9 @@ func eventPayload(t *testing.T, event runstate.Event) map[string]any {
 }
 
 type waitingProposalExecutor struct {
-	t        *testing.T
-	baseHash string
+	t                *testing.T
+	baseHash         string
+	requiresDecision bool
 }
 
 func (waitingProposalExecutor) Resolve(string) (string, error) { return "/fixture/adapter", nil }
@@ -384,8 +565,11 @@ func (fixture waitingProposalExecutor) Execute(_ context.Context, plan adapter.E
 	if _, err := plan.Recorder.RecordExecutionStopped(adapter.ExecutionStop{IntervalID: plan.IntervalID, Reason: "normal", Charging: "measured", ObservedAt: plan.IntervalOpened}); err != nil {
 		return adapter.ExecuteReport{}, err
 	}
-	proposal := protocol.ProposalEvent{Type: protocol.EventProposal, ID: "emitted-1", Amendment: amendmentForPlan(fixture.baseHash), RequiresDecision: true}
-	result := protocol.ExecuteResult{Outcome: protocol.OutcomeWaitingHuman, PendingDecisionIDs: []string{proposal.ID}}
+	proposal := protocol.ProposalEvent{Type: protocol.EventProposal, ID: "emitted-1", Amendment: amendmentForPlan(fixture.baseHash), RequiresDecision: fixture.requiresDecision}
+	result := protocol.ExecuteResult{Outcome: protocol.OutcomeWaitingHuman}
+	if proposal.RequiresDecision {
+		result.PendingDecisionIDs = []string{proposal.ID}
+	}
 	if _, err := plan.Recorder.RecordOutcome(adapter.OutcomeObservation{EventType: string(runstate.EventAttemptBlocked), Result: result, Raised: []adapter.RaisedDecision{{Kind: protocol.EventProposal, Proposal: &proposal}}}); err != nil {
 		return adapter.ExecuteReport{}, err
 	}

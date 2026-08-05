@@ -103,6 +103,14 @@ type ProposalDispositioner interface {
 	PrepareAdapterProposal(context.Context, AdapterProposal) (AdapterProposalDisposition, error)
 }
 
+// AutoProposalShapeGuard lets a dispositioner that can prepare an auto
+// approval reject a mixed raised set before the prepare mutation is possible.
+// Ordinary non-blocking proposals remain valid for dispositioners that do not
+// produce prepares.
+type AutoProposalShapeGuard interface {
+	RequiresSingleRaisedForAuto() bool
+}
+
 // AdapterProposal is the driver-owned identity boundary supplied before
 // attempt.blocked becomes durable.
 type AdapterProposal struct {
@@ -128,6 +136,10 @@ type AdapterProposalDisposition struct {
 	// driver has appended the proposal's attempt.blocked source event. It is
 	// nil for rejections, and never for a returned route descriptor.
 	AppendRoute func(context.Context) error
+	// PreparedReceipt is the durable auto-approval request. It replaces the
+	// otherwise-required attempt.blocked receipt because preparation raises the
+	// mutation barrier.
+	PreparedReceipt *faultpoint.DurabilityReceipt
 }
 
 // AdapterExecutor is the process-facing adapter boundary for one attempt.
