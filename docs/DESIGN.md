@@ -2550,10 +2550,43 @@ notification, that invocation performs steps 1 and 2 normally. Once step 2 has m
 lease to the quiesced sidecar, it has relinquished driver authority and must invoke the shared
 step-3 commit table as the approver before it returns. A matching sidecar takes the matching-sidecar
 row; it is not the table's `Wait` row and does not project `WAITING_HUMAN`. Thus the ordinary path
-appends `amendment.approved` (or yields to cancellation) without requiring `resume`. Only a crash
-after the lease move and before that call leaves the pending prepare for `RC-RESUME-007`, which
-re-enters the same table. An actor must never commit while it still holds driver authority or while
-holding the state lock from step 1.
+appends `amendment.approved` (or yields to cancellation) without requiring `resume` **to complete
+the control transaction**. Only a crash after the lease move and before that call leaves the pending
+prepare for `RC-RESUME-007`, which re-enters the same table. An actor must never commit while it
+still holds driver authority or while holding the state lock from step 1.
+
+**Post-auto-commit continuation.** A matching-sidecar approval removes that sidecar and leaves no
+`driver.lease`; it deliberately preserves no driver authority. Its `fenced_epoch` is absent because
+the driver drained voluntarily, not because it was fenced. The resulting `revision_restart` is
+therefore an eligible continuation, not an already-running attempt. Its owner is determined by the
+existence of a live continuation episode, **never by proposal origin or approval mode**:
+
+- If the same live `run` episode performed the quiesce ACK and then called the table as auto
+  approver, it does not return `WAITING_HUMAN` after a successful commit. It acquires a fresh normal
+  driver lease at the next authority epoch, selects the approved head's `revision_restart` through
+  the same C.1 selection used by `RC-RESUME-042`, and passes that already-selected successor to C.4
+  for ordinary materialization. It returns only the eventual existing `run` outcome. If that fresh
+  acquisition or selection cannot complete, it returns the ordinary interrupted run result; the
+  committed approval remains durable and a later `resume` performs the same continuation.
+- A command invocation — including CLI `amend` and amendment-form `approve` — is never a live
+  continuation episode and never acquires a driver lease merely because its auto approval committed.
+  It returns after the commit has made the restart eligible. With no live continuation episode, a
+  later `resume` acquires normal authority and performs C.1 then C.4; the command has not become a
+  second spelling of `run`.
+
+C.1 owns the conversion from an approval-derived `revision_restart` to the fixed pending successor;
+C.4's between-unit selector owns only materialization of that successor and must not rediscover a
+restart from raw revision history. This is why the rule is identical for a recovered and a live
+continuation while their authority acquisition differs only by whether a live episode already exists.
+
+The post-commit acquisition is the ordinary fresh-acquisition sequence, not a dead-owner reclaim:
+the previous epoch has no lease, so its recorded owner — even if its process still exists — cannot
+pass a driver-authorized mutation CAS. A wedged owner instead retains a current matching lease and
+takes the fenced table row. A crash before commit remains `RC-RESUME-007`; a crash after a committed
+matching-sidecar approval and before fresh acquisition has no pending prepare and reaches the normal
+no-lease continuation, including `RC-RESUME-042`. This is a **repair**, not an extension: §9 already
+declares both auto approval and execution in a new-revision attempt; this rule makes their existing
+handoff evaluable without adding a background worker or granting command authority to `amend`.
 
 Two design choices make the interval between prepare and commit safe, and they matter more than the
 step list:
@@ -3674,6 +3707,12 @@ impact; it also includes the envelope evaluation when policy evaluated it. Stdou
 diagnostic is not a stable parseable surface. The operator may inspect those computed routing facts
 before invoking `approve`. Its pending decision is non-blocking: it does not put an attempt,
 movement, or run in `WAITING_HUMAN`.
+
+A CLI auto approval follows the same evaluation, closure, prepare, and commit rules as every other
+proposal. After a successful commit it returns success for that durable command transaction; it does
+not acquire execution authority or wait for the restarted attempt. If no live continuation episode
+exists, `resume` later performs the `revision_restart` continuation defined in §6. This is a command
+authority boundary, not an origin-specific §9 policy outcome.
 
 Passing this pipeline and the approval policy establishes intent; it does not by itself authorize
 `amendment.approval_prepared`. §6's durable-consequence closure barrier runs before preparation and
@@ -5548,11 +5587,11 @@ The rows:
 | `RC-RESUME-046` | A `driver.lease` exists at the current journal-projected epoch and its matching owner is verifiably live | Yield to the live owner. The current owner already holds continuation authority; recovery neither reclaims its lease nor enters C.2 beside it, and appends no event. §7 maps the outcome of the invoking command after this action |
 | `RC-RESUME-006` | `cancel.requested` present, run nonterminal | **Cancellation takes precedence over resumption and over a pending prepare.** Execute **steps (a)–(f) of the §6 cancellation oracle exactly** — the whole list, including `(e)`'s `run.cancelled` and `(f)`'s lease cleanup; an earlier draft stopped at `(d)`, which left recovery unable to terminalize a cancelling run at all — including the conditional `(c)` and `(d)` — this row deliberately does not restate them, because two copies of a sequence are two chances to disagree. Three notes specific to recovery: `sweep_unverifiable` in (a) halts, since C.1 runs before C.2/C.3 and would otherwise terminalize without consulting the process identities those tables rely on; (c)'s interval close — which has its own predicate, independent of whether (d) fences — is why the generic pre-table close skips a cancelled run; and **no replacement driver is launched** |
 | `RC-RESUME-007` | `amendment.approval_prepared` pending, no matching `amendment.approved` or `amendment.approval_abandoned`, no cancellation | **Complete or abandon the prepare — never step past it**, and the **mutation barrier stays in force** while doing so. Verify **both** referenced files, because first-match ordering means the generic missing-file checks below are never reached: `prepares/<prepare-id>.json` against its recorded hash (`missing_prepare_plan`), and the prewritten snapshot against its recorded raw *and* semantic hashes and its binding to that plan (`missing_snapshot_file`). Sweep every recorded adapter and criterion launch to verified empty (`sweep_unverifiable` halts). Then run §6's commit table exactly as the original approver would have, appending `amendment.approved` **from the persisted plan** — or `amendment.approval_abandoned` if the head changed or the plan no longer validates. Reclaiming authority or entering C.2 while a prepare is pending would let a new driver run against a revision that was about to change |
-| `RC-RESUME-008` | An `authority.granted` epoch exists with no live owner | Reclaim per §6 |
+| `RC-RESUME-008` | An authority-granted current epoch has no live owner: its `driver.lease` is absent, or its current-epoch lease owner is verifiably dead | Re-establish authority per §6, then re-evaluate. When the lease is absent — including after a committed matching-sidecar approval — this is ordinary fresh acquisition at the next epoch, not dead-owner reclaim: the recorded prior owner cannot pass a driver-authorized mutation CAS, even if its process still exists. When the current lease owner is dead, reclaim that exact lease per §6 |
 | `RC-RESUME-009` | `root_snapshot_divergence` — the root score claims the snapshot's revision with a different semantic hash | Halt (§1). Resume is impossible until an operator resolves it |
 | `RC-RESUME-010` | A run-level snapshot, artifact, proposal record, ref, `resolved-cast.yaml`, or attempt-started review-subject input named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
 | `RC-RESUME-037` | `amendment.routed_human` durable, its matching `decision.requested` absent | Apply §1's source-to-request rule idempotently, then re-evaluate C.1. The routed event fixes the request payload; recovery does not re-run routing or infer it from `attempt.blocked` |
-| `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). Do not enter C.2 or C.3 for an attempt from the superseded revision |
+| `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). The same C.1 selection is used by a live post-auto-commit continuation; C.4 receives only its fixed pending successor and does not rediscover revision history. Do not enter C.2 or C.3 for an attempt from the superseded revision |
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
 | `RC-RESUME-012` | Otherwise | Proceed to C.2 for the movement's current-head, non-superseded in-flight attempt, if any; when there is none, proceed to the between-unit scheduler in C.4 |
 
