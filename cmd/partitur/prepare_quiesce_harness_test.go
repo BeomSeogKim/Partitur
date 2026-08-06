@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,6 +39,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		child, runID := preparedLiveDriver(t, partitur, repository, environment)
 		defer child.stop(t)
 		assertPendingPrepare(t, repository, runID)
+		assertPrepareBarrier(t, repository, runID)
 		child.kill(t)
 		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
 	})
@@ -51,6 +53,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		assertQuiesceRound(t, repository, runID, 1)
 		assertNormalLeasePresent(t, repository, runID)
 		child.kill(t)
+		assertPrepareBarrier(t, repository, runID)
 		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
 	})
 
@@ -355,6 +358,32 @@ func assertNormalLeasePresent(t *testing.T, repository string, runID runstate.Ru
 	t.Helper()
 	if _, err := os.Stat(runstorePath(repository, runID, "driver.lease")); err != nil {
 		t.Fatalf("matching normal lease before lease move: %v", err)
+	}
+}
+
+func assertPrepareBarrier(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Mutate(runID, "", func(transaction *runstore.Txn) error {
+		event := runstate.Event{
+			RunID: runID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+			Type: runstate.EventRunFailed, Payload: []byte(`{"reason":"fixture"}`),
+		}
+		if _, err := runstate.Apply(input.Projection.State, event); err != nil {
+			return err
+		}
+		_, err := transaction.At("prepare.barrier.ordinary_mutation").Append(event)
+		return err
+	})
+	if !errors.Is(err, runstate.ErrIllegalTransition) || !strings.Contains(err.Error(), "prepare_pending") {
+		t.Fatalf("ordinary mutation while prepare is pending = %v, want prepare_pending refusal", err)
 	}
 }
 
