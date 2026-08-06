@@ -357,8 +357,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 
 func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map[receiptKillKey]bool) {
 	t.Helper()
-	if len(records) != 8 {
-		t.Fatalf("receipt registry records=%d, want eight", len(records))
+	if len(records) != 10 {
+		t.Fatalf("receipt registry records=%d, want ten", len(records))
 	}
 	counts := make(map[faultpoint.EdgeID]int)
 	for key, passed := range records {
@@ -373,15 +373,16 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		}
 		counts[key.edge]++
 	}
-	if len(counts) != 5 {
-		t.Fatalf("receipt registry edges=%d, want five", len(counts))
+	if len(counts) != 6 {
+		t.Fatalf("receipt registry edges=%d, want six", len(counts))
 	}
 	for edge, want := range map[faultpoint.EdgeID]int{
-		faultpoint.EdgePrepareSnapshotToPlan:     2,
-		faultpoint.EdgePreparePlanToPrepared:     2,
-		faultpoint.EdgeQuiesceObservedToSwept:    1,
-		faultpoint.EdgePreparePreparedToObserved: 2,
-		faultpoint.EdgeQuiesceSweptToLeaseMoved:  1,
+		faultpoint.EdgePrepareSnapshotToPlan:        2,
+		faultpoint.EdgePreparePlanToPrepared:        2,
+		faultpoint.EdgeQuiesceObservedToSwept:       1,
+		faultpoint.EdgePreparePreparedToObserved:    2,
+		faultpoint.EdgeQuiesceSweptToLeaseMoved:     1,
+		faultpoint.EdgeProposalBlockedRouteToRouted: 2,
 	} {
 		if counts[edge] != want {
 			t.Fatalf("receipt registry records for %q = %d, want %d", edge, counts[edge], want)
@@ -465,6 +466,8 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 		{faultpoint.EdgePreparePreparedToObserved, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/observed"},
 		{faultpoint.EdgeQuiesceObservedToSwept, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/observed"},
 		{faultpoint.EdgeQuiesceSweptToLeaseMoved, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/lease_moved"},
+		{faultpoint.EdgeProposalBlockedRouteToRouted, "attempt.blocked", "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
+		{faultpoint.EdgeProposalBlockedRouteToRouted, "recovery.amendment.routed_human", "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
 	}
 }
 
@@ -484,6 +487,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	}
 	publicationResult := make(chan killHarnessJSONResult, 1)
 	prepareResult := make(chan killHarnessJSONResult, 1)
+	proposalResult := make(chan killHarnessJSONResult, 1)
 	go func() {
 		passed, output, err := runKillHarnessJSON(root, "./internal/amendmentexec", "^TestPreparePublicationKillCuts$")
 		publicationResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
@@ -492,18 +496,29 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		passed, output, err := prepareQuiesceKillHarnessResult()
 		prepareResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
 	}()
+	go func() {
+		passed, output, err := runKillHarnessJSON(root, "./cmd/partitur", "^TestBlockedProposalRouteKillCuts$")
+		proposalResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
+	}()
 
 	publication := <-publicationResult
 	prepare := <-prepareResult
+	proposal := <-proposalResult
 	if publication.err != nil {
 		return nil, publication.output, publication.err
 	}
 	if prepare.err != nil {
 		return nil, prepare.output, prepare.err
 	}
+	if proposal.err != nil {
+		return nil, proposal.output, proposal.err
+	}
 	passed := publication.passed
 	preparePassed := prepare.passed
 	for test, result := range preparePassed {
+		passed[test] = result
+	}
+	for test, result := range proposal.passed {
 		passed[test] = result
 	}
 
@@ -511,11 +526,11 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	for _, record := range receiptKillHarnessEdges() {
 		key := receiptKillKey{edge: record.edge, endpoint: record.endpoint}
 		if _, duplicate := records[key]; duplicate {
-			return nil, publication.output + prepare.output, fmt.Errorf("duplicate receipt registry record for %q at %q", key.edge, key.endpoint)
+			return nil, publication.output + prepare.output + proposal.output, fmt.Errorf("duplicate receipt registry record for %q at %q", key.edge, key.endpoint)
 		}
 		records[key] = passed[record.test]
 	}
-	return records, publication.output + prepare.output, nil
+	return records, publication.output + prepare.output + proposal.output, nil
 }
 
 func prepareQuiesceKillHarnessPassed(t *testing.T) map[string]bool {

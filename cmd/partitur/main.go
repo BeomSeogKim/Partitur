@@ -548,7 +548,7 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 	if err != nil {
 		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment())
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return recoveryexec.Result{}, err
 	}

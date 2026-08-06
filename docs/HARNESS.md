@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches twenty-five E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches twenty-six E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -80,9 +80,9 @@ is paused there.
 | Edge | Selection | Driven by | Reason |
 |---|---|---|---|
 | `proposal.published_to_blocked_route` | not reached by this gate's cuts | — | No blocking-proposal route fixture; the core PR owns it |
-| `proposal.blocked_route_to_routed` | not reached by this gate's cuts | — | No blocking-proposal route fixture; the core PR owns it |
+| `proposal.blocked_route_to_routed` | reachable | `TestBlockedProposalRouteKillCuts` | A real `run` is killed at the durable `attempt.blocked` descriptor and recovery's durable routed receipt; the recovery route is compared field-for-field with the frozen descriptor while the current project score is invalid |
 | `proposal.published_to_routed` | not reached by this gate's cuts | — | No routed-proposal subprocess fixture |
-| `proposal.routed_to_decision_requested` | not reached by this gate's cuts | — | No routed-proposal subprocess fixture |
+| `proposal.routed_to_decision_requested` | not reached by this gate's cuts | — | No source-discriminating routed-proposal subprocess fixture |
 
 ### Cancellation
 
@@ -186,9 +186,9 @@ stated Appendix E branch.
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No prepare/quiesce crash subprocess fixture yet. A post-compare-move boundary now brackets the durable sidecar before an approver reaches the existing commit-lock boundary; the B3 core fixture owns the two-sided cuts |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
 | `proposal.published_to_blocked_route` | not reached by this gate's cuts | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035`; E.2 | No blocking-proposal route fixture; the core PR owns it |
-| `proposal.blocked_route_to_routed` | not reached by this gate's cuts | §4 blocking handshake; C.1 `RC-RESUME-049`; E.2 | No blocking-proposal route fixture; the core PR owns it |
+| `proposal.blocked_route_to_routed` | reachable | §4 blocking handshake; C.1 `RC-RESUME-049`; E.2 | `TestBlockedProposalRouteKillCuts` kills the production run at `attempt.blocked` and the production resume at its routed receipt. The route must match the frozen descriptor while invalid current score input proves recovery did not re-run §9 |
 | `proposal.published_to_routed` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-035`; E.2 | No routed-proposal subprocess fixture |
-| `proposal.routed_to_decision_requested` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-037`; E.2 | No routed-proposal subprocess fixture |
+| `proposal.routed_to_decision_requested` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-037`; E.2 | No source-discriminating routed-proposal subprocess fixture |
 | `cancel.swept_to_terminal` | reachable | §6 (a), (e); E.2 | Real `cancel` subprocess matrix covers all eight `(b, c, d)` combinations at both endpoints |
 | `cancel.swept_to_quarantined` | reachable | §6 (a)-(b); E.2 | Real `cancel` subprocess matrix covers the four `(b)`-true combinations at both endpoints |
 | `cancel.interval_stopped_to_terminal` | reachable | §6 (c)-(e); E.2 | Real `cancel` subprocess matrix covers the four `(c)`-true combinations at both endpoints |
