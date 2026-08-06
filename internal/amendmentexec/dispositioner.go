@@ -47,14 +47,17 @@ type ProposalDispositioner struct {
 	barrierLimit int
 	// afterBarrier is a test-only interleave seam. Production leaves it nil.
 	afterBarrier func()
+	// afterCLIProposalRecordPublication is a test-only interleave seam. Production leaves it nil.
+	afterCLIProposalRecordPublication func()
 }
 
 func New() ProposalDispositioner { return ProposalDispositioner{NewID: workspace.NewID} }
 
 type amendmentProposal struct {
 	driver.AdapterProposal
-	origin string
-	mutate func(func(*runstore.Txn, runstate.State) error) error
+	origin                              string
+	appendRouteInPublicationTransaction bool
+	mutate                              func(func(*runstore.Txn, runstate.State) error) error
 }
 
 // CLIProposal is the command-origin value captured before §9 admission takes
@@ -115,7 +118,8 @@ func (dispositioner ProposalDispositioner) SubmitCLI(ctx context.Context, store 
 			Store: store, RunID: submission.RunID, ProposalID: runstate.ProposalID(proposalID),
 			DecisionID: decisionID, Event: protocol.ProposalEvent{Amendment: encoded, RequiresDecision: false},
 		},
-		origin: "cli",
+		origin:                              "cli",
+		appendRouteInPublicationTransaction: true,
 	}
 	proposal.mutate = func(mutation func(*runstore.Txn, runstate.State) error) error {
 		return store.MutateProjected(submission.RunID, mutation)
@@ -126,11 +130,8 @@ func (dispositioner ProposalDispositioner) SubmitCLI(ctx context.Context, store 
 	}
 	result := CLIResult{ProposalID: proposal.ProposalID, DecisionID: decisionID, Outcome: outcome}
 	if outcome.Kind == amendment.Routed {
-		if prepared.AppendRoute == nil {
-			return CLIResult{}, errors.New("CLI routed amendment has no route append")
-		}
-		if err := prepared.AppendRoute(ctx); err != nil {
-			return CLIResult{}, err
+		if prepared.AppendRoute != nil {
+			return CLIResult{}, errors.New("CLI routed amendment escaped publication interval")
 		}
 		return result, nil
 	}
@@ -287,34 +288,17 @@ func (dispositioner ProposalDispositioner) finalizeDisposition(proposal amendmen
 			if err != nil {
 				return err
 			}
+			if proposal.appendRouteInPublicationTransaction {
+				if dispositioner.afterCLIProposalRecordPublication != nil {
+					dispositioner.afterCLIProposalRecordPublication()
+				}
+				return appendCLIProposalRoute(transaction, state, proposal, outcome, routeEvent)
+			}
 			disposition = driver.AdapterProposalDisposition{
 				RouteDescriptor: descriptor,
 				AppendRoute: func(context.Context) error {
-					if proposal.origin == "adapter" {
-						_, err := proposal.Authority.Append(routeEvent, faultpoint.ReceiptAddress("amendment.routed_human"))
-						return err
-					}
-					return proposal.mutate(func(transaction *runstore.Txn, current runstate.State) error {
-						if _, err := runstate.Apply(current, routeEvent); err != nil {
-							return err
-						}
-						if _, err := transaction.At("amendment.routed_human").Append(routeEvent); err != nil {
-							return err
-						}
-						request, err := decisionRequestedEvent(proposal, outcome.Reason)
-						if err != nil {
-							return err
-						}
-						next, err := runstate.Apply(current, routeEvent)
-						if err != nil {
-							return err
-						}
-						if _, err := runstate.Apply(next, request); err != nil {
-							return err
-						}
-						_, err = transaction.At("amendment.decision.requested").Append(request)
-						return err
-					})
+					_, err := proposal.Authority.Append(routeEvent, faultpoint.ReceiptAddress("amendment.routed_human"))
+					return err
 				},
 			}
 			return nil
@@ -325,6 +309,28 @@ func (dispositioner ProposalDispositioner) finalizeDisposition(proposal amendmen
 		}
 	})
 	return disposition, result, err
+}
+
+func appendCLIProposalRoute(transaction *runstore.Txn, current runstate.State, proposal amendmentProposal, outcome amendment.Outcome, routeEvent runstate.Event) error {
+	if _, err := runstate.Apply(current, routeEvent); err != nil {
+		return err
+	}
+	if _, err := transaction.At("amendment.routed_human").Append(routeEvent); err != nil {
+		return err
+	}
+	request, err := decisionRequestedEvent(proposal, outcome.Reason)
+	if err != nil {
+		return err
+	}
+	next, err := runstate.Apply(current, routeEvent)
+	if err != nil {
+		return err
+	}
+	if _, err := runstate.Apply(next, request); err != nil {
+		return err
+	}
+	_, err = transaction.At("amendment.decision.requested").Append(request)
+	return err
 }
 
 func requireNoPendingPrepare(state runstate.State) error {

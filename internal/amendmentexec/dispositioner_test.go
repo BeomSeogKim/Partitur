@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/amendment"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
@@ -383,6 +384,181 @@ func TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource(t *test
 	if _, err := os.Stat(record); err != nil {
 		t.Fatalf("published proposal record: %v", err)
 	}
+}
+
+func TestSubmitCLIHoldsPublicationIntervalAgainstConcurrentRecoveryCleanup(t *testing.T) {
+	receipts := &receiptRecorder{}
+	preparation, store, authority, started := dispositionFixtureWithReceiptObserver(t, receipts)
+	if err := authority.Release(); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published := make(chan struct{})
+	releasePublisher := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releasePublisher) }) }
+	t.Cleanup(release)
+	dispositioner := testDispositioner()
+	dispositioner.afterCLIProposalRecordPublication = func() {
+		close(published)
+		<-releasePublisher
+	}
+	type submissionResult struct {
+		result CLIResult
+		err    error
+	}
+	submitted := make(chan submissionResult, 1)
+	go func() {
+		result, err := dispositioner.SubmitCLI(context.Background(), store, CLIProposal{
+			RunID: started.RunID, BaseRevision: 1, BaseHash: runstate.Hash(hash),
+			Operations: []byte(`[{"op":"replace","path":"/goal","value":"needs-review"}]`), Reason: "publication interval",
+		})
+		submitted <- submissionResult{result: result, err: err}
+	}()
+
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CLI publisher did not reach the proposal-record publication interval")
+	}
+	if receipts.index("proposal.record.published") == -1 {
+		t.Fatal("proposal.record.published receipt was not observed before the publication interval")
+	}
+	if receipts.index("amendment.routed_human") != -1 {
+		t.Fatal("amendment.routed_human was observed before the publication interval released")
+	}
+
+	cleanupProbe := newLockAcquisitionProbe("test.recovery.cleanup_proposal_records.lock")
+	contender, err := runstore.New(preparation.RepositoryRoot, cleanupProbe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupAttempted := make(chan struct{})
+	cleanupDone := make(chan error, 1)
+	go func() {
+		close(cleanupAttempted)
+		cleanupDone <- contender.Mutate(started.RunID, cleanupProbe.point, func(transaction *runstore.Txn) error {
+			return transaction.At("recovery.cleanup_proposal_records").QuarantineUnreferencedProposalRecords()
+		})
+	}()
+	<-cleanupAttempted
+
+	select {
+	case <-cleanupProbe.acquired:
+		t.Fatal("recovery cleanup acquired the state lock while the CLI publisher held its publication interval")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+	var submittedResult submissionResult
+	select {
+	case submittedResult = <-submitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CLI publisher did not finish after the publication interval released")
+	}
+	if submittedResult.err != nil {
+		t.Fatal(submittedResult.err)
+	}
+	if submittedResult.result.Outcome.Kind != amendment.Routed {
+		t.Fatalf("CLI outcome = %q, want routed", submittedResult.result.Outcome.Kind)
+	}
+	select {
+	case <-cleanupProbe.acquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery cleanup did not acquire the state lock after the publication interval released")
+	}
+	select {
+	case err := <-cleanupDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery cleanup did not finish after the publication interval released")
+	}
+
+	record := filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "proposals", string(submittedResult.result.ProposalID)+".json")
+	if _, err := os.Stat(record); err != nil {
+		t.Fatalf("recovery cleanup removed live publisher's proposal record: %v", err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routed, requested := 0, 0
+	for _, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventAmendmentRoutedHuman:
+			routed++
+		case runstate.EventDecisionRequested:
+			requested++
+		}
+	}
+	if routed != 1 || requested != 1 {
+		t.Fatalf("routed=%d decision_requested=%d, want one of each", routed, requested)
+	}
+	if publication, routed := receipts.index("proposal.record.published"), receipts.index("amendment.routed_human"); publication == -1 || routed == -1 || publication >= routed {
+		t.Fatalf("receipt order publication=%d routed=%d, want distinct publication before route", publication, routed)
+	}
+}
+
+func TestSubmitCLIPreservesRejectedAndApprovedOutcomes(t *testing.T) {
+	t.Run("rejected", func(t *testing.T) {
+		preparation, store, authority, started := dispositionFixture(t)
+		defer authority.Release()
+		hash, err := preparation.Score.Hash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := testDispositioner().SubmitCLI(context.Background(), store, CLIProposal{
+			RunID: started.RunID, BaseRevision: 1, BaseHash: runstate.Hash(hash),
+			Operations: []byte(`[{"op":"replace","path":"/goal","value":"goal"}]`), Reason: "no-op CLI amendment",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Outcome.Kind != amendment.Rejected || result.Outcome.Reason != "no_op" {
+			t.Fatalf("CLI rejection outcome = %+v, want no_op rejection", result.Outcome)
+		}
+		journal, err := store.ReadJournal(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if last := journal.Events[len(journal.Events)-1]; last.Type != runstate.EventAmendmentRejected {
+			t.Fatalf("last event = %s, want amendment.rejected", last.Type)
+		}
+	})
+
+	t.Run("approved", func(t *testing.T) {
+		preparation, store, authority, started := dispositionFixture(t)
+		if err := authority.Release(); err != nil {
+			t.Fatal(err)
+		}
+		hash, err := preparation.Score.Hash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := testDispositioner().SubmitCLI(context.Background(), store, CLIProposal{
+			RunID: started.RunID, BaseRevision: 1, BaseHash: runstate.Hash(hash),
+			Operations: []byte(`[{"op":"replace","path":"/policy/budget/active_wall_clock_min","value":9}]`), Reason: "approved CLI amendment",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Outcome.Kind != amendment.Approved {
+			t.Fatalf("CLI approval outcome = %+v, want approved", result.Outcome)
+		}
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if input.Projection.State.ScoreHead.Revision != 2 || input.Projection.State.PendingPrepare != nil {
+			t.Fatalf("CLI approval state = %+v, want revision 2 with no pending prepare", input.Projection.State)
+		}
+	})
 }
 
 func TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource(t *testing.T) {
@@ -1099,6 +1275,44 @@ type receiptPauseGate struct {
 	reached chan faultpoint.DurabilityReceipt
 	release chan struct{}
 	once    sync.Once
+}
+
+type receiptRecorder struct {
+	mu        sync.Mutex
+	addresses []faultpoint.ReceiptAddress
+}
+
+func (recorder *receiptRecorder) Observed(receipt faultpoint.DurabilityReceipt) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.addresses = append(recorder.addresses, receipt.Address)
+}
+
+func (recorder *receiptRecorder) index(address faultpoint.ReceiptAddress) int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	for index, observed := range recorder.addresses {
+		if observed == address {
+			return index
+		}
+	}
+	return -1
+}
+
+type lockAcquisitionProbe struct {
+	point    faultpoint.PointID
+	acquired chan struct{}
+	once     sync.Once
+}
+
+func newLockAcquisitionProbe(point faultpoint.PointID) *lockAcquisitionProbe {
+	return &lockAcquisitionProbe{point: point, acquired: make(chan struct{})}
+}
+
+func (probe *lockAcquisitionProbe) Reached(point faultpoint.PointID) {
+	if point == probe.point {
+		probe.once.Do(func() { close(probe.acquired) })
+	}
 }
 
 func newReceiptPauseGate(address faultpoint.ReceiptAddress) *receiptPauseGate {
