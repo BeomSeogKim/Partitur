@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches twenty E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches twenty-two E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -170,14 +170,16 @@ required; the criterion set is not implied by the adapter set.
 
 ## Gate-cut dispositions
 
-The table is the executable selection contract for this gate. `reachable` means the subprocess
-matrix names both endpoints. `not reached by this gate's cuts` is deliberately narrower than
-unreachable: it records only that this gate has no fixture for the stated Appendix E branch.
+The table is the executable selection contract for this gate. `reachable` means its registry has
+emitted passing records for both endpoints: probe-addressed cuts come from the subprocess matrix,
+and receipt-addressed cuts come from their receipt fixture. `not reached by this gate's cuts` is
+deliberately narrower than unreachable: it records only that this gate has no fixture for the
+stated Appendix E branch.
 
 | Edge | Disposition | Owning clause | Reason |
 |---|---|---|---|
-| `prepare.snapshot_to_plan` | not reached by this gate's cuts | §6 step 1; §9; E.2 | No prepare/approval subprocess fixture |
-| `prepare.plan_to_prepared` | not reached by this gate's cuts | §6 step 1; B.5; E.2 | No prepare/approval subprocess fixture |
+| `prepare.snapshot_to_plan` | reachable | §6 step 1; §9; E.2 | `TestPreparePublicationKillCuts` emits passing records for snapshot and plan receipts; production `resume` quarantines the unreferenced snapshot, leaves the original head, and reaches a journal fixed point |
+| `prepare.plan_to_prepared` | reachable | §6 step 1; B.5; E.2 | `TestPreparePublicationKillCuts` emits passing records for plan and approval-prepared receipts; production `resume` removes the orphan plan rather than quarantining it and reaches a journal fixed point |
 | `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | No prepare/quiesce crash subprocess fixture yet. The harness can now pause a live driver after authority acquisition while its parent appends the prepare with that driver's observed epoch; the B3 core fixture owns the two-sided cuts |
 | `quiesce.observed_to_swept` | not reached by this gate's cuts | §6 step 2; B.5; E.2 | No quiesce-receipt subprocess fixture yet. The durable receipt is projected and replayable, but no live driver emits it in this norm slice |
 | `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No prepare/quiesce crash subprocess fixture yet. The same parent-injected live driver reaches the sessions-swept boundary while draining the durable prepare; the B3 core fixture owns the two-sided cuts |

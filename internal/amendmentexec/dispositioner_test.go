@@ -1,15 +1,20 @@
 package amendmentexec
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +32,280 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/validate"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
+
+const (
+	prepareCutRepositoryEnvironment = "PARTITUR_PREPARE_CUT_REPOSITORY"
+	prepareCutAddressEnvironment    = "PARTITUR_PREPARE_CUT_ADDRESS"
+	prepareCutVendorEnvironment     = "PARTITUR_AMENDMENTEXEC_VENDOR"
+)
+
+func TestMain(m *testing.M) {
+	if os.Getenv(prepareCutVendorEnvironment) == "1" {
+		runPrepareCutVendor()
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func runPrepareCutVendor() {
+	for _, argument := range os.Args[1:] {
+		if argument == "--version" {
+			fmt.Println("codex 9.8.7")
+			return
+		}
+	}
+	prompt, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		os.Exit(91)
+	}
+	const outputPrefix = "- Writable artifact directory: "
+	for _, line := range strings.Split(string(prompt), "\n") {
+		if !strings.HasPrefix(line, outputPrefix) {
+			continue
+		}
+		output := strings.TrimSpace(strings.TrimPrefix(line, outputPrefix))
+		if err := os.WriteFile(filepath.Join(output, "report.txt"), []byte("one movement reached its declared verdict\n"), 0o600); err != nil {
+			os.Exit(93)
+		}
+		result := []byte(`{"version":1,"artifacts":[{"artifact_id":"report","path":"report.txt"}],"questions":[],"proposal":null,"summary":"completed"}`)
+		if err := os.WriteFile(filepath.Join(output, "partitur-result.json"), result, 0o600); err != nil {
+			os.Exit(95)
+		}
+		fmt.Println(`{"type":"fixture.ignored"}`)
+		return
+	}
+	os.Exit(92)
+}
+
+// TestPreparePublicationCutChild is invoked as a subprocess by
+// TestPreparePublicationKillCuts. The receipt observer exits the entire
+// approver process after its durable publication and before its next step.
+func TestPreparePublicationCutChild(t *testing.T) {
+	repository := os.Getenv(prepareCutRepositoryEnvironment)
+	address := faultpoint.ReceiptAddress(os.Getenv(prepareCutAddressEnvironment))
+	if repository == "" || address == "" {
+		return
+	}
+	preparation, store, authority, started := prepareCutDispositionFixtureAt(t, repository, crashAtReceipt{address: address})
+	defer authority.Release()
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintln(os.Stdout, started.RunID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
+	t.Fatalf("prepare returned after receipt %q: %v", address, err)
+}
+
+func TestPreparePublicationKillCuts(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	for _, name := range []string{"partitur", "partitur-adapter-codex", "partitur-trampoline"} {
+		build := exec.Command("go", "build", "-tags=faultprobe", "-o", filepath.Join(bin, name), "./cmd/"+name)
+		build.Dir = root
+		if output, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build %s: %v\n%s", name, err, output)
+		}
+	}
+	partitur := filepath.Join(bin, "partitur")
+	environment := append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "PARTITUR_CODEX_BIN="+os.Args[0], prepareCutVendorEnvironment+"=1")
+
+	for _, cut := range []struct {
+		name        string
+		address     faultpoint.ReceiptAddress
+		before      func(*testing.T, string, runstate.RunID)
+		after       func(*testing.T, string, runstate.RunID)
+		wantHead    uint64
+		wantPending bool
+	}{
+		{name: "prepare.snapshot_to_plan/snapshot", address: "amendment.approval.snapshot", before: assertSnapshotCutDurable, after: assertSnapshotCutQuarantined, wantHead: 1},
+		{name: "prepare.snapshot_to_plan/plan", address: "amendment.approval.plan", before: assertPlanCutDurable, after: assertSnapshotAndPlanCutRecovered, wantHead: 1},
+		{name: "prepare.plan_to_prepared/plan", address: "amendment.approval.plan", before: assertPlanCutDurable, after: assertPlanCutRemoved, wantHead: 1},
+		{name: "prepare.plan_to_prepared/prepared", address: "amendment.approval_prepared", before: assertPreparedCutDurable, after: assertPreparedCutRecovered, wantHead: 2},
+	} {
+		cut := cut
+		t.Run(cut.name, func(t *testing.T) {
+			repository := t.TempDir()
+			runID := killPreparePublicationAtReceipt(t, repository, cut.address)
+			cut.before(t, repository, runID)
+			assertPrepareCutRecoveryFixedPoint(t, partitur, repository, runID, environment, cut.wantHead, cut.wantPending)
+			cut.after(t, repository, runID)
+		})
+	}
+}
+
+type crashAtReceipt struct{ address faultpoint.ReceiptAddress }
+
+func (crash crashAtReceipt) Observed(receipt runstore.DurabilityReceipt) {
+	if receipt.Address == crash.address {
+		if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func killPreparePublicationAtReceipt(t *testing.T, repository string, address faultpoint.ReceiptAddress) runstate.RunID {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run=^TestPreparePublicationCutChild$")
+	command.Env = append(os.Environ(), prepareCutRepositoryEnvironment+"="+repository, prepareCutAddressEnvironment+"="+string(address))
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() {
+		_ = command.Wait()
+		t.Fatalf("cut child published no run id at %q: %v\nstderr:\n%s", address, scanner.Err(), &stderr)
+	}
+	runID := runstate.RunID(strings.TrimSpace(scanner.Text()))
+	if runID == "" {
+		_ = command.Wait()
+		t.Fatalf("cut child published an empty run id at %q\nstderr:\n%s", address, &stderr)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatalf("cut child at %q exited successfully\nstderr:\n%s", address, &stderr)
+	}
+	return runID
+}
+
+func assertSnapshotCutDurable(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	path := filepath.Join(repository, ".partitur", "runs", string(runID), "scores", "revision-2.yaml")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("snapshot cut did not leave its durable snapshot: %v", err)
+	}
+}
+
+func assertPlanCutDurable(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	plans := filepath.Join(repository, ".partitur", "runs", string(runID), "prepares")
+	entries, err := os.ReadDir(plans)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("plan cut entries=%v err=%v, want one orphan plan", entries, err)
+	}
+}
+
+func assertPreparedCutDurable(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.PendingPrepare == nil {
+		t.Fatal("approval_prepared receipt did not leave a pending prepare")
+	}
+}
+
+func assertSnapshotCutQuarantined(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	runRoot := filepath.Join(repository, ".partitur", "runs", string(runID))
+	if _, err := os.Stat(filepath.Join(runRoot, "scores", "revision-2.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unreferenced snapshot still occupies its head path: %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(runRoot, "quarantine", "unreferenced_prepare_snapshot", "*", "revision-2.yaml"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("snapshot quarantine entries=%v err=%v, want one", matches, err)
+	}
+}
+
+func assertPlanCutRemoved(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	runRoot := filepath.Join(repository, ".partitur", "runs", string(runID))
+	entries, err := os.ReadDir(filepath.Join(runRoot, "prepares"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("orphan plan remains after recovery: %v", entries)
+	}
+	matches, err := filepath.Glob(filepath.Join(runRoot, "quarantine", "*", "*", "*.json"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("orphan plan was quarantined instead of removed: %v err=%v", matches, err)
+	}
+}
+
+func assertSnapshotAndPlanCutRecovered(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	assertSnapshotCutQuarantined(t, repository, runID)
+	assertPlanCutRemoved(t, repository, runID)
+}
+
+func assertPreparedCutRecovered(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(repository, ".partitur", "runs", string(runID), "prepares"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("prepared plan remains after recovery: %v", entries)
+	}
+}
+
+func assertPrepareCutRecoveryFixedPoint(t *testing.T, partitur, repository string, runID runstate.RunID, environment []string, wantHead uint64, wantPending bool) {
+	t.Helper()
+	run := func() int {
+		command := exec.Command(partitur, "resume", string(runID))
+		command.Dir = repository
+		command.Env = environment
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		err := command.Run()
+		if stdout.Len() != 0 || stderr.Len() != 0 {
+			journal, _ := os.ReadFile(filepath.Join(repository, ".partitur", "runs", string(runID), "journal.jsonl"))
+			t.Fatalf("resume stdout=%q stderr=%q journal=%s", stdout.String(), stderr.String(), journal)
+		}
+		if err == nil {
+			return 0
+		}
+		exit, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatal(err)
+		}
+		return exit.ExitCode()
+	}
+	if code := run(); code != 0 && code != 4 {
+		t.Fatalf("first resume exit=%d, want 0 or 4", code)
+	}
+	first, err := os.ReadFile(filepath.Join(repository, ".partitur", "runs", string(runID), "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := run(); code != 0 && code != 4 {
+		t.Fatalf("fixed-point resume exit=%d, want 0 or 4", code)
+	}
+	second, err := os.ReadFile(filepath.Join(repository, ".partitur", "runs", string(runID), "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("fixed-point recovery appended another durable event")
+	}
+	input, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := input.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Projection.State.ScoreHead.Revision != wantHead || (loaded.Projection.State.PendingPrepare != nil) != wantPending {
+		t.Fatalf("recovery state=%+v, want head revision %d pending prepare=%t", loaded.Projection.State, wantHead, wantPending)
+	}
+}
 
 func TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked(t *testing.T) {
 	preparation, store, authority, started := dispositionFixture(t)
@@ -743,7 +1022,19 @@ func dispositionFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *
 
 func dispositionFixtureWithReceiptObserver(t *testing.T, observer runstore.ReceiptObserver) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
 	t.Helper()
-	root := t.TempDir()
+	return dispositionFixtureAt(t, t.TempDir(), observer)
+}
+
+func dispositionFixtureAt(t *testing.T, root string, observer runstore.ReceiptObserver) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
+	t.Helper()
+	return dispositionFixtureDocumentsAt(t, root, observer,
+		`{"score":"0.2","name":"amendmentexec","revision":1,"status":"finalized","goal":"goal","open_questions":[],"parts":{"reader":{"capabilities":["repo_read"],"read_only":true}},"movements":[{"id":"inspect","part":"reader","grants":["repo_read"],"may_propose":true,"instruction":"inspect","outputs":[{"id":"report","kind":"artifact"}],"acceptance":{"hard":[{"id":"report-present","artifact":"report"}]}}],"policy":{"allowed_paths":["src/**"],"budget":{"active_wall_clock_min":10,"retries_per_movement":2},"amendment":{"auto":"envelope"}},"verification":{"expectation":{"intent":"pass-existing-tests","apply_gate":{"require":["verified"]}},"final_movement":"inspect"}}`,
+		`{"cast":"0.1","performers":{"worker":{"adapter":"fixture","model":"fixture"}},"bindings":{"reader":{"performer":"worker"}}}`,
+	)
+}
+
+func dispositionFixtureDocumentsAt(t *testing.T, root string, observer runstore.ReceiptObserver, scoreDocument, castDocument string) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
+	t.Helper()
 	write := func(path, value string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -753,8 +1044,8 @@ func dispositionFixtureWithReceiptObserver(t *testing.T, observer runstore.Recei
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(root, "partitur.yaml"), `{"score":"0.2","name":"amendmentexec","revision":1,"status":"finalized","goal":"goal","open_questions":[],"parts":{"reader":{"capabilities":["repo_read"],"read_only":true}},"movements":[{"id":"inspect","part":"reader","grants":["repo_read"],"may_propose":true,"instruction":"inspect","outputs":[{"id":"report","kind":"artifact"}],"acceptance":{"hard":[{"id":"report-present","artifact":"report"}]}}],"policy":{"allowed_paths":["src/**"],"budget":{"active_wall_clock_min":10,"retries_per_movement":2},"amendment":{"auto":"envelope"}},"verification":{"expectation":{"intent":"pass-existing-tests","apply_gate":{"require":["verified"]}},"final_movement":"inspect"}}`)
-	write(filepath.Join(root, ".partitur", "cast.yaml"), `{"cast":"0.1","performers":{"worker":{"adapter":"fixture","model":"fixture"}},"bindings":{"reader":{"performer":"worker"}}}`)
+	write(filepath.Join(root, "partitur.yaml"), scoreDocument)
+	write(filepath.Join(root, ".partitur", "cast.yaml"), castDocument)
 	for _, args := range [][]string{{"init"}, {"config", "user.name", "Partitur Test"}, {"config", "user.email", "partitur@example.invalid"}, {"add", "partitur.yaml", ".partitur/cast.yaml"}, {"commit", "-m", "fixture"}} {
 		command := exec.Command("git", args...)
 		command.Dir = root
@@ -787,6 +1078,14 @@ func dispositionFixtureWithReceiptObserver(t *testing.T, observer runstore.Recei
 		t.Fatal(err)
 	}
 	return preparation, store, authority, started
+}
+
+func prepareCutDispositionFixtureAt(t *testing.T, root string, observer runstore.ReceiptObserver) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
+	t.Helper()
+	return dispositionFixtureDocumentsAt(t, root, observer,
+		`{"score":"0.2","name":"amendmentexec","revision":1,"status":"finalized","goal":"goal","open_questions":[],"parts":{"reader":{"capabilities":["repo_read","shell","network"],"read_only":true}},"movements":[{"id":"inspect","part":"reader","grants":["repo_read","shell","network"],"may_propose":true,"instruction":"inspect","outputs":[{"id":"report","kind":"artifact"}],"acceptance":{"hard":[{"id":"report-present","artifact":"report"}]}}],"policy":{"allowed_paths":["**"],"budget":{"active_wall_clock_min":10,"retries_per_movement":2},"amendment":{"auto":"envelope"}},"verification":{"expectation":{"intent":"pass-existing-tests","apply_gate":{"require":["verified"]}},"final_movement":"inspect"}}`,
+		`{"cast":"0.1","performers":{"worker":{"adapter":"codex","model":"fixture"}},"bindings":{"reader":{"performer":"worker"}}}`,
+	)
 }
 
 type receiptPauseGate struct {
