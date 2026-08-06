@@ -507,7 +507,7 @@ func appendRecoveryControlPrepare(store *runstore.Store, runID runstate.RunID, r
 		if err != nil {
 			return err
 		}
-		_, err = transaction.At("control-fixture.prepared").Append(runstate.Event{RunID: runID, ScoreRevision: plan.BaseRevision, Type: runstate.EventAmendmentApprovalPrepared, Payload: payload})
+		_, err = transaction.At("amendment.approval_prepared").Append(runstate.Event{RunID: runID, ScoreRevision: plan.BaseRevision, Type: runstate.EventAmendmentApprovalPrepared, Payload: payload})
 		return err
 	})
 }
