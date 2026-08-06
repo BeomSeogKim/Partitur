@@ -97,7 +97,7 @@ func (transaction *Txn) CreateLease(expectedAbsent bool, lease Lease) (Durabilit
 		}
 		receipt := transaction.newReceipt(faultpoint.LeaseCreation)
 		receipt.Mutation.Path = relativeToRoot(transaction.store.root, path)
-		return receipt, nil
+		return transaction.observeReceipt(receipt), nil
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		return DurabilityReceipt{}, fmt.Errorf("read existing lease: %w", err)
@@ -123,7 +123,7 @@ func (transaction *Txn) CreateLease(expectedAbsent bool, lease Lease) (Durabilit
 	}
 	receipt := transaction.newReceipt(faultpoint.LeaseCreation)
 	receipt.Mutation.Path = relativeToRoot(transaction.store.root, path)
-	return receipt, nil
+	return transaction.observeReceipt(receipt), nil
 }
 
 // CompareMoveLease conditionally moves driver.lease to destination.
@@ -163,7 +163,7 @@ func (transaction *Txn) CompareMoveLease(
 	receipt := transaction.newReceipt(faultpoint.LeaseMove)
 	receipt.Mutation.Source = relativeToRoot(transaction.store.root, sourcePath)
 	receipt.Mutation.Destination = relativeToRoot(transaction.store.root, destinationPath)
-	return receipt, nil
+	return transaction.observeReceipt(receipt), nil
 }
 
 // CompareRemoveLease conditionally removes driver.lease.
@@ -187,7 +187,7 @@ func (transaction *Txn) CompareRemoveLease(expected LeaseIdentity) (DurabilityRe
 	}
 	receipt := transaction.newReceipt(faultpoint.LeaseRemoval)
 	receipt.Mutation.Path = relativeToRoot(transaction.store.root, path)
-	return receipt, nil
+	return transaction.observeReceipt(receipt), nil
 }
 
 func encodeLease(lease Lease) ([]byte, error) {

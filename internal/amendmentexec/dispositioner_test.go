@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -180,6 +181,74 @@ func TestDispositionerPreparesAutoApproval(t *testing.T) {
 	_, err = testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
 	if !errors.Is(err, ErrPreparePending) {
 		t.Fatalf("second auto prepare error = %v, want ErrPreparePending", err)
+	}
+}
+
+func TestDispositionerReceiptObserverBracketsPreparePublications(t *testing.T) {
+	for _, cut := range []struct {
+		name    string
+		address faultpoint.ReceiptAddress
+	}{
+		{name: "snapshot", address: "amendment.approval.snapshot"},
+		{name: "plan", address: "amendment.approval.plan"},
+	} {
+		t.Run(cut.name, func(t *testing.T) {
+			gate := newReceiptPauseGate(cut.address)
+			t.Cleanup(gate.Release)
+			preparation, store, authority, started := dispositionFixtureWithReceiptObserver(t, gate)
+			defer authority.Release()
+			hash, err := preparation.Score.Hash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := make(chan error, 1)
+			go func() {
+				_, err := testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
+				result <- err
+			}()
+
+			receipt := gate.Wait(t)
+			if receipt.Mutation.Kind != faultpoint.FilePublication {
+				t.Fatalf("receipt kind = %q, want file publication", receipt.Mutation.Kind)
+			}
+			snapshot := filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "scores", "revision-2.yaml")
+			plans := filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "prepares")
+			if _, err := os.Stat(snapshot); err != nil {
+				t.Fatalf("snapshot is not durable at %s receipt: %v", cut.name, err)
+			}
+			if cut.address == "amendment.approval.snapshot" {
+				entries, err := os.ReadDir(plans)
+				if !errors.Is(err, os.ErrNotExist) || len(entries) != 0 {
+					t.Fatalf("plan entries at snapshot receipt = %v, read error = %v", entries, err)
+				}
+			} else if entries, err := os.ReadDir(plans); err != nil || len(entries) != 1 {
+				t.Fatalf("plan entries at plan receipt = %v, read error = %v", entries, err)
+			}
+			journal, err := store.ReadJournal(started.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range journal.Events {
+				if event.Type == runstate.EventAmendmentApprovalPrepared {
+					t.Fatalf("approval_prepared exists at %s receipt", cut.name)
+				}
+			}
+			select {
+			case err := <-result:
+				t.Fatalf("disposition returned while paused at %s: %v", cut.name, err)
+			default:
+			}
+
+			gate.Release()
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatalf("disposition after %s release: %v", cut.name, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("disposition remained paused after %s release", cut.name)
+			}
+		})
 	}
 }
 
@@ -669,6 +738,10 @@ func testDispositioner() ProposalDispositioner {
 }
 
 func dispositionFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
+	return dispositionFixtureWithReceiptObserver(t, nil)
+}
+
+func dispositionFixtureWithReceiptObserver(t *testing.T, observer runstore.ReceiptObserver) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult) {
 	t.Helper()
 	root := t.TempDir()
 	write := func(path, value string) {
@@ -705,7 +778,7 @@ func dispositionFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := runstore.New(root, faultpoint.Nop{})
+	store, err := runstore.New(root, faultpoint.Nop{}, observer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,6 +787,44 @@ func dispositionFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *
 		t.Fatal(err)
 	}
 	return preparation, store, authority, started
+}
+
+type receiptPauseGate struct {
+	address faultpoint.ReceiptAddress
+	reached chan faultpoint.DurabilityReceipt
+	release chan struct{}
+	once    sync.Once
+}
+
+func newReceiptPauseGate(address faultpoint.ReceiptAddress) *receiptPauseGate {
+	return &receiptPauseGate{
+		address: address,
+		reached: make(chan faultpoint.DurabilityReceipt, 1),
+		release: make(chan struct{}),
+	}
+}
+
+func (gate *receiptPauseGate) Observed(receipt faultpoint.DurabilityReceipt) {
+	if receipt.Address != gate.address {
+		return
+	}
+	gate.reached <- receipt
+	<-gate.release
+}
+
+func (gate *receiptPauseGate) Wait(t *testing.T) faultpoint.DurabilityReceipt {
+	t.Helper()
+	select {
+	case receipt := <-gate.reached:
+		return receipt
+	case <-time.After(5 * time.Second):
+		t.Fatalf("receipt observer did not reach %q", gate.address)
+		return faultpoint.DurabilityReceipt{}
+	}
+}
+
+func (gate *receiptPauseGate) Release() {
+	gate.once.Do(func() { close(gate.release) })
 }
 
 func autoApprovalAttemptFixture(t *testing.T) (*validate.Preparation, *runstore.Store, *runstore.Driver, workspace.StartResult, *workspace.AttemptWorkspace, runstore.RunInput, string) {

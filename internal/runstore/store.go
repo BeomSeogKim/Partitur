@@ -24,15 +24,23 @@ var (
 type Store struct {
 	root                  string
 	probe                 faultpoint.Probe
+	receiptObserver       ReceiptObserver
 	fs                    fsOperations
 	sweepSessions         func(context.Context, runstate.State) error
 	quiesceReceiptCadence time.Duration
 }
 
 // New constructs a store rooted at repositoryRoot.
-func New(repositoryRoot string, probe faultpoint.Probe) (*Store, error) {
+func New(repositoryRoot string, probe faultpoint.Probe, observers ...ReceiptObserver) (*Store, error) {
 	if probe == nil {
 		return nil, errors.New("runstore: nil probe")
+	}
+	if len(observers) > 1 {
+		return nil, errors.New("runstore: multiple receipt observers")
+	}
+	receiptObserver := ReceiptObserver(receiptObserverFunc(func(DurabilityReceipt) {}))
+	if len(observers) == 1 && observers[0] != nil {
+		receiptObserver = observers[0]
 	}
 	root, err := filepath.Abs(repositoryRoot)
 	if err != nil {
@@ -46,7 +54,7 @@ func New(repositoryRoot string, probe faultpoint.Probe) (*Store, error) {
 		return nil, errors.New("repository root is not a directory")
 	}
 	return &Store{
-		root: root, probe: probe, fs: realFS{},
+		root: root, probe: probe, receiptObserver: receiptObserver, fs: realFS{},
 		sweepSessions: sweepRecordedSessions, quiesceReceiptCadence: quiesceReceiptCadence,
 	}, nil
 }
@@ -144,6 +152,11 @@ func (transaction *Txn) newReceipt(kind faultpoint.MutationKind) faultpoint.Dura
 			RunID: string(transaction.runID),
 		},
 	}
+}
+
+func (transaction *Txn) observeReceipt(receipt DurabilityReceipt) DurabilityReceipt {
+	transaction.store.receiptObserver.Observed(receipt)
+	return receipt
 }
 
 func (transaction *Txn) runRoot() string {

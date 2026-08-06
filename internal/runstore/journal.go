@@ -314,7 +314,7 @@ func (transaction *Txn) journalReceipt(event runstate.Event, path string) Durabi
 	receipt.Mutation.Sequence = event.Seq
 	receipt.Mutation.Timestamp = event.Timestamp
 	receipt.Mutation.Path = relativeToRoot(transaction.store.root, path)
-	return receipt
+	return transaction.observeReceipt(receipt)
 }
 
 func (transaction *Txn) loadJournal(path string) ([]journalEntry, error) {
