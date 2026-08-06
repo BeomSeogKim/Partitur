@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches twenty-four E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches twenty-five E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -182,7 +182,7 @@ stated Appendix E branch.
 | `prepare.plan_to_prepared` | reachable | §6 step 1; B.5; E.2 | `TestPreparePublicationKillCuts` emits passing records for plan and approval-prepared receipts; production `resume` removes the orphan plan rather than quarantining it and reaches a journal fixed point |
 | `prepare.prepared_to_observed` | reachable | §6 mutation barrier; E.2 | `TestPrepareQuiesceDriverKillCuts` retains the durable prepare while the production driver is still paused before observation, then at its first quiesce receipt. An ordinary durable mutation is refused `prepare_pending` in both states before recovery |
 | `quiesce.observed_to_swept` | reachable | §6 step 2; B.5; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after its first durable quiesce receipt and at the completed-sweep probe. Both states retain no sidecar and re-enter recovery without resume minting a new quiesce receipt |
-| `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No prepare/quiesce crash subprocess fixture yet. The same parent-injected live driver reaches the sessions-swept boundary while draining the durable prepare; the B3 core fixture owns the two-sided cuts |
+| `quiesce.swept_to_lease_moved` | reachable | §6 step 2; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after the completed-sweep probe and at its durable lease-move receipt. With the matching lease and no sidecar, recovery reaches its own post-sweep probe before fencing; the no-lease control does not reach that probe and commits unfenced |
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No prepare/quiesce crash subprocess fixture yet. A post-compare-move boundary now brackets the durable sidecar before an approver reaches the existing commit-lock boundary; the B3 core fixture owns the two-sided cuts |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
 | `proposal.published_to_blocked_route` | not reached by this gate's cuts | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035`; E.2 | No blocking-proposal route fixture; the core PR owns it |

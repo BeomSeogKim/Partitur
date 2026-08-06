@@ -357,8 +357,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 
 func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map[receiptKillKey]bool) {
 	t.Helper()
-	if len(records) != 7 {
-		t.Fatalf("receipt registry records=%d, want seven", len(records))
+	if len(records) != 8 {
+		t.Fatalf("receipt registry records=%d, want eight", len(records))
 	}
 	counts := make(map[faultpoint.EdgeID]int)
 	for key, passed := range records {
@@ -373,14 +373,15 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		}
 		counts[key.edge]++
 	}
-	if len(counts) != 4 {
-		t.Fatalf("receipt registry edges=%d, want four", len(counts))
+	if len(counts) != 5 {
+		t.Fatalf("receipt registry edges=%d, want five", len(counts))
 	}
 	for edge, want := range map[faultpoint.EdgeID]int{
 		faultpoint.EdgePrepareSnapshotToPlan:     2,
 		faultpoint.EdgePreparePlanToPrepared:     2,
 		faultpoint.EdgeQuiesceObservedToSwept:    1,
 		faultpoint.EdgePreparePreparedToObserved: 2,
+		faultpoint.EdgeQuiesceSweptToLeaseMoved:  1,
 	} {
 		if counts[edge] != want {
 			t.Fatalf("receipt registry records for %q = %d, want %d", edge, counts[edge], want)
@@ -463,6 +464,7 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 		{faultpoint.EdgePreparePreparedToObserved, "amendment.approval_prepared", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/prepared"},
 		{faultpoint.EdgePreparePreparedToObserved, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/observed"},
 		{faultpoint.EdgeQuiesceObservedToSwept, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/observed"},
+		{faultpoint.EdgeQuiesceSweptToLeaseMoved, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/lease_moved"},
 	}
 }
 
@@ -470,7 +472,8 @@ func prepareQuiesceProbeKillHarnessRecords(t *testing.T) map[faultpoint.EdgeID]b
 	t.Helper()
 	passed := prepareQuiesceKillHarnessPassed(t)
 	return map[faultpoint.EdgeID]bool{
-		faultpoint.EdgeQuiesceObservedToSwept: passed["TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/swept"],
+		faultpoint.EdgeQuiesceObservedToSwept:   passed["TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/swept"],
+		faultpoint.EdgeQuiesceSweptToLeaseMoved: passed["TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/swept"],
 	}
 }
 
