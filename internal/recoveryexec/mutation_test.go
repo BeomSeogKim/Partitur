@@ -39,6 +39,12 @@ func TestMutationRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot(t *
 		filepath.Join("internal", "runstore", "prepare_artifact_cleanup.go"), "\t\tif !ok || referenced[revision] {\n", "\t\tif !ok || referenced[revision] || true {\n")
 }
 
+func TestMutationRecoveryPreprocessingQuarantinesUnreferencedProposalRecords(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingQuarantinesOnlyUnreferencedProposalRecords", goEnvironment,
+		filepath.Join("internal", "runstore", "proposal_record_cleanup.go"), "\t\tif proposalRecordReferenced(entries, proposalID, rawHash(contents)) {\n", "\t\tif true || proposalRecordReferenced(entries, proposalID, rawHash(contents)) {\n")
+}
+
 func TestMutationRecoveryPreprocessingRemovesOrphanPreparePlans(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingRemovesUnreferencedPreparePlan", goEnvironment,
