@@ -158,7 +158,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, approve, cancel, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, approve, amend, cancel, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -319,7 +319,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, approve, cancel, status, logs\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, validate, run, resume, answer, approve, amend, cancel, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
@@ -328,6 +328,168 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestAmendCommandDispositionsAndCommandAuthority(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		patch     string
+		wantCode  int
+		wantEvent runstate.EventType
+		check     func(*testing.T, *runstore.Store)
+	}{
+		{
+			name: "rejected", patch: `[{"op":"replace","path":"/revision","value":2}]`, wantCode: 3, wantEvent: runstate.EventAmendmentRejected,
+		},
+		{
+			name: "routed stays non-blocking", patch: `[{"op":"replace","path":"/goal","value":"needs-review"}]`, wantCode: 0, wantEvent: runstate.EventDecisionRequested,
+			check: func(t *testing.T, store *runstore.Store) {
+				t.Helper()
+				input, err := store.LoadRunInput("run-1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if input.Projection.State.Run != runstate.RunRunning || len(input.Projection.State.PendingDecisions) != 1 {
+					t.Fatalf("routed CLI state = run:%s pending:%+v, want RUNNING with one non-blocking decision", input.Projection.State.Run, input.Projection.State.PendingDecisions)
+				}
+				for _, decision := range input.Projection.State.PendingDecisions {
+					if decision.Type != "amendment" || decision.Blocking {
+						t.Fatalf("CLI decision = %+v, want non-blocking amendment", decision)
+					}
+				}
+			},
+		},
+		{
+			name: "auto approved commits but does not acquire driver authority", patch: `[{"op":"replace","path":"/policy/budget/active_wall_clock_min","value":9}]`, wantCode: 0, wantEvent: runstate.EventAmendmentApproved,
+			check: func(t *testing.T, store *runstore.Store) {
+				t.Helper()
+				input, err := store.LoadRunInput("run-1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if input.Projection.State.ScoreHead.Revision != 2 || input.Projection.State.PendingPrepare != nil {
+					t.Fatalf("auto command state = head:%+v pending:%+v, want committed revision 2", input.Projection.State.ScoreHead, input.Projection.State.PendingPrepare)
+				}
+				if _, present, err := store.ReadLease("run-1"); err != nil || present {
+					t.Fatalf("CLI amend lease present=%t error=%v, want no driver lease", present, err)
+				}
+				_, _ = resume(context.Background(), "run-1")
+				journal, err := store.ReadJournal("run-1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !hasCommandRevisionRestartSelection(journal.Events, 2) {
+					t.Fatal("subsequent resume did not materialize the committed revision restart")
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, store := amendCommandFixture(t, true)
+			patchPath := filepath.Join(root, "patch.json")
+			if err := os.WriteFile(patchPath, []byte(test.patch), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := runAmend("", patchPath, "operator correction", "", &stdout, &stderr); code != test.wantCode {
+				t.Fatalf("amend exit=%d stderr=%q, want %d", code, stderr.String(), test.wantCode)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("amend stdout=%q, want empty", stdout.String())
+			}
+			if test.wantEvent == runstate.EventDecisionRequested {
+				for _, fact := range []string{"proposal_id=", "decision_id=", "reason=", "actual_impact="} {
+					if !strings.Contains(stderr.String(), fact) {
+						t.Fatalf("routed diagnostic=%q, missing %q", stderr.String(), fact)
+					}
+				}
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := journal.Events[len(journal.Events)-1].Type; got != test.wantEvent {
+				t.Fatalf("journal tail=%s, want %s; stderr=%q", got, test.wantEvent, stderr.String())
+			}
+			if test.check != nil {
+				test.check(t, store)
+			}
+		})
+	}
+}
+
+func TestAmendCommandRejectsHeadChangedAfterBaseCapture(t *testing.T) {
+	root, store := amendCommandFixture(t, false)
+	patchPath := filepath.Join(root, "patch.json")
+	if err := os.WriteFile(patchPath, []byte(`[{"op":"replace","path":"/goal","value":"stale"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := afterAmendmentBaseCapture
+	afterAmendmentBaseCapture = func() {
+		appendResumeApprovedSnapshot(t, store)
+	}
+	t.Cleanup(func() { afterAmendmentBaseCapture = previous })
+	var stdout, stderr bytes.Buffer
+	if code := runAmend("", patchPath, "stale test", "", &stdout, &stderr); code != 3 {
+		t.Fatalf("amend exit=%d stderr=%q, want rejected amendment exit 3", code, stderr.String())
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := journal.Events[len(journal.Events)-1]
+	if last.Type != runstate.EventAmendmentRejected || !strings.Contains(string(last.Payload), `"reason":"stale"`) {
+		t.Fatalf("head-moved result = %s %s, want stale rejection", last.Type, last.Payload)
+	}
+}
+
+func amendCommandFixture(t *testing.T, withAttempt bool) (string, *runstore.Store) {
+	t.Helper()
+	root, store := resumeFixtureWithInputs(t, "", amendCommandScore(), []byte("cast: \"0.1\"\nperformers:\n  reviewer:\n    adapter: adapter\n    model: model\nbindings:\n  reviewer:\n    performer: reviewer\n"))
+	if withAttempt {
+		appendResumeAttempt(t, store, false)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	return root, store
+}
+
+func amendCommandScore() []byte {
+	return []byte("score: \"0.2\"\nname: amend-command\nrevision: 1\nstatus: finalized\ngoal: fixture\nverification:\n  expectation:\n    intent: pass-existing-tests\n    apply_gate:\n      waived: true\n      reason: fixture\nparts:\n  reviewer:\n    capabilities: [repo_read]\nmovements:\n  - id: review\n    part: reviewer\n    grants: [repo_read]\n    instruction: inspect\npolicy:\n  allowed_paths: [\"**\"]\n  budget:\n    active_wall_clock_min: 10\n  amendment:\n    auto: envelope\n")
+}
+
+func hasCommandRevisionRestartSelection(events []runstate.Event, revision uint64) bool {
+	for _, event := range events {
+		if event.Type == runstate.EventPerformerSelected && event.ScoreRevision == revision && strings.Contains(string(event.Payload), `"reason":"revision_restart"`) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestParseAmendArgs(t *testing.T) {
+	for _, test := range []struct {
+		args                                      []string
+		wantRun, wantPatch, wantReason, wantClaim string
+		want                                      bool
+	}{
+		{args: []string{"amend", "--patch", "patch.json", "--reason", "narrow"}, wantPatch: "patch.json", wantReason: "narrow", want: true},
+		{args: []string{"amend", "run-1", "--patch", "-", "--reason", "narrow", "--claimed-impact", "impact.json"}, wantRun: "run-1", wantPatch: "-", wantReason: "narrow", wantClaim: "impact.json", want: true},
+		{args: []string{"amend", "--reason", "narrow", "--patch", "patch.json"}},
+		{args: []string{"amend", "run-1", "--patch", "patch.json", "--reason"}},
+		{args: []string{"amend", "run-1", "--patch", "patch.json", "--reason", "narrow", "--claimed-impact"}},
+	} {
+		runID, patch, reason, claim, ok := parseAmendArgs(test.args)
+		if ok != test.want || runID != test.wantRun || patch != test.wantPatch || reason != test.wantReason || claim != test.wantClaim {
+			t.Fatalf("parseAmendArgs(%v) = (%q, %q, %q, %q, %t)", test.args, runID, patch, reason, claim, ok)
+		}
 	}
 }
 

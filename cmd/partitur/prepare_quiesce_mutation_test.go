@@ -78,6 +78,14 @@ func TestMutationParentPrepareInjectionGuards(t *testing.T) {
 			packagePath: "./cmd/partitur",
 			testName:    "TestRunRoutesAdapterProposalThroughProductionComposition",
 		},
+		{
+			name:        "CLI auto approval commits its prepared transaction",
+			source:      "internal/amendmentexec/dispositioner.go",
+			before:      "if err := store.CompleteOrAbandonPrepare(ctx, submission.RunID); err != nil {",
+			after:       "if err := errors.New(\"mutation: skip CLI prepare commit\"); err != nil {",
+			packagePath: "./cmd/partitur",
+			testName:    "TestAmendCommandDispositionsAndCommandAuthority/auto_approved_commits_but_does_not_acquire_driver_authority",
+		},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			assertPrepareQuiesceMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, mutation.packagePath, mutation.testName)

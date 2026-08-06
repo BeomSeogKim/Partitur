@@ -97,6 +97,31 @@ func (store *Store) Mutate(
 	})
 }
 
+// MutateProjected holds the repository state lock and supplies the current
+// projection without granting execution-driver authority. Commands which
+// record lifecycle transactions use this boundary; only run and resume acquire
+// a Driver lease.
+func (store *Store) MutateProjected(
+	runID runstate.RunID,
+	mutation func(*Txn, runstate.State) error,
+) error {
+	if mutation == nil {
+		return errors.New("runstore: nil projected mutation")
+	}
+	initial, err := store.LoadInitialScore(runID)
+	if err != nil {
+		return err
+	}
+	seed := movementSeed(initial)
+	return store.Mutate(runID, "", func(transaction *Txn) error {
+		state, err := transaction.project(seed)
+		if err != nil {
+			return err
+		}
+		return mutation(transaction, state)
+	})
+}
+
 // RunIDs returns the valid run directory names at this store's fixed root.
 // It does not create the runs directory, so absence is an empty collection.
 func (store *Store) RunIDs() ([]runstate.RunID, error) {
