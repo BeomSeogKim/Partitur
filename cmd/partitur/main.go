@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/amendment"
 	"github.com/BeomSeogKim/Partitur/internal/amendmentexec"
 	"github.com/BeomSeogKim/Partitur/internal/cancelwait"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
@@ -34,6 +36,10 @@ import (
 var version = "dev"
 
 var errOutputStream = errors.New("output stream is unwritable")
+
+// afterAmendmentBaseCapture is an interleave seam for command tests. Production
+// leaves it as a no-op; the capture itself remains before §9 admission.
+var afterAmendmentBaseCapture = func() {}
 
 type validateRunner func() validation.Result
 type prepareRunner func() (*validation.Preparation, validation.Result)
@@ -226,6 +232,9 @@ func runWithReaders(
 	if decisionID, approved, overridden, reason, ok := parseApproveArgs(args); ok {
 		return runApprove(decisionID, approved, overridden, reason, stderr)
 	}
+	if requestedID, patchPath, reason, claimedImpactPath, ok := parseAmendArgs(args); ok {
+		return runAmend(requestedID, patchPath, reason, claimedImpactPath, stdout, stderr)
+	}
 	if len(args) == 1 && args[0] == "run" {
 		preparation, preparationResult := prepare()
 		if preparationResult.Refusal != nil {
@@ -283,7 +292,109 @@ func runWithReaders(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate, run, resume, answer, approve, cancel, status, logs")
+	fmt.Fprintln(w, "commands: version, validate, run, resume, answer, approve, amend, cancel, status, logs")
+}
+
+func parseAmendArgs(args []string) (runID, patchPath, reason, claimedImpactPath string, ok bool) {
+	if len(args) < 5 || args[0] != "amend" {
+		return "", "", "", "", false
+	}
+	index := 1
+	if !strings.HasPrefix(args[index], "-") {
+		if args[index] == "" {
+			return "", "", "", "", false
+		}
+		runID = args[index]
+		index++
+	}
+	if index+4 > len(args) || args[index] != "--patch" || args[index+1] == "" || args[index+2] != "--reason" || args[index+3] == "" {
+		return "", "", "", "", false
+	}
+	patchPath, reason = args[index+1], args[index+3]
+	index += 4
+	if index == len(args) {
+		return runID, patchPath, reason, "", true
+	}
+	if index+2 == len(args) && args[index] == "--claimed-impact" && args[index+1] != "" {
+		return runID, patchPath, reason, args[index+1], true
+	}
+	return "", "", "", "", false
+}
+
+func runAmend(requestedID, patchPath, reason, claimedImpactPath string, stdout, stderr io.Writer) int {
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	report, err := statusprojection.Read(root, requestedID)
+	if err != nil {
+		renderStatusError(stderr, err)
+		return statusErrorCode(err)
+	}
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	runID := runstate.RunID(report.Run.ID)
+	// Capture this exact head before reading the operator's files or taking the
+	// admission lock. SubmitCLI rechecks it and never substitutes a newer head.
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	afterAmendmentBaseCapture()
+	patch, err := readAmendmentPath(root, patchPath, true)
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	var claimedImpact []byte
+	if claimedImpactPath != "" {
+		claimedImpact, err = readAmendmentPath(root, claimedImpactPath, false)
+		if err != nil {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+	}
+	result, err := amendmentexec.New().SubmitCLI(context.Background(), store, amendmentexec.CLIProposal{
+		RunID: runID, BaseRevision: input.Projection.State.ScoreHead.Revision, BaseHash: input.Projection.State.ScoreHead.SemanticHash,
+		Operations: patch, Reason: reason, ClaimedImpact: claimedImpact,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", runID, "nonterminal", "partitur resume "+string(runID), err.Error())
+		return 6
+	}
+	switch result.Outcome.Kind {
+	case amendment.Rejected:
+		fmt.Fprintf(stderr, "amendment rejected: proposal_id=%q reason=%q\n", result.ProposalID, result.Outcome.Reason)
+		return 3
+	case amendment.Routed:
+		impact, _ := json.Marshal(result.Outcome.Impact.Value())
+		diagnostic := fmt.Sprintf("amendment routed: proposal_id=%q decision_id=%q reason=%q actual_impact=%s", result.ProposalID, result.DecisionID, result.Outcome.Reason, impact)
+		if result.Outcome.Class != "" {
+			diagnostic += fmt.Sprintf(" envelope_evaluation={class:%q guard_passed:%t}", result.Outcome.Class, result.Outcome.GuardPass)
+		}
+		fmt.Fprintln(stderr, diagnostic)
+		return 0
+	case amendment.Approved:
+		return 0
+	default:
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", runID, "nonterminal", "partitur resume "+string(runID), "amendment produced no disposition")
+		return 6
+	}
+}
+
+func readAmendmentPath(root, path string, allowStdin bool) ([]byte, error) {
+	if allowStdin && path == "-" {
+		return io.ReadAll(os.Stdin)
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	return os.ReadFile(path)
 }
 
 func parseApproveArgs(args []string) (decisionID string, approved bool, overridden []runstate.FindingReference, reason string, ok bool) {

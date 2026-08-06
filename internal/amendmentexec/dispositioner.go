@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/BeomSeogKim/Partitur/internal/amendment"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
@@ -50,6 +51,101 @@ type ProposalDispositioner struct {
 
 func New() ProposalDispositioner { return ProposalDispositioner{NewID: workspace.NewID} }
 
+type amendmentProposal struct {
+	driver.AdapterProposal
+	origin string
+	mutate func(func(*runstore.Txn, runstate.State) error) error
+}
+
+// CLIProposal is the command-origin value captured before §9 admission takes
+// the repository state lock. Operations retain their submitted JSON bytes.
+type CLIProposal struct {
+	RunID         runstate.RunID
+	BaseRevision  uint64
+	BaseHash      runstate.Hash
+	Operations    json.RawMessage
+	Reason        string
+	ClaimedImpact json.RawMessage
+}
+
+// CLIResult reports the durable disposition of one command-origin proposal.
+// A routed proposal includes the allocated non-blocking human decision.
+type CLIResult struct {
+	ProposalID runstate.ProposalID
+	DecisionID string
+	Outcome    amendment.Outcome
+}
+
+// SubmitCLI runs the same §9 evaluator, barrier, prepare, and commit table as
+// an adapter proposal, while deliberately never acquiring driver authority.
+func (dispositioner ProposalDispositioner) SubmitCLI(ctx context.Context, store *runstore.Store, submission CLIProposal) (CLIResult, error) {
+	if store == nil || submission.RunID == "" {
+		return CLIResult{}, errors.New("CLI amendment requires store and run id")
+	}
+	if strings.TrimSpace(submission.Reason) == "" {
+		return CLIResult{}, errors.New("CLI amendment reason is required")
+	}
+	newID := dispositioner.NewID
+	if newID == nil {
+		newID = workspace.NewID
+	}
+	proposalID, err := newID()
+	if err != nil {
+		return CLIResult{}, fmt.Errorf("allocate proposal id: %w", err)
+	}
+	decisionID, err := newID()
+	if err != nil {
+		return CLIResult{}, fmt.Errorf("allocate decision id: %w", err)
+	}
+	value := map[string]any{
+		"base_revision": submission.BaseRevision,
+		"base_hash":     submission.BaseHash,
+		"operations":    submission.Operations,
+		"reason":        submission.Reason,
+	}
+	if len(submission.ClaimedImpact) != 0 {
+		value["claimed_impact"] = submission.ClaimedImpact
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return CLIResult{}, fmt.Errorf("encode CLI amendment: %w", err)
+	}
+	proposal := amendmentProposal{
+		AdapterProposal: driver.AdapterProposal{
+			Store: store, RunID: submission.RunID, ProposalID: runstate.ProposalID(proposalID),
+			DecisionID: decisionID, Event: protocol.ProposalEvent{Amendment: encoded, RequiresDecision: false},
+		},
+		origin: "cli",
+	}
+	proposal.mutate = func(mutation func(*runstore.Txn, runstate.State) error) error {
+		return store.MutateProjected(submission.RunID, mutation)
+	}
+	prepared, outcome, err := dispositioner.prepare(ctx, proposal)
+	if err != nil {
+		return CLIResult{}, err
+	}
+	result := CLIResult{ProposalID: proposal.ProposalID, DecisionID: decisionID, Outcome: outcome}
+	if outcome.Kind == amendment.Routed {
+		if prepared.AppendRoute == nil {
+			return CLIResult{}, errors.New("CLI routed amendment has no route append")
+		}
+		if err := prepared.AppendRoute(ctx); err != nil {
+			return CLIResult{}, err
+		}
+		return result, nil
+	}
+	if outcome.Kind != amendment.Approved {
+		return result, nil
+	}
+	if prepared.PreparedReceipt == nil {
+		return CLIResult{}, errors.New("CLI approved amendment has no prepare receipt")
+	}
+	if err := store.CompleteOrAbandonPrepare(ctx, submission.RunID); err != nil {
+		return CLIResult{}, err
+	}
+	return result, nil
+}
+
 // RequiresSingleRaisedForAuto prevents a prepare from suppressing the durable
 // source event for another raised adapter decision.
 func (ProposalDispositioner) RequiresSingleRaisedForAuto() bool { return true }
@@ -61,27 +157,41 @@ func (dispositioner ProposalDispositioner) PrepareAdapterProposal(ctx context.Co
 	if proposal.Store == nil || proposal.Authority == nil {
 		return driver.AdapterProposalDisposition{}, errors.New("amendment dispositioner requires store and authority")
 	}
+	prepared, _, err := dispositioner.prepare(ctx, amendmentProposal{
+		AdapterProposal: proposal, origin: "adapter",
+		mutate: func(mutation func(*runstore.Txn, runstate.State) error) error {
+			return proposal.Authority.Mutate(mutation)
+		},
+	})
+	return prepared, err
+}
+
+func (dispositioner ProposalDispositioner) prepare(ctx context.Context, proposal amendmentProposal) (driver.AdapterProposalDisposition, amendment.Outcome, error) {
+	if err := ctx.Err(); err != nil {
+		return driver.AdapterProposalDisposition{}, amendment.Outcome{}, err
+	}
 	submission, err := decodeSubmission(proposal.Event)
 	if err != nil {
-		return driver.AdapterProposalDisposition{}, err
+		return driver.AdapterProposalDisposition{}, amendment.Outcome{}, err
 	}
-	approved, err := dispositioner.hasApprovalIntent(proposal, submission)
+	approved, _, err := dispositioner.hasApprovalIntent(proposal, submission)
 	if err != nil {
-		return driver.AdapterProposalDisposition{}, err
+		return driver.AdapterProposalDisposition{}, amendment.Outcome{}, err
 	}
 	if !approved {
-		disposition, err := dispositioner.finalizeDisposition(proposal, submission, false)
+		disposition, outcome, err := dispositioner.finalizeDisposition(proposal, submission, false)
 		if errors.Is(err, errBarrierRecheck) {
 			return dispositioner.prepareAtBarrierFixedPoint(ctx, proposal, submission)
 		}
-		return disposition, err
+		return disposition, outcome, err
 	}
 	return dispositioner.prepareAtBarrierFixedPoint(ctx, proposal, submission)
 }
 
-func (dispositioner ProposalDispositioner) hasApprovalIntent(proposal driver.AdapterProposal, input submission) (bool, error) {
+func (dispositioner ProposalDispositioner) hasApprovalIntent(proposal amendmentProposal, input submission) (bool, amendment.Outcome, error) {
 	approved := false
-	err := proposal.Authority.Mutate(func(_ *runstore.Txn, state runstate.State) error {
+	var result amendment.Outcome
+	err := proposal.mutate(func(_ *runstore.Txn, state runstate.State) error {
 		if err := requireNoPendingPrepare(state); err != nil {
 			return err
 		}
@@ -89,13 +199,14 @@ func (dispositioner ProposalDispositioner) hasApprovalIntent(proposal driver.Ada
 		if err != nil {
 			return err
 		}
+		result = outcome
 		approved = outcome.Kind == amendment.Approved
 		return nil
 	})
-	return approved, err
+	return approved, result, err
 }
 
-func (dispositioner ProposalDispositioner) prepareAtBarrierFixedPoint(ctx context.Context, proposal driver.AdapterProposal, input submission) (driver.AdapterProposalDisposition, error) {
+func (dispositioner ProposalDispositioner) prepareAtBarrierFixedPoint(ctx context.Context, proposal amendmentProposal, input submission) (driver.AdapterProposalDisposition, amendment.Outcome, error) {
 	limit := dispositioner.barrierLimit
 	if limit == 0 {
 		limit = defaultBarrierLimit
@@ -104,29 +215,30 @@ func (dispositioner ProposalDispositioner) prepareAtBarrierFixedPoint(ctx contex
 	for {
 		open, err := dispositioner.applyBarrier(ctx, proposal)
 		if err != nil {
-			return driver.AdapterProposalDisposition{}, err
+			return driver.AdapterProposalDisposition{}, amendment.Outcome{}, err
 		}
 		if open {
 			applied++
 			if applied > limit {
-				return driver.AdapterProposalDisposition{}, ErrBarrierDidNotConverge
+				return driver.AdapterProposalDisposition{}, amendment.Outcome{}, ErrBarrierDidNotConverge
 			}
 			continue
 		}
 		if dispositioner.afterBarrier != nil {
 			dispositioner.afterBarrier()
 		}
-		disposition, err := dispositioner.finalizeDisposition(proposal, input, true)
+		disposition, outcome, err := dispositioner.finalizeDisposition(proposal, input, true)
 		if errors.Is(err, errBarrierRecheck) {
 			continue
 		}
-		return disposition, err
+		return disposition, outcome, err
 	}
 }
 
-func (dispositioner ProposalDispositioner) finalizeDisposition(proposal driver.AdapterProposal, input submission, requireBarrierFixedPoint bool) (driver.AdapterProposalDisposition, error) {
+func (dispositioner ProposalDispositioner) finalizeDisposition(proposal amendmentProposal, input submission, requireBarrierFixedPoint bool) (driver.AdapterProposalDisposition, amendment.Outcome, error) {
 	var disposition driver.AdapterProposalDisposition
-	err := proposal.Authority.Mutate(func(transaction *runstore.Txn, state runstate.State) error {
+	var result amendment.Outcome
+	err := proposal.mutate(func(transaction *runstore.Txn, state runstate.State) error {
 		if err := requireNoPendingPrepare(state); err != nil {
 			return err
 		}
@@ -134,6 +246,8 @@ func (dispositioner ProposalDispositioner) finalizeDisposition(proposal driver.A
 		if err != nil {
 			return err
 		}
+		result = outcome
+		proposal.ScoreRevision = state.ScoreHead.Revision
 		if !requireBarrierFixedPoint && outcome.Kind == amendment.Approved {
 			return errBarrierRecheck
 		}
@@ -176,8 +290,31 @@ func (dispositioner ProposalDispositioner) finalizeDisposition(proposal driver.A
 			disposition = driver.AdapterProposalDisposition{
 				RouteDescriptor: descriptor,
 				AppendRoute: func(context.Context) error {
-					_, err := proposal.Authority.Append(routeEvent, faultpoint.ReceiptAddress("amendment.routed_human"))
-					return err
+					if proposal.origin == "adapter" {
+						_, err := proposal.Authority.Append(routeEvent, faultpoint.ReceiptAddress("amendment.routed_human"))
+						return err
+					}
+					return proposal.mutate(func(transaction *runstore.Txn, current runstate.State) error {
+						if _, err := runstate.Apply(current, routeEvent); err != nil {
+							return err
+						}
+						if _, err := transaction.At("amendment.routed_human").Append(routeEvent); err != nil {
+							return err
+						}
+						request, err := decisionRequestedEvent(proposal, outcome.Reason)
+						if err != nil {
+							return err
+						}
+						next, err := runstate.Apply(current, routeEvent)
+						if err != nil {
+							return err
+						}
+						if _, err := runstate.Apply(next, request); err != nil {
+							return err
+						}
+						_, err = transaction.At("amendment.decision.requested").Append(request)
+						return err
+					})
 				},
 			}
 			return nil
@@ -187,7 +324,7 @@ func (dispositioner ProposalDispositioner) finalizeDisposition(proposal driver.A
 			return fmt.Errorf("unknown amendment outcome %q", outcome.Kind)
 		}
 	})
-	return disposition, err
+	return disposition, result, err
 }
 
 func requireNoPendingPrepare(state runstate.State) error {
@@ -197,7 +334,7 @@ func requireNoPendingPrepare(state runstate.State) error {
 	return nil
 }
 
-func (dispositioner ProposalDispositioner) evaluate(proposal driver.AdapterProposal, input submission, state runstate.State) (amendment.Outcome, map[string]any, error) {
+func (dispositioner ProposalDispositioner) evaluate(proposal amendmentProposal, input submission, state runstate.State) (amendment.Outcome, map[string]any, error) {
 	proposal.ScoreRevision = state.ScoreHead.Revision
 	attempts, err := executiondep.Collect(proposal.Store, proposal.RunID)
 	if err != nil {
@@ -223,7 +360,7 @@ func (dispositioner ProposalDispositioner) evaluate(proposal driver.AdapterPropo
 	return outcome, versions, nil
 }
 
-func (dispositioner ProposalDispositioner) applyBarrier(ctx context.Context, proposal driver.AdapterProposal) (bool, error) {
+func (dispositioner ProposalDispositioner) applyBarrier(ctx context.Context, proposal amendmentProposal) (bool, error) {
 	input, err := recoveryInput(proposal.Store, proposal.RunID, proposal.Authority)
 	if err != nil {
 		return false, err
@@ -270,7 +407,7 @@ func barrierDecision(input recovery.Input) recovery.Decision {
 	return decision
 }
 
-func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.Txn, state runstate.State, proposal driver.AdapterProposal, input submission, outcome amendment.Outcome, versions map[string]any, disposition *driver.AdapterProposalDisposition) error {
+func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.Txn, state runstate.State, proposal amendmentProposal, input submission, outcome amendment.Outcome, versions map[string]any, disposition *driver.AdapterProposalDisposition) error {
 	newID := dispositioner.NewID
 	if newID == nil {
 		newID = workspace.NewID
@@ -294,13 +431,16 @@ func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.T
 	fileHash := rawHash(snapshot)
 	envelope := string(outcome.Class)
 	plan := runstate.ApprovalPlan{
-		Schema: runstate.ApprovalPlanSchema, ProposalID: proposal.ProposalID, EmittedID: stringPointer(proposal.Event.ID),
+		Schema: runstate.ApprovalPlanSchema, ProposalID: proposal.ProposalID,
 		Mode: "auto", EnvelopeClass: &envelope, BaseRevision: input.BaseRevision, BaseHash: input.BaseHash,
 		ClassifierVersion: canonical.AmendmentClassifierVersion, NewRevision: state.ScoreHead.Revision + 1,
 		NewSnapshotHash: runstate.Hash(semanticHash), NewSnapshotFileHash: runstate.Hash(fileHash),
 		TypedDelta: outcome.Impact.TypedDelta(), ActualImpact: outcome.Impact.Value(), HeadMovements: approvalHeadMovements(prepared),
 		SupersededAttemptIDs: cancellableAttempts(state), ObsoletedDecisionIDs: pendingDecisions(state),
 		Finalization: false, IdentityVersions: versions,
+	}
+	if proposal.origin == "adapter" {
+		plan.EmittedID = stringPointer(proposal.Event.ID)
 	}
 	if state.ApplicationCandidate != nil {
 		plan.CandidateID = stringPointer(state.ApplicationCandidate.ID)
@@ -506,12 +646,15 @@ func decodeImpact(raw json.RawMessage) (score.Impact, error) {
 	return result, nil
 }
 
-func (value submission) record(proposal driver.AdapterProposal) ([]byte, error) {
+func (value submission) record(proposal amendmentProposal) ([]byte, error) {
 	fields := []recordField{
 		stringField("schema", "partitur/proposal-record+json;v=1"), stringField("proposal_id", string(proposal.ProposalID)),
-		stringField("origin", "adapter"), stringField("attempt_id", string(proposal.AttemptID)), stringField("emitted_id", proposal.Event.ID),
+		stringField("origin", proposal.origin),
 		valueField("base_revision", value.BaseRevision), stringField("base_hash", string(value.BaseHash)), rawField("operations", value.OperationsRaw),
 		stringField("reason", value.Reason), valueField("requires_decision", proposal.Event.RequiresDecision),
+	}
+	if proposal.origin == "adapter" {
+		fields = append(fields, stringField("attempt_id", string(proposal.AttemptID)), stringField("emitted_id", proposal.Event.ID))
 	}
 	if value.Evidence != nil {
 		fields = append(fields, valueField("evidence", value.Evidence))
@@ -555,8 +698,11 @@ func encodeRecord(fields []recordField) ([]byte, error) {
 	return encoded.Bytes(), nil
 }
 
-func rejectionEvent(proposal driver.AdapterProposal, input submission, outcome amendment.Outcome, versions map[string]any) (runstate.Event, error) {
-	payload := map[string]any{"proposal_id": string(proposal.ProposalID), "emitted_id": proposal.Event.ID, "reason": outcome.Reason, "base_revision": input.BaseRevision, "base_hash": string(input.BaseHash), "classifier_version": canonical.AmendmentClassifierVersion, "identity_versions": versions}
+func rejectionEvent(proposal amendmentProposal, input submission, outcome amendment.Outcome, versions map[string]any) (runstate.Event, error) {
+	payload := map[string]any{"proposal_id": string(proposal.ProposalID), "reason": outcome.Reason, "base_revision": input.BaseRevision, "base_hash": string(input.BaseHash), "classifier_version": canonical.AmendmentClassifierVersion, "identity_versions": versions}
+	if proposal.origin == "adapter" {
+		payload["emitted_id"] = proposal.Event.ID
+	}
 	if proposal.Event.RequiresDecision {
 		payload["decision_id"] = proposal.DecisionID
 	}
@@ -582,19 +728,26 @@ func routeDescriptor(recordHash string, outcome amendment.Outcome, input submiss
 	return map[string]any{"proposal_record_hash": recordHash, "reason": outcome.Reason, "decision_type": "amendment", "base_revision": input.BaseRevision, "base_hash": string(input.BaseHash), "classifier_version": canonical.AmendmentClassifierVersion, "typed_delta": outcome.Impact.TypedDelta(), "actual_impact": outcome.Impact.Value(), "identity_versions": versions}
 }
 
-func routedEvent(proposal driver.AdapterProposal, descriptor map[string]any) (runstate.Event, error) {
+func routedEvent(proposal amendmentProposal, descriptor map[string]any) (runstate.Event, error) {
 	payload := make(map[string]any, len(descriptor)+5)
 	for key, value := range descriptor {
 		payload[key] = value
 	}
 	payload["proposal_id"] = string(proposal.ProposalID)
-	payload["emitted_id"] = proposal.Event.ID
+	if proposal.origin == "adapter" {
+		payload["emitted_id"] = proposal.Event.ID
+	}
 	payload["decision_id"] = proposal.DecisionID
 	payload["blocking"] = proposal.Event.RequiresDecision
 	return amendmentEvent(proposal, runstate.EventAmendmentRoutedHuman, payload)
 }
 
-func amendmentEvent(proposal driver.AdapterProposal, eventType runstate.EventType, payload map[string]any) (runstate.Event, error) {
+func decisionRequestedEvent(proposal amendmentProposal, reason string) (runstate.Event, error) {
+	payload := map[string]any{"decision_id": proposal.DecisionID, "decision_type": "amendment", "proposal_id": string(proposal.ProposalID), "routed_reason": reason, "blocking": false}
+	return amendmentEvent(proposal, runstate.EventDecisionRequested, payload)
+}
+
+func amendmentEvent(proposal amendmentProposal, eventType runstate.EventType, payload map[string]any) (runstate.Event, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return runstate.Event{}, err
