@@ -23,6 +23,19 @@ type Path string
 type Hash = runstate.Hash
 type DurabilityReceipt = faultpoint.DurabilityReceipt
 
+// ReceiptObserver observes a completed durable mutation receipt. It is
+// separate from faultpoint.Probe: receipts attest durable operations while
+// probes mark ephemeral boundaries.
+type ReceiptObserver interface {
+	Observed(DurabilityReceipt)
+}
+
+type receiptObserverFunc func(DurabilityReceipt)
+
+func (observer receiptObserverFunc) Observed(receipt DurabilityReceipt) {
+	observer(receipt)
+}
+
 var (
 	ErrInvalidPath                  = errors.New("invalid runstore path")
 	ErrJournalCorrupt               = errors.New("journal_corrupt")

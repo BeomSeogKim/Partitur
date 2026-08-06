@@ -46,7 +46,7 @@ func (transaction *Txn) PublishImmutable(
 		}
 		receipt := transaction.newReceipt(faultpoint.FilePublication)
 		receipt.Mutation.Path = relativeToRoot(transaction.store.root, target)
-		return receipt, nil
+		return transaction.observeReceipt(receipt), nil
 	case !errors.Is(err, fs.ErrNotExist):
 		return DurabilityReceipt{}, fmt.Errorf("read publication target: %w", err)
 	}
@@ -78,7 +78,7 @@ func (transaction *Txn) PublishImmutable(
 	}
 	receipt := transaction.newReceipt(faultpoint.FilePublication)
 	receipt.Mutation.Path = relativeToRoot(transaction.store.root, target)
-	return receipt, nil
+	return transaction.observeReceipt(receipt), nil
 }
 
 // Quarantine durably moves a run-local source to its content-addressed path.
@@ -131,7 +131,7 @@ func (transaction *Txn) Quarantine(source Path) (QuarantineResult, error) {
 	return QuarantineResult{
 		Source:      source,
 		Destination: destination,
-		Receipt:     receipt,
+		Receipt:     transaction.observeReceipt(receipt),
 	}, nil
 }
 
@@ -152,7 +152,7 @@ func (transaction *Txn) RemoveDurable(path Path) (DurabilityReceipt, error) {
 	}
 	receipt := transaction.newReceipt(faultpoint.DurableRemoval)
 	receipt.Mutation.Path = relativeToRoot(transaction.store.root, target)
-	return receipt, nil
+	return transaction.observeReceipt(receipt), nil
 }
 
 func digest(contents []byte) string {
