@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -80,6 +82,74 @@ type pausedRun struct {
 	processPID   int
 	paused       bool
 	commandEnded bool
+}
+
+func pauseRunAtReceipt(t *testing.T, binary, repository string, environment []string, target faultpoint.ReceiptAddress) *pausedRun {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := make([]*os.File, 0, 8)
+	for range 6 {
+		file, err := os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+	}
+	files = append(files, notifyWrite, releaseRead)
+	child := &pausedRun{notify: notifyRead, release: releaseWrite, scanner: bufio.NewScanner(notifyRead)}
+	child.command = exec.Command(binary, "run")
+	child.command.Dir = repository
+	child.command.Env = replaceEnvironment(environment, map[string]string{
+		"PARTITUR_RECEIPT_NOTIFY_FD":  "9",
+		"PARTITUR_RECEIPT_RELEASE_FD": "10",
+	})
+	child.command.ExtraFiles = files
+	child.command.Stdout = &child.stdout
+	child.command.Stderr = &child.stderr
+	if err := child.command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		defer file.Close()
+	}
+	if err := notifyWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseRead.Close(); err != nil {
+		t.Fatal(err)
+	}
+	child.processPID = child.command.Process.Pid
+	for child.scanner.Scan() {
+		fields := bytes.Fields(child.scanner.Bytes())
+		if len(fields) != 2 {
+			t.Fatalf("receipt rendezvous = %q", child.scanner.Text())
+		}
+		pid, err := strconv.Atoi(string(fields[1]))
+		if err != nil || pid != child.processPID {
+			t.Fatalf("receipt rendezvous pid=%q, want child pid=%d", fields[1], child.processPID)
+		}
+		if faultpoint.ReceiptAddress(fields[0]) == target {
+			child.paused = true
+			return child
+		}
+		if _, err := child.release.Write([]byte{1}); err != nil {
+			t.Fatalf("release receipt %q: %v", fields[0], err)
+		}
+	}
+	if err := child.scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	err = child.command.Wait()
+	journal, _ := os.ReadFile(filepath.Join(repository, ".partitur", "runs", strings.TrimSpace(child.stdout.String()), "journal.jsonl"))
+	t.Fatalf("run ended before receipt rendezvous: %v\nstdout:\n%s\nstderr:\n%s\njournal:\n%s", err, &child.stdout, &child.stderr, journal)
+	return nil
 }
 
 func pauseRunAtPoint(t *testing.T, binary, repository string, environment []string, target faultpoint.PointID) *pausedRun {
@@ -176,14 +246,16 @@ func (child *pausedRun) releaseAndExpect(t *testing.T, want []faultpoint.PointID
 
 func (child *pausedRun) stop(t *testing.T) {
 	t.Helper()
-	if child == nil || child.commandEnded {
+	if child == nil {
 		return
 	}
-	if child.command.Process != nil {
+	if !child.commandEnded && child.command.Process != nil {
 		_ = child.command.Process.Kill()
 	}
 	_ = child.release.Close()
-	_ = child.command.Wait()
+	if !child.commandEnded {
+		_ = child.command.Wait()
+	}
 	_ = child.notify.Close()
 }
 

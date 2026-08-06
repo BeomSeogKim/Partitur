@@ -43,6 +43,7 @@ var (
 
 type dependencies struct {
 	probe               faultpoint.Probe
+	receiptObserver     runstore.ReceiptObserver
 	client              AdapterExecutor
 	resolveTrampoline   func() (string, error)
 	now                 func() time.Time
@@ -84,6 +85,7 @@ func DefaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies 
 func executionDependenciesFrom(dependencies dependencies) ExecutionDependencies {
 	return ExecutionDependencies{
 		Probe:                    dependencies.probe,
+		ReceiptObserver:          dependencies.receiptObserver,
 		Client:                   dependencies.client,
 		ResolveTrampoline:        dependencies.resolveTrampoline,
 		Now:                      dependencies.now,
@@ -149,7 +151,7 @@ func run(
 		return interrupted(result, err)
 	}
 	seeds := movementSeeds(preparation.Score)
-	store, err := runstore.New(preparation.RepositoryRoot, dependencies.probe)
+	store, err := runstore.New(preparation.RepositoryRoot, dependencies.probe, dependencies.receiptObserver)
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -433,7 +435,7 @@ func executeAutoApprovalCancellation(ctx context.Context, result Result, control
 
 func dependenciesFromExecution(execution ExecutionDependencies) dependencies {
 	return dependencies{
-		probe: execution.Probe, client: execution.Client, resolveTrampoline: execution.ResolveTrampoline,
+		probe: execution.Probe, receiptObserver: execution.ReceiptObserver, client: execution.Client, resolveTrampoline: execution.ResolveTrampoline,
 		now: execution.Now, newID: execution.NewID, proposalDisposition: execution.ProposalDisposition,
 		afterMovementFailed: execution.afterMovementFailed, afterPrepareAcknowledged: execution.AfterPrepareAcknowledged,
 		acquireDriver: execution.AcquireDriver,
@@ -525,7 +527,7 @@ func ExecuteAttempt(
 		afterMovementFailed: executionDependencies.afterMovementFailed,
 	}
 	result = Result{RunID: execution.RunID}
-	store, err := runstore.New(execution.RepositoryRoot, executionDependencies.Probe)
+	store, err := runstore.New(execution.RepositoryRoot, executionDependencies.Probe, executionDependencies.ReceiptObserver)
 	if err != nil {
 		return stopped(result, err)
 	}

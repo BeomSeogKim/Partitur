@@ -83,6 +83,7 @@ type AcceptanceBudgetTerminalization struct {
 // without validating current inputs or starting a new run.
 type ExecutionDependencies struct {
 	Probe             faultpoint.Probe
+	ReceiptObserver   runstore.ReceiptObserver
 	Client            AdapterExecutor
 	ResolveTrampoline func() (string, error)
 	Now               func() time.Time
