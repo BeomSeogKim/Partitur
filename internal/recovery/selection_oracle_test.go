@@ -313,6 +313,12 @@ func preprocessingCase(caseID CaseID) bool {
 		CaseFinalGateRejected:
 		// RC-RESUME-021 needs the journal-projected rejected human gate; its
 		// recoveryexec fixture drives that state through resolution and replan.
+		//
+		// Exemption here removes a case from selection only; it hands the case's
+		// effects to nothing. RC-RESUME-035's §9 half and RC-RESUME-036 are locked
+		// by the artifact-level tests in internal/recoveryexec (TestRecoveryPre-
+		// processing*), which is where they were found missing entirely. Whether
+		// 034 and 038 are locked anywhere has not been established.
 		return true
 	default:
 		return false
