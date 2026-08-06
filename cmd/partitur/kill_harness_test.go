@@ -357,8 +357,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 
 func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map[receiptKillKey]bool) {
 	t.Helper()
-	if len(records) != 10 {
-		t.Fatalf("receipt registry records=%d, want ten", len(records))
+	if len(records) != 12 {
+		t.Fatalf("receipt registry records=%d, want twelve", len(records))
 	}
 	counts := make(map[faultpoint.EdgeID]int)
 	for key, passed := range records {
@@ -373,16 +373,17 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		}
 		counts[key.edge]++
 	}
-	if len(counts) != 6 {
-		t.Fatalf("receipt registry edges=%d, want six", len(counts))
+	if len(counts) != 7 {
+		t.Fatalf("receipt registry edges=%d, want seven", len(counts))
 	}
 	for edge, want := range map[faultpoint.EdgeID]int{
-		faultpoint.EdgePrepareSnapshotToPlan:        2,
-		faultpoint.EdgePreparePlanToPrepared:        2,
-		faultpoint.EdgeQuiesceObservedToSwept:       1,
-		faultpoint.EdgePreparePreparedToObserved:    2,
-		faultpoint.EdgeQuiesceSweptToLeaseMoved:     1,
-		faultpoint.EdgeProposalBlockedRouteToRouted: 2,
+		faultpoint.EdgePrepareSnapshotToPlan:           2,
+		faultpoint.EdgePreparePlanToPrepared:           2,
+		faultpoint.EdgeQuiesceObservedToSwept:          1,
+		faultpoint.EdgePreparePreparedToObserved:       2,
+		faultpoint.EdgeQuiesceSweptToLeaseMoved:        1,
+		faultpoint.EdgeProposalPublishedToBlockedRoute: 2,
+		faultpoint.EdgeProposalBlockedRouteToRouted:    2,
 	} {
 		if counts[edge] != want {
 			t.Fatalf("receipt registry records for %q = %d, want %d", edge, counts[edge], want)
@@ -466,6 +467,8 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 		{faultpoint.EdgePreparePreparedToObserved, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/observed"},
 		{faultpoint.EdgeQuiesceObservedToSwept, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/observed"},
 		{faultpoint.EdgeQuiesceSweptToLeaseMoved, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/lease_moved"},
+		{faultpoint.EdgeProposalPublishedToBlockedRoute, "proposal.record.published", "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/published"},
+		{faultpoint.EdgeProposalPublishedToBlockedRoute, "attempt.blocked", "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/blocked_route"},
 		{faultpoint.EdgeProposalBlockedRouteToRouted, "attempt.blocked", "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
 		{faultpoint.EdgeProposalBlockedRouteToRouted, "recovery.amendment.routed_human", "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
 	}
@@ -488,6 +491,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	publicationResult := make(chan killHarnessJSONResult, 1)
 	prepareResult := make(chan killHarnessJSONResult, 1)
 	proposalResult := make(chan killHarnessJSONResult, 1)
+	publicationProposalResult := make(chan killHarnessJSONResult, 1)
 	go func() {
 		passed, output, err := runKillHarnessJSON(root, "./internal/amendmentexec", "^TestPreparePublicationKillCuts$")
 		publicationResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
@@ -500,10 +504,15 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		passed, output, err := runKillHarnessJSON(root, "./cmd/partitur", "^TestBlockedProposalRouteKillCuts$")
 		proposalResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
 	}()
+	go func() {
+		passed, output, err := runKillHarnessJSON(root, "./cmd/partitur", "^TestProposalPublicationKillCuts$")
+		publicationProposalResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
+	}()
 
 	publication := <-publicationResult
 	prepare := <-prepareResult
 	proposal := <-proposalResult
+	publicationProposal := <-publicationProposalResult
 	if publication.err != nil {
 		return nil, publication.output, publication.err
 	}
@@ -513,12 +522,18 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	if proposal.err != nil {
 		return nil, proposal.output, proposal.err
 	}
+	if publicationProposal.err != nil {
+		return nil, publicationProposal.output, publicationProposal.err
+	}
 	passed := publication.passed
 	preparePassed := prepare.passed
 	for test, result := range preparePassed {
 		passed[test] = result
 	}
 	for test, result := range proposal.passed {
+		passed[test] = result
+	}
+	for test, result := range publicationProposal.passed {
 		passed[test] = result
 	}
 
@@ -530,7 +545,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		}
 		records[key] = passed[record.test]
 	}
-	return records, publication.output + prepare.output + proposal.output, nil
+	return records, publication.output + prepare.output + proposal.output + publicationProposal.output, nil
 }
 
 func prepareQuiesceKillHarnessPassed(t *testing.T) map[string]bool {
