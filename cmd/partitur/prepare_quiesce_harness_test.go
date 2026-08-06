@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -87,15 +88,43 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 	})
 
 	t.Run("quiesce.swept_to_lease_moved/swept", func(t *testing.T) {
-		repository, environment := killHarnessRepository(t, bin, vendor)
-		child, runID := preparedLiveDriver(t, partitur, repository, environment)
-		defer child.stop(t)
-		child.releaseProbe(t)
-		child.waitProbe(t, faultpoint.PointQuiesceSessionsSwept)
-		child.kill(t)
-		assertNoQuiesceSidecar(t, repository, runID)
-		assertNormalLeasePresent(t, repository, runID)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		t.Run("matching_lease", func(t *testing.T) {
+			repository, environment := killHarnessRepository(t, bin, vendor)
+			child, runID := preparedLiveDriver(t, partitur, repository, environment)
+			defer child.stop(t)
+			child.releaseProbe(t)
+			child.waitProbe(t, faultpoint.PointQuiesceSessionsSwept)
+			child.kill(t)
+			assertNoQuiesceSidecar(t, repository, runID)
+			assertNormalLeasePresent(t, repository, runID)
+
+			// No sidecar is the only durable evidence that step 2 completed. The
+			// matching-lease recovery row must therefore sweep again before fencing.
+			killAtPoint(t, partitur, repository, environment, faultpoint.PointSupersedeSessionsSwept, "resume", string(runID))
+			assertPendingPrepare(t, repository, runID)
+			assertNoQuiesceSidecar(t, repository, runID)
+			assertNormalLeasePresent(t, repository, runID)
+			assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+			assertPreparedApprovalFenced(t, repository, runID)
+		})
+
+		t.Run("no_lease_control", func(t *testing.T) {
+			repository, environment := killHarnessRepository(t, bin, vendor)
+			child, runID := preparedLiveDriver(t, partitur, repository, environment)
+			defer child.stop(t)
+			child.releaseProbe(t)
+			child.waitProbe(t, faultpoint.PointQuiesceSessionsSwept)
+			child.kill(t)
+			assertNoQuiesceSidecar(t, repository, runID)
+			removeHarnessLease(t, repository, runID)
+			assertNoNormalLease(t, repository, runID)
+
+			// The no-lease, no-sidecar row commits directly. It must not take the
+			// matching-lease recovery sweep, whose probe is immediately after it.
+			resumeWithoutPoint(t, partitur, repository, environment, string(runID), faultpoint.PointSupersedeSessionsSwept)
+			assertPreparedApprovalUnfenced(t, repository, runID)
+			assertFixedPointReplay(t, partitur, repository, environment, string(runID), readHarnessJournal(t, repository, string(runID)))
+		})
 	})
 
 	t.Run("quiesce.swept_to_lease_moved/lease_moved", func(t *testing.T) {
@@ -107,6 +136,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		child.kill(t)
 		assertQuiesceSidecar(t, repository, runID)
 		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertPreparedApprovalUnfenced(t, repository, runID)
 	})
 
 	t.Run("quiesce.lease_moved_to_commit_lock/lease_moved", func(t *testing.T) {
@@ -358,6 +388,163 @@ func assertNormalLeasePresent(t *testing.T, repository string, runID runstate.Ru
 	t.Helper()
 	if _, err := os.Stat(runstorePath(repository, runID, "driver.lease")); err != nil {
 		t.Fatalf("matching normal lease before lease move: %v", err)
+	}
+}
+
+func assertNoNormalLease(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	if _, err := os.Stat(runstorePath(repository, runID, "driver.lease")); !os.IsNotExist(err) {
+		t.Fatalf("normal lease after durable removal = %v", err)
+	}
+}
+
+func removeHarnessLease(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, present, err := store.ReadLease(runID)
+	if err != nil || !present {
+		t.Fatalf("read matching lease before control removal: present=%t err=%v", present, err)
+	}
+	if err := store.Mutate(runID, "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("quiesce.swept_to_lease_moved/no_lease_control").CompareRemoveLease(lease.Identity())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPreparedApprovalFenced(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	assertPreparedApprovalFence(t, repository, runID, true)
+}
+
+func assertPreparedApprovalUnfenced(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	assertPreparedApprovalFence(t, repository, runID, false)
+}
+
+func assertPreparedApprovalFence(t *testing.T, repository string, runID runstate.RunID, wantFenced bool) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventAmendmentApproved {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		_, fenced := payload["fenced_epoch"]
+		if fenced != wantFenced {
+			t.Fatalf("prepared approval fenced=%t, want %t: %s", fenced, wantFenced, event.Payload)
+		}
+		return
+	}
+	t.Fatal("recovery did not append amendment.approved")
+}
+
+func resumeWithoutPoint(
+	t *testing.T,
+	binary, repository string,
+	environment []string,
+	runID string,
+	forbidden faultpoint.PointID,
+) {
+	t.Helper()
+	notifyRead, notifyWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notifyRead.Close()
+	defer notifyWrite.Close()
+	releaseRead, releaseWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRead.Close()
+	defer releaseWrite.Close()
+
+	files := make([]*os.File, 0, 8)
+	for range 6 {
+		file, err := os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+		defer file.Close()
+	}
+	files = append(files, notifyWrite, releaseRead)
+	var stdout, stderr bytes.Buffer
+	command := exec.Command(binary, "resume", runID)
+	command.Dir = repository
+	command.Env = replaceEnvironment(environment, map[string]string{
+		"PARTITUR_FAULTPOINT_HARNESS":    "1",
+		"PARTITUR_FAULTPOINT_NOTIFY_FD":  "9",
+		"PARTITUR_FAULTPOINT_RELEASE_FD": "10",
+	})
+	command.ExtraFiles = files
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = notifyWrite.Close()
+	_ = releaseRead.Close()
+
+	type result struct {
+		err error
+	}
+	done := make(chan result, 1)
+	go func() { done <- result{err: command.Wait()} }()
+	notifications := make(chan faultpoint.PointID, 1)
+	go func() {
+		scanner := bufio.NewScanner(notifyRead)
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			if len(fields) == 2 {
+				notifications <- faultpoint.PointID(fields[0])
+			}
+		}
+		close(notifications)
+	}()
+
+	timer := time.NewTimer(15 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case point, ok := <-notifications:
+			if !ok {
+				notifications = nil
+				continue
+			}
+			if point == forbidden {
+				_ = command.Process.Kill()
+				<-done
+				t.Fatalf("resume reached forbidden recovery point %q", forbidden)
+			}
+			if _, err := releaseWrite.Write([]byte{1}); err != nil {
+				t.Fatal(err)
+			}
+		case result := <-done:
+			if result.err != nil || stdout.String() != "" || stderr.String() != "" {
+				t.Fatalf("resume avoiding %q: err=%v stdout=%q stderr=%q", forbidden, result.err, stdout.String(), stderr.String())
+			}
+			return
+		case <-timer.C:
+			_ = command.Process.Kill()
+			<-done
+			t.Fatalf("timed out waiting for resume avoiding %q", forbidden)
+		}
 	}
 }
 
