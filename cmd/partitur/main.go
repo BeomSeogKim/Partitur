@@ -15,6 +15,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/amendmentexec"
 	"github.com/BeomSeogKim/Partitur/internal/cancelwait"
 	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -79,8 +80,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 		stderr,
 		validation.Run,
 		validation.Prepare,
-		driver.Run,
+		productionRunDriver,
 	)
+}
+
+// productionRunDriver is the command composition root for a live run. It is
+// kept outside driver because amendmentexec implements driver's callback.
+func productionRunDriver(
+	ctx context.Context,
+	preparation *validation.Preparation,
+	started driver.StartedObserver,
+) driver.Result {
+	return driver.RunWithExecutionDependencies(
+		ctx,
+		preparation,
+		started,
+		productionExecutionDependencies(faultpoint.ProbeFromEnvironment()),
+	)
+}
+
+func productionExecutionDependencies(probe faultpoint.Probe) driver.ExecutionDependencies {
+	execution := driver.DefaultExecutionDependencies(probe)
+	execution.ProposalDisposition = amendmentexec.New()
+	return execution
 }
 
 func runWithValidate(

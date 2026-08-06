@@ -59,6 +59,25 @@ func TestMutationParentPrepareInjectionGuards(t *testing.T) {
 			packagePath: "./internal/runstore",
 			testName:    "TestReclaimDeadRecoveryDriverReleasesStateLockBeforeLeaseCreatedBoundary",
 		},
+		{
+			name:   "production command wires amendment dispositioner",
+			source: "cmd/partitur/main.go",
+			before: "\texecution.ProposalDisposition = amendmentexec.New()",
+			after: "\texecution.ProposalDisposition = func() driver.ProposalDispositioner {\n" +
+				"\t\t_ = amendmentexec.New\n" +
+				"\t\treturn nil\n" +
+				"\t}()",
+			packagePath: "./cmd/partitur",
+			testName:    "TestProductionExecutionDependenciesWireAmendmentDispositioner",
+		},
+		{
+			name:        "run dispatches adapter proposals through production composition",
+			source:      "cmd/partitur/main.go",
+			before:      "\t\tproductionRunDriver,",
+			after:       "\t\tdriver.Run,",
+			packagePath: "./cmd/partitur",
+			testName:    "TestRunRoutesAdapterProposalThroughProductionComposition",
+		},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			assertPrepareQuiesceMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, mutation.packagePath, mutation.testName)

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/amendmentexec"
 	"github.com/BeomSeogKim/Partitur/internal/cancellation"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/cast"
@@ -40,6 +41,13 @@ func TestVersion(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "dev" || stderr.Len() != 0 {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestProductionExecutionDependenciesWireAmendmentDispositioner(t *testing.T) {
+	execution := productionExecutionDependencies(faultpoint.Nop{})
+	if _, ok := execution.ProposalDisposition.(amendmentexec.ProposalDispositioner); !ok {
+		t.Fatalf("production proposal dispositioner = %T, want amendmentexec.ProposalDispositioner", execution.ProposalDisposition)
 	}
 }
 
