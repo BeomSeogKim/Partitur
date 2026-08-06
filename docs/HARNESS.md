@@ -73,7 +73,7 @@ is paused there.
 | `quiesce.observed_to_swept` | R → **B** | driver | a durable quiesce receipt before that receipt's sweep completes |
 | `quiesce.swept_to_lease_moved` | **B** → R | driver | a pending prepare the driver has observed |
 | `quiesce.lease_moved_to_commit_lock` | R → **B** | driver, then approver | sidecar written, approver not yet re-entered |
-| `prepare.quarantined_to_abandoned` | R → R | approver or canceller | an abandonment on each reason: `cancelled`, `base_head_changed`, `plan_invalidated` |
+| `prepare.quarantined_to_abandoned` | R → R | approver or canceller | a cancellation with a pending prepare, so the cancellation oracle takes `(b)` |
 
 ### Routed proposals
 
@@ -184,7 +184,7 @@ stated Appendix E branch.
 | `quiesce.observed_to_swept` | reachable | §6 step 2; B.5; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after its first durable quiesce receipt and at the completed-sweep probe. Both states retain no sidecar and re-enter recovery without resume minting a new quiesce receipt |
 | `quiesce.swept_to_lease_moved` | reachable | §6 step 2; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after the completed-sweep probe and at its durable lease-move receipt. With the matching lease and no sidecar, recovery reaches its own post-sweep probe before fencing; the no-lease control does not reach that probe and commits unfenced |
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No prepare/quiesce crash subprocess fixture yet. A post-compare-move boundary now brackets the durable sidecar before an approver reaches the existing commit-lock boundary; the B3 core fixture owns the two-sided cuts |
-| `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
+| `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | `TestSubprocessKillHarness` already cuts cancellation after snapshot quarantine and before abandonment, but that `cancelled` instance has not yet been registered for this edge |
 | `proposal.published_to_blocked_route` | reachable | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035`; E.2 | `TestProposalPublicationKillCuts` kills the production run at the published record and its matching blocked descriptor. Recovery quarantines the unreferenced record with its original bytes at the first cut and retains the descriptor raw-hash-bound record at the second |
 | `proposal.blocked_route_to_routed` | reachable | §4 blocking handshake; C.1 `RC-RESUME-049`; E.2 | `TestBlockedProposalRouteKillCuts` kills the production run at `attempt.blocked` and the production resume at its routed receipt. The route must match the frozen descriptor while invalid current score input proves recovery did not re-run §9 |
 | `proposal.published_to_routed` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-035`; E.2 | No routed-proposal subprocess fixture |

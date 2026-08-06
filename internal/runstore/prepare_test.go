@@ -1,6 +1,7 @@
 package runstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -321,32 +322,96 @@ func TestPrepareCommitClassifiesEveryNonFenceTableRow(t *testing.T) {
 			t.Fatalf("silence-expired matching owner classification = %v, %v", next, err)
 		}
 	})
-	t.Run("base head changed abandons", func(t *testing.T) {
-		store, _ := preparedCommitStore(t, nil)
-		next, _, err := classifyPreparedCommit(t, store, func(state *runstate.State) { state.ScoreHead.Revision++ })
-		if err != nil || next != prepareCommitDone {
-			t.Fatalf("base-changed commit classification = %v, %v", next, err)
-		}
-		assertPreparedCommitTerminal(t, store, runstate.EventAmendmentApprovalAbandoned)
-	})
-	t.Run("invalidated plan abandons", func(t *testing.T) {
-		store, _ := preparedCommitStore(t, nil)
-		next, _, err := classifyPreparedCommit(t, store, func(state *runstate.State) { state.PendingPrepare.ProposalID = "other" })
-		if err != nil || next != prepareCommitDone {
-			t.Fatalf("invalid-plan commit classification = %v, %v", next, err)
-		}
-		assertPreparedCommitTerminal(t, store, runstate.EventAmendmentApprovalAbandoned)
-	})
 }
 
-func assertPreparedCommitTerminal(t *testing.T, store *Store, want runstate.EventType) {
-	t.Helper()
-	journal, err := store.ReadJournal("run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(journal.Events) == 0 || journal.Events[len(journal.Events)-1].Type != want {
-		t.Fatalf("prepare commit terminal = %+v, want %s", journal.Events, want)
+func TestPrepareCommitDefensiveConsistencyAbandonmentCleansUpBeforeAppending(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		reason string
+		mutate func(*runstate.State)
+	}{
+		{
+			name:   "base head changed",
+			reason: "base_head_changed",
+			mutate: func(state *runstate.State) { state.ScoreHead.Revision++ },
+		},
+		{
+			name:   "plan invalidated",
+			reason: "plan_invalidated",
+			mutate: func(state *runstate.State) { state.PendingPrepare.ProposalID = "other" },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, prepare := preparedCommitStore(t, nil)
+			runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+			snapshot := filepath.Join(runRoot, "scores", "revision-2.yaml")
+			plan := filepath.Join(runRoot, "prepares", string(prepare.ID)+".json")
+			sidecar := filepath.Join(runRoot, "driver.quiesced."+string(prepare.ID))
+			snapshotBytes, err := os.ReadFile(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+				_, err := transaction.At("test.sidecar").PublishImmutable(Path("driver.quiesced."+string(prepare.ID)), []byte("sidecar"), Hash(rawHash([]byte("sidecar"))))
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{snapshot, plan, sidecar} {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("fixture path %s: %v", path, err)
+				}
+			}
+
+			var addresses []faultpoint.ReceiptAddress
+			store.receiptObserver = receiptObserverFunc(func(receipt DurabilityReceipt) {
+				addresses = append(addresses, receipt.Address)
+			})
+			next, _, err := classifyPreparedCommit(t, store, test.mutate)
+			if err != nil || next != prepareCommitDone {
+				t.Fatalf("defensive abandonment classification = %v, %v", next, err)
+			}
+			wantAddresses := []faultpoint.ReceiptAddress{
+				"prepare.commit.snapshot",
+				"prepare.commit.plan",
+				"prepare.commit.sidecar",
+				"prepare.commit.abandoned",
+			}
+			if len(addresses) != len(wantAddresses) {
+				t.Fatalf("durable operation order = %v, want %v", addresses, wantAddresses)
+			}
+			for index, want := range wantAddresses {
+				if addresses[index] != want {
+					t.Fatalf("durable operation %d = %q, want %q (all=%v)", index, addresses[index], want, addresses)
+				}
+			}
+
+			quarantined := filepath.Join(runRoot, "quarantine", "abandoned_prepare", strings.TrimPrefix(rawHash(snapshotBytes), "sha256:"), "revision-2.yaml")
+			quarantinedBytes, err := os.ReadFile(quarantined)
+			if err != nil || !bytes.Equal(quarantinedBytes, snapshotBytes) {
+				t.Fatalf("quarantined snapshot = %q, %v; want original snapshot", quarantined, err)
+			}
+			for _, path := range []string{snapshot, plan, sidecar} {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("cleanup %s err=%v, want absent", path, err)
+				}
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			last := journal.Events[len(journal.Events)-1]
+			if last.Type != runstate.EventAmendmentApprovalAbandoned {
+				t.Fatalf("last event = %s, want %s", last.Type, runstate.EventAmendmentApprovalAbandoned)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(last.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := payload["reason"].(string); got != test.reason {
+				t.Fatalf("abandonment reason = %q, want %q", got, test.reason)
+			}
+		})
 	}
 }
 
