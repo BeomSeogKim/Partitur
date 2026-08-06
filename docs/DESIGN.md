@@ -309,7 +309,15 @@ event that makes it authoritative:
   proposal, it is instead the route descriptor in the terminal `attempt.blocked`; that descriptor
   carries the same hash and the already-decided route payload, and `amendment.routed_human` follows
   it (§4).
-- On recovery, a proposal file with neither `amendment.routed_human` nor a matching blocking
+- **Command-origin publication interval.** For an ordinary command-origin route, the repository
+  state lock is retained from the successful proposal-record rename through the fsynced
+  `amendment.routed_human` append. These are distinct durable operations, not one atomic write:
+  Appendix E may inject a crash after the record receipt and before the route append. A `resume`
+  waits for that interval; it must not classify a route-absent record as an orphan while its live
+  publisher holds the lock. If the publisher crashes, the lock is released and replay quarantines
+  the route-absent record under the rule below.
+- On recovery, after any command-origin publication interval has ended, a proposal file with
+  neither `amendment.routed_human` nor a matching blocking
   `attempt.blocked` route descriptor is quarantined: nothing authoritative referred to it. A
   descriptor is an authoritative reference only when its proposal id and raw hash match the file;
   then `RC-RESUME-049` completes its missing `amendment.routed_human` without re-evaluating the
@@ -2230,8 +2238,9 @@ the recovery rule below.
 share a mechanism:
 
 - A **repository state lock** (OS file lock) guards state mutations — journal appends, ref
-  updates, snapshot writes, CAS operations. It is held only for the duration of a mutation,
-  never across a human wait and never across an adapter execution.
+  updates, snapshot writes, CAS operations. It is held for one bounded mutation or, only where a
+  named protocol rule says so, a bounded sequence of adjacent local durable mutations. It is never
+  held across a human wait, an adapter execution, or any other external wait.
 - A per-run **execution-driver lease** (`runs/<run-id>/driver.lease`, §1) is held for the
   whole active execution episode by whichever process is driving attempts. A PID alone is
   insufficient — PIDs are reused and a stale file would masquerade as a live owner — so the lease
@@ -6224,7 +6233,7 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 |---|---|---|---|---|
 | `proposal.published_to_blocked_route` | blocking-proposal record published `R` | matching `attempt.blocked` route descriptor appended `R` | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035` | A record without either a routed event or its matching blocked descriptor is unreferenced and quarantined; a descriptor names and raw-hash-binds the only record from which `RC-RESUME-049` may recover a route |
 | `proposal.blocked_route_to_routed` | blocking `attempt.blocked` route descriptor appended `R` | matching `amendment.routed_human` appended `R` | §4 blocking handshake; C.1 `RC-RESUME-049` | Recovery verifies the descriptor-named immutable record and appends the frozen route idempotently; it never re-runs §9 or derives a route from an unreferenced record |
-| `proposal.published_to_routed` | proposal record published `R` | `amendment.routed_human` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-035`, `RC-RESUME-049` | An ordinary routed record has no other durable reference and is quarantined when its route is absent; the blocking-descriptor exception is confined to the two rows above |
+| `proposal.published_to_routed` | proposal record published `R` | `amendment.routed_human` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-035`, `RC-RESUME-049` | An ordinary routed record has no durable reference other than its route. A command-origin publisher retains the state lock across this edge; an adapter-origin publisher is protected by its matching live driver lease. A live publisher is not an orphan. A crash after publication releases that protection, so recovery quarantines the record when the route and blocking descriptor are absent |
 | `proposal.routed_to_decision_requested` | `amendment.routed_human` appended `R` | matching `decision.requested` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-037` | Recovery appends the request idempotently from the routed event; it never re-runs routing or infers the request from `attempt.blocked` |
 
 **Cancellation** — `(a)`–`(f)` are §6's labels and are not restated here.
