@@ -289,7 +289,7 @@ func supersessionObligationDifference(required, discharged map[supersessionOblig
 
 func supersessionFixture(t *testing.T, bin, vendor string, branch supersessionBranch) (string, []string, runstate.RunID, *preparedLiveRun, uint64) {
 	t.Helper()
-	repository, environment := killHarnessRepository(t, bin, vendor)
+	repository, environment := killHarnessRepositoryWithInputs(t, bin, vendor, supersessionScore(), runCast())
 	driver := startPreparedLiveRun(t, mustE2EBinary(t, bin, "partitur"), repository, environment)
 	driver.waitProbe(t, faultpoint.PointAuthorityLeaseCreated)
 	runID, err := soleRunID(repository)
@@ -309,6 +309,12 @@ func supersessionFixture(t *testing.T, bin, vendor string, branch supersessionBr
 	}
 	appendSupersessionFixtureInterval(t, store, runID, input.Projection.State.ScoreHead.Revision)
 	return repository, environment, runID, driver, input.Projection.State.Authority.Epoch
+}
+
+func supersessionScore() map[string]any {
+	score := runScore()
+	score["policy"].(map[string]any)["amendment"] = map[string]any{"auto": "envelope"}
+	return score
 }
 
 func mustE2EBinary(t *testing.T, directory, name string) string {
