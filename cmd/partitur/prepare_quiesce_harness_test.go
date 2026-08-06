@@ -639,11 +639,16 @@ type pausedRun struct {
 	stdout       bytes.Buffer
 	stderr       bytes.Buffer
 	processPID   int
+	receipts     []string
 	paused       bool
 	commandEnded bool
 }
 
 func pauseRunAtReceipt(t *testing.T, binary, repository string, environment []string, target faultpoint.ReceiptAddress) *pausedRun {
+	return pauseCommandAtReceipt(t, binary, repository, environment, target, "run")
+}
+
+func pauseCommandAtReceipt(t *testing.T, binary, repository string, environment []string, target faultpoint.ReceiptAddress, arguments ...string) *pausedRun {
 	t.Helper()
 	notifyRead, notifyWrite, err := os.Pipe()
 	if err != nil {
@@ -663,7 +668,7 @@ func pauseRunAtReceipt(t *testing.T, binary, repository string, environment []st
 	}
 	files = append(files, notifyWrite, releaseRead)
 	child := &pausedRun{notify: notifyRead, release: releaseWrite, scanner: bufio.NewScanner(notifyRead)}
-	child.command = exec.Command(binary, "run")
+	child.command = exec.Command(binary, arguments...)
 	child.command.Dir = repository
 	child.command.Env = replaceEnvironment(environment, map[string]string{
 		"PARTITUR_RECEIPT_NOTIFY_FD":  "9",
@@ -698,6 +703,7 @@ func pauseRunAtReceipt(t *testing.T, binary, repository string, environment []st
 			child.paused = true
 			return child
 		}
+		child.receipts = append(child.receipts, string(fields[0]))
 		if _, err := child.release.Write([]byte{1}); err != nil {
 			t.Fatalf("release receipt %q: %v", fields[0], err)
 		}
@@ -707,7 +713,7 @@ func pauseRunAtReceipt(t *testing.T, binary, repository string, environment []st
 	}
 	err = child.command.Wait()
 	journal, _ := os.ReadFile(filepath.Join(repository, ".partitur", "runs", strings.TrimSpace(child.stdout.String()), "journal.jsonl"))
-	t.Fatalf("run ended before receipt rendezvous: %v\nstdout:\n%s\nstderr:\n%s\njournal:\n%s", err, &child.stdout, &child.stderr, journal)
+	t.Fatalf("run ended before receipt rendezvous %q; saw=%v: %v\nstdout:\n%s\nstderr:\n%s\njournal:\n%s", target, child.receipts, err, &child.stdout, &child.stderr, journal)
 	return nil
 }
 
