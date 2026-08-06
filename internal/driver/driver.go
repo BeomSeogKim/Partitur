@@ -101,15 +101,26 @@ func Run(
 	preparation *validate.Preparation,
 	started StartedObserver,
 ) Result {
-	execution := defaultExecutionDependencies(faultpoint.ProbeFromEnvironment())
-	return run(ctx, preparation, started, dependencies{
-		probe:             execution.Probe,
-		client:            execution.Client,
-		resolveTrampoline: execution.ResolveTrampoline,
-		now:               execution.Now,
-		newID:             execution.NewID,
-		workspaceStart:    workspace.Start,
-	})
+	return RunWithExecutionDependencies(
+		ctx,
+		preparation,
+		started,
+		defaultExecutionDependencies(faultpoint.ProbeFromEnvironment()),
+	)
+}
+
+// RunWithExecutionDependencies drives one prepared score with dependencies
+// supplied by the composition root. The driver keeps no dependency on
+// consequence implementations so their package layering remains acyclic.
+func RunWithExecutionDependencies(
+	ctx context.Context,
+	preparation *validate.Preparation,
+	started StartedObserver,
+	execution ExecutionDependencies,
+) Result {
+	dependencies := dependenciesFromExecution(execution)
+	dependencies.workspaceStart = workspace.Start
+	return run(ctx, preparation, started, dependencies)
 }
 
 func run(

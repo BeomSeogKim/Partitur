@@ -32,6 +32,7 @@ const runVendorOutcomeEnvironment = "PARTITUR_RUN_VENDOR_OUTCOME"
 const runVendorMarkerEnvironment = "PARTITUR_RUN_VENDOR_MARKER"
 const runVendorContestedEnvironment = "PARTITUR_RUN_VENDOR_CONTESTED"
 const runVendorFindingIDEnvironment = "PARTITUR_RUN_VENDOR_FINDING_ID"
+const runVendorProposalBaseHashEnvironment = "PARTITUR_RUN_VENDOR_PROPOSAL_BASE_HASH"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runVendorEnvironment) == "1" {
@@ -205,6 +206,71 @@ func TestRunTerminalizesACancellationObservedMidExecute(t *testing.T) {
 	// §6 (f): the lease is gone.
 	if _, err := os.Stat(filepath.Join(repository, ".partitur", "runs", runID, "driver.lease")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("driver.lease stat = %v, want absent", err)
+	}
+}
+
+func TestRunRoutesAdapterProposalThroughProductionComposition(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoreDocument := runScore()
+	scoreDocument["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	compiled, diagnostics := score.CompileValue(scoreDocument)
+	if len(diagnostics) != 0 {
+		t.Fatalf("compile proposal fixture: %v", diagnostics)
+	}
+	baseHash, err := compiled.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, scoreDocument, runCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":                               t.TempDir(),
+		"PATH":                               bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN":                 vendor,
+		runVendorEnvironment:                 "1",
+		runVendorProposalBaseHashEnvironment: baseHash,
+	})
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := strings.TrimSpace(stdout)
+	if code != 0 || runID == "" || stdout != runID+"\n" || stderr != "" {
+		t.Fatalf("adapter proposal run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, routed := -1, -1
+	for index, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventAttemptBlocked:
+			blocked = index
+		case runstate.EventAmendmentRoutedHuman:
+			routed = index
+		}
+	}
+	if blocked < 0 || routed < 0 || blocked >= routed {
+		t.Fatalf("production proposal disposition journal=%v", eventKinds(journal.Events))
 	}
 }
 
@@ -1719,11 +1785,26 @@ func runVendorFixture() {
 		}
 		artifacts = append(artifacts, map[string]any{"artifact_id": "findings", "path": "findings.json"})
 	}
+	proposal := any(nil)
+	if baseHash := os.Getenv(runVendorProposalBaseHashEnvironment); baseHash != "" {
+		proposal = map[string]any{
+			"id": "fixture-amendment",
+			"amendment": map[string]any{
+				"base_revision": float64(1),
+				"base_hash":     baseHash,
+				"operations": []any{map[string]any{
+					"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9),
+				}},
+				"reason": "fixture amendment",
+			},
+			"requires_decision": true,
+		}
+	}
 	result := map[string]any{
 		"version":   float64(1),
 		"artifacts": artifacts,
 		"questions": []any{},
-		"proposal":  nil,
+		"proposal":  proposal,
 		"summary":   "completed",
 	}
 	data, err := json.Marshal(result)
