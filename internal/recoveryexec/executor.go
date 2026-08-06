@@ -319,6 +319,9 @@ func (executor *Executor) acquireAuthority(input recovery.Input) error {
 	}
 	executor.Driver = driver
 	if err := executor.Store.Mutate(executor.RunID, "", func(transaction *runstore.Txn) error {
+		if err := transaction.At("recovery.cleanup_proposal_records").QuarantineUnreferencedProposalRecords(); err != nil {
+			return err
+		}
 		if err := transaction.At("recovery.cleanup_review_subject_inputs").RemoveUnreferencedReviewSubjectInputs(); err != nil {
 			return err
 		}

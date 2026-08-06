@@ -3378,6 +3378,105 @@ func TestRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot(t *testing.
 	}
 }
 
+func TestRecoveryPreprocessingQuarantinesOnlyUnreferencedProposalRecords(t *testing.T) {
+	store := acquirableRecoveryStore(t)
+	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := map[string][]byte{
+		"unreferenced":          []byte("unreferenced proposal record"),
+		"routed":                []byte("routed proposal record"),
+		"blocked":               []byte("blocked proposal record"),
+		"mismatched-descriptor": []byte("mismatched descriptor proposal record"),
+	}
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		for proposalID, contents := range records {
+			if _, err := transaction.At("fixture.proposal_record").PublishImmutable(runstore.Path("proposals/"+proposalID+".json"), contents, runstore.Hash(hashFixture(contents))); err != nil {
+				return err
+			}
+		}
+		if _, err := transaction.At("fixture.routed_proposal").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventAmendmentRoutedHuman,
+			Payload: handlerPayload(t, proposalRoutePayload("routed", hashFixture(records["routed"]), input.Projection.State.ScoreHead.SemanticHash)),
+		}); err != nil {
+			return err
+		}
+		versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+		for _, event := range []runstate.Event{
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementReady, Payload: handlerPayload(t, map[string]any{})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "write", Type: runstate.EventMovementStarted, Payload: handlerPayload(t, map[string]any{})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: handlerPayload(t, map[string]any{"reason": "initial", "performer_id": "writer", "adapter_id": "adapter", "model": "fixture"})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: handlerPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": versions})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: handlerPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventAttemptBlocked,
+				Payload: handlerPayload(t, map[string]any{
+					"raised": []any{map[string]any{
+						"decision_id": "blocked-decision", "emitted_id": "blocked-emitted", "kind": "proposal", "proposal_id": "blocked", "blocking": true,
+						"route": proposalRouteDescriptor(hashFixture(records["blocked"]), input.Projection.State.ScoreHead.SemanticHash),
+					}, map[string]any{
+						"decision_id": "mismatched-decision", "emitted_id": "mismatched-emitted", "kind": "proposal", "proposal_id": "mismatched-descriptor", "blocking": true,
+						"route": proposalRouteDescriptor("sha256:mismatched", input.Projection.State.ScoreHead.SemanticHash),
+					}},
+					"pending_decision_ids": []any{"blocked-decision", "mismatched-decision"},
+				}),
+			},
+		} {
+			if _, err := transaction.At("fixture." + faultpoint.ReceiptAddress(event.Type)).Append(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &Executor{Store: store, RunID: "run-1"}
+	if err := executor.acquireAuthority(recovery.Input{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = executor.Driver.Release() })
+	for _, proposalID := range []string{"unreferenced", "mismatched-descriptor"} {
+		if _, err := os.Stat(filepath.Join(runRoot, "proposals", proposalID+".json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unreferenced proposal record %s remains: %v", proposalID, err)
+		}
+		quarantined := filepath.Join(runRoot, "quarantine", "unreferenced_proposal_record", strings.TrimPrefix(hashFixture(records[proposalID]), "sha256:"), proposalID+".json")
+		if contents, err := os.ReadFile(quarantined); err != nil || !bytes.Equal(contents, records[proposalID]) {
+			t.Fatalf("quarantined proposal record %s contents=%q error=%v", proposalID, contents, err)
+		}
+	}
+	for _, proposalID := range []string{"routed", "blocked"} {
+		if contents, err := os.ReadFile(filepath.Join(runRoot, "proposals", proposalID+".json")); err != nil || !bytes.Equal(contents, records[proposalID]) {
+			t.Fatalf("referenced proposal record %s contents=%q error=%v", proposalID, contents, err)
+		}
+	}
+}
+
+func proposalRoutePayload(proposalID, recordHash string, baseHash runstate.Hash) map[string]any {
+	payload := proposalRouteDescriptor(recordHash, baseHash)
+	payload["proposal_id"] = proposalID
+	payload["decision_id"] = proposalID + "-decision"
+	payload["blocking"] = false
+	return payload
+}
+
+func proposalRouteDescriptor(recordHash string, baseHash runstate.Hash) map[string]any {
+	return map[string]any{
+		"proposal_record_hash": recordHash, "reason": "requires_decision", "decision_type": "amendment",
+		"base_revision": 1, "base_hash": baseHash, "classifier_version": 1, "typed_delta": []any{},
+		"actual_impact": map[string]any{
+			"score_changes": []any{},
+			"authority": map[string]any{
+				"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}},
+				"grants":        []any{},
+				"side_effects":  map[string]any{"added": []any{}, "removed": []any{}},
+			},
+			"budget": map[string]any{},
+		},
+		"identity_versions": map[string]any{"canonical_encoding": 1, "projections": map[string]any{}},
+	}
+}
+
 func TestRecoveryPreprocessingRemovesUnreferencedPreparePlan(t *testing.T) {
 	store := acquirableRecoveryStore(t)
 	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
