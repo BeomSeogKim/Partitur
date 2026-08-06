@@ -101,6 +101,7 @@ func productionRunDriver(
 
 func productionExecutionDependencies(probe faultpoint.Probe) driver.ExecutionDependencies {
 	execution := driver.DefaultExecutionDependencies(probe)
+	execution.ReceiptObserver = runstore.ReceiptObserverFromEnvironment()
 	execution.ProposalDisposition = amendmentexec.New()
 	return execution
 }

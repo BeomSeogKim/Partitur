@@ -274,6 +274,72 @@ func TestRunRoutesAdapterProposalThroughProductionComposition(t *testing.T) {
 	}
 }
 
+func TestProductionDriverInstallsReceiptObserver(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scoreDocument := runScore()
+	scoreDocument["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	compiled, diagnostics := score.CompileValue(scoreDocument)
+	if len(diagnostics) != 0 {
+		t.Fatalf("compile proposal fixture: %v", diagnostics)
+	}
+	baseHash, err := compiled.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, scoreDocument, runCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME":                               t.TempDir(),
+		"PATH":                               bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PARTITUR_CODEX_BIN":                 vendor,
+		runVendorEnvironment:                 "1",
+		runVendorProposalBaseHashEnvironment: baseHash,
+	})
+	child := pauseRunAtReceipt(t, partitur, repository, environment, "movement.movement.ready")
+	defer child.stop(t)
+	if err := child.command.Process.Kill(); err != nil {
+		t.Fatalf("kill receipt-paused driver: %v", err)
+	}
+	if err := child.command.Wait(); err == nil {
+		t.Fatal("receipt-paused driver exited successfully")
+	}
+	child.commandEnded = true
+
+	runID, err := soleRunID(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Movements["inspect"] != runstate.MovementReady {
+		t.Fatalf("movement-ready receipt did not leave a ready movement: %+v", input.Projection.State.Movements)
+	}
+}
+
 func TestRunQuiescesWhenPrepareIsObservedMidExecute(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
