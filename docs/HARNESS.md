@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches twenty-two E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches twenty-three E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -181,7 +181,7 @@ stated Appendix E branch.
 | `prepare.snapshot_to_plan` | reachable | §6 step 1; §9; E.2 | `TestPreparePublicationKillCuts` emits passing records for snapshot and plan receipts; production `resume` quarantines the unreferenced snapshot, leaves the original head, and reaches a journal fixed point |
 | `prepare.plan_to_prepared` | reachable | §6 step 1; B.5; E.2 | `TestPreparePublicationKillCuts` emits passing records for plan and approval-prepared receipts; production `resume` removes the orphan plan rather than quarantining it and reaches a journal fixed point |
 | `prepare.prepared_to_observed` | not reached by this gate's cuts | §6 mutation barrier; E.2 | No prepare/quiesce crash subprocess fixture yet. The harness can now pause a live driver after authority acquisition while its parent appends the prepare with that driver's observed epoch; the B3 core fixture owns the two-sided cuts |
-| `quiesce.observed_to_swept` | not reached by this gate's cuts | §6 step 2; B.5; E.2 | No quiesce-receipt subprocess fixture yet. The durable receipt is projected and replayable, but no live driver emits it in this norm slice |
+| `quiesce.observed_to_swept` | reachable | §6 step 2; B.5; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after its first durable quiesce receipt and at the completed-sweep probe. Both states retain no sidecar and re-enter recovery without resume minting a new quiesce receipt |
 | `quiesce.swept_to_lease_moved` | not reached by this gate's cuts | §6 step 2; E.2 | No prepare/quiesce crash subprocess fixture yet. The same parent-injected live driver reaches the sessions-swept boundary while draining the durable prepare; the B3 core fixture owns the two-sided cuts |
 | `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No prepare/quiesce crash subprocess fixture yet. A post-compare-move boundary now brackets the durable sidecar before an approver reaches the existing commit-lock boundary; the B3 core fixture owns the two-sided cuts |
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | No abandonment-reason fixture |
