@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches twenty-seven E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirty-one E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -194,10 +194,10 @@ stated Appendix E branch.
 | `cancel.interval_stopped_to_terminal` | reachable | §6 (c)-(e); E.2 | Real `cancel` subprocess matrix covers the four `(c)`-true combinations at both endpoints |
 | `cancel.fence_decided_to_terminal` | reachable | §6 (d)-(e); E.2; E.3 | Real `cancel` subprocess matrix covers the four `(d)`-true combinations at both endpoints and checks E.3 at `(d)` |
 | `cancel.terminal_to_lease_removed` | reachable | §6 (e)-(f); C.1 terminal row; E.2 | Real `cancel` subprocess matrix covers the four `(d)`-true combinations at both endpoints |
-| `supersede.swept_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
-| `supersede.interval_stopped_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
-| `supersede.fence_decided_to_approved` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
-| `supersede.approved_to_lease_removed` | not reached by this gate's cuts | §6 commit table; E.2 | No supersession fixture |
+| `supersede.swept_to_approved` | reachable | §6 commit table; E.2 | `TestSupersessionKillMatrix` cuts both endpoints on each silence-expiry and dead-owner branch; every survivor sweep is verified empty before the fenced approval |
+| `supersede.interval_stopped_to_approved` | reachable | §6 commit table; E.2 | `TestSupersessionKillMatrix` cuts the durable interval close and approval on both branches, requiring `execution.stopped {reason: superseded, charging: clamped}` before approval |
+| `supersede.fence_decided_to_approved` | reachable | §6 commit table; E.2 | `TestSupersessionKillMatrix` cuts the fence decision and durable fenced approval on both branches, retaining the old epoch before the approval and requiring its increment afterward |
+| `supersede.approved_to_lease_removed` | reachable | §6 commit table; C.1 stale-lease row; E.2 | `TestSupersessionKillMatrix` cuts the durable approval and stale-lease removal on both branches, then recovers to the lease-free fixed point |
 | `authority.granted_to_lease_created` | reachable | §6 authority acquisition; E.2 | Driver/reclaimer crash fixture |
 | `launch.adapter.marker_held_to_identity_published` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
 | `launch.adapter.identity_published_to_recorded` | reachable | §4 launch handoff; E.2 | Adapter trampoline crash fixture |
