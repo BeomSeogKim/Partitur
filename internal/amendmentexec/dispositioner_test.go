@@ -142,11 +142,17 @@ func TestPreparePublicationKillCuts(t *testing.T) {
 type crashAtReceipt struct{ address faultpoint.ReceiptAddress }
 
 func (crash crashAtReceipt) Observed(receipt runstore.DurabilityReceipt) {
-	if receipt.Address == crash.address {
-		if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
-			panic(err)
-		}
+	if receipt.Address != crash.address {
+		return
 	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
+		panic(err)
+	}
+	// SIGKILL is asynchronous. Returning here lets this goroutine keep running
+	// until the kernel reaps the process, so the next durable step can land
+	// past the cut and the crash is no longer at the endpoint this record
+	// claims. Block instead, and let the signal end the process.
+	time.Sleep(time.Hour)
 }
 
 func killPreparePublicationAtReceipt(t *testing.T, repository string, address faultpoint.ReceiptAddress) runstate.RunID {
