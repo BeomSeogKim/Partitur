@@ -316,8 +316,9 @@ event that makes it authoritative:
   waits for that interval; it must not classify a route-absent record as an orphan while its live
   publisher holds the lock. If the publisher crashes, the lock is released and replay quarantines
   the route-absent record under the rule below.
-- On recovery, after any command-origin publication interval has ended, a proposal file with
-  neither `amendment.routed_human` nor a matching blocking
+- On recovery, after any command-origin publication interval has ended and journal replay has
+  reached an `owner = clear` selection cut, a proposal file with neither
+  `amendment.routed_human` nor a matching blocking
   `attempt.blocked` route descriptor is quarantined: nothing authoritative referred to it. A
   descriptor is an authoritative reference only when its proposal id and raw hash match the file;
   then `RC-RESUME-049` completes its missing `amendment.routed_human` without re-evaluating the
@@ -1625,10 +1626,15 @@ after this publication, so the later execute brief can never cite an undurable s
 review criterion. The location is derived from that event envelope and its score revision; the
 adapter receives the same `instance_id`, path, and raw SHA-256 in `inputs`. The input remains
 core-owned and retained with the run — terminal staging cleanup never removes it. During recovery,
-an unreferenced pre-`attempt.started` copy is removed under `RC-RESUME-035`; once an
-`attempt.started` names it, `RC-RESUME-010` verifies the derived file against the recorded raw hash
-and halts `missing_artifact_file` on absence or mismatch. Recovery never regenerates a named input:
-the raw bytes that crossed the adapter boundary are evidence, not a cache.
+`RC-RESUME-035` removes an unreferenced pre-`attempt.started` copy only after journal replay has
+reached an `owner = clear` selection cut, and before that cut's selected continuation. A stale or
+orphan lease first takes its own cleanup and re-evaluates; a verified live owner yields, and an
+unverifiable owner halts, without this review-subject-input cleanup. On an eligible `resume`, this
+cleanup runs exactly once. Terminal cleanup uses this same recovery step after any lease cleanup
+and performs no independent review-subject-input sweep. Once an `attempt.started` names it,
+`RC-RESUME-010` verifies the derived file against the recorded raw hash and halts
+`missing_artifact_file` on absence or mismatch. Recovery never regenerates a named input: the raw
+bytes that crossed the adapter boundary are evidence, not a cache.
 
 The reserved `partitur.` prefix is unusable as a score-declared output id by construction
 (§1 identifier grammar), so these inputs cannot be spoofed. The core-observed subject tree
