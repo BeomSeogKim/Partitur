@@ -31,6 +31,49 @@ func TestCompletionCommandDispatchClaim(t *testing.T) {
 	)
 }
 
+func TestCommandStoreConstructionInstallsReceiptObserver(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stores int
+	var unwired []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || !isRunstoreCall(call, "New") {
+			return true
+		}
+		stores++
+		for _, argument := range call.Args {
+			if isRunstoreCall(argument, "ReceiptObserverFromEnvironment") {
+				return true
+			}
+		}
+		unwired = append(unwired, fileSet.Position(call.Pos()).String())
+		return true
+	})
+	if stores == 0 {
+		t.Fatal("main.go constructs no command stores")
+	}
+	if len(unwired) != 0 {
+		t.Fatalf("command store construction lacks ReceiptObserverFromEnvironment at %s", strings.Join(unwired, ", "))
+	}
+}
+
+func isRunstoreCall(expression ast.Expr, name string) bool {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != name {
+		return false
+	}
+	packageName, ok := selector.X.(*ast.Ident)
+	return ok && packageName.Name == "runstore"
+}
+
 func completionCommandMembers(t *testing.T) map[string]bool {
 	t.Helper()
 	completion, err := os.ReadFile(filepath.Join("..", "..", "docs", "COMPLETION.md"))
