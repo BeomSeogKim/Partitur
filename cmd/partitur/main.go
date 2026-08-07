@@ -455,7 +455,7 @@ func findingReferencePresent(references []runstate.FindingReference, candidate r
 }
 
 func runApprove(decisionID string, approved bool, overridden []runstate.FindingReference, reason string, stderr io.Writer) int {
-	if err := resolveHumanGate(decisionID, approved, overridden, reason); err != nil {
+	if err := resolveApproval(decisionID, approved, overridden, reason); err != nil {
 		if errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
@@ -471,7 +471,7 @@ func runApprove(decisionID string, approved bool, overridden []runstate.FindingR
 	return 0
 }
 
-func resolveHumanGate(decisionID string, approved bool, overridden []runstate.FindingReference, reason string) error {
+func resolveApproval(decisionID string, approved bool, overridden []runstate.FindingReference, reason string) error {
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve invocation directory: %w", err)
@@ -485,7 +485,25 @@ func resolveHumanGate(decisionID string, approved bool, overridden []runstate.Fi
 		return err
 	}
 	runID := runstate.RunID(report.Run.ID)
-	if err := store.ResolveHumanGate(runID, decisionID, approved, overridden, reason); err != nil {
+	decisionType := ""
+	for _, decision := range report.Run.PendingDecisions {
+		if decision.ID == decisionID {
+			decisionType = decision.Type
+			break
+		}
+	}
+	switch decisionType {
+	case "human_gate":
+		err = store.ResolveHumanGate(runID, decisionID, approved, overridden, reason)
+	case "amendment":
+		if approved {
+			return runstore.ErrDecisionResolutionNotAllowed
+		}
+		err = store.RejectRoutedAmendment(runID, decisionID, reason)
+	default:
+		return runstore.ErrDecisionResolutionNotAllowed
+	}
+	if err != nil {
 		return err
 	}
 	store.WakeLeaseOwner(runID)

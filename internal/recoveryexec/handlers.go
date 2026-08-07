@@ -549,16 +549,17 @@ func materializeSuccessor(ctx context.Context, execution HandlerContext, action 
 	}
 	causationID := pending.CausationID
 	if causationID == "" {
-		causationType := runstate.EventAttemptFailed
-		if pending.Reason == "decision_resume" {
-			causationType = runstate.EventDecisionResolved
-		}
 		causationID, err = latestEventID(journal.Events, func(previous runstate.Event) bool {
 			if previous.AttemptID != pending.AttemptID {
 				return false
 			}
-			if causationType == runstate.EventDecisionResolved {
-				return previous.Type == causationType
+			if pending.Reason == "decision_resume" {
+				switch previous.Type {
+				case runstate.EventDecisionResolved, runstate.EventAmendmentHumanRejected, runstate.EventAmendmentRejected:
+					return true
+				default:
+					return false
+				}
 			}
 			return previous.Type == runstate.EventAttemptFailed || previous.Type == runstate.EventAcceptanceFailed
 		})
