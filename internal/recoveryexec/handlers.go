@@ -715,9 +715,6 @@ func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Act
 				return err
 			}
 		}
-		if err := transaction.At("recovery.terminal_cleanup/review_subject_inputs").RemoveUnreferencedReviewSubjectInputs(); err != nil {
-			return err
-		}
 		return nil
 	}); err != nil {
 		return err

@@ -106,11 +106,16 @@ func (executor *Executor) Execute(ctx context.Context) (Result, error) {
 	if halted.Halt != "" {
 		return Result{Decision: halted, Outcome: OutcomeHalted}, nil
 	}
-	return executor.execute(ctx, input, recovery.Plan(input))
+	return executor.executeSelected(ctx, input, recovery.Plan(input), true)
 }
 
 func (executor *Executor) execute(ctx context.Context, input recovery.Input, decision recovery.Decision) (Result, error) {
+	return executor.executeSelected(ctx, input, decision, false)
+}
+
+func (executor *Executor) executeSelected(ctx context.Context, input recovery.Input, decision recovery.Decision, runEligibleCleanup bool) (Result, error) {
 	result := Result{}
+	eligibleCleanupCompleted := false
 	for {
 		if !decision.Valid() {
 			return result, fmt.Errorf("%w: %+v", ErrInvalidDecision, decision)
@@ -120,6 +125,30 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 			// Appendix B.7: a halt is intentionally not a journal event.
 			result.Outcome = OutcomeHalted
 			return result, nil
+		}
+		if runEligibleCleanup && executor.Store != nil && executor.RunID != "" && !eligibleCleanupCompleted && clearOwnerCut(input) {
+			if err := executor.cleanupUnreferencedRecoveryArtifacts(); err != nil {
+				if halted, ok := haltDecision(decision, err); ok {
+					result.Decision = halted
+					result.Outcome = OutcomeHalted
+					return result, nil
+				}
+				return result, err
+			}
+			eligibleCleanupCompleted = true
+			refreshed, halted, err := executor.reloadAfterEffect(ctx, input, decision)
+			if err != nil {
+				return result, err
+			}
+			if halted.Halt != "" {
+				result.Decision = halted
+				result.Outcome = OutcomeHalted
+				return result, nil
+			}
+			input = refreshed
+			decision = recovery.Plan(input)
+			result.Replans++
+			continue
 		}
 
 		action := *decision.Action
@@ -263,6 +292,29 @@ func (executor *Executor) execute(ctx context.Context, input recovery.Input, dec
 				}
 				return result, fmt.Errorf("execute recovery action %s: %w", action.Kind, err)
 			}
+			if runEligibleCleanup && action.Kind == recovery.ActionTerminalCleanup && !eligibleCleanupCompleted {
+				refreshed, halted, err := executor.reloadAfterEffect(ctx, input, decision)
+				if err != nil {
+					return result, err
+				}
+				if halted.Halt != "" {
+					result.Decision = halted
+					result.Outcome = OutcomeHalted
+					return result, nil
+				}
+				input = refreshed
+				if clearOwnerCut(input) {
+					if err := executor.cleanupUnreferencedRecoveryArtifacts(); err != nil {
+						if halted, ok := haltDecision(decision, err); ok {
+							result.Decision = halted
+							result.Outcome = OutcomeHalted
+							return result, nil
+						}
+						return result, err
+					}
+					eligibleCleanupCompleted = true
+				}
+			}
 			result.Kinds = append(result.Kinds, action.Kind)
 			if action.Continuation != "" || action.Replan {
 				refreshed, halted, err := executor.reloadAfterEffect(ctx, input, decision)
@@ -318,14 +370,28 @@ func (executor *Executor) acquireAuthority(input recovery.Input) error {
 		return fmt.Errorf("acquire recovery authority: %w", err)
 	}
 	executor.Driver = driver
-	if err := executor.Store.Mutate(executor.RunID, "", func(transaction *runstore.Txn) error {
+	return nil
+}
+
+// clearOwnerCut recognizes the owner = clear selection cut. A current driver
+// is not clear: it is already inside a recovery continuation, and cleanup ran
+// before the executor established that authority.
+func clearOwnerCut(input recovery.Input) bool {
+	return !input.Observations.Lease.Exists
+}
+
+func (executor *Executor) cleanupUnreferencedRecoveryArtifacts() error {
+	if executor.Store == nil || executor.RunID == "" {
+		return ErrIncompleteExecutor
+	}
+	if err := executor.Store.MutateProjected(executor.RunID, func(transaction *runstore.Txn, state runstate.State) error {
 		if err := transaction.At("recovery.cleanup_proposal_records").QuarantineUnreferencedProposalRecords(); err != nil {
 			return err
 		}
 		if err := transaction.At("recovery.cleanup_review_subject_inputs").RemoveUnreferencedReviewSubjectInputs(); err != nil {
 			return err
 		}
-		return transaction.At("recovery.cleanup_prepare_artifacts").RemoveUnreferencedPrepareArtifacts(input.Projection.State.PendingPrepare)
+		return transaction.At("recovery.cleanup_prepare_artifacts").RemoveUnreferencedPrepareArtifacts(state.PendingPrepare)
 	}); err != nil {
 		return fmt.Errorf("cleanup unreferenced recovery artifacts: %w", err)
 	}

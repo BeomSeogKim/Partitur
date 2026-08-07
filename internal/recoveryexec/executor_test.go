@@ -3356,21 +3356,26 @@ func TestRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot(t *testing.
 	store := acquirableRecoveryStore(t)
 	runRoot := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1")
 	snapshot := []byte("unreferenced pre-prepare snapshot")
+	reviewInput := []byte("unreferenced review subject input")
 	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
 		_, err := transaction.At("fixture.orphan_snapshot").PublishImmutable("scores/revision-2.yaml", snapshot, runstore.Hash(hashFixture(snapshot)))
+		if err != nil {
+			return err
+		}
+		_, err = transaction.At("fixture.orphan_review_subject_input").PublishImmutable("inputs/write/revision-1/subject-tree.json", reviewInput, runstore.Hash(hashFixture(reviewInput)))
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.LoadRunInput("run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := (&Executor{Store: store, RunID: "run-1"}).acquireAuthority(recovery.Input{Projection: input.Projection}); err != nil {
-		t.Fatal(err)
+	result := executeClearOwnerRecovery(t, store)
+	if result.Decision.CaseID != recovery.CaseHumanGateWaiting || result.Decision.Action == nil || result.Decision.Action.Kind != recovery.ActionReturnWaitingHuman || result.Outcome != OutcomeQuiescent {
+		t.Fatalf("result=%+v, want clear-owner waiting-human selection", result)
 	}
 	if _, err := os.Stat(filepath.Join(runRoot, "scores", "revision-2.yaml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unreferenced snapshot remains at immutable path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runRoot, "inputs", "write", "revision-1", "subject-tree.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unreferenced review subject input remains at immutable path: %v", err)
 	}
 	quarantined := filepath.Join(runRoot, "quarantine", "unreferenced_prepare_snapshot", strings.TrimPrefix(hashFixture(snapshot), "sha256:"), "revision-2.yaml")
 	if contents, err := os.ReadFile(quarantined); err != nil || !bytes.Equal(contents, snapshot) {
@@ -3431,11 +3436,7 @@ func TestRecoveryPreprocessingQuarantinesOnlyUnreferencedProposalRecords(t *test
 	}); err != nil {
 		t.Fatal(err)
 	}
-	executor := &Executor{Store: store, RunID: "run-1"}
-	if err := executor.acquireAuthority(recovery.Input{}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = executor.Driver.Release() })
+	executeClearOwnerRecovery(t, store)
 	for _, proposalID := range []string{"unreferenced", "mismatched-descriptor"} {
 		if _, err := os.Stat(filepath.Join(runRoot, "proposals", proposalID+".json")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("unreferenced proposal record %s remains: %v", proposalID, err)
@@ -3486,13 +3487,7 @@ func TestRecoveryPreprocessingRemovesUnreferencedPreparePlan(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	input, err := store.LoadRunInput("run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := (&Executor{Store: store, RunID: "run-1"}).acquireAuthority(recovery.Input{Projection: input.Projection}); err != nil {
-		t.Fatal(err)
-	}
+	executeClearOwnerRecovery(t, store)
 	for _, path := range []string{"prepares/orphan.json"} {
 		if _, err := os.Stat(filepath.Join(runRoot, path)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("orphan artifact %s remains: %v", path, err)
@@ -3529,9 +3524,8 @@ func TestRecoveryPreprocessingRemovesTerminalPreparePlan(t *testing.T) {
 	if err != nil || input.Projection.State.PendingPrepare != nil {
 		t.Fatalf("terminal prepare state=%+v error=%v", input.Projection.State.PendingPrepare, err)
 	}
-	if err := (&Executor{Store: store, RunID: "run-1"}).acquireAuthority(recovery.Input{Projection: input.Projection}); err != nil {
-		t.Fatal(err)
-	}
+	executeClearOwnerRecovery(t, store)
+	executeClearOwnerRecovery(t, store)
 	plan := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "prepares", "prepare-1.json")
 	if _, err := os.Stat(plan); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("terminal prepare plan remains: %v", err)
@@ -3590,6 +3584,176 @@ func TestReclaimAuthorityIsTheOnlyAuthorityBoundary(t *testing.T) {
 	}
 }
 
+func TestRecoveryCleanupSkipsVerifiedLiveOwner(t *testing.T) {
+	store := acquirableRecoveryStore(t)
+	record := publishUnreferencedProposalRecord(t, store, "live-owner", []byte("live owner proposal record"))
+	driver, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = driver.Release() })
+
+	executor := &Executor{Store: store, RunID: "run-1"}
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		loaded, err := store.LoadRunInput("run-1")
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		lease, present, err := store.ReadLease("run-1")
+		if err != nil || !present {
+			return recovery.Input{}, fmt.Errorf("live-owner fixture lease present=%t error=%v", present, err)
+		}
+		return recovery.Input{Projection: loaded.Projection, Observations: recovery.Observations{Lease: recovery.LeaseObservation{
+			Exists: true, Readable: true, Epoch: lease.Epoch, Owner: recovery.OwnerLive,
+			Identity: &recovery.LeaseIdentity{Epoch: lease.Epoch, Token: lease.Token, PID: lease.PID, Start: lease.Start},
+		}}}, nil
+	}
+	result, err := executor.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Decision.CaseID != recovery.CaseLiveOwner || result.Outcome != OutcomeRefused {
+		t.Fatalf("result=%+v, want verified-live-owner refusal", result)
+	}
+	if _, err := os.Stat(record); err != nil {
+		t.Fatalf("live owner proposal record was quarantined: %v", err)
+	}
+}
+
+func TestRecoveryCleanupRunsAfterStaleLeaseReplanExactlyOnce(t *testing.T) {
+	observer := &recoveryReceiptObserver{}
+	store := acquirableRecoveryStore(t, observer)
+	previous, err := store.AcquireRecoveryDriver("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := previous.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("fixture.advance_authority").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventAuthorityGranted,
+			Payload: handlerPayload(t, map[string]any{
+				"authority_epoch": 2, "owner_pid": 1,
+				"owner_start_identity": map[string]any{"platform": "darwin", "start_tvsec": 1, "start_tvusec": 1},
+			}),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := runstore.Lease{Epoch: 1, Token: "stale-owner", PID: os.Getpid(), Start: start}
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("fixture.stale_lease").CreateLease(true, stale)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record := publishUnreferencedProposalRecord(t, store, "stale-owner", []byte("stale owner proposal record"))
+
+	loads := 0
+	sawStaleReplan := false
+	executor := &Executor{Store: store, RunID: "run-1"}
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		loads++
+		loaded, err := store.LoadRunInput("run-1")
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		if loads == 2 {
+			if _, err := os.Stat(record); err != nil {
+				return recovery.Input{}, fmt.Errorf("cleanup ran before stale-lease replan: %w", err)
+			}
+			sawStaleReplan = true
+		}
+		projection := loaded.Projection
+		projection.State.PendingDecisions = map[string]runstate.PendingDecision{
+			"cleanup-wait": {ID: "cleanup-wait", Blocking: true},
+		}
+		lease, present, err := store.ReadLease("run-1")
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		observations := recovery.Observations{}
+		if present {
+			observations.Lease = recovery.LeaseObservation{Exists: true, Readable: true, Epoch: lease.Epoch, Owner: recovery.OwnerLive,
+				Identity: &recovery.LeaseIdentity{Epoch: lease.Epoch, Token: lease.Token, PID: lease.PID, Start: lease.Start}}
+		}
+		return recovery.Input{Projection: projection, Observations: observations}, nil
+	}
+	result, err := executor.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.Driver != nil {
+		t.Cleanup(func() { _ = executor.Driver.Release() })
+	}
+	if !sawStaleReplan || result.Outcome != OutcomeQuiescent || result.Replans < 2 {
+		t.Fatalf("result=%+v loads=%d sawStaleReplan=%t, want stale cleanup then clear-owner replan", result, loads, sawStaleReplan)
+	}
+	if _, err := os.Stat(record); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale-owner proposal record remains at immutable path: %v", err)
+	}
+	if got := observer.count("recovery.cleanup_proposal_records"); got != 1 {
+		t.Fatalf("proposal cleanup receipts=%d, want exactly one", got)
+	}
+}
+
+type recoveryReceiptObserver struct {
+	addresses []faultpoint.ReceiptAddress
+}
+
+func (observer *recoveryReceiptObserver) Observed(receipt runstore.DurabilityReceipt) {
+	observer.addresses = append(observer.addresses, receipt.Address)
+}
+
+func (observer *recoveryReceiptObserver) count(address faultpoint.ReceiptAddress) int {
+	count := 0
+	for _, observed := range observer.addresses {
+		if observed == address {
+			count++
+		}
+	}
+	return count
+}
+
+func publishUnreferencedProposalRecord(t *testing.T, store *runstore.Store, proposalID string, contents []byte) string {
+	t.Helper()
+	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("fixture.unreferenced_proposal").PublishImmutable(runstore.Path("proposals/"+proposalID+".json"), contents, runstore.Hash(hashFixture(contents)))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "proposals", proposalID+".json")
+}
+
+func executeClearOwnerRecovery(t *testing.T, store *runstore.Store) Result {
+	t.Helper()
+	executor := &Executor{Store: store, RunID: "run-1"}
+	executor.Load = func(context.Context) (recovery.Input, error) {
+		loaded, err := store.LoadRunInput("run-1")
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		projection := loaded.Projection
+		if projection.State.PendingDecisions == nil {
+			projection.State.PendingDecisions = make(map[string]runstate.PendingDecision)
+		}
+		projection.State.PendingDecisions["cleanup-wait"] = runstate.PendingDecision{ID: "cleanup-wait", Blocking: true}
+		return recovery.Input{Projection: projection}, nil
+	}
+	result, err := executor.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
 func TestSelectRevisionRestartRequiresThePlannerSelectedC4Successor(t *testing.T) {
 	action := recovery.Action{
 		Kind: recovery.ActionSelectRevisionRestart,
@@ -3619,9 +3783,9 @@ func TestSelectRevisionRestartRequiresThePlannerSelectedC4Successor(t *testing.T
 	}
 }
 
-func acquirableRecoveryStore(t *testing.T) *runstore.Store {
+func acquirableRecoveryStore(t *testing.T, observers ...runstore.ReceiptObserver) *runstore.Store {
 	t.Helper()
-	store, err := runstore.New(t.TempDir(), faultpoint.Nop{})
+	store, err := runstore.New(t.TempDir(), faultpoint.Nop{}, observers...)
 	if err != nil {
 		t.Fatal(err)
 	}
