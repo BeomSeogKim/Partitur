@@ -480,7 +480,7 @@ func resolveHumanGate(decisionID string, approved bool, overridden []runstate.Fi
 	if err != nil {
 		return answerSelectionError{err: err}
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment())
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return err
 	}
@@ -530,7 +530,7 @@ func answerQuestion(decisionID, answer string) error {
 	if err != nil {
 		return answerSelectionError{err: err}
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment())
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return err
 	}
@@ -687,7 +687,7 @@ func cancel(ctx context.Context, requestedID string) (recoveryexec.Result, error
 	if err != nil {
 		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment())
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return recoveryexec.Result{}, err
 	}
