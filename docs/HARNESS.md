@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches thirty-three E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirty-four E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -183,7 +183,7 @@ stated Appendix E branch.
 | `prepare.prepared_to_observed` | reachable | §6 mutation barrier; E.2 | `TestPrepareQuiesceDriverKillCuts` retains the durable prepare while the production driver is still paused before observation, then at its first quiesce receipt. An ordinary durable mutation is refused `prepare_pending` in both states before recovery |
 | `quiesce.observed_to_swept` | reachable | §6 step 2; B.5; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after its first durable quiesce receipt and at the completed-sweep probe. Both states retain no sidecar and re-enter recovery without resume minting a new quiesce receipt |
 | `quiesce.swept_to_lease_moved` | reachable | §6 step 2; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after the completed-sweep probe and at its durable lease-move receipt. With the matching lease and no sidecar, recovery reaches its own post-sweep probe before fencing; the no-lease control does not reach that probe and commits unfenced |
-| `quiesce.lease_moved_to_commit_lock` | not reached by this gate's cuts | §6 step 3; E.2 | No prepare/quiesce crash subprocess fixture yet. A post-compare-move boundary now brackets the durable sidecar before an approver reaches the existing commit-lock boundary; the B3 core fixture owns the two-sided cuts |
+| `quiesce.lease_moved_to_commit_lock` | reachable | §6 step 3; E.2 | `TestPrepareQuiesceDriverKillCuts` kills the production driver after `prepare.ack.lease`, then cancellation wins without an approval. It separately kills production `resume` at the commit-lock boundary, corrupts the bound plan, and requires repeated `missing_prepare_plan` halts with the pending prepare and sidecar unchanged |
 | `prepare.quarantined_to_abandoned` | reachable | §6 `(b)`; §9 snapshot lifecycle; E.2 | `TestPrepareQuarantinedToAbandonedKillCuts` kills the production `cancel` after the snapshot quarantine and after `amendment.approval_abandoned`. The first cut preserves the quarantined snapshot bytes and a `prepare_pending` mutation refusal; the second carries `reason: cancelled` only after that quarantine. Both recover to the cancellation fixed point |
 | `proposal.published_to_blocked_route` | reachable | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035`; E.2 | `TestProposalPublicationKillCuts` kills the production run at the published record and its matching blocked descriptor. Recovery quarantines the unreferenced record with its original bytes at the first cut and retains the descriptor raw-hash-bound record at the second |
 | `proposal.blocked_route_to_routed` | reachable | §4 blocking handshake; C.1 `RC-RESUME-049`; E.2 | `TestBlockedProposalRouteKillCuts` kills the production run at `attempt.blocked` and the production resume at its routed receipt. The route must match the frozen descriptor while invalid current score input proves recovery did not re-run §9 |

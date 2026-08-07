@@ -162,6 +162,38 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		assertQuiesceSidecar(t, repository, runID)
 		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
 	})
+
+	t.Run("quiesce.lease_moved_to_commit_lock/lease_moved/cancellation_wins", func(t *testing.T) {
+		repository, environment := killHarnessRepository(t, bin, vendor)
+		child, runID := preparedLiveDriver(t, partitur, repository, environment)
+		defer child.stop(t)
+		child.releaseProbe(t)
+		child.waitReceipt(t, "prepare.ack.lease")
+		child.kill(t)
+		assertQuiesceSidecar(t, repository, runID)
+		assertPendingPrepare(t, repository, runID)
+
+		code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "cancel", string(runID))
+		if code != 4 || stdout != "" || stderr != "" {
+			t.Fatalf("cancel after lease-move cut exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		assertPrepareCancellationWins(t, repository, runID)
+		assertFixedPointReplay(t, partitur, repository, environment, string(runID), readHarnessJournal(t, repository, string(runID)))
+	})
+
+	t.Run("quiesce.lease_moved_to_commit_lock/commit_lock/hash_mismatch_halts", func(t *testing.T) {
+		repository, environment := killHarnessRepository(t, bin, vendor)
+		child, runID := preparedLiveDriver(t, partitur, repository, environment)
+		defer child.stop(t)
+		child.releaseProbe(t)
+		child.waitReceipt(t, "prepare.ack.lease")
+		child.kill(t)
+		killAtPoint(t, partitur, repository, environment, faultpoint.PointQuiesceCommitLockHeld, "resume", string(runID))
+		assertPendingPrepare(t, repository, runID)
+		assertQuiesceSidecar(t, repository, runID)
+		corruptPendingPreparePlan(t, repository, runID)
+		assertPreparePlanHashMismatchHalt(t, partitur, repository, environment, runID)
+	})
 }
 
 type liveDriverNotification struct {
@@ -451,6 +483,87 @@ func assertPreparedApprovalFence(t *testing.T, repository string, runID runstate
 		return
 	}
 	t.Fatal("recovery did not append amendment.approved")
+}
+
+func assertPrepareCancellationWins(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Run != runstate.RunCancelled || input.Projection.State.PendingPrepare != nil {
+		t.Fatalf("cancellation after lease move state=%+v", input.Projection.State)
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var abandoned int
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAmendmentApproved {
+			t.Fatal("matching sidecar committed after cancellation")
+		}
+		if event.Type != runstate.EventAmendmentApprovalAbandoned {
+			continue
+		}
+		abandoned++
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["reason"] != "cancelled" {
+			t.Fatalf("cancellation abandonment payload=%v", payload)
+		}
+	}
+	if abandoned != 1 {
+		t.Fatalf("cancellation abandonment events=%d, want one", abandoned)
+	}
+}
+
+func corruptPendingPreparePlan(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := input.Projection.State.PendingPrepare
+	if prepare == nil {
+		t.Fatal("cannot corrupt a completed prepare plan")
+	}
+	path := runstorePath(repository, runID, filepath.Join("prepares", string(prepare.ID)+".json"))
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(contents, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPreparePlanHashMismatchHalt(t *testing.T, binary, repository string, environment []string, runID runstate.RunID) {
+	t.Helper()
+	journal := readHarnessJournal(t, repository, string(runID))
+	for attempt := 0; attempt < 2; attempt++ {
+		code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "resume", string(runID))
+		if code != 5 || stdout != "" || !strings.Contains(stderr, `reason="missing_prepare_plan"`) {
+			t.Fatalf("hash-mismatched prepare resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		if replay := readHarnessJournal(t, repository, string(runID)); !bytes.Equal(replay, journal) {
+			t.Fatal("hash-mismatched prepare resume appended durable state")
+		}
+		assertPendingPrepare(t, repository, runID)
+		assertQuiesceSidecar(t, repository, runID)
+		assertNoEvent(t, repository, runID, runstate.EventAmendmentApproved)
+		assertNoEvent(t, repository, runID, runstate.EventAmendmentApprovalAbandoned)
+	}
 }
 
 func resumeWithoutPoint(
