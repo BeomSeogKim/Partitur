@@ -364,8 +364,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 
 func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map[receiptKillKey]bool) {
 	t.Helper()
-	if len(records) != 20 {
-		t.Fatalf("receipt registry records=%d, want twenty", len(records))
+	if len(records) != 22 {
+		t.Fatalf("receipt registry records=%d, want twenty-two", len(records))
 	}
 	counts := make(map[faultpoint.EdgeID]int)
 	for key, passed := range records {
@@ -380,8 +380,8 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		}
 		counts[key.edge]++
 	}
-	if len(counts) != 12 {
-		t.Fatalf("receipt registry edges=%d, want twelve", len(counts))
+	if len(counts) != 13 {
+		t.Fatalf("receipt registry edges=%d, want thirteen", len(counts))
 	}
 	for edge, want := range map[faultpoint.EdgeID]int{
 		faultpoint.EdgePrepareSnapshotToPlan:              2,
@@ -389,6 +389,7 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		faultpoint.EdgeQuiesceObservedToSwept:             1,
 		faultpoint.EdgePreparePreparedToObserved:          2,
 		faultpoint.EdgeQuiesceSweptToLeaseMoved:           1,
+		faultpoint.EdgePrepareQuarantinedToAbandoned:      2,
 		faultpoint.EdgeProposalPublishedToBlockedRoute:    2,
 		faultpoint.EdgeProposalBlockedRouteToRouted:       2,
 		faultpoint.EdgeProposalPublishedToRouted:          2,
@@ -478,6 +479,7 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 	const fixture = "TestPreparePublicationKillCuts/"
 	const supersessionFixture = "TestSupersessionKillMatrix"
 	const cliRoutedProposalFixture = "TestCLIProposalPublishedToRoutedKillCuts/"
+	const cancelledPrepareFixture = "TestPrepareQuarantinedToAbandonedKillCuts/"
 	return []receiptKillRecord{
 		{faultpoint.EdgePrepareSnapshotToPlan, "amendment.approval.snapshot", fixture + "prepare.snapshot_to_plan/snapshot"},
 		{faultpoint.EdgePrepareSnapshotToPlan, "amendment.approval.plan", fixture + "prepare.snapshot_to_plan/plan"},
@@ -487,6 +489,8 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 		{faultpoint.EdgePreparePreparedToObserved, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/observed"},
 		{faultpoint.EdgeQuiesceObservedToSwept, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/observed"},
 		{faultpoint.EdgeQuiesceSweptToLeaseMoved, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/lease_moved"},
+		{faultpoint.EdgePrepareQuarantinedToAbandoned, "cancellation.prepare.snapshot", cancelledPrepareFixture + "prepare.quarantined_to_abandoned/quarantined"},
+		{faultpoint.EdgePrepareQuarantinedToAbandoned, "cancellation.amendment.approval_abandoned", cancelledPrepareFixture + "prepare.quarantined_to_abandoned/abandoned"},
 		{faultpoint.EdgeProposalPublishedToBlockedRoute, "proposal.record.published", "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/published"},
 		{faultpoint.EdgeProposalPublishedToBlockedRoute, "attempt.blocked", "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/blocked_route"},
 		{faultpoint.EdgeProposalBlockedRouteToRouted, "attempt.blocked", "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
@@ -530,6 +534,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	proposalResult := make(chan killHarnessJSONResult, 1)
 	publicationProposalResult := make(chan killHarnessJSONResult, 1)
 	cliRoutedProposalResult := make(chan killHarnessJSONResult, 1)
+	cancelledPrepareResult := make(chan killHarnessJSONResult, 1)
 	supersessionResult := make(chan killHarnessJSONResult, 1)
 	go func() {
 		passed, output, err := runKillHarnessJSON(root, "./internal/amendmentexec", "^TestPreparePublicationKillCuts$")
@@ -552,6 +557,10 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		cliRoutedProposalResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
 	}()
 	go func() {
+		passed, output, err := runKillHarnessJSON(root, "./cmd/partitur", "^TestPrepareQuarantinedToAbandonedKillCuts$")
+		cancelledPrepareResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
+	}()
+	go func() {
 		passed, output, err := supersessionKillHarnessResult()
 		supersessionResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
 	}()
@@ -561,6 +570,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	proposal := <-proposalResult
 	publicationProposal := <-publicationProposalResult
 	cliRoutedProposal := <-cliRoutedProposalResult
+	cancelledPrepare := <-cancelledPrepareResult
 	supersession := <-supersessionResult
 	if publication.err != nil {
 		return nil, publication.output, publication.err
@@ -576,6 +586,9 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	}
 	if cliRoutedProposal.err != nil {
 		return nil, cliRoutedProposal.output, cliRoutedProposal.err
+	}
+	if cancelledPrepare.err != nil {
+		return nil, cancelledPrepare.output, cancelledPrepare.err
 	}
 	if supersession.err != nil {
 		return nil, supersession.output, supersession.err
@@ -594,6 +607,9 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	for test, result := range cliRoutedProposal.passed {
 		passed[test] = result
 	}
+	for test, result := range cancelledPrepare.passed {
+		passed[test] = result
+	}
 	for test, result := range supersession.passed {
 		passed[test] = result
 	}
@@ -606,7 +622,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		}
 		records[key] = passed[record.test]
 	}
-	return records, publication.output + prepare.output + proposal.output + publicationProposal.output + cliRoutedProposal.output + supersession.output, nil
+	return records, publication.output + prepare.output + proposal.output + publicationProposal.output + cliRoutedProposal.output + cancelledPrepare.output + supersession.output, nil
 }
 
 func prepareQuiesceKillHarnessPassed(t *testing.T) map[string]bool {
