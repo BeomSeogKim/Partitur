@@ -180,8 +180,27 @@ func TestEvaluateHumanDecisionRecordsGuardWithoutRerouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decided.Kind != Approved || decided.Class != NarrowPaths || decided.GuardPass {
+	if decided.Kind != Approved || decided.Reason != "runtime_scope_started" || decided.Class != NarrowPaths || decided.GuardPass {
 		t.Fatalf("decision outcome=%+v", decided)
+	}
+}
+
+func TestEvaluateHumanDecisionRecordsUnclassifiedAuditReason(t *testing.T) {
+	base := testScore(t)
+	hash, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := runstate.NewState(nil)
+	state.Run = runstate.RunRunning
+	state.ScoreHead = runstate.ScoreHead{Revision: 1, SemanticHash: runstate.Hash(hash)}
+	operations := []any{op("replace", "/policy/allowed_paths", []any{"test/**", "src/**"})}
+	decision, err := Evaluate(Input{State: state, Base: base, BaseRevision: 1, BaseHash: runstate.Hash(hash), Operations: operations, ClaimedImpact: claimFor(t, base, operations), HasClaimedImpact: true, HumanDecision: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Kind != Approved || decision.Reason != "unclassified_change" || decision.Class != "" || decision.GuardPass {
+		t.Fatalf("decision outcome=%+v", decision)
 	}
 }
 

@@ -196,6 +196,175 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 	})
 }
 
+// TestHumanApprovalPreparedToObservedKillCuts uses the production approve
+// command to create the prepare.  The broader quiesce matrix uses a synthetic
+// control prepare, so it cannot attest this command-side producer.
+func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("prepare.prepared_to_observed/prepared", func(t *testing.T) {
+		repository, environment, runID, driver, approver := preparedHumanApproval(t, partitur, bin, vendor)
+		defer driver.stop(t)
+		defer approver.stop(t)
+		assertPendingPrepare(t, repository, runID)
+		driver.kill(t)
+		killPausedRun(t, approver)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+	})
+
+	t.Run("prepare.prepared_to_observed/observed", func(t *testing.T) {
+		repository, environment, runID, driver, approver := preparedHumanApproval(t, partitur, bin, vendor)
+		defer driver.stop(t)
+		defer approver.stop(t)
+		releasePausedReceipt(t, approver)
+		driver.releaseProbe(t)
+		driver.waitReceipt(t, "prepare.quiesce_observed")
+		assertQuiesceRound(t, repository, runID, 1)
+		driver.kill(t)
+		killPausedRun(t, approver)
+		assertPrepareBarrier(t, repository, runID)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+	})
+
+	t.Run("prepare.commit/approved", func(t *testing.T) {
+		repository, environment, runID, driver, decisionID := routedHumanApproval(t, partitur, bin, vendor)
+		defer driver.stop(t)
+		approverReady := make(chan *pausedRun, 1)
+		go func() {
+			approverReady <- pauseCommandAtReceipt(t, partitur, repository, environment, "prepare.commit.approved", "approve", decisionID, "--approve")
+		}()
+		waitForHarnessPendingPrepare(t, repository, runID)
+		driver.releaseProbe(t)
+		// The durable prepare makes this live driver stop at its observation,
+		// swept, and lease-moved probes, then at its two quiesce and lease-move
+		// receipts. Let it finish the acknowledgement transaction before the
+		// approving command is expected to enter the shared commit table.
+		driver.releaseProbe(t)
+		driver.releaseProbe(t)
+		driver.releaseProbe(t)
+		driver.releaseReceipt(t)
+		driver.releaseReceipt(t)
+		driver.releaseReceipt(t)
+		var approver *pausedRun
+		select {
+		case approver = <-approverReady:
+		case <-time.After(15 * time.Second):
+			t.Fatal("human approver did not reach prepare.commit.approved")
+		}
+		defer approver.stop(t)
+		assertCommittedHumanApproval(t, repository, runID, decisionID)
+		driver.awaitExit(t)
+		killPausedRun(t, approver)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+	})
+}
+
+func preparedHumanApproval(t *testing.T, binary, bin, vendor string) (string, []string, runstate.RunID, *preparedLiveRun, *pausedRun) {
+	t.Helper()
+	repository, environment, runID, driver, decisionID := routedHumanApproval(t, binary, bin, vendor)
+	approver := pauseCommandAtReceipt(t, binary, repository, environment, "amendment.approval_prepared", "approve", decisionID, "--approve")
+	return repository, environment, runID, driver, approver
+}
+
+func routedHumanApproval(t *testing.T, binary, bin, vendor string) (string, []string, runstate.RunID, *preparedLiveRun, string) {
+	t.Helper()
+	repository, environment := killHarnessRepository(t, bin, vendor)
+	driver := startPreparedLiveRun(t, binary, repository, environment)
+	driver.waitProbe(t, faultpoint.PointAuthorityLeaseCreated)
+	runID, err := soleRunID(repository)
+	if err != nil {
+		driver.stop(t)
+		t.Fatal(err)
+	}
+	patch := filepath.Join(repository, "human-approval.json")
+	if err := os.WriteFile(patch, []byte(`[{"op":"replace","path":"/goal","value":"needs-human-approval"}]`), 0o600); err != nil {
+		driver.stop(t)
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "amend", string(runID), "--patch", patch, "--reason", "human approval crash fixture")
+	if code != 0 || stdout != "" || !strings.Contains(stderr, "amendment routed:") {
+		driver.stop(t)
+		t.Fatalf("route amendment exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	routed := routedProposalEvent(t, repository, runID, runstate.EventAmendmentRoutedHuman)
+	var routedPayload map[string]any
+	if err := json.Unmarshal(routed.Payload, &routedPayload); err != nil {
+		driver.stop(t)
+		t.Fatal(err)
+	}
+	request := routedDecisionRequest(t, repository, runID, routedPayload["proposal_id"])
+	decisionID, ok := request["decision_id"].(string)
+	if !ok || decisionID == "" {
+		driver.stop(t)
+		t.Fatalf("routed decision request=%#v", request)
+	}
+	return repository, environment, runID, driver, decisionID
+}
+
+func releasePausedReceipt(t *testing.T, child *pausedRun) {
+	t.Helper()
+	if !child.paused {
+		t.Fatal("human approver is not paused")
+	}
+	if _, err := child.release.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForHarnessPendingPrepare(t *testing.T, repository string, runID runstate.RunID) {
+	t.Helper()
+	deadline := time.After(15 * time.Second)
+	for {
+		store, err := runstore.New(repository, faultpoint.Nop{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := store.LoadRunInput(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if input.Projection.State.PendingPrepare != nil {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("human approver did not prepare")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func assertCommittedHumanApproval(t *testing.T, repository string, runID runstate.RunID, decisionID string) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := journal.Events[len(journal.Events)-1]
+	if last.Type != runstate.EventAmendmentApproved {
+		t.Fatalf("commit receipt journal tail=%s, want amendment.approved", last.Type)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["mode"] != "human" || payload["decision_id"] != decisionID {
+		t.Fatalf("human approval payload=%#v", payload)
+	}
+}
+
 type liveDriverNotification struct {
 	kind string
 	name string
@@ -370,6 +539,17 @@ func (child *preparedLiveRun) stop(t *testing.T) {
 	if !child.ended {
 		child.kill(t)
 	}
+}
+
+func (child *preparedLiveRun) awaitExit(t *testing.T) {
+	t.Helper()
+	if child.ended {
+		return
+	}
+	if err := child.command.Wait(); err != nil {
+		t.Fatalf("prepared driver exit: %v\nstdout:\n%s\nstderr:\n%s", err, &child.stdout, &child.stderr)
+	}
+	child.ended = true
 }
 
 func assertPendingPrepare(t *testing.T, repository string, runID runstate.RunID) {

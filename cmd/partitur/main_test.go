@@ -419,6 +419,72 @@ func TestAmendCommandDispositionsAndCommandAuthority(t *testing.T) {
 	}
 }
 
+func TestApproveCommandCommitsRoutedAmendmentWithoutDriverAuthority(t *testing.T) {
+	root, store := amendCommandFixture(t, true)
+	patchPath := filepath.Join(root, "patch.json")
+	if err := os.WriteFile(patchPath, []byte(`[{"op":"replace","path":"/goal","value":"needs-human-approval"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runAmend("", patchPath, "operator correction", "", &stdout, &stderr); code != 0 {
+		t.Fatalf("route exit=%d stderr=%q", code, stderr.String())
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decisionID string
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventDecisionRequested {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		decisionID, _ = payload["decision_id"].(string)
+	}
+	if decisionID == "" {
+		t.Fatal("routed amendment did not request a decision")
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runApprove(decisionID, true, nil, "", &stderr); code != 0 {
+		t.Fatalf("approve exit=%d stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("approve stdout=%q stderr=%q, want empty", stdout.String(), stderr.String())
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.ScoreHead.Revision != 2 || input.Projection.State.PendingPrepare != nil {
+		t.Fatalf("approved command state = %+v", input.Projection.State)
+	}
+	if _, present, err := store.ReadLease("run-1"); err != nil || present {
+		t.Fatalf("approve lease present=%t error=%v, want no driver authority", present, err)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := journal.Events[len(journal.Events)-1]
+	if approved.Type != runstate.EventAmendmentApproved {
+		t.Fatalf("terminal event=%s, want amendment.approved", approved.Type)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(approved.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["mode"] != "human" || payload["decision_id"] != decisionID || payload["envelope_evaluation"] == nil {
+		t.Fatalf("approved payload=%#v", payload)
+	}
+	if _, present := payload["envelope_class"]; present {
+		t.Fatalf("human approval carries envelope_class: %#v", payload)
+	}
+}
+
 func TestAmendCommandRejectsHeadChangedAfterBaseCapture(t *testing.T) {
 	root, store := amendCommandFixture(t, false)
 	patchPath := filepath.Join(root, "patch.json")

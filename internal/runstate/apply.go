@@ -793,7 +793,11 @@ func Apply(input State, event Event) (State, error) {
 		if event.ScoreRevision != approvedHead.Revision {
 			return state, invalid(event, "approval envelope revision does not match the new head")
 		}
-		if !slices.Equal(mustStrings(payload, "obsoleted_decision_ids"), pendingDecisionIDs(state)) {
+		obsoleted := pendingDecisionIDs(state)
+		if state.PendingPrepare.Mode == "human" && state.PendingPrepare.DecisionID != nil {
+			obsoleted = pendingDecisionIDsExcept(state, *state.PendingPrepare.DecisionID)
+		}
+		if !slices.Equal(mustStrings(payload, "obsoleted_decision_ids"), obsoleted) {
 			return state, invalid(event, "obsoleted_decision_ids do not match the pre-event projection")
 		}
 		head, err := headMovements(payload["head_movements"].([]any))
@@ -835,6 +839,9 @@ func Apply(input State, event Event) (State, error) {
 			state.Authority = Authority{Epoch: fencedEpoch}
 		}
 		state.PendingPrepare = nil
+		if mustString(payload, "mode") == "human" {
+			delete(state.RoutedAmendments, ProposalID(mustString(payload, "proposal_id")))
+		}
 		closeAllPendingDecisions(&state)
 	case EventAuthorityGranted:
 		epoch := mustUint(payload, "authority_epoch")
@@ -1096,6 +1103,17 @@ func pendingDecisionIDs(state State) []string {
 	ids := make([]string, 0, len(state.PendingDecisions))
 	for id := range state.PendingDecisions {
 		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func pendingDecisionIDsExcept(state State, excluded string) []string {
+	ids := make([]string, 0, len(state.PendingDecisions))
+	for id := range state.PendingDecisions {
+		if id != excluded {
+			ids = append(ids, id)
+		}
 	}
 	slices.Sort(ids)
 	return ids

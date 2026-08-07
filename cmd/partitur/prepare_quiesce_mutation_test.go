@@ -86,6 +86,14 @@ func TestMutationParentPrepareInjectionGuards(t *testing.T) {
 			packagePath: "./cmd/partitur",
 			testName:    "TestAmendCommandDispositionsAndCommandAuthority/auto_approved_commits_but_does_not_acquire_driver_authority",
 		},
+		{
+			name:        "human approve re-enters the shared commit table without driver authority",
+			source:      "internal/amendmentexec/dispositioner.go",
+			before:      "err = store.CompleteOrAbandonPrepare(ctx, runID)",
+			after:       "err = context.Canceled // mutation: skip human prepare commit",
+			packagePath: "./cmd/partitur",
+			testName:    "TestApproveCommandCommitsRoutedAmendmentWithoutDriverAuthority",
+		},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			assertPrepareQuiesceMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, mutation.packagePath, mutation.testName)

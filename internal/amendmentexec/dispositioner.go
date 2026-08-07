@@ -9,8 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/amendment"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
@@ -56,9 +59,13 @@ func New() ProposalDispositioner { return ProposalDispositioner{NewID: workspace
 type amendmentProposal struct {
 	driver.AdapterProposal
 	origin                              string
+	humanDecision                       bool
+	immutableRecord                     []byte
 	appendRouteInPublicationTransaction bool
 	mutate                              func(func(*runstore.Txn, runstate.State) error) error
 }
+
+const commandPreparePollInterval = 25 * time.Millisecond
 
 // CLIProposal is the command-origin value captured before §9 admission takes
 // the repository state lock. Operations retain their submitted JSON bytes.
@@ -145,6 +152,62 @@ func (dispositioner ProposalDispositioner) SubmitCLI(ctx context.Context, store 
 		return CLIResult{}, err
 	}
 	return result, nil
+}
+
+// DecisionRejectedError reports the durable decision-time rejection that
+// closes a routed amendment. It is distinct from an interrupted command: the
+// human decision completed, but §§9.1--9.9 no longer admitted the proposal.
+type DecisionRejectedError struct {
+	ProposalID runstate.ProposalID
+	Reason     string
+}
+
+func (err *DecisionRejectedError) Error() string {
+	return fmt.Sprintf("amendment decision rejected: proposal_id=%q reason=%q", err.ProposalID, err.Reason)
+}
+
+// ApproveRouted replays the immutable routed proposal through the human
+// decision path. It intentionally uses MutateProjected and the shared §6
+// table: an approving command never obtains driver authority.
+func (dispositioner ProposalDispositioner) ApproveRouted(ctx context.Context, store *runstore.Store, runID runstate.RunID, decisionID string) error {
+	if store == nil || runID == "" || decisionID == "" {
+		return runstore.ErrDecisionResolutionNotAllowed
+	}
+	proposal, input, err := loadRoutedProposal(store, runID, decisionID)
+	if err != nil {
+		return err
+	}
+	prepared, outcome, err := dispositioner.prepareAtBarrierFixedPoint(ctx, proposal, input)
+	if err != nil {
+		return err
+	}
+	if outcome.Kind == amendment.Rejected {
+		return &DecisionRejectedError{ProposalID: proposal.ProposalID, Reason: outcome.Reason}
+	}
+	if outcome.Kind != amendment.Approved || prepared.PreparedReceipt == nil {
+		return errors.New("human amendment approval did not produce a prepare")
+	}
+	store.WakeLeaseOwner(runID)
+	for {
+		err = store.CompleteOrAbandonPrepare(ctx, runID)
+		if !errors.Is(err, runstore.ErrPrepareWaiting) {
+			return err
+		}
+		if err := waitForPrepare(ctx, commandPreparePollInterval); err != nil {
+			return err
+		}
+	}
+}
+
+func waitForPrepare(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // RequiresSingleRaisedForAuto prevents a prepare from suppressing the durable
@@ -341,6 +404,11 @@ func requireNoPendingPrepare(state runstate.State) error {
 }
 
 func (dispositioner ProposalDispositioner) evaluate(proposal amendmentProposal, input submission, state runstate.State) (amendment.Outcome, map[string]any, error) {
+	if proposal.humanDecision {
+		if err := verifyRoutedProposal(proposal.Store, proposal.RunID, proposal.DecisionID, proposal.ProposalID, proposal.immutableRecord, state); err != nil {
+			return amendment.Outcome{}, nil, err
+		}
+	}
 	proposal.ScoreRevision = state.ScoreHead.Revision
 	attempts, err := executiondep.Collect(proposal.Store, proposal.RunID)
 	if err != nil {
@@ -354,7 +422,7 @@ func (dispositioner ProposalDispositioner) evaluate(proposal amendmentProposal, 
 		State: state, Base: base, BaseRevision: input.BaseRevision, BaseHash: input.BaseHash,
 		Operations: input.Operations, ClaimedImpact: input.ClaimedImpact,
 		HasClaimedImpact: input.HasClaimedImpact, Attempts: attempts,
-		RequiresDecision: proposal.Event.RequiresDecision,
+		RequiresDecision: proposal.Event.RequiresDecision, HumanDecision: proposal.humanDecision,
 	})
 	if err != nil {
 		return amendment.Outcome{}, nil, err
@@ -435,15 +503,30 @@ func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.T
 		return err
 	}
 	fileHash := rawHash(snapshot)
-	envelope := string(outcome.Class)
+	mode := "auto"
+	var envelope *string
+	var decisionID *string
+	var envelopeEvaluation map[string]any
+	if proposal.humanDecision {
+		mode = "human"
+		decisionID = stringPointer(proposal.DecisionID)
+		envelopeEvaluation = envelopeEvaluationFor(outcome)
+	} else {
+		value := string(outcome.Class)
+		envelope = &value
+	}
+	obsoleted := pendingDecisions(state)
+	if decisionID != nil {
+		obsoleted = withoutDecision(obsoleted, *decisionID)
+	}
 	plan := runstate.ApprovalPlan{
 		Schema: runstate.ApprovalPlanSchema, ProposalID: proposal.ProposalID,
-		Mode: "auto", EnvelopeClass: &envelope, BaseRevision: input.BaseRevision, BaseHash: input.BaseHash,
+		Mode: mode, DecisionID: decisionID, EnvelopeClass: envelope, BaseRevision: input.BaseRevision, BaseHash: input.BaseHash,
 		ClassifierVersion: canonical.AmendmentClassifierVersion, NewRevision: state.ScoreHead.Revision + 1,
 		NewSnapshotHash: runstate.Hash(semanticHash), NewSnapshotFileHash: runstate.Hash(fileHash),
 		TypedDelta: outcome.Impact.TypedDelta(), ActualImpact: outcome.Impact.Value(), HeadMovements: approvalHeadMovements(prepared),
-		SupersededAttemptIDs: cancellableAttempts(state), ObsoletedDecisionIDs: pendingDecisions(state),
-		Finalization: false, IdentityVersions: versions,
+		SupersededAttemptIDs: cancellableAttempts(state), ObsoletedDecisionIDs: obsoleted,
+		EnvelopeEvaluation: envelopeEvaluation, Finalization: false, IdentityVersions: versions,
 	}
 	if proposal.origin == "adapter" {
 		plan.EmittedID = stringPointer(proposal.Event.ID)
@@ -462,12 +545,18 @@ func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.T
 		return err
 	}
 	payload := map[string]any{
-		"prepare_id": prepareID, "proposal_id": string(proposal.ProposalID), "mode": "auto", "envelope_class": envelope,
+		"prepare_id": prepareID, "proposal_id": string(proposal.ProposalID), "mode": mode,
 		"base_revision": input.BaseRevision, "base_hash": string(input.BaseHash), "new_revision": plan.NewRevision,
 		"new_snapshot_hash": semanticHash, "new_snapshot_file_hash": fileHash, "plan_record_hash": rawHash(planBytes),
 		"target_attempt_ids": attemptStrings(plan.SupersededAttemptIDs), "observed_authority_epoch": state.Authority.Epoch,
 		"quiesce_silence_limit_ms": quiesceSilenceLimitMillis,
 		"classifier_version":       canonical.AmendmentClassifierVersion, "identity_versions": versions,
+	}
+	if decisionID != nil {
+		payload["decision_id"] = *decisionID
+	}
+	if envelope != nil {
+		payload["envelope_class"] = *envelope
 	}
 	event, err := amendmentEvent(proposal, runstate.EventAmendmentApprovalPrepared, payload)
 	if err != nil {
@@ -478,6 +567,125 @@ func (dispositioner ProposalDispositioner) appendPrepare(transaction *runstore.T
 		return err
 	}
 	disposition.PreparedReceipt = &receipt
+	return nil
+}
+
+func envelopeEvaluationFor(outcome amendment.Outcome) map[string]any {
+	evaluation := map[string]any{"guard_passed": outcome.GuardPass}
+	if outcome.Class != "" {
+		evaluation["class"] = string(outcome.Class)
+	}
+	if !outcome.GuardPass {
+		evaluation["guard_failure_reason"] = outcome.Reason
+	}
+	return evaluation
+}
+
+type routedProposalRecord struct {
+	Schema           string          `json:"schema"`
+	ProposalID       string          `json:"proposal_id"`
+	Origin           string          `json:"origin"`
+	BaseRevision     uint64          `json:"base_revision"`
+	BaseHash         runstate.Hash   `json:"base_hash"`
+	Operations       json.RawMessage `json:"operations"`
+	Reason           string          `json:"reason"`
+	RequiresDecision bool            `json:"requires_decision"`
+	AttemptID        string          `json:"attempt_id"`
+	EmittedID        string          `json:"emitted_id"`
+	Evidence         []string        `json:"evidence"`
+	ClaimedImpact    json.RawMessage `json:"claimed_impact"`
+}
+
+func loadRoutedProposal(store *runstore.Store, runID runstate.RunID, decisionID string) (amendmentProposal, submission, error) {
+	if store == nil {
+		return amendmentProposal{}, submission{}, runstore.ErrDecisionResolutionNotAllowed
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		return amendmentProposal{}, submission{}, err
+	}
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventAmendmentRoutedHuman {
+			continue
+		}
+		var route map[string]any
+		if err := json.Unmarshal(event.Payload, &route); err != nil {
+			return amendmentProposal{}, submission{}, err
+		}
+		if route["decision_id"] != decisionID {
+			continue
+		}
+		proposalID, ok := route["proposal_id"].(string)
+		if !ok || proposalID == "" || filepath.Base(proposalID) != proposalID {
+			return amendmentProposal{}, submission{}, runstore.ErrDecisionResolutionNotAllowed
+		}
+		contents, err := os.ReadFile(filepath.Join(store.RepositoryRoot(), ".partitur", "runs", string(runID), "proposals", proposalID+".json"))
+		if err != nil {
+			return amendmentProposal{}, submission{}, fmt.Errorf("read routed proposal record: %w", err)
+		}
+		recordHash, ok := route["proposal_record_hash"].(string)
+		if !ok || rawHash(contents) != recordHash {
+			return amendmentProposal{}, submission{}, runstore.ErrDecisionResolutionNotAllowed
+		}
+		record, input, err := decodeRoutedProposalRecord(contents)
+		if err != nil {
+			return amendmentProposal{}, submission{}, err
+		}
+		if record.ProposalID != proposalID {
+			return amendmentProposal{}, submission{}, runstore.ErrDecisionResolutionNotAllowed
+		}
+		proposal := amendmentProposal{AdapterProposal: driver.AdapterProposal{
+			Store: store, RunID: runID, ProposalID: runstate.ProposalID(proposalID), DecisionID: decisionID,
+			AttemptID: runstate.AttemptID(record.AttemptID), Event: protocol.ProposalEvent{ID: record.EmittedID, RequiresDecision: record.RequiresDecision},
+		}, origin: record.Origin, humanDecision: true, immutableRecord: append([]byte(nil), contents...)}
+		proposal.mutate = func(mutation func(*runstore.Txn, runstate.State) error) error {
+			return store.MutateProjected(runID, mutation)
+		}
+		return proposal, input, nil
+	}
+	return amendmentProposal{}, submission{}, runstore.ErrDecisionResolutionNotAllowed
+}
+
+func decodeRoutedProposalRecord(contents []byte) (routedProposalRecord, submission, error) {
+	var record routedProposalRecord
+	if err := protocol.DecodeStrict(contents, &record); err != nil {
+		return routedProposalRecord{}, submission{}, fmt.Errorf("decode routed proposal record: %w", err)
+	}
+	if record.Schema != "partitur/proposal-record+json;v=1" || record.ProposalID == "" ||
+		(record.Origin != "adapter" && record.Origin != "cli") || record.BaseRevision == 0 || record.BaseHash == "" || record.Reason == "" || len(record.Operations) == 0 {
+		return routedProposalRecord{}, submission{}, runstore.ErrDecisionResolutionNotAllowed
+	}
+	operations, err := canonical.ParseJSON(record.Operations)
+	if err != nil {
+		return routedProposalRecord{}, submission{}, fmt.Errorf("parse routed amendment operations: %w", err)
+	}
+	values, ok := operations.([]any)
+	if !ok {
+		return routedProposalRecord{}, submission{}, errors.New("parse routed amendment operations: operations must be an array")
+	}
+	input := submission{BaseRevision: record.BaseRevision, BaseHash: record.BaseHash, OperationsRaw: record.Operations, Reason: record.Reason, Evidence: record.Evidence, Operations: values}
+	if len(record.ClaimedImpact) != 0 {
+		claim, err := decodeImpact(record.ClaimedImpact)
+		if err != nil {
+			return routedProposalRecord{}, submission{}, fmt.Errorf("decode routed claimed impact: %w", err)
+		}
+		input.ClaimedImpactRaw = record.ClaimedImpact
+		input.ClaimedImpact = claim
+		input.HasClaimedImpact = true
+	}
+	return record, input, nil
+}
+
+func verifyRoutedProposal(store *runstore.Store, runID runstate.RunID, decisionID string, proposalID runstate.ProposalID, expected []byte, state runstate.State) error {
+	decision, pending := state.PendingDecisions[decisionID]
+	routed, present := state.RoutedAmendments[proposalID]
+	if !pending || !present || decision.Type != "amendment" || decision.ProposalID != proposalID || routed.DecisionID != decisionID || routed.DecisionType != "amendment" {
+		return runstore.ErrDecisionResolutionNotAllowed
+	}
+	proposal, _, err := loadRoutedProposal(store, runID, decisionID)
+	if err != nil || proposal.ProposalID != proposalID || !bytes.Equal(proposal.immutableRecord, expected) {
+		return runstore.ErrDecisionResolutionNotAllowed
+	}
 	return nil
 }
 
@@ -536,6 +744,16 @@ func pendingDecisions(state runstate.State) []string {
 		result = append(result, id)
 	}
 	sort.Strings(result)
+	return result
+}
+
+func withoutDecision(values []string, decisionID string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != decisionID {
+			result = append(result, value)
+		}
+	}
 	return result
 }
 func attemptStrings(values []runstate.AttemptID) []string {
@@ -709,7 +927,7 @@ func rejectionEvent(proposal amendmentProposal, input submission, outcome amendm
 	if proposal.origin == "adapter" {
 		payload["emitted_id"] = proposal.Event.ID
 	}
-	if proposal.Event.RequiresDecision {
+	if proposal.Event.RequiresDecision || proposal.humanDecision {
 		payload["decision_id"] = proposal.DecisionID
 	}
 	if outcome.Condition != "" {
