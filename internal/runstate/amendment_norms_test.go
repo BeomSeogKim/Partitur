@@ -39,6 +39,213 @@ func TestClaimedImpactOptionalityIsSpecified(t *testing.T) {
 	}
 }
 
+func TestApprovalDecisionTypeSyntaxIsSpecified(t *testing.T) {
+	lines := recoveryDesignLines(t)
+	section := approvalSyntaxSection(t, lines)
+	forms := approvalRejectForms(t, section)
+
+	humanGate := approvalRejectFormForTypes(t, forms, "human_gate")
+	if humanGate.reason != "optional" {
+		t.Fatalf("human_gate rejection reason = %q, want optional", humanGate.reason)
+	}
+
+	amendmentFinalization := approvalRejectFormForTypes(t, forms, "amendment", "finalization")
+	if amendmentFinalization.reason != "required" {
+		t.Fatalf("amendment/finalization rejection reason = %q, want required", amendmentFinalization.reason)
+	}
+
+	amendmentPolicy := amendmentFinalizationApprovalPolicy(t, section)
+	if amendmentFinalization.reason != amendmentPolicy.reason {
+		t.Fatalf("amendment/finalization grammar reason = %q, want policy %q", amendmentFinalization.reason, amendmentPolicy.reason)
+	}
+	if !amendmentPolicy.overrideInvalid {
+		t.Fatal("amendment/finalization approval policy permits --override")
+	}
+	if amendmentFinalization.reasonField != amendmentPolicy.reasonField {
+		t.Fatalf("amendment/finalization grammar field = %q, want policy field %q", amendmentFinalization.reasonField, amendmentPolicy.reasonField)
+	}
+
+	humanReason := amendmentHumanRejectionReason(t, recoveryDocumentSection(t, lines,
+		"## B.5 Amendments",
+		"## B.6 Shipping"))
+	if amendmentFinalization.reasonField != humanReason {
+		t.Fatalf("amendment/finalization rejection field = %q, want B.5 field %q", amendmentFinalization.reasonField, humanReason)
+	}
+}
+
+func approvalSyntaxSection(t *testing.T, lines []string) []string {
+	t.Helper()
+
+	start := uniqueLineIndex(t, lines, "**Operands and options.** Enough to be a contract rather than a sketch; anything not listed is not")
+	end := uniqueLinePrefixIndex(t, lines, "**`partitur status` observable surface.**")
+	if end <= start {
+		t.Fatal("partitur status section must follow operands and options")
+	}
+	return lines[start+1 : end]
+}
+
+func uniqueLinePrefixIndex(t *testing.T, lines []string, prefix string) int {
+	t.Helper()
+
+	index := -1
+	count := 0
+	for lineIndex, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			index = lineIndex
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("%q prefix count = %d, want 1", prefix, count)
+	}
+	return index
+}
+
+type approvalRejectForm struct {
+	decisionTypes map[string]struct{}
+	reason        string
+	reasonField   string
+}
+
+type approvalDecisionPolicy struct {
+	reason          string
+	reasonField     string
+	overrideInvalid bool
+}
+
+func amendmentFinalizationApprovalPolicy(t *testing.T, lines []string) approvalDecisionPolicy {
+	t.Helper()
+
+	narrative := strings.Join(strings.Fields(strings.Join(lines, "\n")), " ")
+	const prefix = "For an `amendment` or `finalization` decision,"
+	if count := strings.Count(narrative, prefix); count != 1 {
+		t.Fatalf("amendment/finalization approval policy prefix count = %d, want 1", count)
+	}
+	policyText := strings.TrimSpace(strings.TrimPrefix(narrative[strings.Index(narrative, prefix):], prefix))
+	policy := approvalDecisionPolicy{}
+	if strings.Contains(policyText, "rejection requires `--reason <text>`") {
+		policy.reason = "required"
+	}
+	const mappingPrefix = "which becomes B.5's `"
+	_, mapping, found := strings.Cut(policyText, mappingPrefix)
+	if found {
+		field, _, closed := strings.Cut(mapping, "`")
+		if !closed || field == "" {
+			t.Fatalf("unparseable amendment/finalization B.5 mapping %q", policyText)
+		}
+		policy.reasonField = field
+	}
+	policy.overrideInvalid = strings.Contains(policyText, "`--override` is invalid")
+	if policy.reason == "" || policy.reasonField == "" || !policy.overrideInvalid {
+		t.Fatalf("unparseable amendment/finalization approval policy %q", policyText)
+	}
+	return policy
+}
+
+func approvalRejectForms(t *testing.T, lines []string) []approvalRejectForm {
+	t.Helper()
+
+	var forms []approvalRejectForm
+	for _, line := range lines {
+		command, comment, found := strings.Cut(strings.TrimSpace(line), "#")
+		if !found || !strings.HasPrefix(strings.TrimSpace(command), "| --reject") {
+			continue
+		}
+
+		form := approvalRejectForm{decisionTypes: make(map[string]struct{})}
+		switch strings.TrimSpace(command) {
+		case "| --reject [--reason <text>]":
+			form.reason = "optional"
+		case "| --reject --reason <text>":
+			form.reason = "required"
+		default:
+			t.Fatalf("unparseable approve reject grammar %q", line)
+		}
+
+		decisionTypes, mapping, found := strings.Cut(strings.TrimSpace(comment), ";")
+		decisionTypes = strings.TrimSuffix(strings.TrimSpace(decisionTypes), " only")
+		if decisionTypes == "" {
+			t.Fatalf("approve reject grammar has no decision-type restriction %q", line)
+		}
+		for _, decisionType := range strings.Split(decisionTypes, " | ") {
+			if decisionType == "" {
+				t.Fatalf("unparseable decision-type restriction %q", line)
+			}
+			form.decisionTypes[decisionType] = struct{}{}
+		}
+		if found {
+			mapping = strings.TrimSpace(mapping)
+			const prefix = "B.5 `"
+			if !strings.HasPrefix(mapping, prefix) || !strings.HasSuffix(mapping, "`") {
+				t.Fatalf("unparseable B.5 mapping %q", line)
+			}
+			form.reasonField = strings.TrimSuffix(strings.TrimPrefix(mapping, prefix), "`")
+		}
+		forms = append(forms, form)
+	}
+	if len(forms) != 2 {
+		t.Fatalf("approve reject grammar forms = %d, want 2", len(forms))
+	}
+	return forms
+}
+
+func approvalRejectFormForTypes(t *testing.T, forms []approvalRejectForm, want ...string) approvalRejectForm {
+	t.Helper()
+
+	for _, form := range forms {
+		if len(form.decisionTypes) != len(want) {
+			continue
+		}
+		matches := true
+		for _, decisionType := range want {
+			if _, ok := form.decisionTypes[decisionType]; !ok {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return form
+		}
+	}
+	t.Fatalf("approve reject grammar has no form for decision types %s", strings.Join(want, ", "))
+	return approvalRejectForm{}
+}
+
+func amendmentHumanRejectionReason(t *testing.T, lines []string) string {
+	t.Helper()
+
+	inPayload := false
+	field := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "amendment.human_rejected {" {
+			if inPayload {
+				t.Fatal("B.5 has nested amendment.human_rejected payload")
+			}
+			inPayload = true
+			continue
+		}
+		if !inPayload {
+			continue
+		}
+		if trimmed == "}" {
+			break
+		}
+		if !strings.Contains(trimmed, "# non-empty") {
+			continue
+		}
+		candidate := strings.TrimSpace(strings.SplitN(trimmed, ",", 2)[0])
+		if candidate == "" || field != "" {
+			t.Fatalf("unparseable amendment.human_rejected non-empty field %q", line)
+		}
+		field = candidate
+	}
+	if !inPayload || field == "" {
+		t.Fatal("B.5 has no non-empty amendment.human_rejected reason field")
+	}
+	return field
+}
+
 func TestAmendmentEvaluatorReadinessIsNotProved(t *testing.T) {
 	lines := recoveryDesignLines(t)
 	contents := strings.Join(lines, "\n")

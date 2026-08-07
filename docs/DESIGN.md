@@ -3170,8 +3170,9 @@ partitur validate
 partitur answer  <decision-id> --answer <text> | --answer-file <path>
 partitur approve <decision-id> --approve
                               | --approve --override <artifact-instance-id>:<finding-id>
-                                  [--override <artifact-instance-id>:<finding-id>]... --reason <text>
-                              | --reject [--reason <text>]
+                                  [--override <artifact-instance-id>:<finding-id>]... --reason <text> # human_gate only
+                              | --reject [--reason <text>] # human_gate only
+                              | --reject --reason <text>   # amendment | finalization; B.5 `human_reason`
 partitur amend   [<run-id>] --patch <path> # RFC 6902 JSON; - reads stdin
                  --reason <text> [--claimed-impact <path>]
 partitur cancel  [<run-id>]
@@ -3190,11 +3191,12 @@ option: §1's core allocation is the only creation path. For commands whose synt
 `answer` and the human-gate form of `approve` instead select that same unique active run through
 their decision-resolution rule above; their decision ids are run-unique rather than global.
 `--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
-human gate would be indefensible. `--reason` is valid only with `--reject`, where it becomes
-`reason`, or with one or more `--override` options, where it becomes `override_reason`; it is
-required in the latter form and invalid with bare `--approve`. `--override` is invalid with
-`--reject`. Repeating the same `--override` pair is a usage error (exit 1): the command appends
-nothing.
+human gate would be indefensible. For a `human_gate` decision, `--reason` is valid only with
+`--reject`, where it becomes `reason`, or with one or more `--override` options, where it becomes
+`override_reason`; it is required in the latter form and invalid with bare `--approve`. `--override`
+is invalid with `--reject`. For an `amendment` or `finalization` decision, rejection requires
+`--reason <text>`, which becomes B.5's `human_reason`; `--override` is invalid. Repeating the same
+`--override` pair is a usage error (exit 1): the command appends nothing.
 
 **`partitur status` observable surface.** `status` is an observation of the selected run's
 authoritative journal and its immutable pinned score snapshots. It takes neither a driver lease nor
