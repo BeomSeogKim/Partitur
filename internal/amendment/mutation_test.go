@@ -29,7 +29,7 @@ func TestMutationEvaluatorGuards(t *testing.T) {
 		{"candidate feasibility", "} else if condition != \"\" {", "} else if false && condition != \"\" { // mutation", "TestEvaluateCandidateFinalityPrecedesPolicy"},
 		{"requires decision policy row", "if input.RequiresDecision {", "if false { // mutation", "TestEvaluatePipelineAndPolicy/requires_decision_routes_otherwise_eligible_amendment"},
 		{"human guard audit-only", "if input.HumanDecision {", "if false { // mutation", "TestEvaluateHumanDecisionRecordsGuardWithoutRerouting"},
-		{"human unclassified audit reason", `Reason: "unclassified_change"`, `Reason: "runtime_scope_started"`, "TestEvaluateHumanDecisionRecordsUnclassifiedAuditReason"},
+		{"human unclassified audit reason", `Kind: Approved, Reason: "unclassified_change"`, `Kind: Approved, Reason: "runtime_scope_started"`, "TestEvaluateHumanDecisionRecordsUnclassifiedAuditReason"},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			assertMutationKilled(t, environment, "evaluator.go", mutation.before, mutation.after, mutation.test)
