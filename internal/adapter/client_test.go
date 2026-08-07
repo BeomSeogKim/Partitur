@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,6 +29,12 @@ const (
 	vendorModeEnv          = "PARTITUR_EXECUTE_VENDOR_MODE"
 	vendorOutEnv           = "PARTITUR_EXECUTE_VENDOR_OUTPUT"
 	incidentalTestDeadline = 10 * time.Second
+	// One suffix per fixture step, never rewritten: a single stage file would
+	// have to be truncated and replaced, and a sweep landing inside that
+	// rewrite leaves a file whose contents say nothing.
+	sweepStageSpawning = ".spawning"
+	sweepStageSpawned  = ".spawned"
+	sweepStageWritten  = ".written"
 )
 
 func TestMain(m *testing.M) {
@@ -308,13 +315,24 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 		50*time.Millisecond,
 		40*time.Millisecond,
 	)
+	armed := time.Now()
 	report := client.ProbeAll([]string{"fake"})
+	elapsed := time.Since(armed)
 	assertDiagnosticKinds(t, report, DiagnosticDeadline)
 	data, err := os.ReadFile(marker)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v\n%s", err, sweepFixtureDiagnosis(marker, report, armed, elapsed))
 	}
-	for _, field := range strings.Fields(string(data)) {
+	// A marker whose write failed part way leaves a readable but short file,
+	// and the loop below would then iterate nothing and pass. The session has
+	// exactly two members, so anything else is the fixture failing to record
+	// what this test exists to observe.
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		t.Fatalf("marker = %q, want the fake's pid and its child's\n%s",
+			data, sweepFixtureDiagnosis(marker, report, armed, elapsed))
+	}
+	for _, field := range fields {
 		pid, err := strconv.Atoi(field)
 		if err != nil {
 			t.Fatal(err)
@@ -540,6 +558,74 @@ func assertDiagnosticKinds(t *testing.T, report Report, want ...DiagnosticKind) 
 	if len(report.Probes) != 0 {
 		t.Fatalf("failed report unexpectedly contains probes: %#v", report.Probes)
 	}
+}
+
+// sweepFixtureDiagnosis reports what the session-sweep fixture had done by the
+// time its marker was read. An absent marker on its own cannot say whether the
+// fake was killed before it could write one — a fixture race — or whether the
+// sweep acted on a session it should not have, which is a production defect;
+// the two repairs point in opposite directions.
+//
+// The fixture stamps one file per step with the wall clock, and this converts
+// each to time elapsed since this test called ProbeAll. That crossing of the
+// process boundary is the point: the timer starts before the fake exists,
+// so a duration the fake measures for itself cannot say how much budget was
+// left, and a fake killed at "request+1ms" may have been started 49ms into a
+// 50ms deadline.
+//
+// The offsets are measured from this test's call, not from the core's timer:
+// the core resolves the executable and encodes the request before arming it, so
+// an offset is an *upper* bound on elapsed deadline and therefore a *lower*
+// bound on the budget that remained. A step at probe+10ms of a 50ms deadline
+// had at least 40ms left. That is the direction the conclusion needs — "the
+// fixture still had room and produced no marker" survives the imprecision —
+// but it is diagnostic evidence, not a timer oracle: the stamps cross processes
+// as wall clock and lose Go's monotonic reading, so a clock adjustment
+// mid-probe can skew them either way.
+//
+// Known limitation, predating this instrumentation: the assertion checks the
+// swept pids with Kill(pid, 0) and has no start-identity check, so a pid reused
+// between the sweep and the check reads as a surviving session member.
+//
+// A step is reported as absent only when the file does not exist; any other
+// read error is reported as such, so a filesystem fault is not read as "never
+// got there". Step-write failures additionally go to stderr, which the core
+// collects independently of that directory.
+func sweepFixtureDiagnosis(marker string, report Report, armed time.Time, elapsed time.Duration) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "probe elapsed=%s\n", elapsed)
+	for _, suffix := range []string{sweepStageSpawning, sweepStageSpawned, sweepStageWritten} {
+		stamp, err := os.ReadFile(marker + suffix)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			fmt.Fprintf(&builder, "step %s: absent\n", suffix)
+			continue
+		case err != nil:
+			fmt.Fprintf(&builder, "step %s: unreadable (%v)\n", suffix, err)
+			continue
+		}
+		at, parseErr := time.Parse(time.RFC3339Nano, string(stamp))
+		if parseErr != nil {
+			fmt.Fprintf(&builder, "step %s: unparsable stamp %q (%v)\n", suffix, stamp, parseErr)
+			continue
+		}
+		fmt.Fprintf(&builder, "step %s: probe+%s\n", suffix, at.Sub(armed))
+	}
+	entries, err := os.ReadDir(filepath.Dir(marker))
+	if err != nil {
+		fmt.Fprintf(&builder, "marker directory unreadable: %v\n", err)
+	} else {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		fmt.Fprintf(&builder, "marker directory=%v\n", names)
+	}
+	for _, diagnostic := range report.Diagnostics {
+		fmt.Fprintf(&builder, "diagnostic kind=%v detail=%q stderr=%q\n",
+			diagnostic.Kind, diagnostic.Detail, diagnostic.Stderr)
+	}
+	return builder.String()
 }
 
 func replaceEnvironment(environment []string, replacements map[string]string) []string {
@@ -786,13 +872,33 @@ func runFakeAdapter(mode string) {
 		writeValid(adapterID)
 		ignoreTermAndHang()
 	case "session_tree_hang":
+		// Each step drops its own file stamped with the wall clock. The test
+		// runs on the same machine and knows when it called ProbeAll, so it can
+		// bound these against the deadline — which this process cannot do on
+		// its own: the core's timer starts before the fake exists, so nothing
+		// measured from inside it bounds the remaining budget.
+		stamp := func(suffix string) {
+			if err := os.WriteFile(marker+suffix, []byte(time.Now().Format(time.RFC3339Nano)), 0o600); err != nil {
+				// These share a directory with the marker, so a filesystem
+				// fault takes them too. stderr does not depend on that
+				// directory and the core collects it on the deadline path.
+				_, _ = fmt.Fprintf(os.Stderr, "stage %s write failed: %v\n", suffix, err)
+			}
+		}
+		stamp(sweepStageSpawning)
 		child := exec.Command(os.Args[0])
 		child.Env = replaceEnvironment(os.Environ(), map[string]string{fakeModeEnv: "child_hang"})
 		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := child.Start(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "spawn failed: %v\n", err)
 			os.Exit(8)
 		}
-		_ = os.WriteFile(marker, []byte(fmt.Sprintf("%d %d", os.Getpid(), child.Process.Pid)), 0o600)
+		stamp(sweepStageSpawned)
+		if err := os.WriteFile(marker, []byte(fmt.Sprintf("%d %d", os.Getpid(), child.Process.Pid)), 0o600); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "marker write failed: %v\n", err)
+		} else {
+			stamp(sweepStageWritten)
+		}
 		ignoreTermAndHang()
 	case "child_hang":
 		ignoreTermAndHang()
