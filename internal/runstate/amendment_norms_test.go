@@ -106,10 +106,19 @@ func TestCommandOriginProposalPublicationIntervalIsSpecified(t *testing.T) {
 	for _, clause := range []string{
 		"It is held for one bounded mutation or, only where a\n  named protocol rule says so, a bounded sequence of adjacent local durable mutations. It is never\n  held across a human wait, an adapter execution, or any other external wait.",
 		"**Command-origin publication interval.** For an ordinary command-origin route, the repository\n  state lock is retained from the successful proposal-record rename through the fsynced\n  `amendment.routed_human` append. These are distinct durable operations, not one atomic write:\n  Appendix E may inject a crash after the record receipt and before the route append. A `resume`\n  waits for that interval; it must not classify a route-absent record as an orphan while its live\n  publisher holds the lock. If the publisher crashes, the lock is released and replay quarantines\n  the route-absent record under the rule below.",
-		"On recovery, after any command-origin publication interval has ended, a proposal file with\n  neither `amendment.routed_human` nor a matching blocking\n  `attempt.blocked` route descriptor is quarantined: nothing authoritative referred to it.",
+		"On recovery, after any command-origin publication interval has ended and journal replay has\n  reached an `owner = clear` selection cut, a proposal file with neither\n  `amendment.routed_human` nor a matching blocking\n  `attempt.blocked` route descriptor is quarantined: nothing authoritative referred to it.",
 	} {
 		if count := strings.Count(contents, clause); count != 1 {
 			t.Fatalf("command-origin publication interval clause count=%d, want 1: %q", count, clause)
 		}
+	}
+}
+
+func TestReviewSubjectInputRecoveryCleanupTimingIsSpecified(t *testing.T) {
+	contents := strings.Join(recoveryDesignLines(t), "\n")
+
+	const clause = "`RC-RESUME-035` removes an unreferenced pre-`attempt.started` copy only after journal replay has\nreached an `owner = clear` selection cut, and before that cut's selected continuation. A stale or\norphan lease first takes its own cleanup and re-evaluates; a verified live owner yields, and an\nunverifiable owner halts, without this review-subject-input cleanup. On an eligible `resume`, this\ncleanup runs exactly once. Terminal cleanup uses this same recovery step after any lease cleanup\nand performs no independent review-subject-input sweep."
+	if count := strings.Count(contents, clause); count != 1 {
+		t.Fatalf("review-subject-input recovery cleanup timing clause count=%d, want 1: %q", count, clause)
 	}
 }
