@@ -1,0 +1,14 @@
+cast: "0.1"
+performers:
+  codex:
+    adapter: codex
+    model: gpt-5.6-sol
+    allow_advisory_enforcement: true
+  claude:
+    adapter: claude
+    model: claude-sonnet-5
+    allow_advisory_enforcement: true
+bindings:
+  writer:
+    performer: codex
+    fallbacks: [claude]

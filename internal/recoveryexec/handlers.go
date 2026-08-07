@@ -520,6 +520,18 @@ func closeRecoveredAcceptanceBudgetInterval(execution HandlerContext, action rec
 	})
 }
 
+// recoveredExecutionDependencies gives a recovered attempt the same receipt
+// seam a live one has. `DefaultExecutionDependencies` leaves the observer nil,
+// and the run command fills it in on its own path — so without this, every
+// durable append made by an attempt that recovery started is unobservable, and
+// the cut between `attempt.completed` and `movement.succeeded` cannot be
+// reached by any caller.
+func recoveredExecutionDependencies() driver.ExecutionDependencies {
+	execution := driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment())
+	execution.ReceiptObserver = runstore.ReceiptObserverFromEnvironment()
+	return execution
+}
+
 func materializeSuccessor(ctx context.Context, execution HandlerContext, action recovery.Action) error {
 	if execution.Store == nil || execution.Driver == nil || action.PendingSuccessor == nil {
 		return errors.New("recovery successor materialization requires store, driver, and pending successor")
@@ -651,7 +663,7 @@ func executeRecoveredAttemptAtBase(
 		RemainingMS:          input.Projection.Scheduler.RemainingTime,
 		RetriesConsumed:      retriesConsumed(input.Projection.State, runstate.MovementID(movementID)),
 		VisitedPerformers:    visitedPerformers(input.Projection, runstate.MovementID(movementID)),
-	}, driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()))
+	}, recoveredExecutionDependencies())
 	if result.Err != nil {
 		return result.Err
 	}
