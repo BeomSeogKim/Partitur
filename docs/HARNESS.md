@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches thirty-one E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirty-two E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -81,7 +81,7 @@ is paused there.
 |---|---|---|---|
 | `proposal.published_to_blocked_route` | reachable | `TestProposalPublicationKillCuts` | A real blocking-proposal `run` is killed at its immutable record and matching `attempt.blocked` descriptor; recovery quarantines the unreferenced record with its original bytes at the first cut and retains the descriptor-bound record at the second |
 | `proposal.blocked_route_to_routed` | reachable | `TestBlockedProposalRouteKillCuts` | A real `run` is killed at the durable `attempt.blocked` descriptor and recovery's durable routed receipt; the recovery route is compared field-for-field with the frozen descriptor while the current project score is invalid |
-| `proposal.published_to_routed` | not reached by this gate's cuts | — | No routed-proposal subprocess fixture |
+| `proposal.published_to_routed` | reachable | `TestCLIProposalPublishedToRoutedKillCuts` | A real CLI `amend` is killed at its published record and routed receipt; recovery quarantines the route-absent record with its original bytes at the first cut and retains the route-bound record at the second |
 | `proposal.routed_to_decision_requested` | not reached by this gate's cuts | — | No source-discriminating routed-proposal subprocess fixture |
 
 ### Cancellation
@@ -187,7 +187,7 @@ stated Appendix E branch.
 | `prepare.quarantined_to_abandoned` | not reached by this gate's cuts | §6; §9; E.2 | `TestSubprocessKillHarness` already cuts cancellation after snapshot quarantine and before abandonment, but that `cancelled` instance has not yet been registered for this edge |
 | `proposal.published_to_blocked_route` | reachable | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035`; E.2 | `TestProposalPublicationKillCuts` kills the production run at the published record and its matching blocked descriptor. Recovery quarantines the unreferenced record with its original bytes at the first cut and retains the descriptor raw-hash-bound record at the second |
 | `proposal.blocked_route_to_routed` | reachable | §4 blocking handshake; C.1 `RC-RESUME-049`; E.2 | `TestBlockedProposalRouteKillCuts` kills the production run at `attempt.blocked` and the production resume at its routed receipt. The route must match the frozen descriptor while invalid current score input proves recovery did not re-run §9 |
-| `proposal.published_to_routed` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-035`; E.2 | No routed-proposal subprocess fixture |
+| `proposal.published_to_routed` | reachable | §1 routed-proposal records; C.1 `RC-RESUME-035`; E.2 | `TestCLIProposalPublishedToRoutedKillCuts` kills the production CLI `amend` at `proposal.record.published` and `amendment.routed_human`. Recovery quarantines the route-absent record with its original bytes at the first cut and retains the route-bound record at the second |
 | `proposal.routed_to_decision_requested` | not reached by this gate's cuts | §1 routed-proposal records; C.1 `RC-RESUME-037`; E.2 | No source-discriminating routed-proposal subprocess fixture |
 | `cancel.swept_to_terminal` | reachable | §6 (a), (e); E.2 | Real `cancel` subprocess matrix covers all eight `(b, c, d)` combinations at both endpoints |
 | `cancel.swept_to_quarantined` | reachable | §6 (a)-(b); E.2 | Real `cancel` subprocess matrix covers the four `(b)`-true combinations at both endpoints |
