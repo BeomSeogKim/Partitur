@@ -456,6 +456,11 @@ func findingReferencePresent(references []runstate.FindingReference, candidate r
 
 func runApprove(decisionID string, approved bool, overridden []runstate.FindingReference, reason string, stderr io.Writer) int {
 	if err := resolveApproval(decisionID, approved, overridden, reason); err != nil {
+		var rejected *amendmentexec.DecisionRejectedError
+		if errors.As(err, &rejected) {
+			fmt.Fprintf(stderr, "amendment rejected: proposal_id=%q reason=%q\n", rejected.ProposalID, rejected.Reason)
+			return 3
+		}
 		if errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
@@ -497,7 +502,7 @@ func resolveApproval(decisionID string, approved bool, overridden []runstate.Fin
 		err = store.ResolveHumanGate(runID, decisionID, approved, overridden, reason)
 	case "amendment":
 		if approved {
-			return runstore.ErrDecisionResolutionNotAllowed
+			return amendmentexec.New().ApproveRouted(context.Background(), store, runID, decisionID)
 		}
 		err = store.RejectRoutedAmendment(runID, decisionID, reason)
 	default:

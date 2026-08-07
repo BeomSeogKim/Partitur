@@ -79,8 +79,9 @@ func runPrepareCutVendor() {
 }
 
 // TestPreparePublicationCutChild is invoked as a subprocess by
-// TestPreparePublicationKillCuts. The receipt observer exits the entire
-// approver process after its durable publication and before its next step.
+// TestPreparePublicationKillCuts. It routes a real adapter proposal, then
+// invokes the human approve producer; the receipt observer exits the whole
+// approving process after its durable publication and before its next step.
 func TestPreparePublicationCutChild(t *testing.T) {
 	repository := os.Getenv(prepareCutRepositoryEnvironment)
 	address := faultpoint.ReceiptAddress(os.Getenv(prepareCutAddressEnvironment))
@@ -93,11 +94,42 @@ func TestPreparePublicationCutChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prepareRoutedHumanApproval(t, store, authority, started.RunID, hash)
 	if _, err := fmt.Fprintln(os.Stdout, started.RunID); err != nil {
 		t.Fatal(err)
 	}
-	_, err = testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
-	t.Fatalf("prepare returned after receipt %q: %v", address, err)
+	err = testDispositioner().ApproveRouted(context.Background(), store, started.RunID, "dec-1")
+	t.Fatalf("human approve returned after receipt %q: %v", address, err)
+}
+
+func prepareRoutedHumanApproval(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID, hash string) {
+	t.Helper()
+	disposition, err := testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, runID, hash, true, []any{
+		map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition.AppendRoute == nil {
+		t.Fatal("human approval crash fixture has no routed proposal")
+	}
+	if err := disposition.AppendRoute(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routed := journal.Events[len(journal.Events)-1]
+	payload, err := json.Marshal(map[string]any{
+		"decision_id": "dec-1", "decision_type": "amendment", "proposal_id": "prp-1", "routed_reason": "requires_decision", "blocking": true, "emitted_id": "emitted-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authority.Append(runstate.Event{RunID: runID, ScoreRevision: routed.ScoreRevision, MovementID: routed.MovementID, AttemptID: routed.AttemptID, Type: runstate.EventDecisionRequested, Payload: payload}, "fixture.human.decision.requested"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPreparePublicationKillCuts(t *testing.T) {
@@ -642,6 +674,240 @@ func TestDispositionerPreparesAutoApproval(t *testing.T) {
 	_, err = testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, false, []any{map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)}}))
 	if !errors.Is(err, ErrPreparePending) {
 		t.Fatalf("second auto prepare error = %v, want ErrPreparePending", err)
+	}
+}
+
+func TestApproveRoutedPreparesHumanApprovalFromImmutableRecord(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispositioner := testDispositioner()
+	disposition, err := dispositioner.PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, true, []any{
+		map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition.AppendRoute == nil {
+		t.Fatal("routed proposal has no route append")
+	}
+	if err := disposition.AppendRoute(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routed := journal.Events[len(journal.Events)-1]
+	requestPayload, err := json.Marshal(map[string]any{
+		"decision_id": "dec-1", "decision_type": "amendment", "proposal_id": "prp-1", "routed_reason": "requires_decision", "blocking": true, "emitted_id": "emitted-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authority.Append(runstate.Event{RunID: started.RunID, ScoreRevision: routed.ScoreRevision, MovementID: routed.MovementID, AttemptID: routed.AttemptID, Type: runstate.EventDecisionRequested, Payload: requestPayload}, "test.human.decision.requested"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	done := make(chan error, 1)
+	go func() { done <- dispositioner.ApproveRouted(ctx, store, started.RunID, "dec-1") }()
+	var prepare runstate.PendingPrepare
+	deadline := time.After(5 * time.Second)
+	for {
+		input, err := store.LoadRunInput(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if input.Projection.State.PendingPrepare != nil {
+			prepare = *input.Projection.State.PendingPrepare
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("approve returned before preparing: %v", err)
+		case <-deadline:
+			t.Fatal("approve did not append a human prepare")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	journal, err = store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := journal.Events[len(journal.Events)-1]
+	if prepared.Type != runstate.EventAmendmentApprovalPrepared {
+		t.Fatalf("prepared event = %s, want amendment.approval_prepared", prepared.Type)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(prepared.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["mode"] != "human" || payload["decision_id"] != "dec-1" {
+		t.Fatalf("human prepare payload = %#v", payload)
+	}
+	if _, present := payload["envelope_class"]; present {
+		t.Fatalf("human prepare carries envelope_class: %#v", payload)
+	}
+	planBytes, err := os.ReadFile(filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "prepares", string(prepare.ID)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := runstate.DecodeApprovalPlan(planBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != "human" || plan.DecisionID == nil || *plan.DecisionID != "dec-1" || plan.EnvelopeClass != nil || plan.EnvelopeEvaluation == nil {
+		t.Fatalf("human approval plan = %+v", plan)
+	}
+	if plan.EnvelopeEvaluation["guard_passed"] != true {
+		t.Fatalf("human approval plan envelope evaluation = %#v", plan.EnvelopeEvaluation)
+	}
+	if len(plan.ObsoletedDecisionIDs) != 0 {
+		t.Fatalf("human approval plan obsoletes its own decision: %+v", plan.ObsoletedDecisionIDs)
+	}
+	if err := store.AcknowledgePrepare(ctx, authority, prepare.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("approve after quiesce acknowledgement: %v", err)
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.PendingPrepare != nil || input.Projection.State.ScoreHead.Revision != 2 {
+		t.Fatalf("human approval state = %+v", input.Projection.State)
+	}
+	journal, err = store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := journal.Events[len(journal.Events)-1]
+	if approved.Type != runstate.EventAmendmentApproved {
+		t.Fatalf("terminal approval event = %s", approved.Type)
+	}
+	if err := json.Unmarshal(approved.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["mode"] != "human" || payload["decision_id"] != "dec-1" || payload["envelope_evaluation"] == nil {
+		t.Fatalf("human approval payload = %#v", payload)
+	}
+	if obsoleted, ok := payload["obsoleted_decision_ids"].([]any); !ok || len(obsoleted) != 0 {
+		t.Fatalf("human approval obsoleted decisions = %#v, want none", payload["obsoleted_decision_ids"])
+	}
+	if _, present := payload["envelope_class"]; present {
+		t.Fatalf("human approval carries envelope_class: %#v", payload)
+	}
+}
+
+func TestApproveRoutedRejectsTamperedImmutableRecord(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareRoutedHumanApproval(t, store, authority, started.RunID, hash)
+	path := filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(started.RunID), "proposals", "prp-1.json")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(contents, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := testDispositioner().ApproveRouted(ctx, store, started.RunID, "dec-1"); !errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
+		t.Fatalf("tampered record error = %v, want decision resolution refusal", err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAmendmentApprovalPrepared {
+			t.Fatalf("tampered record produced a prepare: %s", event.Payload)
+		}
+	}
+}
+
+func TestApproveRoutedRequiresLiveRoutedDecision(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disposition, err := testDispositioner().PrepareAdapterProposal(context.Background(), adapterProposal(store, authority, started.RunID, hash, true, []any{
+		map[string]any{"op": "replace", "path": "/policy/budget/active_wall_clock_min", "value": float64(9)},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition.AppendRoute == nil {
+		t.Fatal("routed proposal has no route append")
+	}
+	if err := disposition.AppendRoute(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := testDispositioner().ApproveRouted(ctx, store, started.RunID, "dec-1"); !errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
+		t.Fatalf("approval without pending routed decision = %v, want decision resolution refusal", err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAmendmentApprovalPrepared {
+			t.Fatalf("missing routed decision produced a prepare: %s", event.Payload)
+		}
+	}
+}
+
+func TestApproveRoutedAppendsDecisionTimeRejection(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareRoutedHumanApproval(t, store, authority, started.RunID, hash)
+	if err := store.RequestCancellation(started.RunID); err != nil {
+		t.Fatal(err)
+	}
+	err = testDispositioner().ApproveRouted(context.Background(), store, started.RunID, "dec-1")
+	var rejected *DecisionRejectedError
+	if !errors.As(err, &rejected) || rejected.Reason != "run_cancelling" {
+		t.Fatalf("decision-time result = %v, want run_cancelling rejection", err)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := journal.Events[len(journal.Events)-1]
+	if last.Type != runstate.EventAmendmentRejected {
+		t.Fatalf("decision-time terminal = %s, want amendment.rejected", last.Type)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(last.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["decision_id"] != "dec-1" || payload["reason"] != "run_cancelling" {
+		t.Fatalf("decision-time rejection payload = %#v", payload)
+	}
+}
+
+func TestEnvelopeEvaluationForPreservesDecisionTimeGuardReason(t *testing.T) {
+	evaluation := envelopeEvaluationFor(amendment.Outcome{Reason: "unclassified_change", GuardPass: false})
+	if evaluation["guard_passed"] != false || evaluation["guard_failure_reason"] != "unclassified_change" {
+		t.Fatalf("envelope evaluation=%#v", evaluation)
 	}
 }
 

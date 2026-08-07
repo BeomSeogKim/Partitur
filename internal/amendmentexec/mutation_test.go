@@ -23,12 +23,18 @@ func TestMutationDispositionerGuards(t *testing.T) {
 	for _, mutation := range []struct {
 		name, source, before, after, target string
 	}{
-		{"blocking rejection closes derived decision", "internal/amendmentexec/dispositioner.go", "if proposal.Event.RequiresDecision {", "if false { // mutation", "TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked"},
+		{"blocking rejection closes derived decision", "internal/amendmentexec/dispositioner.go", "if proposal.Event.RequiresDecision || proposal.humanDecision {", "if false { // mutation", "TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked"},
 		{"frozen descriptor retains evaluated reason", "internal/amendmentexec/dispositioner.go", `"reason": outcome.Reason, "decision_type": "amendment",`, `"reason": "auto_disabled", "decision_type": "amendment",`, "TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource"},
 		{"pending prepare guard refuses a second prepare", "internal/amendmentexec/dispositioner.go", "if state.PendingPrepare != nil {", "if false { // mutation", "TestDispositionerPreparesAutoApproval"},
 		{"routed marker follows blocked source", "internal/driver/driver.go", "for _, appendRoute := range appendRoutes {", "for _, appendRoute := range appendRoutes[:0] { // mutation", "TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource"},
 		{"recovery preserves the frozen descriptor", "internal/recoveryconsequence/consequence.go", `payload["emitted_id"] = immutable.EmittedID`, `payload["emitted_id"] = "invented"`, "TestRecoveryCompletesFrozenBlockingProposalRouteThenRequest"},
 		{"recovery request reads routed reason", "internal/recoveryconsequence/consequence.go", `"routed_reason": routed["reason"],`, `"routed_reason": "invented",`, "TestRecoveryCompletesFrozenBlockingProposalRouteThenRequest"},
+		{"human decision re-run bypasses routing but retains audit", "internal/amendmentexec/dispositioner.go", "RequiresDecision: proposal.Event.RequiresDecision, HumanDecision: proposal.humanDecision,", "RequiresDecision: proposal.Event.RequiresDecision, HumanDecision: false,", "TestApproveRoutedPreparesHumanApprovalFromImmutableRecord"},
+		{"human approval rechecks the immutable proposal bytes", "internal/amendmentexec/dispositioner.go", "if !ok || rawHash(contents) != recordHash {", "if !ok && rawHash(contents) != recordHash { // mutation", "TestApproveRoutedRejectsTamperedImmutableRecord"},
+		{"human approval validates routed decision under the projected-state lock", "internal/amendmentexec/dispositioner.go", "if err := verifyRoutedProposal(proposal.Store, proposal.RunID, proposal.DecisionID, proposal.ProposalID, proposal.immutableRecord, state); err != nil {", "if err := error(nil); err != nil { // mutation", "TestApproveRoutedRequiresLiveRoutedDecision"},
+		{"human approval resolves rather than obsoletes its own decision", "internal/amendmentexec/dispositioner.go", "if decisionID != nil {\n\t\tobsoleted = withoutDecision(obsoleted, *decisionID)", "if false { // mutation\n\t\tobsoleted = withoutDecision(obsoleted, *decisionID)", "TestApproveRoutedPreparesHumanApprovalFromImmutableRecord"},
+		{"projector excludes the directly resolved human decision", "internal/runstate/apply.go", "obsoleted = pendingDecisionIDsExcept(state, *state.PendingPrepare.DecisionID)", "obsoleted = pendingDecisionIDs(state) // mutation", "TestApproveRoutedPreparesHumanApprovalFromImmutableRecord"},
+		{"human audit preserves the evaluated guard reason", "internal/amendmentexec/dispositioner.go", `evaluation["guard_failure_reason"] = outcome.Reason`, `evaluation["guard_failure_reason"] = "runtime_scope_started"`, "TestEnvelopeEvaluationForPreservesDecisionTimeGuardReason"},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			assertMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, mutation.target)

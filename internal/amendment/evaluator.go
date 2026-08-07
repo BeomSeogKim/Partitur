@@ -125,7 +125,14 @@ func Evaluate(input Input) (Outcome, error) {
 	}
 	if input.HumanDecision {
 		class := classify(impact)
-		return Outcome{Kind: Approved, Class: class, GuardPass: class != "" && guardPasses(class, input.Base, patched, input.State, impact), Patched: patched, Impact: impact}, nil
+		if class == "" {
+			return Outcome{Kind: Approved, Reason: "unclassified_change", GuardPass: false, Patched: patched, Impact: impact}, nil
+		}
+		guard := guardPasses(class, input.Base, patched, input.State, impact)
+		if !guard {
+			return Outcome{Kind: Approved, Reason: "runtime_scope_started", Class: class, GuardPass: false, Patched: patched, Impact: impact}, nil
+		}
+		return Outcome{Kind: Approved, Class: class, GuardPass: true, Patched: patched, Impact: impact}, nil
 	}
 
 	// Status is intentionally checked on the authenticated base, not the patched

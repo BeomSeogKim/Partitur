@@ -1327,6 +1327,8 @@ func TestCandidateIncompatibleConditionsAreClosed(t *testing.T) {
 
 func TestHumanApprovalBindsPreparedDecision(t *testing.T) {
 	state := runningAttemptState(t)
+	state.PendingDecisions["decision-1"] = PendingDecision{ID: "decision-1", Type: "amendment", ProposalID: "proposal-1"}
+	state.RoutedAmendments["proposal-1"] = RoutedAmendment{ProposalID: "proposal-1", DecisionID: "decision-1", DecisionType: "amendment"}
 	prepare := autoPreparePayload()
 	prepare["mode"] = "human"
 	delete(prepare, "envelope_class")
@@ -1339,8 +1341,13 @@ func TestHumanApprovalBindsPreparedDecision(t *testing.T) {
 	approval := fixtureEvent(EventAmendmentApproved, approvalPayload("human"), func(event *Event) {
 		event.ScoreRevision = 2
 	})
-	if _, err := Apply(state, approval); err != nil {
+	prepared := state
+	state, err = Apply(state, approval)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, routed := state.RoutedAmendments["proposal-1"]; routed {
+		t.Fatal("human approval left its routed amendment eligible for request recovery")
 	}
 	approval.Payload = mustPayload(t, approvalPayload("human"))
 	var payload map[string]any
@@ -1349,7 +1356,7 @@ func TestHumanApprovalBindsPreparedDecision(t *testing.T) {
 	}
 	payload["decision_id"] = "decision-other"
 	approval.Payload = mustPayload(t, payload)
-	if _, err := Apply(state, approval); !errors.Is(err, ErrInvalidEvent) {
+	if _, err := Apply(prepared, approval); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("Apply() error = %v, want ErrInvalidEvent", err)
 	}
 }
