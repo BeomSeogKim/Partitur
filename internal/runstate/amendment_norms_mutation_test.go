@@ -135,6 +135,74 @@ func TestMutationRoutedProposalE2RowsStayPinned(t *testing.T) {
 	}
 }
 
+func TestMutationApprovalDecisionTypeSyntaxKeepsRejectTypeRestriction(t *testing.T) {
+	assertApprovalDecisionTypeSyntaxMutationKilled(t,
+		"# amendment | finalization; B.5 `human_reason`",
+		"# B.5 `human_reason`",
+		"approval reject grammar no longer restricts the required-reason form to amendment and finalization")
+}
+
+func TestMutationApprovalDecisionTypeSyntaxKeepsAmendmentReasonRequired(t *testing.T) {
+	assertApprovalDecisionTypeSyntaxMutationKilled(t,
+		"| --reject --reason <text>   # amendment | finalization; B.5 `human_reason`",
+		"| --reject [--reason <text>] # amendment | finalization; B.5 `human_reason`",
+		"approval reject grammar no longer requires a reason for amendment and finalization")
+}
+
+func TestMutationApprovalDecisionTypeSyntaxKeepsB5ReasonMapping(t *testing.T) {
+	assertApprovalDecisionTypeSyntaxMutationKilled(t,
+		"; B.5 `human_reason`",
+		"",
+		"approval reject grammar no longer maps amendment and finalization reasons to B.5 human_reason")
+}
+
+func assertApprovalDecisionTypeSyntaxMutationKilled(t *testing.T, anchor, replacement, escaped string) {
+	t.Helper()
+
+	goEnvironment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyRoot := copyRunstateMutationRepository(t)
+	designPath := filepath.Join(copyRoot, "docs", "DESIGN.md")
+	contents, err := os.ReadFile(designPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(contents), anchor); count != 1 {
+		t.Fatalf("mutation anchor count = %d, want 1", count)
+	}
+	mutated := strings.Replace(string(contents), anchor, replacement, 1)
+	if err := os.WriteFile(designPath, []byte(mutated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := os.ReadFile(designPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(applied) != mutated {
+		t.Fatal("mutation did not persist its intended document change")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         filepath.Join(copyRoot, "internal", "runstate"),
+		Package:     ".",
+		TestPattern: "TestApprovalDecisionTypeSyntaxIsSpecified",
+		TestNames:   []string{"TestApprovalDecisionTypeSyntaxIsSpecified"},
+		Environment: goEnvironment.ChildEnvironment(os.Environ()),
+	})
+	cancel()
+	switch result.Outcome {
+	case mutationtest.Killed:
+		return
+	case mutationtest.Survived:
+		t.Fatalf("mutation survived: %s\n%s", escaped, result.Diagnostic())
+	default:
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
+	}
+}
+
 func TestMutationQuiesceReceiptRequiresContiguousRounds(t *testing.T) {
 	goEnvironment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
