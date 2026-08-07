@@ -364,8 +364,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 
 func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map[receiptKillKey]bool) {
 	t.Helper()
-	if len(records) != 22 {
-		t.Fatalf("receipt registry records=%d, want twenty-two", len(records))
+	if len(records) != 23 {
+		t.Fatalf("receipt registry records=%d, want twenty-three", len(records))
 	}
 	counts := make(map[faultpoint.EdgeID]int)
 	for key, passed := range records {
@@ -380,8 +380,8 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		}
 		counts[key.edge]++
 	}
-	if len(counts) != 13 {
-		t.Fatalf("receipt registry edges=%d, want thirteen", len(counts))
+	if len(counts) != 14 {
+		t.Fatalf("receipt registry edges=%d, want fourteen", len(counts))
 	}
 	for edge, want := range map[faultpoint.EdgeID]int{
 		faultpoint.EdgePrepareSnapshotToPlan:              2,
@@ -389,6 +389,7 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		faultpoint.EdgeQuiesceObservedToSwept:             1,
 		faultpoint.EdgePreparePreparedToObserved:          2,
 		faultpoint.EdgeQuiesceSweptToLeaseMoved:           1,
+		faultpoint.EdgeQuiesceLeaseMovedToCommitLock:      1,
 		faultpoint.EdgePrepareQuarantinedToAbandoned:      2,
 		faultpoint.EdgeProposalPublishedToBlockedRoute:    2,
 		faultpoint.EdgeProposalBlockedRouteToRouted:       2,
@@ -489,6 +490,7 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 		{faultpoint.EdgePreparePreparedToObserved, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/observed"},
 		{faultpoint.EdgeQuiesceObservedToSwept, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/observed"},
 		{faultpoint.EdgeQuiesceSweptToLeaseMoved, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/lease_moved"},
+		{faultpoint.EdgeQuiesceLeaseMovedToCommitLock, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.lease_moved_to_commit_lock/lease_moved/cancellation_wins"},
 		{faultpoint.EdgePrepareQuarantinedToAbandoned, "cancellation.prepare.snapshot", cancelledPrepareFixture + "prepare.quarantined_to_abandoned/quarantined"},
 		{faultpoint.EdgePrepareQuarantinedToAbandoned, "cancellation.amendment.approval_abandoned", cancelledPrepareFixture + "prepare.quarantined_to_abandoned/abandoned"},
 		{faultpoint.EdgeProposalPublishedToBlockedRoute, "proposal.record.published", "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/published"},
@@ -510,8 +512,9 @@ func prepareQuiesceProbeKillHarnessRecords(t *testing.T) map[faultpoint.EdgeID]b
 	t.Helper()
 	passed := prepareQuiesceKillHarnessPassed(t)
 	return map[faultpoint.EdgeID]bool{
-		faultpoint.EdgeQuiesceObservedToSwept:   passed["TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/swept"],
-		faultpoint.EdgeQuiesceSweptToLeaseMoved: passed["TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/swept"],
+		faultpoint.EdgeQuiesceObservedToSwept:        passed["TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/swept"],
+		faultpoint.EdgeQuiesceSweptToLeaseMoved:      passed["TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/swept"],
+		faultpoint.EdgeQuiesceLeaseMovedToCommitLock: passed["TestPrepareQuiesceDriverKillCuts/quiesce.lease_moved_to_commit_lock/commit_lock/hash_mismatch_halts"],
 	}
 }
 
