@@ -1,0 +1,50 @@
+score: "0.2"
+name: reference-workflow
+revision: 1
+status: finalized
+
+goal: |
+  Exercise one real, recovery-capable Partitur write attempt against this repository.
+
+context: |
+  This is the COMPLETION.md section 5 reference-workflow reading. The performer must
+  change only reference-workflow/marker.txt; its base content is deliberately different
+  from the required result so that the captured change set is not a no-op.
+
+verification:
+  expectation:
+    intent: none
+    apply_gate:
+      waived: true
+      reason: "Unit 4.4 apply is unavailable; this score records only the five currently reachable reference-workflow properties."
+
+parts:
+  writer:
+    capabilities: [repo_read, repo_write, shell]
+
+movements:
+  - id: write-marker
+    part: writer
+    grants: [repo_read, repo_write, shell]
+    instruction: |
+      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
+      partitur reference workflow
+
+      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+    outputs:
+      - id: marker-change
+        kind: change_set
+    acceptance:
+      hard:
+        - id: marker-is-reference-workflow
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+      human_gate: always
+
+policy:
+  allowed_paths: ["reference-workflow/marker.txt"]
+  side_effects: []
+  budget:
+    active_wall_clock_min: 15
+    retries_per_movement: 0
+  amendment:
+    auto: "off"
