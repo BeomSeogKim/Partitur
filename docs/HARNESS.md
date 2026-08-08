@@ -43,6 +43,23 @@ Exactly Appendix E's: the **control channel** (prepare, quiesce, cancellation, s
 **evidence and lifecycle consequence** chains selected by Appendix C, plus **change-set capture and
 composition**.
 
+### Init precondition specification lock
+
+This is a specification-only catalog, not an Appendix E crash edge. It names the complete
+`partitur init` precondition matrix that implementation item 6 must exercise at the filesystem and
+exit surface; until then, it has no harness fixture.
+
+| Catalog ID | Selection | Driven by |
+|---|---|---|
+| `INIT-001` | `.partitur/` absent; ignore absent; score absent | specification lock |
+| `INIT-002` | `.partitur/` absent; ignore absent; score exists | specification lock |
+| `INIT-003` | `.partitur/` exists; ignore absent; score absent | specification lock |
+| `INIT-004` | `.partitur/` exists; ignore absent; score exists | specification lock |
+| `INIT-005` | `.partitur/` exists; ignore has correct bytes; score absent | specification lock |
+| `INIT-006` | `.partitur/` exists; ignore has correct bytes; score exists | specification lock |
+| `INIT-007` | `.partitur/` exists; ignore has different bytes; score absent | specification lock |
+| `INIT-008` | `.partitur/` exists; ignore has different bytes; score exists | specification lock |
+
 ## Selection manifest
 
 This gate reaches thirty-seven E.2 edges. Each receives a crash injected **on either side of each
