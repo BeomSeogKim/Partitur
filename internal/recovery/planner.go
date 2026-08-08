@@ -37,6 +37,7 @@ const (
 	CaseIncompleteAttempt      CaseID = "RC-RESUME-015"
 	CaseCaptureChangeSet       CaseID = "RC-RESUME-016"
 	CasePostHocVerification    CaseID = "RC-RESUME-017"
+	CaseDraftNoBlockingOutput  CaseID = "RC-RESUME-050"
 	CaseStartAcceptance        CaseID = "RC-RESUME-018"
 	CaseMovementSucceeded      CaseID = "RC-RESUME-019"
 	CaseRunFailed              CaseID = "RC-RESUME-020"
@@ -395,52 +396,53 @@ type Input struct {
 type ActionKind string
 
 const (
-	ActionCloseOpenExecutionInterval ActionKind = "close_open_execution_interval"
-	ActionTerminalCleanup            ActionKind = "terminal_cleanup"
-	ActionRemoveStaleLease           ActionKind = "remove_stale_lease"
-	ActionQuarantineOrphanLease      ActionKind = "quarantine_orphan_lease"
-	ActionRefuseResume               ActionKind = "refuse_resume"
-	ActionExecuteCancellation        ActionKind = "execute_cancellation_oracle"
-	ActionCompleteOrAbandonPrepare   ActionKind = "complete_or_abandon_prepare"
-	ActionReclaimAuthority           ActionKind = "reclaim_authority"
-	ActionAppendBlockedProposalRoute ActionKind = "append_blocked_proposal_route"
-	ActionAppendRoutedRequest        ActionKind = "append_routed_request"
-	ActionSelectRevisionRestart      ActionKind = "select_revision_restart"
-	ActionAppendCompositionTerminal  ActionKind = "append_composition_terminal"
-	ActionProceedAttempt             ActionKind = "proceed_c2"
-	ActionProceedScheduler           ActionKind = "proceed_c4"
-	ActionRealizeRecordedDisposition ActionKind = "realize_recorded_disposition"
-	ActionAppendQuestionRequest      ActionKind = "append_question_request"
-	ActionSelectDecisionResume       ActionKind = "select_decision_resume"
-	ActionReturnWaitingHuman         ActionKind = "return_waiting_human"
-	ActionRecoverUnstartedAttempt    ActionKind = "recover_unstarted_attempt"
-	ActionRecoverUnprobedAttempt     ActionKind = "recover_unprobed_attempt"
-	ActionRecoverIncompleteAttempt   ActionKind = "recover_incomplete_attempt"
-	ActionCaptureChangeSet           ActionKind = "capture_change_set"
-	ActionFailWorktreeLost           ActionKind = "fail_worktree_lost"
-	ActionRerunPostHocVerification   ActionKind = "rerun_post_hoc_verification"
-	ActionAppendAcceptanceStarted    ActionKind = "append_acceptance_started"
-	ActionAppendMovementSucceeded    ActionKind = "append_movement_succeeded"
-	ActionAppendRunFailed            ActionKind = "append_run_failed"
-	ActionAppendFinalGateFailure     ActionKind = "append_final_gate_failure"
-	ActionProceedAcceptance          ActionKind = "proceed_c3"
-	ActionAppendAcceptanceFailure    ActionKind = "append_acceptance_failure"
-	ActionRecoverIncompleteCriterion ActionKind = "recover_incomplete_criterion"
-	ActionVerifyAcceptanceSubject    ActionKind = "verify_acceptance_subject"
-	ActionAppendEvaluationCompleted  ActionKind = "append_acceptance_evaluation_completed"
-	ActionAppendHumanGateRequest     ActionKind = "append_human_gate_request"
-	ActionAppendAcceptanceSuccess    ActionKind = "append_acceptance_success"
-	ActionAppendGateRejectedFailure  ActionKind = "append_gate_rejected_failure"
-	ActionStabilizeUnjournaledLaunch ActionKind = "stabilize_unjournaled_criterion_launch"
-	ActionRemoveUnjournaledLaunch    ActionKind = "remove_unjournaled_criterion_launch"
-	ActionResumeCriterion            ActionKind = "resume_criterion"
-	ActionAppendMovementReady        ActionKind = "append_movement_ready"
-	ActionAppendMovementStarted      ActionKind = "append_movement_started"
-	ActionSelectInitialPerformer     ActionKind = "select_initial_performer"
-	ActionMaterializeSuccessor       ActionKind = "materialize_selected_successor"
-	ActionRerunComposition           ActionKind = "rerun_deterministic_composition"
-	ActionComposeCandidate           ActionKind = "compose_application_candidate"
-	ActionAppendBudgetFailure        ActionKind = "append_budget_exhaustion"
+	ActionCloseOpenExecutionInterval   ActionKind = "close_open_execution_interval"
+	ActionTerminalCleanup              ActionKind = "terminal_cleanup"
+	ActionRemoveStaleLease             ActionKind = "remove_stale_lease"
+	ActionQuarantineOrphanLease        ActionKind = "quarantine_orphan_lease"
+	ActionRefuseResume                 ActionKind = "refuse_resume"
+	ActionExecuteCancellation          ActionKind = "execute_cancellation_oracle"
+	ActionCompleteOrAbandonPrepare     ActionKind = "complete_or_abandon_prepare"
+	ActionReclaimAuthority             ActionKind = "reclaim_authority"
+	ActionAppendBlockedProposalRoute   ActionKind = "append_blocked_proposal_route"
+	ActionAppendRoutedRequest          ActionKind = "append_routed_request"
+	ActionSelectRevisionRestart        ActionKind = "select_revision_restart"
+	ActionAppendCompositionTerminal    ActionKind = "append_composition_terminal"
+	ActionProceedAttempt               ActionKind = "proceed_c2"
+	ActionProceedScheduler             ActionKind = "proceed_c4"
+	ActionRealizeRecordedDisposition   ActionKind = "realize_recorded_disposition"
+	ActionAppendQuestionRequest        ActionKind = "append_question_request"
+	ActionSelectDecisionResume         ActionKind = "select_decision_resume"
+	ActionReturnWaitingHuman           ActionKind = "return_waiting_human"
+	ActionRecoverUnstartedAttempt      ActionKind = "recover_unstarted_attempt"
+	ActionRecoverUnprobedAttempt       ActionKind = "recover_unprobed_attempt"
+	ActionRecoverIncompleteAttempt     ActionKind = "recover_incomplete_attempt"
+	ActionCaptureChangeSet             ActionKind = "capture_change_set"
+	ActionFailWorktreeLost             ActionKind = "fail_worktree_lost"
+	ActionRerunPostHocVerification     ActionKind = "rerun_post_hoc_verification"
+	ActionAppendDraftNoBlockingFailure ActionKind = "append_draft_no_blocking_failure"
+	ActionAppendAcceptanceStarted      ActionKind = "append_acceptance_started"
+	ActionAppendMovementSucceeded      ActionKind = "append_movement_succeeded"
+	ActionAppendRunFailed              ActionKind = "append_run_failed"
+	ActionAppendFinalGateFailure       ActionKind = "append_final_gate_failure"
+	ActionProceedAcceptance            ActionKind = "proceed_c3"
+	ActionAppendAcceptanceFailure      ActionKind = "append_acceptance_failure"
+	ActionRecoverIncompleteCriterion   ActionKind = "recover_incomplete_criterion"
+	ActionVerifyAcceptanceSubject      ActionKind = "verify_acceptance_subject"
+	ActionAppendEvaluationCompleted    ActionKind = "append_acceptance_evaluation_completed"
+	ActionAppendHumanGateRequest       ActionKind = "append_human_gate_request"
+	ActionAppendAcceptanceSuccess      ActionKind = "append_acceptance_success"
+	ActionAppendGateRejectedFailure    ActionKind = "append_gate_rejected_failure"
+	ActionStabilizeUnjournaledLaunch   ActionKind = "stabilize_unjournaled_criterion_launch"
+	ActionRemoveUnjournaledLaunch      ActionKind = "remove_unjournaled_criterion_launch"
+	ActionResumeCriterion              ActionKind = "resume_criterion"
+	ActionAppendMovementReady          ActionKind = "append_movement_ready"
+	ActionAppendMovementStarted        ActionKind = "append_movement_started"
+	ActionSelectInitialPerformer       ActionKind = "select_initial_performer"
+	ActionMaterializeSuccessor         ActionKind = "materialize_selected_successor"
+	ActionRerunComposition             ActionKind = "rerun_deterministic_composition"
+	ActionComposeCandidate             ActionKind = "compose_application_candidate"
+	ActionAppendBudgetFailure          ActionKind = "append_budget_exhaustion"
 )
 
 // Continuation names the next Appendix C table after one action value has
@@ -631,6 +633,19 @@ func PlanAttempt(input Input) Decision {
 		decision := action(CaseContinue, ActionProceedScheduler, false)
 		decision.Action.Continuation = ContinuationC4
 		return decision
+	}
+	if attempt.State == runstate.AttemptVerifying &&
+		input.Projection.Scheduler.Status == "draft" &&
+		attempt.MovementID == input.Projection.Scheduler.DraftInterviewMovement &&
+		!attempt.AcceptanceStarted {
+		return recoveryFailureAction(
+			CaseDraftNoBlockingOutput,
+			ActionAppendDraftNoBlockingFailure,
+			attempt.AttemptID,
+			"task_failed",
+			"draft_no_blocking_output",
+			nil,
+		)
 	}
 	if attempt.State == runstate.AttemptFailed && !attempt.FailureDispositionRealized {
 		return realizeRecordedDisposition(CaseRealizeDisposition, attempt, input.Projection.Scheduler)

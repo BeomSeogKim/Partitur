@@ -1036,6 +1036,7 @@ func ExecuteAttempt(
 		IntervalID:     runstate.IntervalID(adapterInterval),
 		IntervalOpened: adapterOpened,
 		MayPropose:     movement.MayPropose,
+		Draft:          execution.Score.Status() == "draft" && movement.ID == execution.Score.DraftInterviewMovement(),
 		Cancel:         control.Interrupt(),
 		Probe:          dependencies.probe,
 		RecordIdentity: recordIdentity,
@@ -1091,6 +1092,23 @@ func ExecuteAttempt(
 	}
 	if report.Result == nil || report.Result.Outcome != protocol.OutcomeCompleted {
 		return interrupted(result, errors.New("adapter did not complete"))
+	}
+	if execution.Score.Status() == "draft" && movement.ID == execution.Score.DraftInterviewMovement() && len(report.Raised) == 0 {
+		disposition, err := classifyFailure(successor.FailureCase{AttemptKind: successor.KindTaskFailed})
+		if err != nil {
+			return stopped(result, err)
+		}
+		if _, err := appendEvent(runstate.EventAttemptFailed, map[string]any{
+			"kind":        successor.KindTaskFailed,
+			"reason":      "draft_no_blocking_output",
+			"disposition": dispositionPayload(disposition),
+		}, "attempt.failed"); err != nil {
+			return stopped(result, err)
+		}
+		if terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, authority, control, dependencies); handled {
+			return terminal
+		}
+		return interrupted(result, errors.New("driver: draft result disposition was not realized"))
 	}
 
 	verificationFailed, err := completeAttemptVerification(

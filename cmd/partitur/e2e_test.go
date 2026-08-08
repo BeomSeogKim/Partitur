@@ -33,6 +33,7 @@ const runVendorMarkerEnvironment = "PARTITUR_RUN_VENDOR_MARKER"
 const runVendorContestedEnvironment = "PARTITUR_RUN_VENDOR_CONTESTED"
 const runVendorFindingIDEnvironment = "PARTITUR_RUN_VENDOR_FINDING_ID"
 const runVendorProposalBaseHashEnvironment = "PARTITUR_RUN_VENDOR_PROPOSAL_BASE_HASH"
+const runVendorDraftResultEnvironment = "PARTITUR_RUN_VENDOR_DRAFT_RESULT"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runVendorEnvironment) == "1" {
@@ -1836,6 +1837,19 @@ func runVendorFixture() {
 		os.Exit(93)
 	}
 	artifacts := []any{map[string]any{"artifact_id": "report", "path": "report.txt"}}
+	questions := []any{}
+	draftResult := os.Getenv(runVendorDraftResultEnvironment)
+	if draftResult != "" {
+		artifacts = []any{}
+		switch draftResult {
+		case "empty":
+		case "question":
+			questions = []any{map[string]any{"id": "fixture-question", "question": "Which direction should the draft take?"}}
+		case "proposal":
+		default:
+			os.Exit(97)
+		}
+	}
 	if os.Getenv(runVendorContestedEnvironment) == "1" {
 		tree, err := exec.Command("git", "rev-parse", "HEAD^{tree}").Output()
 		if err != nil {
@@ -1866,10 +1880,13 @@ func runVendorFixture() {
 			"requires_decision": true,
 		}
 	}
+	if draftResult == "proposal" && proposal == nil {
+		os.Exit(97)
+	}
 	result := map[string]any{
 		"version":   float64(1),
 		"artifacts": artifacts,
-		"questions": []any{},
+		"questions": questions,
 		"proposal":  proposal,
 		"summary":   "completed",
 	}

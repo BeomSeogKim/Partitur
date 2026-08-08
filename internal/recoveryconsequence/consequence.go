@@ -699,7 +699,7 @@ func sourceAuthority(execution HandlerContext, state runstate.State, action reco
 			source = runstate.EventAttemptStarted
 		case "attempt_terminated_incomplete":
 			source = runstate.EventAdapterProbed
-		case "worktree_lost":
+		case "worktree_lost", "draft_no_blocking_output":
 			source = runstate.EventPerformerCompleted
 		}
 		return LatestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == source && match(event) })
