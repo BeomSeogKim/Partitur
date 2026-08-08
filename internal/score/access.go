@@ -102,6 +102,8 @@ func (s *Score) Execution() ExecutionView {
 		if expectation.ApplyGate.Reason != nil {
 			result.WaiverReason = *expectation.ApplyGate.Reason
 		}
+		result.ApplyGateRequire = slices.Clone(expectation.ApplyGate.Require)
+		result.ApplyGatePredicates = slices.Clone(expectation.ApplyGate.Predicates)
 	}
 	return result
 }

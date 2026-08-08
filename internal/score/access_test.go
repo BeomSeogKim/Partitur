@@ -29,7 +29,7 @@ func TestExecutionReadSurface(t *testing.T) {
 		VerificationExpectationPresent: true,
 		FinalMovementID:                "verify",
 		GateWaived:                     false,
-	}); got != want {
+	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Execution() = %#v, want %#v", got, want)
 	}
 
@@ -124,7 +124,7 @@ func TestExecutionReadSurfacePreservesOmissions(t *testing.T) {
 	if got := nilScore.Revision(); got != 0 {
 		t.Fatalf("nil score revision = %d", got)
 	}
-	if got := nilScore.Execution(); got != (ExecutionView{}) {
+	if got := nilScore.Execution(); !reflect.DeepEqual(got, ExecutionView{}) {
 		t.Fatalf("nil score execution = %#v", got)
 	}
 }

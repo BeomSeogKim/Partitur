@@ -61,6 +61,10 @@ func IdempotencyKey(event Event) (string, error) {
 		return mustString(payload, "scope") + "\x00" + mustString(payload, "target_id") + "\x00" + mustString(payload, "composition_subject_hash"), nil
 	case EventApplicationCandidateRecorded:
 		return mustString(payload, "candidate_id"), nil
+	case EventApplyStarted:
+		return mustString(payload, "candidate_id") + "\x00" + mustString(payload, "txn_id"), nil
+	case EventApplyCompleted, EventApplyFailed, EventApplyRecoveryRequired, EventApplyRecoveryResolved:
+		return mustString(payload, "txn_id"), nil
 	case EventCriterionStarted, EventCriterionCompleted:
 		return string(event.AttemptID) + "\x00" + mustString(payload, "criterion_id"), nil
 	case EventExecutionStarted, EventExecutionStopped:

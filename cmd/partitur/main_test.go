@@ -44,6 +44,158 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestApplyMaterializesCandidateWithoutChangingHeadOrIndex(t *testing.T) {
+	root, store := resumeFixture(t, "")
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseTree := input.BaseTree
+	baseCommit := input.BaseCommit
+	if err := os.WriteFile(filepath.Join(root, "applied.txt"), []byte("candidate result\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "applied.txt")
+	runGit(t, root, "commit", "--quiet", "-m", "candidate")
+	gitOutput := func(arguments ...string) string {
+		t.Helper()
+		command := exec.Command("git", arguments...)
+		command.Dir = root
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", arguments, err)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	format := gitOutput("rev-parse", "--show-object-format")
+	resultTree := "git-" + format + ":" + gitOutput("rev-parse", "HEAD^{tree}")
+	_, baseObject, ok := strings.Cut(baseCommit, ":")
+	if !ok {
+		t.Fatalf("base commit %q is not qualified", baseCommit)
+	}
+	runGit(t, root, "reset", "--hard", "--quiet", baseObject)
+	if err := os.Remove(filepath.Join(root, "applied.txt")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	compositionHash, err := workspace.CandidateCompositionHash(baseTree, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateID, err := canonical.Hash(canonical.DomainCandidate, map[string]any{
+		"base_tree": baseTree, "result_tree": resultTree, "ordered_change_sets": []any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		_, err := tx.At("fixture.succeeded").Append(resumeEvent("run-1", runstate.EventRunSucceeded, map[string]any{
+			"candidate": map[string]any{
+				"candidate_id": candidateID, "base_tree": baseTree, "result_tree": resultTree,
+				"ordered_change_sets": []any{}, "contributors": []any{},
+				"candidate_composition_dependency_hash": compositionHash,
+			},
+			"waiver":            map[string]any{"reason": "fixture"},
+			"identity_versions": resumeIdentityVersions(),
+		}))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := gitOutput("rev-parse", "--git-path", "index")
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(root, indexPath)
+	}
+	indexBefore, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headBefore, err := os.ReadFile(filepath.Join(root, ".git", "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply", "run-1"}, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("apply exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if contents, err := os.ReadFile(filepath.Join(root, "applied.txt")); err != nil || string(contents) != "candidate result\n" {
+		t.Fatalf("applied checkout contents=%q err=%v", contents, err)
+	}
+	indexAfter, err := os.ReadFile(indexPath)
+	if err != nil || !bytes.Equal(indexBefore, indexAfter) {
+		t.Fatalf("user index changed: before=%x after=%x err=%v", indexBefore, indexAfter, err)
+	}
+	headAfter, err := os.ReadFile(filepath.Join(root, ".git", "HEAD"))
+	if err != nil || !bytes.Equal(headBefore, headAfter) {
+		t.Fatalf("HEAD changed: before=%q after=%q err=%v", headBefore, headAfter, err)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(root, ".git", "partitur-apply-index-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary indexes=%v err=%v", leftovers, err)
+	}
+	journalPath := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	journalBeforeRetry, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) < 2 || journal.Events[len(journal.Events)-2].Type != runstate.EventApplyStarted || journal.Events[len(journal.Events)-1].Type != runstate.EventApplyCompleted {
+		t.Fatalf("application journal tail=%v", journal.Events[len(journal.Events)-2:])
+	}
+	if code := run([]string{"apply", "run-1"}, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("idempotent apply exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	journalAfterRetry, err := os.ReadFile(journalPath)
+	if err != nil || !bytes.Equal(journalBeforeRetry, journalAfterRetry) {
+		t.Fatalf("idempotent apply changed journal: before=%q after=%q err=%v", journalBeforeRetry, journalAfterRetry, err)
+	}
+}
+
+func TestApplyRecoverRecordsRequiredThenResolvesBaseTree(t *testing.T) {
+	root, store := resumeFixture(t, "SUCCEEDED")
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := input.Projection.State.ApplicationCandidate
+	if candidate == nil {
+		t.Fatal("fixture candidate is missing")
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		_, err := tx.At("fixture.apply.started").Append(resumeEvent("run-1", runstate.EventApplyStarted, map[string]any{
+			"txn_id": "apply-fixture", "candidate_id": candidate.ID, "before_tree": candidate.BaseTree, "result_tree": candidate.ResultTree,
+			"touched_paths": []any{}, "recovery": map[string]any{"base_tree": candidate.BaseTree, "result_tree": candidate.ResultTree},
+			"identity_versions": resumeIdentityVersions(),
+		}))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply", "run-1"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "normal apply is refused") {
+		t.Fatalf("normal form exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"apply", "run-1", "--recover"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("recover exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) < 3 || journal.Events[len(journal.Events)-2].Type != runstate.EventApplyRecoveryRequired || journal.Events[len(journal.Events)-1].Type != runstate.EventApplyRecoveryResolved {
+		t.Fatalf("recovery journal tail=%v", journal.Events[len(journal.Events)-3:])
+	}
+}
+
 func TestProductionExecutionDependenciesWireAmendmentDispositioner(t *testing.T) {
 	execution := productionExecutionDependencies(faultpoint.Nop{})
 	if _, ok := execution.ProposalDisposition.(amendmentexec.ProposalDispositioner); !ok {
@@ -158,7 +310,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, cancel, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, cancel, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -317,7 +469,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, cancel, status, logs\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, cancel, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,

@@ -266,6 +266,9 @@ func runWithReaders(
 	if requestedID, patchPath, reason, claimedImpactPath, ok := parseAmendArgs(args); ok {
 		return runAmend(requestedID, patchPath, reason, claimedImpactPath, stdout, stderr)
 	}
+	if requestedID, recoverOnly, ok := parseApplyArgs(args); ok {
+		return runApply(requestedID, recoverOnly, stderr)
+	}
 	if len(args) == 1 && args[0] == "run" {
 		preparation, preparationResult := prepare()
 		if preparationResult.Refusal != nil {
@@ -323,7 +326,7 @@ func runWithReaders(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, init, validate, run, resume, answer, approve, amend, cancel, status, logs")
+	fmt.Fprintln(w, "commands: version, init, validate, run, resume, answer, approve, amend, apply, cancel, status, logs")
 }
 
 func initializeRepository() error {
@@ -415,6 +418,56 @@ func parseAmendArgs(args []string) (runID, patchPath, reason, claimedImpactPath 
 		return runID, patchPath, reason, args[index+1], true
 	}
 	return "", "", "", "", false
+}
+
+func parseApplyArgs(args []string) (runID string, recoverOnly bool, ok bool) {
+	if (len(args) != 2 && len(args) != 3) || len(args) == 0 || args[0] != "apply" || args[1] == "" || strings.HasPrefix(args[1], "-") {
+		return "", false, false
+	}
+	if len(args) == 2 {
+		return args[1], false, true
+	}
+	if args[2] != "--recover" {
+		return "", false, false
+	}
+	return args[1], true, true
+}
+
+func runApply(requestedID string, recoverOnly bool, stderr io.Writer) int {
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	result, err := store.Apply(context.Background(), runstate.RunID(requestedID), recoverOnly)
+	if err != nil {
+		if errors.Is(err, runstore.ErrApplicationNotAllowed) {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "application", "partitur apply "+requestedID+" --recover", err.Error())
+		return 6
+	}
+	switch result.Outcome {
+	case runstore.ApplicationOutcomeApplied, runstore.ApplicationOutcomeAlreadyApplied:
+		return 0
+	case runstore.ApplicationOutcomeFailedClean:
+		if result.Detail != "" {
+			fmt.Fprintf(stderr, "application failed cleanly: detail=%q\n", result.Detail)
+		}
+		return 4
+	case runstore.ApplicationOutcomeRecoveryRequired:
+		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", requestedID, result.Detail)
+		return 5
+	default:
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "application", "partitur apply "+requestedID+" --recover", "application produced no outcome")
+		return 6
+	}
 }
 
 func runAmend(requestedID, patchPath, reason, claimedImpactPath string, stdout, stderr io.Writer) int {
