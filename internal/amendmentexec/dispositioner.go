@@ -31,9 +31,10 @@ import (
 )
 
 var (
-	ErrPreparePending          = errors.New("amendment approval prepare is already pending")
-	ErrBarrierDidNotConverge   = errors.New("amendment durable-consequence barrier did not converge")
-	ErrFinalizationNotEligible = errors.New("core finalization is not eligible")
+	ErrPreparePending             = errors.New("amendment approval prepare is already pending")
+	ErrBarrierDidNotConverge      = errors.New("amendment durable-consequence barrier did not converge")
+	ErrBarrierConsequenceNoEffect = errors.New("amendment durable-consequence barrier action produced no durable effect")
+	ErrFinalizationNotEligible    = errors.New("core finalization is not eligible")
 )
 
 const (
@@ -114,9 +115,6 @@ func (dispositioner ProposalDispositioner) RebuildFinalization(ctx context.Conte
 		return store.MutateProjected(runID, mutation)
 	}
 	_, _, err = dispositioner.prepareAtBarrierFixedPoint(ctx, proposal, submission)
-	if errors.Is(err, ErrFinalizationNotEligible) {
-		return nil
-	}
 	return err
 }
 
@@ -498,12 +496,26 @@ func (dispositioner ProposalDispositioner) applyBarrier(ctx context.Context, pro
 	if err != nil {
 		return false, err
 	}
-	decision := barrierDecision(input)
+	return dispositioner.applyBarrierDecision(ctx, proposal, input, barrierDecision(input))
+}
+
+func (dispositioner ProposalDispositioner) applyBarrierDecision(ctx context.Context, proposal amendmentProposal, input recovery.Input, decision recovery.Decision) (bool, error) {
 	if decision.Action == nil || !recoveryconsequence.Handles(decision.CaseID) {
 		return false, nil
 	}
+	before, err := proposal.Store.ReadJournal(proposal.RunID)
+	if err != nil {
+		return false, err
+	}
 	if err := recoveryconsequence.Apply(ctx, recoveryconsequence.HandlerContext{Store: proposal.Store, Driver: proposal.Authority, RunID: proposal.RunID, Input: input}, decision.CaseID, *decision.Action); err != nil {
 		return false, fmt.Errorf("apply amendment barrier %s: %w", decision.CaseID, err)
+	}
+	after, err := proposal.Store.ReadJournal(proposal.RunID)
+	if err != nil {
+		return false, err
+	}
+	if len(after.Events) == len(before.Events) {
+		return false, fmt.Errorf("%w: %s", ErrBarrierConsequenceNoEffect, decision.CaseID)
 	}
 	return true, nil
 }
