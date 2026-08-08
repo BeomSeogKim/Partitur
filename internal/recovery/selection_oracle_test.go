@@ -309,7 +309,7 @@ func appendixC41ActionRows(t *testing.T) []appendixActionRow {
 
 func preprocessingCase(caseID CaseID) bool {
 	switch caseID {
-	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036", "RC-RESUME-038", "RC-RESUME-050",
+	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036", "RC-RESUME-038",
 		CaseFinalGateRejected:
 		// RC-RESUME-021 needs the journal-projected rejected human gate; its
 		// recoveryexec fixture drives that state through resolution and replan.
@@ -318,9 +318,7 @@ func preprocessingCase(caseID CaseID) bool {
 		// effects to nothing. RC-RESUME-035's §9 half and RC-RESUME-036 are locked
 		// by the artifact-level tests in internal/recoveryexec (TestRecoveryPre-
 		// processing*), which is where they were found missing entirely.
-		// RC-RESUME-050 is intentionally spec-only until the draft-result-boundary
-		// implementation supplies its recovery fixture. Whether 034 and 038 are
-		// locked anywhere has not been established.
+		// Whether 034 and 038 are locked anywhere has not been established.
 		return true
 	default:
 		return false
@@ -401,6 +399,11 @@ func appendixC41Cut(t *testing.T, row appendixActionRow) (Input, func(Input) Dec
 		return withAdapterProbe(c2Input(runstate.AttemptRunning)), PlanAttempt
 	case CaseCaptureChangeSet:
 		return withRepoWrite(c2Input(runstate.AttemptVerifying)), PlanAttempt
+	case CaseDraftNoBlockingOutput:
+		input := c2Input(runstate.AttemptVerifying)
+		input.Projection.Scheduler.Status = "draft"
+		input.Projection.Scheduler.DraftInterviewMovement = input.Projection.CurrentHeadAttempt.MovementID
+		return input, PlanAttempt
 	case CasePostHocVerification:
 		return withChangeSet(c2Input(runstate.AttemptVerifying)), PlanAttempt
 	case CaseStartAcceptance:
@@ -504,6 +507,8 @@ func assertAppendixC41CutMatches(t *testing.T, row appendixActionRow) {
 		actual["unit"], actual["phase"] = "attempt", "probed"
 	case CaseCaptureChangeSet:
 		actual["unit"], actual["phase"] = "attempt", "performed"
+	case CaseDraftNoBlockingOutput:
+		actual["consequence"], actual["unit"], actual["phase"] = "draft_no_blocking_output", "attempt", "performed"
 	case CasePostHocVerification:
 		actual["unit"], actual["phase"] = "attempt", "verified"
 	case CaseStartAcceptance:

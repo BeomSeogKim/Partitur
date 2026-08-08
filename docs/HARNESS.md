@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches thirty-five E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirty-six E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -166,7 +166,7 @@ required; the criterion set is not implied by the adapter set.
 |---|---|---|---|
 | `lifecycle.attempt_completed_to_movement_succeeded` | R → R | driver | `attempt.completed` durable, `movement.succeeded` absent |
 | `lifecycle.movement_failed_to_run_failed` | R → R | driver | `movement.failed` durable, run still nonterminal |
-| `lifecycle.draft_performer_completed_to_no_blocking_failure` | not reached by this gate's cuts | — | No draft-result-boundary publisher or `RC-RESUME-050` recovery fixture yet |
+| `lifecycle.draft_performer_completed_to_no_blocking_failure` | R → R | driver / recovery | `TestDraftResultBoundaryKillCuts` kills the real draft interview at `attempt.performer_completed` and `attempt.failed`; recovery appends the classified failure at the first cut and the second resume is byte-identical at both, with `acceptance.started` absent |
 | `acceptance.criterion_error_to_failed` | R → R | driver | `criterion.completed {outcome: ERROR}` durable, `acceptance.failed` absent |
 | `acceptance.evaluation_completed_to_decision_requested` | R → R | driver | evaluation complete, a required human-gate request absent |
 
@@ -216,7 +216,7 @@ stated Appendix E branch.
 | `composition.candidate_evidence_to_terminal` | reachable | B.3; C.1 `RC-RESUME-011`; E.2 | `integration/composition` has conflict-verdict and no-verdict Git-failure candidate fixtures; each kills both sides of the durable candidate composition evidence/terminal cut |
 | `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |
 | `lifecycle.movement_failed_to_run_failed` | reachable | §7 lifecycle; E.2 | Real `run` subprocess matrix uses a terminal adapter-failure fixture at both endpoints; before `resume`, the crashed journal and projection prove the durable movement-failed/run-failed cut window |
-| `lifecycle.draft_performer_completed_to_no_blocking_failure` | not reached by this gate's cuts | §2 draft result boundary; C.2 `RC-RESUME-050`, `RC-RESUME-039`; E.2 | No draft-result-boundary producer or recovery fixture exists yet. Its implementation must cut after `performer.completed` and after the classified `attempt.failed`: the first cut appends that exact failure, realizes its recorded consequence through `RC-RESUME-039`, and leaves `acceptance.started` absent; the second is a fixed point |
+| `lifecycle.draft_performer_completed_to_no_blocking_failure` | reachable | §2 draft result boundary; C.2 `RC-RESUME-050`, `RC-RESUME-039`; E.2 | `TestDraftResultBoundaryKillCuts` kills a real draft interview after `attempt.performer_completed` and `attempt.failed`. The first cut appends `draft_no_blocking_output`, realizes it through `RC-RESUME-039`, and leaves `acceptance.started` absent; the second resume is a fixed point at both cuts |
 | `acceptance.criterion_error_to_failed` | not reached by this gate's cuts | §7 acceptance; E.2 | No criterion-error fixture |
 | `acceptance.evaluation_completed_to_decision_requested` | reachable | §7 acceptance; E.2 | Real `run` subprocess fixture cuts both the completed evaluation with the gate request absent and the durable gate request |
 

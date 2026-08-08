@@ -685,6 +685,23 @@ func TestPlanC2RowsAndAdjacentStates(t *testing.T) {
 			adjacent: withChangeSet(c2Input(runstate.AttemptVerifying)),
 		},
 		{
+			name: "probed draft interview before performer completion remains incomplete",
+			input: func() Input {
+				input := withAdapterProbe(draftNoBlockingInput())
+				input.Projection.CurrentHeadAttempt.State = runstate.AttemptRunning
+				return input
+			}(),
+			wantCase: CaseIncompleteAttempt, wantKind: ActionRecoverIncompleteAttempt, replan: true,
+			steps:    []ActionStep{StepSweepRecordedSession, StepCloseAdapterInterval, StepClassifyAndAppendFailure},
+			adjacent: draftNoBlockingInput(),
+		},
+		{
+			name:     "draft performer completion fails before verification or acceptance",
+			input:    draftNoBlockingInput(),
+			wantCase: CaseDraftNoBlockingOutput, wantKind: ActionAppendDraftNoBlockingFailure, replan: true,
+			adjacent: withChangeSet(c2Input(runstate.AttemptVerifying)),
+		},
+		{
 			name:     "repo write completion captures its missing change set first",
 			input:    withRepoWrite(c2Input(runstate.AttemptVerifying)),
 			wantCase: CaseCaptureChangeSet, wantKind: ActionCaptureChangeSet, replan: true,
@@ -734,12 +751,19 @@ func TestPlanC2RowsAndAdjacentStates(t *testing.T) {
 	for _, caseID := range []CaseID{
 		CaseRealizeDisposition, CaseAppendQuestionRequest, CaseDecisionResume, CaseWaitingHuman,
 		CaseUnstartedAttempt, CaseUnprobedAttempt, CaseIncompleteAttempt, CaseCaptureChangeSet,
-		CasePostHocVerification, CaseStartAcceptance, CaseMovementSucceeded, CaseRunFailed,
+		CaseDraftNoBlockingOutput, CasePostHocVerification, CaseStartAcceptance, CaseMovementSucceeded, CaseRunFailed,
 	} {
 		if !seen[caseID] {
 			t.Fatalf("C.2 case %s has no direct selection test", caseID)
 		}
 	}
+}
+
+func draftNoBlockingInput() Input {
+	input := c2Input(runstate.AttemptVerifying)
+	input.Projection.Scheduler.Status = "draft"
+	input.Projection.Scheduler.DraftInterviewMovement = input.Projection.CurrentHeadAttempt.MovementID
+	return input
 }
 
 func TestPlanC2ScopeHaltsAndPrecedence(t *testing.T) {
