@@ -151,7 +151,7 @@ func (store *Store) RejectRoutedAmendment(runID runstate.RunID, decisionID, reas
 			return err
 		}
 		decision, ok := state.PendingDecisions[decisionID]
-		if state.Run == runstate.RunNotStarted || state.Run.Terminal() || !ok || decision.Type != "amendment" {
+		if state.Run == runstate.RunNotStarted || state.Run.Terminal() || !ok || (decision.Type != "amendment" && decision.Type != "finalization") {
 			return ErrDecisionResolutionNotAllowed
 		}
 		routed, ok := state.RoutedAmendments[decision.ProposalID]

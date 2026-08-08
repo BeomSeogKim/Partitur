@@ -57,10 +57,11 @@ type StepHandler func(context.Context, HandlerContext, recovery.Action) error
 // only the already-established authority that authorizes execution mutation.
 // Planning and halts need no driver and never invoke an effect handler.
 type Executor struct {
-	Driver *runstore.Driver
-	Store  *runstore.Store
-	RunID  runstate.RunID
-	Load   LoadInput
+	Driver        *runstore.Driver
+	Store         *runstore.Store
+	RunID         runstate.RunID
+	Load          LoadInput
+	CoreFinalizer func(context.Context, *runstore.Store, runstate.RunID) error
 
 	// Steps is a test seam. A nil map selects the package's default handlers;
 	// a non-nil map is intentionally exact so tests can expose missing steps.
@@ -401,6 +402,7 @@ func (executor *Executor) cleanupUnreferencedRecoveryArtifacts() error {
 func actionRequiresDriver(action recovery.Action) bool {
 	switch action.Kind {
 	case recovery.ActionTerminalCleanup,
+		recovery.ActionRebuildFinalization,
 		recovery.ActionRemoveStaleLease,
 		recovery.ActionQuarantineOrphanLease,
 		recovery.ActionRefuseResume,
@@ -529,6 +531,14 @@ func (executor *Executor) stepHandler(caseID recovery.CaseID, step recovery.Acti
 }
 
 func (executor *Executor) kindHandler(caseID recovery.CaseID, kind recovery.ActionKind) (StepHandler, bool) {
+	if kind == recovery.ActionRebuildFinalization {
+		if executor.CoreFinalizer == nil {
+			return nil, false
+		}
+		return func(ctx context.Context, execution HandlerContext, _ recovery.Action) error {
+			return executor.CoreFinalizer(ctx, execution.Store, execution.RunID)
+		}, true
+	}
 	if recoveryconsequence.Handles(caseID) {
 		return func(ctx context.Context, execution HandlerContext, action recovery.Action) error {
 			return recoveryconsequence.Apply(ctx, execution, caseID, action)

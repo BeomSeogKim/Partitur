@@ -57,6 +57,7 @@ const (
 	CaseScheduler              CaseID = "RC-RESUME-043"
 	CaseRecoveredComposition   CaseID = "RC-RESUME-044"
 	CaseBudgetExhausted        CaseID = "RC-RESUME-045"
+	CaseFinalizationRebuild    CaseID = "RC-RESUME-038"
 )
 
 // HaltReason is an Appendix D recovery halt reason.
@@ -246,6 +247,7 @@ type Scheduler struct {
 type QuestionRequest struct {
 	DecisionID string
 	Durable    bool
+	Resolved   bool
 }
 
 // AttemptRecovery is the replay-derived C.2 view of one attempt. ScoreRevision
@@ -369,6 +371,7 @@ type Projection struct {
 	CurrentHeadAttempt    *AttemptRecovery
 	Acceptance            *AcceptanceRecovery
 	Scheduler             Scheduler
+	FinalizationEligible  bool
 }
 
 // Observations are all non-journal inputs used by C.1 and C.2.
@@ -408,6 +411,7 @@ const (
 	ActionAppendRoutedRequest          ActionKind = "append_routed_request"
 	ActionSelectRevisionRestart        ActionKind = "select_revision_restart"
 	ActionAppendCompositionTerminal    ActionKind = "append_composition_terminal"
+	ActionRebuildFinalization          ActionKind = "rebuild_finalization"
 	ActionProceedAttempt               ActionKind = "proceed_c2"
 	ActionProceedScheduler             ActionKind = "proceed_c4"
 	ActionRealizeRecordedDisposition   ActionKind = "realize_recorded_disposition"
@@ -604,6 +608,9 @@ func Plan(input Input) Decision {
 		decision := action(CaseCompositionTerminal, ActionAppendCompositionTerminal, true)
 		decision.Action.CompositionTerminal = &terminal
 		return decision
+	}
+	if input.Projection.FinalizationEligible {
+		return action(CaseFinalizationRebuild, ActionRebuildFinalization, true)
 	}
 	if currentHeadAttempt(input.Projection) != nil {
 		decision := action(CaseContinue, ActionProceedAttempt, false)

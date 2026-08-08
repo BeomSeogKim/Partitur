@@ -793,6 +793,13 @@ func Apply(input State, event Event) (State, error) {
 		if event.ScoreRevision != approvedHead.Revision {
 			return state, invalid(event, "approval envelope revision does not match the new head")
 		}
+		finalization := mustBool(payload, "finalization")
+		if finalization {
+			routed, routedOK := state.RoutedAmendments[ProposalID(mustString(payload, "proposal_id"))]
+			if state.PendingPrepare.Mode != "human" || event.MovementID == "" || !routedOK || routed.DecisionType != "finalization" {
+				return state, invalid(event, "finalization approval does not match a routed finalization")
+			}
+		}
 		obsoleted := pendingDecisionIDs(state)
 		if state.PendingPrepare.Mode == "human" && state.PendingPrepare.DecisionID != nil {
 			obsoleted = pendingDecisionIDsExcept(state, *state.PendingPrepare.DecisionID)
@@ -807,6 +814,12 @@ func Apply(input State, event Event) (State, error) {
 		movements, order, repoWrite, dependencies, final, err := reconciledHead(state, head)
 		if err != nil {
 			return state, invalid(event, err.Error())
+		}
+		if finalization {
+			if _, ok := movements[event.MovementID]; !ok {
+				return state, invalid(event, "finalization interview movement is absent from approved head")
+			}
+			movements[event.MovementID] = MovementSucceeded
 		}
 		supersededAttemptIDs := mustStrings(payload, "superseded_attempt_ids")
 		if !slices.Equal(supersededAttemptIDs, cancellableAttemptIDs(state)) {
@@ -2419,8 +2432,8 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 		default:
 			return errors.New("invalid amendment approval mode")
 		}
-		if mustBool(payload, "finalization") {
-			return errors.New("finalization is outside the supported projector")
+		if mustBool(payload, "finalization") && mustString(payload, "mode") != "human" {
+			return errors.New("finalization approval requires human mode")
 		}
 		return sortedStringFields(payload, "superseded_attempt_ids", "obsoleted_decision_ids")
 	case EventExecutionStarted:

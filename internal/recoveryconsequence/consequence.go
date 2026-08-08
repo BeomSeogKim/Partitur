@@ -494,6 +494,11 @@ func AppendRoutedRequest(_ context.Context, execution HandlerContext, action rec
 			"routed_reason": routed["reason"],
 			"blocking":      routed["blocking"],
 		}
+		address := faultpoint.ReceiptAddress("recovery.decision.requested.amendment")
+		if routed["decision_type"] == "finalization" {
+			delete(payload, "blocking")
+			address = faultpoint.ReceiptAddress("recovery.decision.requested.finalization")
+		}
 		if emittedID, ok := routed["emitted_id"]; ok {
 			payload["emitted_id"] = emittedID
 		}
@@ -502,7 +507,7 @@ func AppendRoutedRequest(_ context.Context, execution HandlerContext, action rec
 			PartID: source.PartID, AttemptID: source.AttemptID, Type: runstate.EventDecisionRequested,
 			Payload: RecoveryPayload(payload),
 		}
-		_, err = execution.Driver.Append(event, "recovery.decision.requested.amendment")
+		_, err = execution.Driver.Append(event, address)
 		return err
 	}
 	return fmt.Errorf("recovery routed amendment %q is absent", action.RoutedProposalID)

@@ -309,7 +309,7 @@ func appendixC41ActionRows(t *testing.T) []appendixActionRow {
 
 func preprocessingCase(caseID CaseID) bool {
 	switch caseID {
-	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036", "RC-RESUME-038",
+	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036",
 		CaseFinalGateRejected:
 		// RC-RESUME-021 needs the journal-projected rejected human gate; its
 		// recoveryexec fixture drives that state through resolution and replan.
@@ -382,6 +382,10 @@ func appendixC41Cut(t *testing.T, row appendixActionRow) (Input, func(Input) Dec
 		return withRevisionRestart(baseInput()), Plan
 	case CaseCompositionTerminal:
 		return withCompositionTerminal(baseInput()), Plan
+	case CaseFinalizationRebuild:
+		input := baseInput()
+		input.Projection.FinalizationEligible = true
+		return input, Plan
 
 	case CaseRealizeDisposition:
 		return withFailedAttempt(c2Input(runstate.AttemptFailed), false), PlanAttempt
@@ -489,6 +493,9 @@ func assertAppendixC41CutMatches(t *testing.T, row appendixActionRow) {
 		actual["consequence"], actual["phase"], actual["decision"] = "revision", "revision_changed", "released"
 	case CaseCompositionTerminal:
 		actual["consequence"], actual["unit"], actual["phase"] = "composition_terminal", "movement_composition", "completed"
+	case CaseFinalizationRebuild:
+		actual["run"], actual["integrity"], actual["owner"], actual["control"] = "irrelevant", "repair", "*", "*"
+		actual["consequence"], actual["unit"], actual["phase"], actual["decision"], actual["budget"], actual["observation"] = "*", "*", "finalization_rebuild", "*", "*", "safe"
 	case CaseRealizeDisposition:
 		actual["consequence"], actual["unit"], actual["phase"] = "disposition", "attempt", "failed"
 	case CaseAcceptanceFailed:

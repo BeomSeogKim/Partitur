@@ -45,7 +45,7 @@ composition**.
 
 ## Selection manifest
 
-This gate reaches thirty-six E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirty-seven E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -82,7 +82,7 @@ is paused there.
 | `proposal.published_to_blocked_route` | reachable | `TestProposalPublicationKillCuts` | A real blocking-proposal `run` is killed at its immutable record and matching `attempt.blocked` descriptor; recovery quarantines the unreferenced record with its original bytes at the first cut and retains the descriptor-bound record at the second |
 | `proposal.blocked_route_to_routed` | reachable | `TestBlockedProposalRouteKillCuts` | A real `run` is killed at the durable `attempt.blocked` descriptor and recovery's durable routed receipt; the recovery route is compared field-for-field with the frozen descriptor while the current project score is invalid |
 | `proposal.published_to_routed` | reachable | `TestCLIProposalPublishedToRoutedKillCuts` | A real CLI `amend` is killed at its published record and routed receipt; recovery quarantines the route-absent record with its original bytes at the first cut and retains the route-bound record at the second |
-| `proposal.core_finalization_published_to_routed` | not reached by this gate's cuts | — | No core-finalization publisher or `RC-RESUME-038` recovery fixture yet |
+| `proposal.core_finalization_published_to_routed` | reachable | `TestCoreFinalizationPublishedToRoutedKillCuts` | A real draft `run`, question resolution, and `resume` are killed at the core publisher's record and route receipts; the near cut quarantines the original bytes before a fresh record routes, while the far cut retains its raw-hash-bound record and a second `resume` appends no duplicate route. |
 | `proposal.routed_to_decision_requested` | reachable | `TestCLIRoutedProposalToDecisionRequestedKillCuts` | A real CLI `amend` is killed at its routed and decision-request receipts; the route cut recovers the matching request while no `attempt.blocked` exists in the journal, and the request cut proves that append is durable and idempotent |
 
 ### Cancellation
@@ -190,7 +190,7 @@ stated Appendix E branch.
 | `proposal.published_to_blocked_route` | reachable | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035`; E.2 | `TestProposalPublicationKillCuts` kills the production run at the published record and its matching blocked descriptor. Recovery quarantines the unreferenced record with its original bytes at the first cut and retains the descriptor raw-hash-bound record at the second |
 | `proposal.blocked_route_to_routed` | reachable | §4 blocking handshake; C.1 `RC-RESUME-049`; E.2 | `TestBlockedProposalRouteKillCuts` kills the production run at `attempt.blocked` and the production resume at its routed receipt. The route must match the frozen descriptor while invalid current score input proves recovery did not re-run §9 |
 | `proposal.published_to_routed` | reachable | §1 routed-proposal records; C.1 `RC-RESUME-035`; E.2 | `TestCLIProposalPublishedToRoutedKillCuts` kills the production CLI `amend` at `proposal.record.published` and `amendment.routed_human`. Recovery quarantines the route-absent record with its original bytes at the first cut and retains the route-bound record at the second |
-| `proposal.core_finalization_published_to_routed` | not reached by this gate's cuts | §2 finalization; C.1 `RC-RESUME-038`; E.2 | No core-finalization publisher or `RC-RESUME-038` recovery fixture exists yet. PR 4 must cut both receipts: at the first, preserve the quarantined original bytes and require the next `resume` to route one fresh record; at the second, retain the route-bound record and require the second `resume` to append neither another record nor another route |
+| `proposal.core_finalization_published_to_routed` | reachable | §2 finalization; C.1 `RC-RESUME-038`; E.2 | `TestCoreFinalizationPublishedToRoutedKillCuts` kills the production draft lifecycle at `proposal.record.published` and `amendment.routed_human`. The first cut quarantines the original bytes and routes one fresh record on the next `resume`; the second retains the route-bound record and the following `resume` appends neither another record nor another route. |
 | `proposal.routed_to_decision_requested` | reachable | §1 routed-proposal records; C.1 `RC-RESUME-037`; E.2 | `TestCLIRoutedProposalToDecisionRequestedKillCuts` kills a real CLI `amend` at `amendment.routed_human` and `amendment.decision.requested`. At the route cut, recovery appends the sole matching request from the routed fields while the journal has no `attempt.blocked`; at the request cut, the same request is already durable and repeated recovery is a fixed point |
 | `cancel.swept_to_terminal` | reachable | §6 (a), (e); E.2 | Real `cancel` subprocess matrix covers all eight `(b, c, d)` combinations at both endpoints |
 | `cancel.swept_to_quarantined` | reachable | §6 (a)-(b); E.2 | Real `cancel` subprocess matrix covers the four `(b)`-true combinations at both endpoints |

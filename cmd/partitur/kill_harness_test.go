@@ -364,8 +364,8 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 
 func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map[receiptKillKey]bool) {
 	t.Helper()
-	if len(records) != 27 {
-		t.Fatalf("receipt registry records=%d, want twenty-seven", len(records))
+	if len(records) != 29 {
+		t.Fatalf("receipt registry records=%d, want twenty-nine", len(records))
 	}
 	counts := make(map[faultpoint.EdgeID]int)
 	for key, passed := range records {
@@ -380,8 +380,8 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		}
 		counts[key.edge]++
 	}
-	if len(counts) != 16 {
-		t.Fatalf("receipt registry edges=%d, want sixteen", len(counts))
+	if len(counts) != 17 {
+		t.Fatalf("receipt registry edges=%d, want seventeen", len(counts))
 	}
 	for edge, want := range map[faultpoint.EdgeID]int{
 		faultpoint.EdgePrepareSnapshotToPlan:                               2,
@@ -400,6 +400,7 @@ func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map
 		faultpoint.EdgeSupersedeFenceDecidedToApproved:                     1,
 		faultpoint.EdgeSupersedeApprovedToLeaseRemoved:                     2,
 		faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure: 2,
+		faultpoint.EdgeProposalCoreFinalizationPublishedToRouted:           2,
 	} {
 		if counts[edge] != want {
 			t.Fatalf("receipt registry records for %q = %d, want %d", edge, counts[edge], want)
@@ -485,6 +486,7 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 	const cliRoutedRequestFixture = "TestCLIRoutedProposalToDecisionRequestedKillCuts/"
 	const cancelledPrepareFixture = "TestPrepareQuarantinedToAbandonedKillCuts/"
 	const draftResultFixture = "TestDraftResultBoundaryKillCuts/"
+	const coreFinalizationFixture = "TestCoreFinalizationPublishedToRoutedKillCuts/"
 	return []receiptKillRecord{
 		{faultpoint.EdgePrepareSnapshotToPlan, "amendment.approval.snapshot", fixture + "prepare.snapshot_to_plan/snapshot"},
 		{faultpoint.EdgePrepareSnapshotToPlan, "amendment.approval.plan", fixture + "prepare.snapshot_to_plan/plan"},
@@ -513,6 +515,8 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 		{faultpoint.EdgeSupersedeApprovedToLeaseRemoved, "prepare.commit.lease", supersessionFixture},
 		{faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure, "attempt.performer_completed", draftResultFixture + "lifecycle.draft_performer_completed_to_no_blocking_failure/performer_completed"},
 		{faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure, "attempt.failed", draftResultFixture + "lifecycle.draft_performer_completed_to_no_blocking_failure/attempt_failed"},
+		{faultpoint.EdgeProposalCoreFinalizationPublishedToRouted, "proposal.record.published", coreFinalizationFixture + "published_reconstructs_after_quarantine"},
+		{faultpoint.EdgeProposalCoreFinalizationPublishedToRouted, "amendment.routed_human", coreFinalizationFixture + "routed_retains_and_second_resume_is_fixed"},
 	}
 }
 
@@ -549,6 +553,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	cancelledPrepareResult := make(chan killHarnessJSONResult, 1)
 	supersessionResult := make(chan killHarnessJSONResult, 1)
 	draftResult := make(chan killHarnessJSONResult, 1)
+	coreFinalizationResult := make(chan killHarnessJSONResult, 1)
 	go func() {
 		passed, output, err := runKillHarnessJSON(root, "./internal/amendmentexec", "^TestPreparePublicationKillCuts$")
 		publicationResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
@@ -585,6 +590,10 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		passed, output, err := runKillHarnessJSON(root, "./cmd/partitur", "^TestDraftResultBoundaryKillCuts$")
 		draftResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
 	}()
+	go func() {
+		passed, output, err := runKillHarnessJSON(root, "./cmd/partitur", "^TestCoreFinalizationPublishedToRoutedKillCuts$")
+		coreFinalizationResult <- killHarnessJSONResult{passed: passed, output: output, err: err}
+	}()
 
 	publication := <-publicationResult
 	prepare := <-prepareResult
@@ -595,6 +604,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	cancelledPrepare := <-cancelledPrepareResult
 	supersession := <-supersessionResult
 	draft := <-draftResult
+	coreFinalization := <-coreFinalizationResult
 	if publication.err != nil {
 		return nil, publication.output, publication.err
 	}
@@ -622,6 +632,9 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	if draft.err != nil {
 		return nil, draft.output, draft.err
 	}
+	if coreFinalization.err != nil {
+		return nil, coreFinalization.output, coreFinalization.err
+	}
 	passed := publication.passed
 	preparePassed := prepare.passed
 	for test, result := range preparePassed {
@@ -648,6 +661,9 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 	for test, result := range draft.passed {
 		passed[test] = result
 	}
+	for test, result := range coreFinalization.passed {
+		passed[test] = result
+	}
 
 	records := make(map[receiptKillKey]bool)
 	for _, record := range receiptKillHarnessEdges() {
@@ -657,7 +673,7 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		}
 		records[key] = passed[record.test]
 	}
-	return records, publication.output + prepare.output + proposal.output + publicationProposal.output + cliRoutedProposal.output + cliRoutedRequest.output + cancelledPrepare.output + supersession.output + draft.output, nil
+	return records, publication.output + prepare.output + proposal.output + publicationProposal.output + cliRoutedProposal.output + cliRoutedRequest.output + cancelledPrepare.output + supersession.output + draft.output + coreFinalization.output, nil
 }
 
 func prepareQuiesceKillHarnessPassed(t *testing.T) map[string]bool {

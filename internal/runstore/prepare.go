@@ -414,7 +414,7 @@ func (transaction *Txn) approvePrepare(state runstate.State, plan runstate.Appro
 	if err != nil {
 		return err
 	}
-	event := runstate.Event{RunID: transaction.runID, ScoreRevision: plan.NewRevision, Type: runstate.EventAmendmentApproved, Payload: payload}
+	event := runstate.Event{RunID: transaction.runID, ScoreRevision: plan.NewRevision, MovementID: plan.MovementID, Type: runstate.EventAmendmentApproved, Payload: payload}
 	if _, err := appendPrepareEvent(transaction, state, event, "prepare.commit.approved"); err != nil {
 		return err
 	}
