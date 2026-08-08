@@ -1278,6 +1278,39 @@ func TestDispositionerBarrierLimitRejectsASecondSelectedConsequence(t *testing.T
 	}
 }
 
+func TestDispositionerRejectsBarrierConsequenceWithoutDurableEffect(t *testing.T) {
+	_, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	before, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := recovery.Decision{CaseID: recovery.CaseRealizeDisposition, Action: &recovery.Action{
+		Kind:                recovery.ActionRealizeRecordedDisposition,
+		RecordedDisposition: &runstate.Disposition{Charged: "quality_retry"},
+		PendingSuccessor:    &recovery.PendingSuccessor{MovementID: "inspect", AttemptID: "retry-1", Performer: "worker", Reason: "quality_retry"},
+	}}
+	open, err := testDispositioner().applyBarrierDecision(context.Background(), amendmentProposal{AdapterProposal: driver.AdapterProposal{Store: store, Authority: authority, RunID: started.RunID}}, recovery.Input{}, decision)
+	if open || !errors.Is(err, ErrBarrierConsequenceNoEffect) {
+		t.Fatalf("barrier result open=%t error=%v, want no-effect refusal", open, err)
+	}
+	after, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Events) != len(before.Events) {
+		t.Fatalf("no-effect barrier appended %d events", len(after.Events)-len(before.Events))
+	}
+}
+
+func TestRebuildFinalizationRefusesStaleIneligibleSelection(t *testing.T) {
+	_, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	if err := testDispositioner().RebuildFinalization(context.Background(), store, started.RunID); !errors.Is(err, ErrFinalizationNotEligible) {
+		t.Fatalf("rebuild error = %v, want ErrFinalizationNotEligible", err)
+	}
+}
+
 func TestDispositionerReestablishesApprovalIntentAfterBarrierInterleave(t *testing.T) {
 	preparation, store, authority, started := dispositionFixture(t)
 	defer authority.Release()

@@ -26,6 +26,9 @@ func TestMutationDispositionerGuards(t *testing.T) {
 		{"blocking rejection closes derived decision", "internal/amendmentexec/dispositioner.go", "if proposal.Event.RequiresDecision || proposal.humanDecision {", "if false { // mutation", "TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked"},
 		{"frozen descriptor retains evaluated reason", "internal/amendmentexec/dispositioner.go", `"reason": outcome.Reason, "decision_type": decisionType,`, `"reason": "auto_disabled", "decision_type": decisionType,`, "TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource"},
 		{"pending prepare guard refuses a second prepare", "internal/amendmentexec/dispositioner.go", "if state.PendingPrepare != nil {", "if false { // mutation", "TestDispositionerPreparesAutoApproval"},
+		{"stale finalization selection is not reported complete", "internal/amendmentexec/dispositioner.go", "\t_, _, err = dispositioner.prepareAtBarrierFixedPoint(ctx, proposal, submission)\n\treturn err", "\t_, _, err = dispositioner.prepareAtBarrierFixedPoint(ctx, proposal, submission)\n\treturn nil // mutation", "TestRebuildFinalizationRefusesStaleIneligibleSelection"},
+		{"barrier rejects a consequence with no durable journal effect", "internal/amendmentexec/dispositioner.go", "if len(after.Events) == len(before.Events) {", "if false && len(after.Events) == len(before.Events) { // mutation", "TestDispositionerRejectsBarrierConsequenceWithoutDurableEffect"},
+		{"barrier detects equality rather than journal growth", "internal/amendmentexec/dispositioner.go", "if len(after.Events) == len(before.Events) {", "if len(after.Events) != len(before.Events) { // mutation", "TestDispositionerBarrierClosesEachCataloguedConsequenceBeforePrepare"},
 		{"routed marker follows blocked source", "internal/driver/driver.go", "for _, appendRoute := range appendRoutes {", "for _, appendRoute := range appendRoutes[:0] { // mutation", "TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource"},
 		{"recovery preserves the frozen descriptor", "internal/recoveryconsequence/consequence.go", `payload["emitted_id"] = immutable.EmittedID`, `payload["emitted_id"] = "invented"`, "TestRecoveryCompletesFrozenBlockingProposalRouteThenRequest"},
 		{"recovery request reads routed reason", "internal/recoveryconsequence/consequence.go", `"routed_reason": routed["reason"],`, `"routed_reason": "invented",`, "TestRecoveryCompletesFrozenBlockingProposalRouteThenRequest"},
@@ -91,6 +94,9 @@ func copyMutationRepository(destination, source string) error {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		target := filepath.Join(destination, relative)
