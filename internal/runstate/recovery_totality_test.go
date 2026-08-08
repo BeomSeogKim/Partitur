@@ -73,6 +73,48 @@ func TestAppendixCRecoverySelectionIsTotal(t *testing.T) {
 		len(axes), len(states), len(actions))
 }
 
+func TestDraftNoBlockingOutputRecoveryPrecedesOrdinaryVerification(t *testing.T) {
+	lines := recoveryDesignLines(t)
+	c2 := recoveryDocumentSection(t, lines,
+		"## C.2 Attempt lifecycle recovery",
+		"## C.3 Acceptance recovery")
+	contents := strings.Join(c2, "\n")
+
+	const caseID = "RC-RESUME-050"
+	const row = "| `RC-RESUME-050` | Current-head `performer.completed` on the draft interview movement while the score remains `status: draft` | Append `attempt.failed {kind: task_failed, reason: draft_no_blocking_output, disposition}` after classifying the quality failure under §3.1's first arm, then re-evaluate C.1 and hand its recorded second-arm consequence to `RC-RESUME-039`. **Acceptance never begins.** A genuinely blocking draft result instead makes `attempt.blocked` durable, not `performer.completed`, so this row is selected from the journal alone and does not reconstruct a lost response |"
+	if count := strings.Count(contents, row); count != 1 {
+		t.Fatalf("C.4.1 action row RA-061 is orphaned: %s must appear exactly once in C.2, got %d", caseID, count)
+	}
+	for _, after := range []string{"| `RC-RESUME-016` |", "| `RC-RESUME-017` |"} {
+		if index := strings.Index(contents, after); index == -1 || strings.Index(contents, row) >= index {
+			t.Fatalf("%s must precede %s in C.2", caseID, after)
+		}
+	}
+
+	axes := recoverySelectionAxes(t, lines)
+	states := reachableRecoverySelectionCuts(t, lines, axes)
+	actions := recoveryActionRows(t, lines, axes, declaredRecoveryCases(t, lines))
+	var special map[string]string
+	for _, state := range states {
+		if state["cut"] == "RS-039" {
+			special = state
+			break
+		}
+	}
+	if special == nil {
+		t.Fatal("C.4.1 is missing the draft no-blocking-output selection cut RS-039")
+	}
+	var winners []recoveryActionRow
+	for _, action := range actions {
+		if recoveryActionMatches(action, special) {
+			winners = append(winners, action)
+		}
+	}
+	if len(winners) != 1 || winners[0].id != "RA-061" || winners[0].caseID != caseID || winners[0].precedence != 70 {
+		t.Fatalf("RS-039 winner = %+v, want RA-061/%s at precedence 70", winners, caseID)
+	}
+}
+
 func recoverySelectionSection(t *testing.T, lines []string) []string {
 	t.Helper()
 	return recoveryDocumentSection(t, lines,

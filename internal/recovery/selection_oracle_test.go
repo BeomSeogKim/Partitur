@@ -33,7 +33,7 @@ type appendixStepBranch struct {
 // non-wildcard discriminant is materialized by the case fixture below.
 func TestAppendixC41SelectsThisPlanner(t *testing.T) {
 	rows := appendixC41ActionRows(t)
-	const declaredActiveRows = 58
+	const declaredActiveRows = 59
 	if len(rows) != declaredActiveRows {
 		t.Fatalf("C.4.1 active action rows = %d, want declared active set %d", len(rows), declaredActiveRows)
 	}
@@ -309,7 +309,7 @@ func appendixC41ActionRows(t *testing.T) []appendixActionRow {
 
 func preprocessingCase(caseID CaseID) bool {
 	switch caseID {
-	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036", "RC-RESUME-038",
+	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036", "RC-RESUME-038", "RC-RESUME-050",
 		CaseFinalGateRejected:
 		// RC-RESUME-021 needs the journal-projected rejected human gate; its
 		// recoveryexec fixture drives that state through resolution and replan.
@@ -317,8 +317,10 @@ func preprocessingCase(caseID CaseID) bool {
 		// Exemption here removes a case from selection only; it hands the case's
 		// effects to nothing. RC-RESUME-035's §9 half and RC-RESUME-036 are locked
 		// by the artifact-level tests in internal/recoveryexec (TestRecoveryPre-
-		// processing*), which is where they were found missing entirely. Whether
-		// 034 and 038 are locked anywhere has not been established.
+		// processing*), which is where they were found missing entirely.
+		// RC-RESUME-050 is intentionally spec-only until the draft-result-boundary
+		// implementation supplies its recovery fixture. Whether 034 and 038 are
+		// locked anywhere has not been established.
 		return true
 	default:
 		return false

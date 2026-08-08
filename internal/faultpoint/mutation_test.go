@@ -83,13 +83,20 @@ func TestMutationAppendixEEdgeIDsRequireCompleteRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	anchor := "\tEdgeProposalBlockedRouteToRouted                     EdgeID = \"proposal.blocked_route_to_routed\"\n"
+	anchor := "\tEdgeLifecycleDraftPerformerCompletedToNoBlockingFailure EdgeID = \"lifecycle.draft_performer_completed_to_no_blocking_failure\"\n"
 	if count := strings.Count(string(contents), anchor); count != 1 {
 		t.Fatalf("mutation anchor count = %d, want 1", count)
 	}
 	mutated := strings.Replace(string(contents), anchor, "", 1)
 	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	applied, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(applied) != mutated {
+		t.Fatal("mutation did not persist its intended EdgeID deletion")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
