@@ -321,8 +321,10 @@ func schedulerFromScore(state runstate.State, pinned *score.Score) recovery.Sche
 	execution := pinned.Execution()
 	policy := pinned.EffectivePolicy()
 	scheduler := recovery.Scheduler{
-		GateWaived:    execution.GateWaived,
-		RemainingTime: policy.ActiveWallClockMin*60*1000 - state.ConsumedBudgetMS,
+		Status:                 pinned.Status(),
+		DraftInterviewMovement: runstate.MovementID(pinned.DraftInterviewMovement()),
+		GateWaived:             execution.GateWaived,
+		RemainingTime:          policy.ActiveWallClockMin*60*1000 - state.ConsumedBudgetMS,
 	}
 	if scheduler.RemainingTime < 0 {
 		scheduler.RemainingTime = 0
@@ -347,12 +349,8 @@ func movementSeed(pinned *score.Score) []runstate.MovementSeed {
 	execution := pinned.Execution()
 	seed := make([]runstate.MovementSeed, 0, len(movements))
 	for _, movement := range movements {
-		initial := runstate.MovementPending
-		if movement.Phase == "draft" {
-			initial = runstate.MovementInapplicable
-		}
 		seed = append(seed, runstate.MovementSeed{
-			ID: runstate.MovementID(movement.ID), Initial: initial,
+			ID: runstate.MovementID(movement.ID), Initial: runstate.InitialMovementState(pinned.Status(), movement.Phase),
 			RepoWrite:       hasGrant(movement.Grants, "repo_write"),
 			HasDependencies: len(movement.Needs) != 0,
 			Final:           movement.ID == execution.FinalMovementID,

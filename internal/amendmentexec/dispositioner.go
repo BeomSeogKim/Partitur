@@ -713,15 +713,11 @@ func approvalHeadMovements(value *score.Score) []runstate.HeadMovement {
 	execution, movements := value.Execution(), value.Movements()
 	result := make([]runstate.HeadMovement, 0, len(movements))
 	for _, movement := range movements {
-		initial := runstate.MovementPending
-		if value.Status() == "finalized" && movement.Phase == "draft" {
-			initial = runstate.MovementInapplicable
-		}
 		repoWrite := false
 		for _, grant := range movement.Grants {
 			repoWrite = repoWrite || grant == "repo_write"
 		}
-		result = append(result, runstate.HeadMovement{ID: runstate.MovementID(movement.ID), Initial: initial, RepoWrite: repoWrite, HasDependencies: len(movement.Needs) != 0, Final: movement.ID == execution.FinalMovementID})
+		result = append(result, runstate.HeadMovement{ID: runstate.MovementID(movement.ID), Initial: runstate.InitialMovementState(value.Status(), movement.Phase), RepoWrite: repoWrite, HasDependencies: len(movement.Needs) != 0, Final: movement.ID == execution.FinalMovementID})
 	}
 	return result
 }

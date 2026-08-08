@@ -21,6 +21,14 @@ func (s *Score) Status() string {
 	return s.document.Status
 }
 
+// DraftInterviewMovement returns the movement named by the draft contract.
+func (s *Score) DraftInterviewMovement() string {
+	if s == nil || s.document.Draft == nil {
+		return ""
+	}
+	return s.document.Draft.InterviewMovement
+}
+
 // Parts returns effective parts sorted by id. Every returned slice is a copy.
 func (s *Score) Parts() []PartView {
 	if s == nil {
