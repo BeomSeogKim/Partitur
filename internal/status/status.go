@@ -254,7 +254,7 @@ func movementSeeds(compiled *score.Score) []runstate.MovementSeed {
 	for index, movement := range movements {
 		seeds[index] = runstate.MovementSeed{
 			ID:              runstate.MovementID(movement.ID),
-			Initial:         runstate.MovementPending,
+			Initial:         runstate.InitialMovementState(compiled.Status(), movement.Phase),
 			RepoWrite:       slices.Contains(movement.Grants, "repo_write"),
 			HasDependencies: len(movement.Needs) != 0,
 			Final:           movement.ID == execution.FinalMovementID,

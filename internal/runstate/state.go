@@ -2,6 +2,15 @@ package runstate
 
 import "fmt"
 
+// InitialMovementState projects a score movement before any journal event.
+// A draft movement is retained but never scheduled after finalization.
+func InitialMovementState(status, phase string) MovementState {
+	if status == "finalized" && phase == "draft" {
+		return MovementInapplicable
+	}
+	return MovementPending
+}
+
 // NewState creates the projection input supplied by the authenticated pinned
 // score. Invalid seeds are programmer errors.
 func NewState(seed []MovementSeed) State {

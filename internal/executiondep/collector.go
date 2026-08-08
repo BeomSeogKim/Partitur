@@ -356,12 +356,8 @@ func movementSeed(compiled *score.Score) []runstate.MovementSeed {
 	execution := compiled.Execution()
 	result := make([]runstate.MovementSeed, 0, len(compiled.Movements()))
 	for _, movement := range compiled.Movements() {
-		initial := runstate.MovementPending
-		if movement.Phase == "draft" {
-			initial = runstate.MovementInapplicable
-		}
 		result = append(result, runstate.MovementSeed{
-			ID: runstate.MovementID(movement.ID), Initial: initial,
+			ID: runstate.MovementID(movement.ID), Initial: runstate.InitialMovementState(compiled.Status(), movement.Phase),
 			RepoWrite: hasGrant(movement.Grants, "repo_write"), HasDependencies: len(movement.Needs) != 0,
 			Final: movement.ID == execution.FinalMovementID,
 		})

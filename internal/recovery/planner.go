@@ -231,10 +231,12 @@ type PendingSuccessor struct {
 // non-waived lifecycle has exactly one Final movement; a waived lifecycle has
 // none and completes by carrying the candidate in run.succeeded.
 type Scheduler struct {
-	Movements        []ScheduledMovement
-	PendingSuccessor *PendingSuccessor
-	GateWaived       bool
-	RemainingTime    int64
+	Movements              []ScheduledMovement
+	PendingSuccessor       *PendingSuccessor
+	Status                 string
+	DraftInterviewMovement runstate.MovementID
+	GateWaived             bool
+	RemainingTime          int64
 }
 
 // QuestionRequest is the replay-derived request cut for one question raised
@@ -874,7 +876,7 @@ func PlanBetweenUnit(projection Projection) Decision {
 	}
 
 	for _, movement := range scheduler.Movements {
-		if state.Movements[movement.ID] != runstate.MovementPending || !dependenciesSucceeded(state, movement.Needs) {
+		if !scheduler.maySelect(movement.ID) || state.Movements[movement.ID] != runstate.MovementPending || !dependenciesSucceeded(state, movement.Needs) {
 			continue
 		}
 		// §8 requires the candidate before the final movement may become READY.
@@ -886,6 +888,9 @@ func PlanBetweenUnit(projection Projection) Decision {
 		return decision
 	}
 	for _, movement := range scheduler.Movements {
+		if !scheduler.maySelect(movement.ID) {
+			continue
+		}
 		switch state.Movements[movement.ID] {
 		case runstate.MovementReady:
 			decision := action(CaseScheduler, ActionAppendMovementStarted, true)
@@ -910,6 +915,10 @@ func PlanBetweenUnit(projection Projection) Decision {
 	// lifecycle must always have a next effect. It is intentionally not
 	// ActionProceedScheduler, which a live executor could otherwise loop on.
 	return Decision{CaseID: CaseScheduler}
+}
+
+func (scheduler Scheduler) maySelect(movementID runstate.MovementID) bool {
+	return scheduler.Status != "draft" || movementID == scheduler.DraftInterviewMovement
 }
 
 func budgetExhaustion(state runstate.State, scheduler Scheduler) Decision {
