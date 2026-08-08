@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,209 @@ func TestShippingCommandSurfaceIsSpecified(t *testing.T) {
 		if len(forms) != 1 || !forms["normal"] {
 			t.Fatalf("CLI forms for %s = %#v, want one normal form", command, forms)
 		}
+	}
+}
+
+func TestShippingExitMappingsAreSpecified(t *testing.T) {
+	// Given
+	lines := recoveryDesignLines(t)
+	globalCodes := globalExitCodeSet(t, lines)
+	shipping := recoveryDocumentSection(t, lines,
+		"## 8. Verification and shipping",
+		"## 9. Amendments")
+	applyCodes := shippingExitCodeTable(t, shipping,
+		"**`partitur apply` exit mapping.**",
+		"| Code | `partitur apply` outcome |")
+	promotionCodes := shippingExitCodeTable(t, shipping,
+		"**`partitur promote-score` exit mapping.**",
+		"| Code | `partitur promote-score` outcome |")
+
+	// When
+	assertSameExitCodeSet(t, "apply", applyCodes, globalCodes)
+	assertSameExitCodeSet(t, "promote-score", promotionCodes, globalCodes)
+
+	// Then
+	assertShippingOutcomeCode(t, applyCodes, "FAILED_CLEAN", 4)
+	assertShippingOutcomeCode(t, applyCodes, "matching neither `base_tree` nor `result_tree`", 5)
+	assertShippingOutcomeCode(t, promotionCodes, "CAS conflict", 2)
+	assertShippingOutcomeCode(t, promotionCodes, "matching neither the expected nor target hash", 5)
+}
+
+func TestShippingExitMappingsStayInsideGlobalCategories(t *testing.T) {
+	// Given
+	lines := recoveryDesignLines(t)
+	global := globalExitCodeDescriptions(t, lines)
+	shipping := recoveryDocumentSection(t, lines,
+		"## 8. Verification and shipping",
+		"## 9. Amendments")
+	apply := shippingExitCodeTable(t, shipping,
+		"**`partitur apply` exit mapping.**",
+		"| Code | `partitur apply` outcome |")
+	promotion := shippingExitCodeTable(t, shipping,
+		"**`partitur promote-score` exit mapping.**",
+		"| Code | `partitur promote-score` outcome |")
+
+	// When
+	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 4, "FAILED_CLEAN", "FAILED_CLEAN")
+	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 5,
+		"Application `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
+	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 2, "CAS conflict", "CAS conflict")
+	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 5,
+		"Promotion `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
+	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 6,
+		"Application remains `APPLYING`", "Application `APPLYING`")
+	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 6,
+		"Promotion remains `PROMOTING`", "Promotion `PROMOTING`")
+
+	// Then
+	assertExistingRunCommandNarrowings(t, lines, global)
+}
+
+func assertShippingOutcomeAdmittedByGlobal(t *testing.T, global, command map[int]string, code int, commandOutcome, globalAdmission string) {
+	t.Helper()
+
+	if !strings.Contains(command[code], commandOutcome) {
+		t.Fatalf("shipping exit-code %d does not name outcome %q", code, commandOutcome)
+	}
+	if !strings.Contains(global[code], globalAdmission) {
+		t.Fatalf("global exit-code %d excludes shipping outcome %q", code, commandOutcome)
+	}
+}
+
+func assertExistingRunCommandNarrowings(t *testing.T, lines []string, global map[int]string) {
+	t.Helper()
+
+	for _, command := range []struct {
+		name            string
+		header          string
+		failure         string
+		recovery        string
+		interruption    string
+		globalFailure   string
+		globalRecovery  string
+		globalInterrupt string
+	}{
+		{"run", "| Code | `partitur run` outcome |", "terminal `FAILED` or `CANCELLED`", "Appendix D", "run remains nonterminal", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
+		{"resume", "| Code | `partitur resume` outcome |", "terminal `FAILED` or `CANCELLED`", "Appendix D", "operational-interruption outcome", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
+		{"cancel", "| Code | `partitur cancel` outcome |", "terminal `FAILED` or `CANCELLED`", "Appendix D", "run remains nonterminal", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
+	} {
+		mapping := documentExitCodeTable(t, lines, command.name, command.header)
+		for code, outcomes := range map[int]struct{ command, global string }{
+			4: {command.failure, command.globalFailure},
+			5: {command.recovery, command.globalRecovery},
+			6: {command.interruption, command.globalInterrupt},
+		} {
+			if !strings.Contains(mapping[code], outcomes.command) {
+				t.Fatalf("%s exit-code %d no longer narrows the run outcome %q", command.name, code, outcomes.command)
+			}
+			if !strings.Contains(global[code], outcomes.global) {
+				t.Fatalf("global exit-code %d excludes the run narrowing %q", code, outcomes.global)
+			}
+		}
+	}
+}
+
+func globalExitCodeSet(t *testing.T, lines []string) map[int]struct{} {
+	t.Helper()
+
+	descriptions := globalExitCodeDescriptions(t, lines)
+	codes := make(map[int]struct{}, len(descriptions))
+	for code := range descriptions {
+		codes[code] = struct{}{}
+	}
+	return codes
+}
+
+func globalExitCodeDescriptions(t *testing.T, lines []string) map[int]string {
+	t.Helper()
+
+	start := uniqueLineIndex(t, lines, "**Exit codes** — stable categories, so a script can branch without parsing prose:")
+	end := uniqueLineIndex(t, lines, "## 8. Verification and shipping")
+	if end <= start {
+		t.Fatal("global exit-code table must precede §8")
+	}
+	section := lines[start+1 : end]
+	table := uniqueLineIndex(t, section, "| Code | Meaning |")
+	return exitCodeTable(t, "global exit-code table", section[table:], "| Code | Meaning |")
+}
+
+func documentExitCodeTable(t *testing.T, lines []string, name, header string) map[int]string {
+	t.Helper()
+
+	table := uniqueLineIndex(t, lines, header)
+	return exitCodeTable(t, name+" exit mapping", lines[table:], header)
+}
+
+func shippingExitCodeTable(t *testing.T, section []string, title, header string) map[int]string {
+	t.Helper()
+
+	start := uniqueLinePrefixIndex(t, section, title)
+	table := uniqueLineIndex(t, section, header)
+	if table <= start {
+		t.Fatalf("%s exit-code table must follow its mapping", title)
+	}
+	return exitCodeTable(t, title, section[table:], header)
+}
+
+func exitCodeTable(t *testing.T, name string, lines []string, header string) map[int]string {
+	t.Helper()
+
+	if len(lines) < 3 || lines[0] != header || lines[1] != "|---|---|" {
+		t.Fatalf("%s has missing or malformed exit-code table header", name)
+	}
+
+	codes := make(map[int]string)
+	for _, line := range lines[2:] {
+		if !strings.HasPrefix(line, "|") {
+			break
+		}
+		cells := markdownTableCells(t, name, line, 2)
+		code, err := strconv.Atoi(cells[0])
+		if err != nil {
+			t.Fatalf("%s has unparseable exit code %q: %v", name, cells[0], err)
+		}
+		if _, duplicate := codes[code]; duplicate {
+			t.Fatalf("%s has duplicate exit code %d", name, code)
+		}
+		codes[code] = cells[1]
+	}
+	if len(codes) == 0 {
+		t.Fatalf("%s extracted no exit-code rows", name)
+	}
+	return codes
+}
+
+func assertSameExitCodeSet(t *testing.T, command string, got map[int]string, want map[int]struct{}) {
+	t.Helper()
+
+	for code := range got {
+		if _, declared := want[code]; !declared {
+			t.Fatalf("%s exit mapping uses undeclared global code %d", command, code)
+		}
+	}
+	for code := range want {
+		if _, found := got[code]; !found {
+			t.Fatalf("%s exit mapping omits declared global code %d", command, code)
+		}
+	}
+}
+
+func assertShippingOutcomeCode(t *testing.T, codes map[int]string, outcome string, want int) {
+	t.Helper()
+
+	found := -1
+	count := 0
+	for code, description := range codes {
+		if strings.Contains(description, outcome) {
+			found = code
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("shipping outcome %q appears in %d exit-code rows, want 1", outcome, count)
+	}
+	if found != want {
+		t.Fatalf("shipping outcome %q maps to %d, want %d", outcome, found, want)
 	}
 }
 
