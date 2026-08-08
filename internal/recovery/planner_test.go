@@ -119,6 +119,15 @@ func TestPlanC4RowsAndSchedulerOrder(t *testing.T) {
 	}
 }
 
+func TestFinalizationRebuildPrecedesCurrentAttempt(t *testing.T) {
+	input := c2Input(runstate.AttemptBlocked)
+	input.Projection.FinalizationEligible = true
+	decision := Plan(input)
+	if decision.CaseID != CaseFinalizationRebuild {
+		t.Fatalf("RC-RESUME-038 selected %s, want %s", decision.CaseID, CaseFinalizationRebuild)
+	}
+}
+
 func TestPlanRevisionRestartCarriesItsSelectedSuccessorToC4(t *testing.T) {
 	decision := Plan(withRevisionRestart(baseInput()))
 	if decision.CaseID != CaseRevisionRestart || decision.Action == nil || decision.Action.Kind != ActionSelectRevisionRestart {

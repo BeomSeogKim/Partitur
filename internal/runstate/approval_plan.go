@@ -14,6 +14,7 @@ const ApprovalPlanSchema = "partitur/approval-plan+json;v=1"
 type ApprovalPlan struct {
 	Schema               string         `json:"schema"`
 	ProposalID           ProposalID     `json:"proposal_id"`
+	MovementID           MovementID     `json:"movement_id"`
 	EmittedID            *string        `json:"emitted_id,omitempty"`
 	Mode                 string         `json:"mode"`
 	DecisionID           *string        `json:"decision_id,omitempty"`

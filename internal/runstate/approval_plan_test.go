@@ -13,6 +13,7 @@ func TestApprovalPlanCodecCarriesEveryInvariantField(t *testing.T) {
 	plan := ApprovalPlan{
 		Schema:              ApprovalPlanSchema,
 		ProposalID:          "proposal-1",
+		MovementID:          "write",
 		EmittedID:           &emittedID,
 		Mode:                "human",
 		DecisionID:          &decisionID,
@@ -42,8 +43,8 @@ func TestApprovalPlanCodecCarriesEveryInvariantField(t *testing.T) {
 	if err := json.Unmarshal(contents, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if len(fields) != 20 {
-		t.Fatalf("human approval plan fields=%d, want 20 invariant fields applicable to human mode", len(fields))
+	if len(fields) != 21 {
+		t.Fatalf("human approval plan fields=%d, want 21 invariant fields applicable to human mode", len(fields))
 	}
 	decoded, err := DecodeApprovalPlan(contents)
 	if err != nil {

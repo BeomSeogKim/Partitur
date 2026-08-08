@@ -54,6 +54,9 @@ type Input struct {
 	// 1–9, but records envelope guards as audit facts instead of routing or
 	// blocking the already-deciding human.
 	HumanDecision bool
+	// Finalization admits the sole core-owned /status patch described by §2.
+	// Ordinary proposals continue to reject every reserved-field mutation.
+	Finalization bool
 }
 
 // Outcome is one deterministic result. Patched and Impact are populated once
@@ -84,7 +87,11 @@ func Evaluate(input Input) (Outcome, error) {
 	if input.State.ScoreHead.Revision != input.BaseRevision || input.State.ScoreHead.SemanticHash != input.BaseHash {
 		return Outcome{Kind: Rejected, Reason: "stale"}, nil
 	}
-	if touchesReserved(input.Operations) {
+	if input.Finalization {
+		if !finalizationPatch(input.Operations) || baseStatus(input.Base) != "draft" {
+			return Outcome{Kind: Rejected, Reason: "reserved_field"}, nil
+		}
+	} else if touchesReserved(input.Operations) {
 		return Outcome{Kind: Rejected, Reason: "reserved_field"}, nil
 	}
 	baseValue, baseBytes, err := scoreValue(input.Base)
@@ -134,6 +141,9 @@ func Evaluate(input Input) (Outcome, error) {
 		}
 		return Outcome{Kind: Approved, Class: class, GuardPass: true, Patched: patched, Impact: impact}, nil
 	}
+	if input.Finalization {
+		return Outcome{Kind: Routed, Reason: "draft_phase", Patched: patched, Impact: impact}, nil
+	}
 
 	// Status is intentionally checked on the authenticated base, not the patched
 	// score; /status is reserved at step 3.
@@ -158,6 +168,17 @@ func Evaluate(input Input) (Outcome, error) {
 		return Outcome{Kind: Routed, Reason: "runtime_scope_started", Class: class, GuardPass: false, Patched: patched, Impact: impact}, nil
 	}
 	return Outcome{Kind: Approved, Class: class, GuardPass: true, Patched: patched, Impact: impact}, nil
+}
+
+func finalizationPatch(operations []any) bool {
+	if len(operations) != 1 {
+		return false
+	}
+	op, ok := operations[0].(map[string]any)
+	if !ok {
+		return false
+	}
+	return op["op"] == "replace" && op["path"] == "/status" && op["value"] == "finalized"
 }
 
 func scoreValue(value *score.Score) (any, []byte, error) {

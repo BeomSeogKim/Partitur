@@ -284,6 +284,7 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 	current.FailureClassification = facts.failureClassification(*current, pinned, resolved, projection.Scheduler)
 	projection.Scheduler.PendingSuccessor = pendingSuccessor(*current)
 	projection.CurrentHeadAttempt = current
+	projection.FinalizationEligible = finalizationEligible(state, pinned, current)
 	if acceptance, ok := state.Acceptances[current.AttemptID]; ok && acceptance.Started {
 		projection.Acceptance = facts.acceptance(state, current.AttemptID, current.MovementID, pinned)
 		if projection.Acceptance.Gate.Required && projection.Acceptance.Gate.Requested &&
@@ -293,6 +294,39 @@ func recoveryProjection(state runstate.State, events []runstate.Event, pinned *s
 		}
 	}
 	return projection
+}
+
+func finalizationEligible(state runstate.State, pinned *score.Score, attempt *recovery.AttemptRecovery) bool {
+	if pinned == nil || pinned.Status() != "draft" || attempt == nil || attempt.MovementID != runstate.MovementID(pinned.DraftInterviewMovement()) {
+		return false
+	}
+	if !pinned.Execution().VerificationExpectationPresent {
+		return false
+	}
+	switch attempt.State {
+	case runstate.AttemptBlocked, runstate.AttemptCompleted, runstate.AttemptFailed:
+	default:
+		return false
+	}
+	if attempt.State == runstate.AttemptFailed && !attempt.FailureDispositionRealized {
+		return false
+	}
+	for _, routed := range state.RoutedAmendments {
+		if routed.DecisionType == "finalization" {
+			return false
+		}
+	}
+	for _, decision := range state.PendingDecisions {
+		if decision.Type == "question" {
+			return false
+		}
+	}
+	for _, request := range attempt.QuestionRequests {
+		if !request.Resolved {
+			return false
+		}
+	}
+	return state.Movements[attempt.MovementID] != runstate.MovementSucceeded
 }
 
 func pendingSuccessor(attempt recovery.AttemptRecovery) *recovery.PendingSuccessor {
@@ -445,6 +479,12 @@ func replayFacts(events []runstate.Event) replayFact {
 			if stringValue(payload, "decision_type") == "question" {
 				if reference, ok := requests[stringValue(payload, "decision_id")]; ok {
 					facts.attempts[reference.attemptID].QuestionRequests[reference.index].Durable = true
+				}
+			}
+		case runstate.EventDecisionResolved:
+			if stringValue(payload, "decision_type") == "question" {
+				if reference, ok := requests[stringValue(payload, "decision_id")]; ok {
+					facts.attempts[reference.attemptID].QuestionRequests[reference.index].Resolved = true
 				}
 			}
 		case runstate.EventAmendmentRoutedHuman:

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -196,7 +197,7 @@ func assertDraftResultRecoveryFixedPoint(
 	expected expectedFailure,
 ) {
 	t.Helper()
-	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "resume", runID)
+	code, stdout, stderr := runCommandBinaryWithin(t, 10*time.Second, binary, repository, environment, "resume", runID)
 	if code != 4 || stdout != "" || stderr != "" {
 		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -206,7 +207,7 @@ func assertDraftResultRecoveryFixedPoint(
 		t.Fatal(err)
 	}
 	assertExpectedFailure(t, first, expected)
-	code, stdout, stderr = runCommandBinary(t, binary, repository, environment, "resume", runID)
+	code, stdout, stderr = runCommandBinaryWithin(t, 10*time.Second, binary, repository, environment, "resume", runID)
 	if code != 4 || stdout != "" || stderr != "" {
 		t.Fatalf("fixed-point replay exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}

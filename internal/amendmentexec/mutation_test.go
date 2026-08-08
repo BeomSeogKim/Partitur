@@ -24,7 +24,7 @@ func TestMutationDispositionerGuards(t *testing.T) {
 		name, source, before, after, target string
 	}{
 		{"blocking rejection closes derived decision", "internal/amendmentexec/dispositioner.go", "if proposal.Event.RequiresDecision || proposal.humanDecision {", "if false { // mutation", "TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked"},
-		{"frozen descriptor retains evaluated reason", "internal/amendmentexec/dispositioner.go", `"reason": outcome.Reason, "decision_type": "amendment",`, `"reason": "auto_disabled", "decision_type": "amendment",`, "TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource"},
+		{"frozen descriptor retains evaluated reason", "internal/amendmentexec/dispositioner.go", `"reason": outcome.Reason, "decision_type": decisionType,`, `"reason": "auto_disabled", "decision_type": decisionType,`, "TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource"},
 		{"pending prepare guard refuses a second prepare", "internal/amendmentexec/dispositioner.go", "if state.PendingPrepare != nil {", "if false { // mutation", "TestDispositionerPreparesAutoApproval"},
 		{"routed marker follows blocked source", "internal/driver/driver.go", "for _, appendRoute := range appendRoutes {", "for _, appendRoute := range appendRoutes[:0] { // mutation", "TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource"},
 		{"recovery preserves the frozen descriptor", "internal/recoveryconsequence/consequence.go", `payload["emitted_id"] = immutable.EmittedID`, `payload["emitted_id"] = "invented"`, "TestRecoveryCompletesFrozenBlockingProposalRouteThenRequest"},

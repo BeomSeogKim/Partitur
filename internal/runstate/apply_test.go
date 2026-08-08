@@ -1254,7 +1254,6 @@ func TestAmendmentApprovalModeFieldsAreConditional(t *testing.T) {
 		{name: "human requires decision id", mutate: func(payload map[string]any) { delete(payload, "decision_id") }},
 		{name: "human forbids envelope class", mutate: func(payload map[string]any) { payload["envelope_class"] = "NARROW_PATHS" }},
 		{name: "human requires envelope evaluation", mutate: func(payload map[string]any) { delete(payload, "envelope_evaluation") }},
-		{name: "human finalization remains unsupported", mutate: func(payload map[string]any) { payload["finalization"] = true }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			payload := approvalPayload("human")
@@ -1264,6 +1263,14 @@ func TestAmendmentApprovalModeFieldsAreConditional(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("human finalization requires human mode", func(t *testing.T) {
+		payload := approvalPayload("auto")
+		payload["finalization"] = true
+		if err := ValidateEvent(fixtureEvent(EventAmendmentApproved, payload, nil)); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("ValidateEvent() error = %v, want ErrInvalidEvent", err)
+		}
+	})
 }
 
 func TestAmendmentRejectedPatchHashFormIsConditional(t *testing.T) {
