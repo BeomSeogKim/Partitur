@@ -11,6 +11,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
+	"github.com/BeomSeogKim/Partitur/internal/protectedpath"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/score"
@@ -167,7 +168,7 @@ func projection(compiled *score.Score, movement score.MovementView, part score.P
 		"resolved_questions":     resolvedQuestions(compiled.ResolvedQuestions()),
 		"effective_paths":        map[string]any{"rw": stringsValue(attempt.GrantedAuthority.PathsRW), "ro": stringsValue(attempt.GrantedAuthority.PathsRO)},
 		"side_effects_permitted": []any{},
-		"protected_paths":        []any{".partitur/**", "partitur.yaml", "refs/partitur/**"},
+		"protected_paths":        stringsValue(protectedpath.AdvertisedGlobs()),
 	}
 	scoreValue := map[string]any{"goal": execution.Goal, "global_invariants": global, "verification_expectation_intent": execution.VerificationExpectation}
 	if execution.ContextPresent {

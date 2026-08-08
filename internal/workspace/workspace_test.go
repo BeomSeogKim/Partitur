@@ -615,6 +615,42 @@ func TestCaptureChangeSetRecordsNoOpAndExcludesProtectedPartiturContent(t *testi
 			t.Fatalf("capture included protected .partitur content: %q and %q", changeSet.BaseTree, changeSet.ResultTree)
 		}
 	})
+
+}
+
+func TestCaptureChangeSetExcludesProtectedRootScore(t *testing.T) {
+	_, preparation := prepareRepositoryWithScore(t, writerScore())
+	started := startFixture(t, preparation, newRecordingGit(t), testRunID)
+	started.Run.newID = idSequence(testAttemptID)
+	attempt, err := started.Run.CreateAttempt(preparation.Score.Movements()[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(attempt.Worktree, "partitur.yaml"), []byte("changed\n"), 0o600)
+	changeSet, err := attempt.CaptureChangeSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changeSet.BaseTree != changeSet.ResultTree {
+		t.Fatalf("capture included protected root score: %q and %q", changeSet.BaseTree, changeSet.ResultTree)
+	}
+}
+
+func TestProtectedPathsPresentFindsExistingProtectedWorktreePaths(t *testing.T) {
+	worktree := t.TempDir()
+	writeFile(t, filepath.Join(worktree, "partitur.yaml"), []byte("score\n"), 0o600)
+	if err := os.Mkdir(filepath.Join(worktree, ".partitur"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := protectedPathsPresent(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"partitur.yaml", ".partitur"}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("protected paths = %v, want %v", paths, want)
+	}
 }
 
 func TestCaptureAcceptanceSubjectIncludesIgnoredProtectedContentAndMatchesWorktree(t *testing.T) {
@@ -840,6 +876,20 @@ func TestReadOnlyVerificationRejectsEachInvariantClause(t *testing.T) {
 				t.Fatalf("verification = %#v, want reason=%q path=%q", verification, test.wantReason, test.wantPath)
 			}
 		})
+	}
+}
+
+func TestVerifyProtectedPathsRejectsChangedGitDirIndirection(t *testing.T) {
+	_, _, attempt := newAttemptFixture(t)
+	writeFile(t, filepath.Join(attempt.Worktree, ".git"), []byte("gitdir: /tmp/foreign\n"), 0o600)
+
+	err := attempt.VerifyProtectedPaths()
+	var verification *VerificationError
+	if !errors.As(err, &verification) {
+		t.Fatalf("error = %v, want VerificationError", err)
+	}
+	if verification.Reason != "protected_path_violation" || !slices.Equal(verification.Paths, []string{".git"}) {
+		t.Fatalf("verification = %#v, want protected .git violation", verification)
 	}
 }
 

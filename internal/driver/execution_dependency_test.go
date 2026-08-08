@@ -161,6 +161,26 @@ func TestExecuteBriefProjectsResolvedQuestions(t *testing.T) {
 	}
 }
 
+func TestExecuteBriefProjectsProtectedPaths(t *testing.T) {
+	prepared := prepareFixture(t, sliceScore())
+	movement, _, _, _, err := selectAttempt(prepared.Score, prepared.Cast, "inspect", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, global, err := executeBrief(
+		prepared.Score,
+		movement,
+		effectiveGrants(movement, prepared.Score.EffectivePolicy()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []any{".partitur/**", "partitur.yaml", "refs/partitur/**"}
+	if got := global["protected_paths"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("protected paths = %#v, want %#v", got, want)
+	}
+}
+
 func TestExecutionDependencyHashBindsScoreBaseForMayPropose(t *testing.T) {
 	first := sliceScore()
 	second := sliceScore()

@@ -31,6 +31,7 @@ func TestProductionImportsAreExplicitlyAllowed(t *testing.T) {
 		"time",
 		"github.com/BeomSeogKim/Partitur/internal/canonical",
 		"github.com/BeomSeogKim/Partitur/internal/faultpoint",
+		"github.com/BeomSeogKim/Partitur/internal/protectedpath",
 		"github.com/BeomSeogKim/Partitur/internal/runstate",
 		"github.com/BeomSeogKim/Partitur/internal/runstore",
 		"github.com/BeomSeogKim/Partitur/internal/score",

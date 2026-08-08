@@ -24,6 +24,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/criterionexec"
 	"github.com/BeomSeogKim/Partitur/internal/executiondep"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/protectedpath"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryobs"
@@ -1637,11 +1638,7 @@ func executeBrief(
 			"ro": stringsToAny(grants.PathsRO),
 		},
 		"side_effects_permitted": []any{},
-		"protected_paths": []any{
-			".partitur/**",
-			"partitur.yaml",
-			"refs/partitur/**",
-		},
+		"protected_paths":        stringsToAny(protectedpath.AdvertisedGlobs()),
 	}
 	globalBytes, err := json.Marshal(global)
 	if err != nil {

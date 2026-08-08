@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/protectedpath"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
@@ -221,7 +222,7 @@ type protectedEntry struct {
 
 func snapshotProtected(root string) (map[string]protectedEntry, error) {
 	result := make(map[string]protectedEntry)
-	for _, relative := range []string{".git", "partitur.yaml", ".partitur"} {
+	for _, relative := range protectedpath.SnapshotNames() {
 		path := filepath.Join(root, filepath.FromSlash(relative))
 		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 			continue

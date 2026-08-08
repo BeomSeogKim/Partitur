@@ -11,6 +11,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/protectedpath"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
@@ -535,7 +536,7 @@ func verifyRecoveryProtectedPaths(repositoryRoot, worktree, baseTree string) (bo
 		return false, err
 	}
 	baseTree = recoveryGitObject(baseTree)
-	for _, path := range []string{"partitur.yaml", ".partitur"} {
+	for _, path := range protectedpath.WorktreeNames() {
 		if err := verifyRecoveryProtectedPath(git, worktree, baseTree, path); err != nil {
 			if errors.Is(err, errRecoveryProtectedMismatch) {
 				return false, nil
@@ -583,7 +584,7 @@ func VerifyRecoverySubject(repositoryRoot, worktree, subjectTree string) (bool, 
 	if len(splitNUL(untracked)) != 0 {
 		return false, nil
 	}
-	for _, path := range []string{"partitur.yaml", ".partitur"} {
+	for _, path := range protectedpath.WorktreeNames() {
 		if err := verifyRecoveryProtectedPath(git, worktree, gitTree, path); err != nil {
 			if errors.Is(err, errRecoveryProtectedMismatch) {
 				return false, nil
