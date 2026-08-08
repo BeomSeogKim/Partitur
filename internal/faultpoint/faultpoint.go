@@ -16,6 +16,7 @@ const (
 	EdgeProposalPublishedToBlockedRoute                  EdgeID = "proposal.published_to_blocked_route"
 	EdgeProposalBlockedRouteToRouted                     EdgeID = "proposal.blocked_route_to_routed"
 	EdgeProposalPublishedToRouted                        EdgeID = "proposal.published_to_routed"
+	EdgeProposalCoreFinalizationPublishedToRouted        EdgeID = "proposal.core_finalization_published_to_routed"
 	EdgeProposalRoutedToDecisionRequested                EdgeID = "proposal.routed_to_decision_requested"
 	EdgeCancelSweptToTerminal                            EdgeID = "cancel.swept_to_terminal"
 	EdgeCancelSweptToQuarantined                         EdgeID = "cancel.swept_to_quarantined"

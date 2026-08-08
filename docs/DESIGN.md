@@ -621,7 +621,12 @@ draft movement's latest attempt is terminal **and** every open question is resol
 `verification.expectation` is complete — checked by `run`/`resume` under the state lock, so it has an
 owner and a recovery point rather than depending on whoever happened to notice. If a crash lands
 between constructing the record and appending `amendment.routed_human`, the orphan record is
-quarantined (§1) and the next `resume` constructs it again.
+quarantined (§1) and the next `resume` constructs it again. The core-finalization publisher holds
+that state lock from publication through the matching route append. Once the crash releases it,
+§1 quarantines the original route-absent record before `RC-RESUME-038` re-evaluates this predicate
+under the lock and constructs and routes one fresh `origin: core_finalization` record. A matching
+route raw-hash-binds and retains its record; after the ordinary route-to-request consequence is
+durable, a second `resume` appends neither another record nor another route.
 
 **A finalized score still contains its draft movement**, since finalization changes only `/status`.
 A *new* run started from that score therefore has an interview movement and no finalization event.
@@ -5543,7 +5548,11 @@ tables below as their owning clauses require:
 | `RC-RESUME-034` | §1 torn-tail repair and manifest rebuild during journal replay |
 | `RC-RESUME-035` | §1 orphan artifact, routed-proposal record, and change-set-ref cleanup; §4 unreferenced pre-`attempt.started` review-subject input cleanup; §9 unreferenced pre-prepare snapshot cleanup |
 | `RC-RESUME-036` | §6/§9 inert orphan plan and quiesced-sidecar cleanup |
-| `RC-RESUME-038` | §2 reconstruction of an orphaned core-finalization proposal on the next `resume` |
+
+`RC-RESUME-038` has its executable §2 owner in C.1: after §1 quarantines a route-absent
+core-finalization original record, it re-evaluates the predicate under the state lock, constructs
+and routes one fresh record, then re-evaluates; it retains a route-bound record and makes the
+second `resume` a no-op.
 
 The known-hole table is deliberately retained even when empty: a later gap must be named here rather
 than hidden in a coverage row, and the mechanical guard checks the table's shape. No known holes
@@ -5677,6 +5686,7 @@ The rows:
 | `RC-RESUME-009` | `root_snapshot_divergence` — the root score claims the snapshot's revision with a different semantic hash | Halt (§1). Resume is impossible until an operator resolves it |
 | `RC-RESUME-010` | A run-level snapshot, artifact, proposal record, ref, `resolved-cast.yaml`, or attempt-started review-subject input named by an event is missing or hash-mismatched | Halt with the matching reason (Appendix D). The journal is the authority and this is corruption |
 | `RC-RESUME-049` | Current-head `attempt.blocked` contains a blocking proposal's route descriptor, its named immutable record verifies, and matching `amendment.routed_human` is absent | Append `amendment.routed_human` idempotently from the **frozen descriptor** and record; do not re-run §9, infer an operations hash, or manufacture a request. The preceding `attempt.blocked` is already terminal, so the next re-evaluation reaches `RC-RESUME-037` for the separate route-to-request cut. This row is the sole exception to §1's orphan cleanup: the blocked descriptor, not an unreferenced file, is its durable routing authority |
+| `RC-RESUME-038` | §1 has quarantined an unreferenced `origin: core_finalization` record whose matching `amendment.routed_human` is absent, and §2's finalization predicate holds | Under the state lock, construct and append the matching route for one fresh core-finalization record, then re-evaluate C.1. A matching route raw-hash-binds and retains its record, so this row does not select again; after the ordinary route-to-request consequence, the second `resume` appends neither a record nor a route |
 | `RC-RESUME-037` | `amendment.routed_human` durable, its matching `decision.requested` absent | Apply §1's source-to-request rule idempotently, then re-evaluate C.1. The routed event fixes the request payload; recovery does not re-run routing or infer it from `attempt.blocked` |
 | `RC-RESUME-042` | `amendment.approved` established the current head, the run remains nonterminal, and an affected movement has no attempt on that head | Replay the approval's derived supersession and decision-obsoletion projections, select the `revision_restart` continuation already fixed by §4 and §9, and hand its materialization to the between-unit scheduler (`RC-RESUME-043`). The same C.1 selection is used by a live post-auto-commit continuation; C.4 receives only its fixed pending successor and does not rediscover revision history. Do not enter C.2 or C.3 for an attempt from the superseded revision |
 | `RC-RESUME-011` | `composition.conflicted` or `composition.failed` durable, its terminal event missing | Append idempotently **the terminal event B.3 gives for that evidence type and scope** — the mapping is B.3's and is not restated here. This row sits below the control rows deliberately: a `cancel.requested` landing between the evidence and its terminal outranks it, which is the qualification B.3 already carries rather than a second precedence. Composition runs between attempts, so nothing on this row enters C.2 |
@@ -6220,7 +6230,7 @@ requires, not the number of review rounds that have run.
 
 ## E.2 The catalog
 
-`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-seven
+`R` marks a `DurabilityReceipt` endpoint, `B` a `BoundaryReached` one. **Thirteen of the thirty-eight
 have a `B` endpoint** — the harness cannot hang those on an fsync and must block on the probe.
 
 **Prepare and quiesce**
@@ -6241,7 +6251,8 @@ have a `B` endpoint** — the harness cannot hang those on an fsync and must blo
 |---|---|---|---|---|
 | `proposal.published_to_blocked_route` | blocking-proposal record published `R` | matching `attempt.blocked` route descriptor appended `R` | §1 routed-proposal records; §4 blocking handshake; C.1 `RC-RESUME-035` | A record without either a routed event or its matching blocked descriptor is unreferenced and quarantined; a descriptor names and raw-hash-binds the only record from which `RC-RESUME-049` may recover a route |
 | `proposal.blocked_route_to_routed` | blocking `attempt.blocked` route descriptor appended `R` | matching `amendment.routed_human` appended `R` | §4 blocking handshake; C.1 `RC-RESUME-049` | Recovery verifies the descriptor-named immutable record and appends the frozen route idempotently; it never re-runs §9 or derives a route from an unreferenced record |
-| `proposal.published_to_routed` | proposal record published `R` | `amendment.routed_human` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-035`, `RC-RESUME-049` | An ordinary routed record has no durable reference other than its route. A command-origin publisher retains the state lock across this edge; an adapter-origin publisher is protected by its matching live driver lease. A live publisher is not an orphan. A crash after publication releases that protection, so recovery quarantines the record when the route and blocking descriptor are absent |
+| `proposal.published_to_routed` | proposal record published `R` | `amendment.routed_human` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-035`, `RC-RESUME-049` | An ordinary adapter- or CLI-origin routed record has no durable reference other than its route. A CLI publisher retains the state lock across this edge; an adapter publisher is protected by its matching live driver lease. A live publisher is not an orphan. A crash after publication releases that protection, so recovery quarantines the record when the route and blocking descriptor are absent |
+| `proposal.core_finalization_published_to_routed` | core-finalization proposal record published `R` | matching `amendment.routed_human` appended `R` | §2 finalization; C.1 `RC-RESUME-038` | The core-finalization publisher retains the state lock across this edge. A crash after publication releases that protection: §1 quarantines the route-absent original record, then `RC-RESUME-038` re-evaluates §2 under the lock and constructs and routes one fresh record. Once the route raw-hash-binds the record, recovery retains it; after the ordinary route-to-request consequence, the second `resume` appends neither another record nor another route |
 | `proposal.routed_to_decision_requested` | `amendment.routed_human` appended `R` | matching `decision.requested` appended `R` | §1 routed-proposal records; C.1 `RC-RESUME-037` | Recovery appends the request idempotently from the routed event; it never re-runs routing or infers the request from `attempt.blocked` |
 
 **Cancellation** — `(a)`–`(f)` are §6's labels and are not restated here.
