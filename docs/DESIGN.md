@@ -3532,11 +3532,11 @@ cast produce `binding_missing`, which is a validation result about content that 
 |---|---|
 | 0 | success |
 | 1 | usage error: unknown command, missing or malformed operand |
-| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state (including a missing, obsoleted, already-resolved, or wrong-type decision addressed by `answer` or gate `approve`), dirty checkout, lock held, unwritable output stream |
+| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state (including a missing, obsoleted, already-resolved, or wrong-type decision addressed by `answer` or gate `approve`), dirty checkout, lock held, unwritable output stream, or a promotion CAS conflict whose root file hash differs from `expected_root_file_hash` |
 | 3 | validation failed: `partitur validate`, pre-run validation for `partitur run`, or a rejected amendment |
-| 4 | a run-driving command reached terminal `FAILED` or `CANCELLED` |
-| 5 | recovery halt — the run cannot proceed and needs an operator (Appendix D) |
-| 6 | post-creation operational interruption — the run remains nonterminal and resumable |
+| 4 | a command's durable transaction completed unsuccessfully: a run reached terminal `FAILED` or `CANCELLED`, or Application reached `FAILED_CLEAN` after a verified rollback |
+| 5 | recovery halt — a command's durable transaction cannot proceed and needs an operator: a run halt names an Appendix D reason; Application or Promotion remains `RECOVERY_REQUIRED` when its `--recover` cannot determine a safe result |
+| 6 | operational interruption after a command started its durable transaction; that transaction remains nonterminal and recoverable by the command's specified continuation: a run by `resume`, Application `APPLYING` by `apply --recover`, or Promotion `PROMOTING` by `promote-score --recover` |
 
 For `answer` and gate `approve`, exit 2 does not by itself distinguish no active run from a
 missing, obsoleted, already-resolved, or wrong-type decision. The stderr diagnostic names the
@@ -3731,6 +3731,34 @@ score.promotion_started { expected_root_file_hash, target_snapshot_file_hash, ca
 transaction (a repeated `score.promotion_started` is an idempotent resume, never a second
 promotion); anything else stays `RECOVERY_REQUIRED`, because the root was changed by
 something else and the CAS can no longer decide.
+
+**`partitur apply` exit mapping.** The following table is exhaustive for `apply`; the run
+remains terminal `SUCCEEDED` on every shipping outcome, and `status --json` remains the
+authoritative surface for `application.state` and its cause.
+
+| Code | `partitur apply` outcome |
+|---|---|
+| 0 | Application reached `APPLIED`, including the idempotent already-applied result |
+| 1 | Usage error |
+| 2 | Run selection or another command precondition was refused under the global exit-code table, including an application projection outside the legal normal or `--recover` entry states |
+| 3 | Not used: `apply` performs neither validation nor amendment rejection |
+| 4 | Application reached `FAILED_CLEAN`: `apply.failed`, or a `--recover` that verified the restored base tree, recorded that outcome; stderr names the verified clean rollback |
+| 5 | `apply --recover` inspected a tree matching neither `base_tree` nor `result_tree` and left Application `RECOVERY_REQUIRED`; stderr names that application recovery state and cause; the run remains `SUCCEEDED` |
+| 6 | This `apply` invocation was operationally interrupted after its transaction started; Application remains `APPLYING` and recoverable with `partitur apply <run-id> --recover`; the run remains `SUCCEEDED` |
+
+**`partitur promote-score` exit mapping.** The following table is exhaustive for
+`promote-score`; the run remains terminal `SUCCEEDED` on every shipping outcome, and
+`status --json` remains the authoritative surface for `promotion.state` and its cause.
+
+| Code | `partitur promote-score` outcome |
+|---|---|
+| 0 | Promotion reached `PROMOTED` |
+| 1 | Usage error |
+| 2 | Run selection or another command precondition was refused under the global exit-code table, including a CAS conflict because the root file hash differs from `expected_root_file_hash` before promotion starts |
+| 3 | Not used: `promote-score` performs neither validation nor amendment rejection |
+| 4 | Not used: promotion has no verified-clean failure outcome |
+| 5 | `promote-score --recover` found the root file hash matching neither the expected nor target hash and left Promotion `RECOVERY_REQUIRED`; stderr names that promotion recovery state and cause; the run remains `SUCCEEDED` |
+| 6 | This `promote-score` invocation was operationally interrupted after its transaction started; Promotion remains `PROMOTING` and recoverable with `partitur promote-score <run-id> --recover`; the run remains `SUCCEEDED` |
 
 `apply` evaluates the selected run's candidate against the expectation of **the same run
 revision** — never against the root score.
