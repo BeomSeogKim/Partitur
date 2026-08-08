@@ -42,6 +42,24 @@ func TestRecomputeDispatchesOnlyCompleteRecordedV3Tuple(t *testing.T) {
 	}
 }
 
+func TestEqualPreservesRecordedProtectedPathsHash(t *testing.T) {
+	attempt := Attempt{
+		ID:               "attempt-1",
+		MovementID:       "inspect",
+		AdapterID:        "adapter",
+		Model:            "model",
+		IdentityVersions: v3IdentityVersions(),
+		RecordedHash:     "sha256:ccf861b5258d377220ad33caec2e020a2bb75ea72691ec7dd013bc922b6fa7c9",
+	}
+	same, err := Equal(testScore(t), attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same {
+		t.Fatal("recorded protected-path hash no longer matches recomputation")
+	}
+}
+
 func TestV3ProjectionDomainsFollowReachedA5Hashes(t *testing.T) {
 	compiled := testScore(t)
 	movement, ok := movementByID(compiled, "inspect")

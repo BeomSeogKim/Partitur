@@ -10,6 +10,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/protectedpath"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
@@ -106,7 +107,7 @@ func (attempt *AttemptWorkspace) CaptureAcceptanceSubject() (AcceptanceSubject, 
 
 func protectedPathsPresent(worktree string) ([]string, error) {
 	paths := make([]string, 0, 2)
-	for _, path := range []string{"partitur.yaml", ".partitur"} {
+	for _, path := range protectedpath.WorktreeNames() {
 		_, err := os.Lstat(worktree + "/" + path)
 		switch {
 		case err == nil:
@@ -137,17 +138,8 @@ func (attempt *AttemptWorkspace) CaptureChangeSet() (ChangeSet, error) {
 	if _, err := gitOutput(attempt.run.git, attempt.Worktree, nil, "read-tree", "HEAD"); err != nil {
 		return ChangeSet{}, fmt.Errorf("reset attempt index: %w", err)
 	}
-	if _, err := gitOutput(
-		attempt.run.git,
-		attempt.Worktree,
-		nil,
-		"add",
-		"--all",
-		"--",
-		".",
-		":(exclude).partitur/**",
-		":(exclude)partitur.yaml",
-	); err != nil {
+	args := append([]string{"add", "--all", "--", "."}, protectedpath.CaptureExclusions()...)
+	if _, err := gitOutput(attempt.run.git, attempt.Worktree, nil, args...); err != nil {
 		return ChangeSet{}, fmt.Errorf("stage attempt worktree: %w", err)
 	}
 	resultTree, err := writeTree(attempt.run.git, attempt.Worktree)
