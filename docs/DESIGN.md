@@ -3141,6 +3141,30 @@ partitur promote-score --recover   # only from PROMOTING | RECOVERY_REQUIRED
 partitur version         # prints the core version; no run state is read or written
 ```
 
+### `partitur init` precondition matrix
+
+The required `.partitur/.gitignore` content is exactly the UTF-8 bytes
+`runs/\nwork/\n`: `runs/` is first, `work/` is second, the final newline is required, and no
+other bytes or lines are permitted. `init` compares that file byte-for-byte.
+
+The matrix below exhausts the physically satisfiable preconditions. A missing `.partitur/` implies
+that its `.gitignore` child is absent; the four logical combinations that instead name that child as
+present cannot occur and are not separate command states. In every `score exists` row, `init`
+preserves the existing `partitur.yaml` bytes byte-for-byte. Where the result says “create score,” it
+means only the minimal draft `partitur.yaml` with an interview movement named above; this matrix does
+not specify that score's template prose.
+
+| Catalog ID | `.partitur/` | `.partitur/.gitignore` | `partitur.yaml` | Result |
+|---|---|---|---|---|
+| `INIT-001` | absent | absent | absent | Create `.partitur/`, write the required ignore bytes, create score; exit 0 |
+| `INIT-002` | absent | absent | exists | Create `.partitur/`, write the required ignore bytes, preserve score bytes; exit 0 |
+| `INIT-003` | exists | absent | absent | Write the required ignore bytes, create score; exit 0 |
+| `INIT-004` | exists | absent | exists | Write the required ignore bytes, preserve score bytes; exit 0 |
+| `INIT-005` | exists | correct bytes | absent | Preserve ignore bytes, create score; exit 0 |
+| `INIT-006` | exists | correct bytes | exists | Preserve ignore bytes and score bytes; exit 0 |
+| `INIT-007` | exists | different bytes | absent | Refuse the differing-ignore precondition: modify neither directory nor ignore file, create no score, and exit 2 |
+| `INIT-008` | exists | different bytes | exists | Refuse the differing-ignore precondition: modify neither directory, ignore file, nor score, and exit 2 |
+
 **Command repository anchoring.** For every command, the invocation working directory is `<repo>` —
 exactly the root whose project inputs, authoritative `.partitur/runs/` state, writable
 `.partitur/work/` staging, and owned Git refs §1 lays out. Partitur never searches parent
