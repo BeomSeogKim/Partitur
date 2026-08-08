@@ -3195,6 +3195,7 @@ not a convention (§8).
 part of v0.2's surface:
 
 ```text
+partitur init
 partitur validate
 partitur answer  <decision-id> --answer <text> | --answer-file <path>
 partitur approve <decision-id> --approve
@@ -3209,14 +3210,21 @@ partitur run
 partitur resume  [<run-id>]
 partitur status  [<run-id>] [--json]
 partitur logs    [<run-id>] [--jsonl] [--follow]
-partitur apply   [<run-id>] [--recover]
-partitur promote-score [<run-id>] [--recover]
+partitur apply   <run-id> [--recover]
+partitur promote-score <run-id> [--recover]
+partitur version
 ```
 
 Every command is **non-interactive**: a missing operand is an error, never a prompt, so the CLI is
 scriptable and a GUI can use the same commands (§0). `partitur run` accepts no run-id operand or
 option: §1's core allocation is the only creation path. For commands whose syntax includes
 `[<run-id>]`, omitting it selects the unique active run and errors if there is not exactly one.
+`apply` and `promote-score` deliberately differ: each requires `<run-id>`. Their shipping
+preconditions address a terminal `SUCCEEDED` run, whereas an omitted generic run id selects the
+unique active nonterminal run. Successful terminal runs accumulate because v0.2 retains run
+directories and defines no run-deletion command (§1), so a unique succeeded-run selector would
+fail after a second success; selecting the most recent one would create a new policy. The
+mandatory id therefore keeps both normal and `--recover` forms targeted at one exact run.
 `answer` and the human-gate form of `approve` instead select that same unique active run through
 their decision-resolution rule above; their decision ids are run-unique rather than global.
 `--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
