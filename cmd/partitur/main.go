@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -36,6 +37,29 @@ import (
 var version = "dev"
 
 var errOutputStream = errors.New("output stream is unwritable")
+
+const initIgnoreContents = "runs/\nwork/\n"
+
+const initScoreContents = `score: "0.2"
+name: draft
+revision: 1
+status: draft
+goal: Start the interview.
+draft:
+  interview_movement: interview
+parts:
+  interview:
+    capabilities: [repo_read]
+movements:
+  - id: interview
+    phase: draft
+    part: interview
+    grants: [repo_read]
+    instruction: Clarify the score.
+policy:
+  budget:
+    active_wall_clock_min: 10
+`
 
 // afterAmendmentBaseCapture is an interleave seam for command tests. Production
 // leaves it as a no-op; the capture itself remains before §9 admission.
@@ -184,6 +208,13 @@ func runWithReaders(
 		}
 		return 0
 	}
+	if len(args) == 1 && args[0] == "init" {
+		if err := initializeRepository(); err != nil {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+		return 0
+	}
 	if requestedID, jsonOutput, ok := parseStatusArgs(args); ok {
 		report, err := readStatus(requestedID)
 		if err != nil {
@@ -292,7 +323,72 @@ func runWithReaders(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, validate, run, resume, answer, approve, amend, cancel, status, logs")
+	fmt.Fprintln(w, "commands: version, init, validate, run, resume, answer, approve, amend, cancel, status, logs")
+}
+
+func initializeRepository() error {
+	root, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve invocation directory: %w", err)
+	}
+	statePath := filepath.Join(root, ".partitur")
+	stateInfo, err := os.Lstat(statePath)
+	stateExists := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("inspect .partitur: %w", err)
+	}
+	if stateExists && !stateInfo.IsDir() {
+		return errors.New(".partitur is not a directory")
+	}
+
+	scorePath := filepath.Join(root, "partitur.yaml")
+	scoreInfo, err := os.Lstat(scorePath)
+	scoreExists := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("inspect partitur.yaml: %w", err)
+	}
+	if scoreExists && !scoreInfo.Mode().IsRegular() {
+		return errors.New("partitur.yaml is not a regular file")
+	}
+
+	ignorePath := filepath.Join(statePath, ".gitignore")
+	ignoreExists := false
+	if stateExists {
+		ignoreInfo, err := os.Lstat(ignorePath)
+		ignoreExists = err == nil
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("inspect .partitur/.gitignore: %w", err)
+		}
+		if ignoreExists && !ignoreInfo.Mode().IsRegular() {
+			return errors.New(".partitur/.gitignore is not a regular file")
+		}
+		if ignoreExists {
+			contents, err := os.ReadFile(ignorePath)
+			if err != nil {
+				return fmt.Errorf("read .partitur/.gitignore: %w", err)
+			}
+			if !bytes.Equal(contents, []byte(initIgnoreContents)) {
+				return errors.New(".partitur/.gitignore has different contents")
+			}
+		}
+	}
+
+	if !stateExists {
+		if err := os.Mkdir(statePath, 0o700); err != nil {
+			return fmt.Errorf("create .partitur: %w", err)
+		}
+	}
+	if !ignoreExists {
+		if err := os.WriteFile(ignorePath, []byte(initIgnoreContents), 0o600); err != nil {
+			return fmt.Errorf("write .partitur/.gitignore: %w", err)
+		}
+	}
+	if !scoreExists {
+		if err := os.WriteFile(scorePath, []byte(initScoreContents), 0o600); err != nil {
+			return fmt.Errorf("write partitur.yaml: %w", err)
+		}
+	}
+	return nil
 }
 
 func parseAmendArgs(args []string) (runID, patchPath, reason, claimedImpactPath string, ok bool) {

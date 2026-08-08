@@ -36,6 +36,9 @@ const runVendorProposalBaseHashEnvironment = "PARTITUR_RUN_VENDOR_PROPOSAL_BASE_
 const runVendorDraftResultEnvironment = "PARTITUR_RUN_VENDOR_DRAFT_RESULT"
 
 func TestMain(m *testing.M) {
+	if os.Getenv(initTestCommandEnvironment) == "1" {
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	}
 	if os.Getenv(runVendorEnvironment) == "1" {
 		runVendorFixture()
 		os.Exit(0)
