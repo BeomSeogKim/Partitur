@@ -510,6 +510,11 @@ func applicationRestore(ctx context.Context, root, baseTree string, touched []st
 		return err
 	}
 	defer cleanup()
+	contained, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer contained.Close()
 	environment := []string{"GIT_INDEX_FILE=" + index}
 	if err := applicationGit(ctx, root, environment, nil, "read-tree", base); err != nil {
 		return err
@@ -533,7 +538,10 @@ func applicationRestore(ctx context.Context, root, baseTree string, touched []st
 			checkout = append(checkout, path)
 			continue
 		}
-		if err := os.Remove(filepath.Join(root, filepath.FromSlash(path))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Removal goes through an os.Root: a touched path whose parent became a
+		// symlink after the patch landed would otherwise unlink a file outside
+		// the checkout entirely (measured — plain os.Remove follows it).
+		if err := contained.Remove(filepath.FromSlash(path)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
@@ -562,7 +570,7 @@ func applicationGitOutput(ctx context.Context, root string, environment []string
 	defer cancel()
 	arguments = append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fileMode=true", "-C", root}, arguments...)
 	command := exec.CommandContext(commandCtx, "git", arguments...)
-	command.Env = applicationGitEnvironment(environment)
+	command.Env = applicationGitEnvironment(root, environment)
 	command.Stdin = bytes.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
@@ -579,7 +587,7 @@ func applicationGitOutput(ctx context.Context, root string, environment []string
 	return stdout.Bytes(), nil
 }
 
-func applicationGitEnvironment(extra []string) []string {
+func applicationGitEnvironment(root string, extra []string) []string {
 	// Drop every inherited GIT_* variable rather than naming the dangerous ones.
 	// The repository-control set — GIT_DIR, GIT_WORK_TREE, GIT_OBJECT_DIRECTORY,
 	// GIT_NAMESPACE and their kin — redirects these commands at a checkout other
@@ -596,6 +604,11 @@ func applicationGitEnvironment(extra []string) []string {
 	values = append(values,
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_TERMINAL_PROMPT=0", "LANG=C", "LC_ALL=C",
+		// Dropping the inherited variable is not enough: a repository-local
+		// `core.worktree` redirects just as well, and `-c core.worktree=…` does
+		// not override it (measured). Naming the work tree explicitly does —
+		// including inside a linked worktree, where this is still its own root.
+		"GIT_WORK_TREE="+root,
 	)
 	return append(values, extra...)
 }

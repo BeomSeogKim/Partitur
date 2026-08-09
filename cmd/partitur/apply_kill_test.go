@@ -454,3 +454,71 @@ func TestApplyRecoveryResolvesFromAFreshObservation(t *testing.T) {
 		t.Fatalf("cause recorded %d times", countEvents(journal.Events, runstate.EventApplyRecoveryRequired))
 	}
 }
+
+// TestApplyIgnoresRepositoryLocalWorktreeRedirection is the second half of
+// containment. Dropping the inherited GIT_* variables does not stop a
+// repository-local `core.worktree`, and `-c core.worktree=…` does not override
+// it either — only naming the work tree explicitly does.
+func TestApplyIgnoresRepositoryLocalWorktreeRedirection(t *testing.T) {
+	root, _, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	elsewhere := t.TempDir()
+	victim := filepath.Join(elsewhere, "victim.txt")
+	if err := os.WriteFile(victim, []byte("not ours\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "config", "core.worktree", elsewhere)
+
+	code, contents, stderr := applyRequireCheckout(t, root)
+	if code != 0 || contents != "candidate result\n" || stderr != "" {
+		t.Fatalf("apply under a redirected core.worktree exit=%d contents=%q stderr=%q", code, contents, stderr)
+	}
+	entries, err := os.ReadDir(elsewhere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "victim.txt" {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("redirected work tree now holds %v", names)
+	}
+}
+
+// TestApplyRollbackRefusesToLeaveTheCheckout puts a touched path under a
+// directory that becomes a symlink after the patch lands. Removing it with a
+// plain path join would unlink a file outside the repository entirely.
+func TestApplyRollbackRefusesToLeaveTheCheckout(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	root, _, _ := applyRequireFixtureWithNestedPath(t)
+	environment := applyKillEnvironment(t)
+
+	// The name has to be the one the touched path resolves to through the
+	// symlink — "nested/file.txt" — or the removal cannot reach it and the test
+	// would pass while asserting nothing.
+	outside := t.TempDir()
+	precious := filepath.Join(outside, "file.txt")
+	if err := os.WriteFile(precious, []byte("precious\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	release := pauseAtPoint(t, partitur, root, environment, faultpoint.PointApplyCheckoutMutated, "apply", "run-1")
+	// The patch has landed. Swap the touched path's parent for a symlink into a
+	// directory the repository has no business touching.
+	nested := filepath.Join(root, "nested")
+	if err := os.RemoveAll(nested); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, nested); err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	if kept, err := os.ReadFile(precious); err != nil || string(kept) != "precious\n" {
+		t.Fatalf("rollback reached outside the checkout: contents=%q err=%v", kept, err)
+	}
+}

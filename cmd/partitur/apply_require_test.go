@@ -44,6 +44,20 @@ type applyGate struct {
 // calling the judgment directly.
 func applyRequireFixture(t *testing.T, gate applyGate) (string, *runstore.Store, string) {
 	t.Helper()
+	return applyRequireFixtureWithFiles(t, gate, applyFixtureCandidateFiles)
+}
+
+// applyRequireFixtureWithNestedPath puts one touched path inside a directory, so
+// a rollback has a parent it could be tricked into following out of the checkout.
+func applyRequireFixtureWithNestedPath(t *testing.T) (string, *runstore.Store, string) {
+	t.Helper()
+	files := append(slices.Clone(applyFixtureCandidateFiles),
+		applyFixtureFile{name: "nested/file.txt", contents: "nested result\n"})
+	return applyRequireFixtureWithFiles(t, applyGate{require: []string{"verified"}}, files)
+}
+
+func applyRequireFixtureWithFiles(t *testing.T, gate applyGate, files []applyFixtureFile) (string, *runstore.Store, string) {
+	t.Helper()
 	root, store := resumeFixtureWithInputs(
 		t,
 		"",
@@ -55,19 +69,22 @@ func applyRequireFixture(t *testing.T, gate applyGate) (string, *runstore.Store,
 		t.Fatal(err)
 	}
 	baseTree, baseCommit := input.BaseTree, input.BaseCommit
-	resultTree := applyFixtureResultTree(t, root, baseCommit)
+	resultTree := applyFixtureResultTree(t, root, baseCommit, files)
 	candidateID := appendApplyRequireRun(t, store, baseTree, resultTree, gate)
 	return root, store, candidateID
 }
 
-// applyFixtureCandidateFiles is what the candidate would write into the
-// checkout: two additions and one modification of a path the base already
-// carries, so a rollback has both kinds of touched path to restore.
-var applyFixtureCandidateFiles = []struct {
+// applyFixtureFile is one path the candidate would write into the checkout.
+type applyFixtureFile struct {
 	name     string
 	contents string
 	inBase   bool
-}{
+}
+
+// applyFixtureCandidateFiles is the default candidate: two additions and one
+// modification of a path the base already carries, so a rollback has both kinds
+// of touched path to restore.
+var applyFixtureCandidateFiles = []applyFixtureFile{
 	{name: "applied.txt", contents: "candidate result\n"},
 	{name: "second.txt", contents: "second result\n"},
 	{name: resumeFixtureBaseFile, contents: "modified by the candidate\n", inBase: true},
@@ -75,11 +92,14 @@ var applyFixtureCandidateFiles = []struct {
 
 // applyFixtureResultTree commits the candidate's files to learn their tree, then
 // restores the checkout to the base so `apply` has real work to do.
-func applyFixtureResultTree(t *testing.T, root, baseCommit string) string {
+func applyFixtureResultTree(t *testing.T, root, baseCommit string, files []applyFixtureFile) string {
 	t.Helper()
 	// Two paths, so a failed apply can be checked for having left the *other*
 	// one alone rather than only the path a test happened to sabotage.
-	for _, file := range applyFixtureCandidateFiles {
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, file.name)), 0o700); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(root, file.name), []byte(file.contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -94,7 +114,7 @@ func applyFixtureResultTree(t *testing.T, root, baseCommit string) string {
 		t.Fatalf("base commit %q is not qualified", baseCommit)
 	}
 	runGit(t, root, "reset", "--hard", "--quiet", baseObject)
-	for _, file := range applyFixtureCandidateFiles {
+	for _, file := range files {
 		if file.inBase {
 			// The reset already restored it; removing it would dirty the checkout.
 			continue
