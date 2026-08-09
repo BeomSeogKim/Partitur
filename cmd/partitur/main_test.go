@@ -1814,6 +1814,11 @@ func resumeFixtureWithInputs(t *testing.T, terminal string, snapshot, resolvedCa
 	return root, store
 }
 
+const (
+	resumeFixtureBaseFile     = "base.txt"
+	resumeFixtureBaseContents = "base\n"
+)
+
 func resumeFixtureRepository(t *testing.T, root string) (string, string) {
 	t.Helper()
 	git := func(arguments ...string) string {
@@ -1829,7 +1834,13 @@ func resumeFixtureRepository(t *testing.T, root string) (string, string) {
 	git("init", "--quiet")
 	git("config", "user.name", "Partitur Test")
 	git("config", "user.email", "partitur@example.invalid")
-	git("commit", "--allow-empty", "--quiet", "-m", "fixture")
+	// One tracked file in the base, so a candidate can *modify* a path rather
+	// than only add one — the case a path-wise rollback has to restore.
+	if err := os.WriteFile(filepath.Join(root, resumeFixtureBaseFile), []byte(resumeFixtureBaseContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", resumeFixtureBaseFile)
+	git("commit", "--quiet", "-m", "fixture")
 	format := git("rev-parse", "--show-object-format")
 	return "git-" + format + ":" + git("rev-parse", "HEAD"), "git-" + format + ":" + git("rev-parse", "HEAD^{tree}")
 }

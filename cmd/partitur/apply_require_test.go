@@ -60,10 +60,17 @@ func applyRequireFixture(t *testing.T, gate applyGate) (string, *runstore.Store,
 	return root, store, candidateID
 }
 
-// applyFixtureCandidateFiles is what the candidate would write into the checkout.
-var applyFixtureCandidateFiles = []struct{ name, contents string }{
-	{"applied.txt", "candidate result\n"},
-	{"second.txt", "second result\n"},
+// applyFixtureCandidateFiles is what the candidate would write into the
+// checkout: two additions and one modification of a path the base already
+// carries, so a rollback has both kinds of touched path to restore.
+var applyFixtureCandidateFiles = []struct {
+	name     string
+	contents string
+	inBase   bool
+}{
+	{name: "applied.txt", contents: "candidate result\n"},
+	{name: "second.txt", contents: "second result\n"},
+	{name: resumeFixtureBaseFile, contents: "modified by the candidate\n", inBase: true},
 }
 
 // applyFixtureResultTree commits the candidate's files to learn their tree, then
@@ -88,6 +95,10 @@ func applyFixtureResultTree(t *testing.T, root, baseCommit string) string {
 	}
 	runGit(t, root, "reset", "--hard", "--quiet", baseObject)
 	for _, file := range applyFixtureCandidateFiles {
+		if file.inBase {
+			// The reset already restored it; removing it would dirty the checkout.
+			continue
+		}
 		if err := os.Remove(filepath.Join(root, file.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
 		}

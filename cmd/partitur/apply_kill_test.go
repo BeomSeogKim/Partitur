@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -320,5 +321,136 @@ func pauseAtPoint(
 		}
 		t.Logf("released %v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, exit.ExitCode(), &stdout, &stderr)
 		return exit.ExitCode()
+	}
+}
+
+// TestApplyIgnoresInheritedGitRedirection is adversarial: an inherited
+// GIT_WORK_TREE redirects Git at a checkout other than the repository holding
+// the run, and `git -C` does not override it. An apply that honoured it would
+// judge one tree and write into another.
+func TestApplyIgnoresInheritedGitRedirection(t *testing.T) {
+	root, _, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	elsewhere := t.TempDir()
+	victim := filepath.Join(elsewhere, "victim.txt")
+	if err := os.WriteFile(victim, []byte("not ours\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_WORK_TREE", elsewhere)
+	t.Setenv("GIT_DIR", filepath.Join(root, ".git"))
+
+	code, contents, stderr := applyRequireCheckout(t, root)
+	if code != 0 || contents != "candidate result\n" || stderr != "" {
+		t.Fatalf("apply under a redirected work tree exit=%d contents=%q stderr=%q", code, contents, stderr)
+	}
+	// The redirected tree must be untouched: neither written into nor emptied.
+	entries, err := os.ReadDir(elsewhere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "victim.txt" {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("redirected work tree now holds %v", names)
+	}
+	if kept, err := os.ReadFile(victim); err != nil || string(kept) != "not ours\n" {
+		t.Fatalf("redirected work tree contents=%q err=%v", kept, err)
+	}
+}
+
+// TestApplyRestoresTouchedPathsAfterALateChange drives the rollback §8 step 3
+// actually specifies. The checkout is altered after the patch lands, so the
+// resulting tree matches neither candidate tree. Reversing the patch would fail
+// its own check here and escalate to RECOVERY_REQUIRED; a path-wise restore to
+// the base tree is what makes this an ordinary clean failure.
+func TestApplyRestoresTouchedPathsAfterALateChange(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	environment := applyKillEnvironment(t)
+
+	release := pauseAtPoint(t, partitur, root, environment, faultpoint.PointApplyCheckoutMutated, "apply", "run-1")
+	// Both touched paths are on disk now. Corrupt one and delete the other.
+	if err := os.WriteFile(filepath.Join(root, "applied.txt"), []byte("tampered\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "second.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if code := release(); code != 4 {
+		t.Fatalf("apply after a late change exit=%d, want the clean failure", code)
+	}
+
+	// Restored to the base tree: the added paths are gone because the base
+	// carries neither, and the modified one is back to its base content — the
+	// two halves of a path-wise restore.
+	for _, file := range applyFixtureCandidateFiles {
+		path := filepath.Join(root, file.name)
+		if file.inBase {
+			contents, err := os.ReadFile(path)
+			if err != nil || string(contents) != resumeFixtureBaseContents {
+				t.Fatalf("%s was not restored to its base content: %q err=%v", file.name, contents, err)
+			}
+			continue
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s survived the rollback: %v", file.name, err)
+		}
+	}
+	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("checkout is not back at the base: %q", status)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventApplyFailed) != 1 ||
+		countEvents(journal.Events, runstate.EventApplyRecoveryRequired) != 0 {
+		t.Fatalf("journal=%v", eventKinds(journal.Events))
+	}
+}
+
+// TestApplyRecoveryResolvesFromAFreshObservation pins the ordering §8 states:
+// the core names the cause durably, and `--recover` *then* re-examines the
+// checkout. Resolving from the observation that produced the cause would answer
+// with a tree that no longer exists.
+func TestApplyRecoveryResolvesFromAFreshObservation(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	environment := applyKillEnvironment(t)
+
+	// Crash before the checkout is touched, so the recorded cause observes the
+	// base tree.
+	killAtPoint(t, partitur, root, environment, faultpoint.PointApplyTransactionStarted, "apply", "run-1")
+
+	// Hold the recovery just after it records that cause, then complete the
+	// application by hand — exactly what an operator restoring from a backup, or
+	// a second tool, could do in that window.
+	release := pauseAtPoint(t, partitur, root, environment, faultpoint.PointApplyRecoveryCauseRecorded, "apply", "run-1", "--recover")
+	for _, file := range applyFixtureCandidateFiles {
+		if err := os.WriteFile(filepath.Join(root, file.name), []byte(file.contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code := release(); code != 0 {
+		t.Fatalf("recovery exit=%d, want the completed application from the fresh observation", code)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := journal.Events[len(journal.Events)-1].Type; last != runstate.EventApplyCompleted {
+		t.Fatalf("recovery journal tail=%v", eventKinds(journal.Events))
+	}
+	if countEvents(journal.Events, runstate.EventApplyRecoveryRequired) != 1 {
+		t.Fatalf("cause recorded %d times", countEvents(journal.Events, runstate.EventApplyRecoveryRequired))
 	}
 }

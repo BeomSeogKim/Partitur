@@ -139,7 +139,7 @@ func (store *Store) applyCandidate(
 	// reversing work that was never done fails. Only undo what was laid down.
 	restored, err := applicationWorktreeTree(ctx, store.root)
 	if err == nil && restored != candidate.BaseTree {
-		if restoreErr := applicationRestore(ctx, store.root, candidate.BaseTree, candidate.ResultTree); restoreErr != nil {
+		if restoreErr := applicationRestore(ctx, store.root, candidate.BaseTree, touched); restoreErr != nil {
 			detail := "apply failed: " + patchErr.Error() + "; rollback failed: " + restoreErr.Error()
 			if appendErr := store.applicationRecoveryRequired(transaction, state, candidate, txnID, versions, detail); appendErr != nil {
 				return ApplicationResult{}, appendErr
@@ -192,6 +192,12 @@ func (store *Store) recoverApplication(ctx context.Context, transaction *Txn, st
 		if err := appendApplicationEvent(transaction, state, runstate.EventApplyRecoveryRequired, payload); err != nil {
 			return ApplicationResult{}, err
 		}
+		store.probe.Reached(faultpoint.PointApplyRecoveryCauseRecorded)
+		// §8: the core names the cause durably, and `--recover` *then* re-examines
+		// the checkout. The first observation is the recorded cause; the outcome
+		// must come from a fresh one, so a checkout that changed between them is
+		// resolved as it is now rather than as it was when the halt was written.
+		tree, treeErr = applicationWorktreeTree(ctx, store.root)
 	}
 	if treeErr != nil {
 		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: treeErr.Error()}, nil
@@ -400,10 +406,12 @@ func applicationClean(ctx context.Context, root string) error {
 	return nil
 }
 
-func applicationWorktreeTree(ctx context.Context, root string) (string, error) {
+// applicationTemporaryIndex reserves an index file beside Git's own so index
+// work never touches the user's. The caller owns its removal.
+func applicationTemporaryIndex(ctx context.Context, root string) (string, func(), error) {
 	indexPath, err := applicationGitOutput(ctx, root, nil, nil, "rev-parse", "--git-path", "index")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	indexDirectory := filepath.Dir(strings.TrimSpace(string(indexPath)))
 	if !filepath.IsAbs(indexDirectory) {
@@ -411,17 +419,25 @@ func applicationWorktreeTree(ctx context.Context, root string) (string, error) {
 	}
 	index, err := os.CreateTemp(indexDirectory, "partitur-apply-index-")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	path := index.Name()
 	if err := index.Close(); err != nil {
 		_ = os.Remove(path)
-		return "", err
+		return "", nil, err
 	}
 	if err := os.Remove(path); err != nil {
+		return "", nil, err
+	}
+	return path, func() { _ = os.Remove(path) }, nil
+}
+
+func applicationWorktreeTree(ctx context.Context, root string) (string, error) {
+	path, cleanup, err := applicationTemporaryIndex(ctx, root)
+	if err != nil {
 		return "", err
 	}
-	defer os.Remove(path)
+	defer cleanup()
 	environment := []string{"GIT_INDEX_FILE=" + path}
 	if err := applicationGit(ctx, root, environment, nil, "read-tree", "HEAD"); err != nil {
 		return "", err
@@ -476,15 +492,56 @@ func applicationPatch(ctx context.Context, root, baseTree, resultTree string) ([
 	return applicationGitOutput(ctx, root, nil, nil, "diff", "--binary", base, result)
 }
 
-func applicationRestore(ctx context.Context, root, baseTree, resultTree string) error {
-	patch, err := applicationPatch(ctx, root, baseTree, resultTree)
+// applicationRestore puts exactly the touched paths back to their base-tree
+// content, which is what §8 step 3 asks for. Reversing the patch instead would
+// only work from a fully applied checkout: a partial application, or a path
+// altered after the fact, fails the reverse check and would escalate an
+// ordinary failure into RECOVERY_REQUIRED.
+func applicationRestore(ctx context.Context, root, baseTree string, touched []string) error {
+	if len(touched) == 0 {
+		return nil
+	}
+	base, err := applicationObjectID(baseTree)
 	if err != nil {
 		return err
 	}
-	if err := applicationGit(ctx, root, nil, patch, "apply", "--reverse", "--check", "--whitespace=nowarn"); err != nil {
+	index, cleanup, err := applicationTemporaryIndex(ctx, root)
+	if err != nil {
 		return err
 	}
-	return applicationGit(ctx, root, nil, patch, "apply", "--reverse", "--whitespace=nowarn")
+	defer cleanup()
+	environment := []string{"GIT_INDEX_FILE=" + index}
+	if err := applicationGit(ctx, root, environment, nil, "read-tree", base); err != nil {
+		return err
+	}
+	// Paths the base tree does not carry are the candidate's additions: there is
+	// nothing to check out over them, so removing them is the restoration.
+	present, err := applicationGitOutput(ctx, root, environment, nil,
+		append([]string{"ls-files", "-z", "--"}, touched...)...)
+	if err != nil {
+		return err
+	}
+	tracked := map[string]bool{}
+	for _, path := range strings.Split(strings.TrimSuffix(string(present), "\x00"), "\x00") {
+		if path != "" {
+			tracked[path] = true
+		}
+	}
+	checkout := make([]string, 0, len(touched))
+	for _, path := range touched {
+		if tracked[path] {
+			checkout = append(checkout, path)
+			continue
+		}
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(path))); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if len(checkout) == 0 {
+		return nil
+	}
+	return applicationGit(ctx, root, environment, nil,
+		append([]string{"checkout-index", "-f", "--"}, checkout...)...)
 }
 
 func applicationObjectID(tree string) (string, error) {
@@ -523,8 +580,16 @@ func applicationGitOutput(ctx context.Context, root string, environment []string
 }
 
 func applicationGitEnvironment(extra []string) []string {
-	values := os.Environ()
-	for _, name := range []string{"GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT", "LANG", "LC_ALL", "GIT_INDEX_FILE"} {
+	// Drop every inherited GIT_* variable rather than naming the dangerous ones.
+	// The repository-control set — GIT_DIR, GIT_WORK_TREE, GIT_OBJECT_DIRECTORY,
+	// GIT_NAMESPACE and their kin — redirects these commands at a checkout other
+	// than the one holding the run, and `-C` does not override it: with
+	// GIT_WORK_TREE set, `git -C <root> rev-parse --show-toplevel` answers with
+	// the redirected tree. Everything this code needs is re-added below.
+	values := slices.DeleteFunc(os.Environ(), func(value string) bool {
+		return strings.HasPrefix(value, "GIT_")
+	})
+	for _, name := range []string{"LANG", "LC_ALL"} {
 		prefix := name + "="
 		values = slices.DeleteFunc(values, func(value string) bool { return strings.HasPrefix(value, prefix) })
 	}
