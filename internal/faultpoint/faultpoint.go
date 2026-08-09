@@ -89,6 +89,8 @@ const (
 	PointCompositionMovementTerminal      PointID = "composition.movement_terminal_recorded"
 	PointCompositionCandidateEvidence     PointID = "composition.candidate_evidence_recorded"
 	PointCompositionCandidateTerminal     PointID = "composition.candidate_terminal_recorded"
+	PointApplyTransactionStarted          PointID = "apply.transaction_started"
+	PointApplyCheckoutMutated             PointID = "apply.checkout_mutated"
 )
 
 // MutationKind identifies a receipt-producing operation from DESIGN Appendix E.1.

@@ -108,13 +108,18 @@ func (store *Store) applyCandidate(
 	}); err != nil {
 		return ApplicationResult{}, err
 	}
+	// The two sides of the durable seam: the transaction is recorded but the
+	// checkout is untouched, and the checkout is written but nothing says so yet.
+	store.probe.Reached(faultpoint.PointApplyTransactionStarted)
 
 	patch, patchErr := applicationPatch(ctx, store.root, candidate.BaseTree, candidate.ResultTree)
 	if patchErr == nil {
 		patchErr = applicationGit(ctx, store.root, nil, patch, "apply", "--check", "--whitespace=nowarn")
 	}
 	if patchErr == nil {
-		patchErr = applicationGit(ctx, store.root, nil, patch, "apply", "--whitespace=nowarn")
+		if patchErr = applicationGit(ctx, store.root, nil, patch, "apply", "--whitespace=nowarn"); patchErr == nil {
+			store.probe.Reached(faultpoint.PointApplyCheckoutMutated)
+		}
 	}
 	if patchErr == nil {
 		afterTree, treeErr := applicationWorktreeTree(ctx, store.root)

@@ -634,6 +634,8 @@ func TestBoundaryPointIDsAreSemanticAndUnique(t *testing.T) {
 		PointCompositionMovementTerminal,
 		PointCompositionCandidateEvidence,
 		PointCompositionCandidateTerminal,
+		PointApplyTransactionStarted,
+		PointApplyCheckoutMutated,
 	}
 	declared := make([]string, len(points))
 	for index, point := range points {
