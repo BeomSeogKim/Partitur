@@ -130,14 +130,19 @@ func (store *Store) applyCandidate(
 			patchErr = fmt.Errorf("applied checkout tree %q does not match candidate result %q", afterTree, candidate.ResultTree)
 		}
 	}
-	if err := applicationRestore(ctx, store.root, candidate.BaseTree, candidate.ResultTree); err != nil {
-		detail := "apply failed: " + patchErr.Error() + "; rollback failed: " + err.Error()
-		if appendErr := store.applicationRecoveryRequired(transaction, state, candidate, txnID, versions, detail); appendErr != nil {
-			return ApplicationResult{}, appendErr
-		}
-		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: detail}, nil
-	}
+	// A patch that never attached leaves the base tree already in place, and
+	// reversing work that was never done fails. Only undo what was laid down.
 	restored, err := applicationWorktreeTree(ctx, store.root)
+	if err == nil && restored != candidate.BaseTree {
+		if restoreErr := applicationRestore(ctx, store.root, candidate.BaseTree, candidate.ResultTree); restoreErr != nil {
+			detail := "apply failed: " + patchErr.Error() + "; rollback failed: " + restoreErr.Error()
+			if appendErr := store.applicationRecoveryRequired(transaction, state, candidate, txnID, versions, detail); appendErr != nil {
+				return ApplicationResult{}, appendErr
+			}
+			return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: detail}, nil
+		}
+		restored, err = applicationWorktreeTree(ctx, store.root)
+	}
 	if err != nil {
 		detail := "rollback tree unverifiable: " + err.Error()
 		if appendErr := store.applicationRecoveryRequired(transaction, state, candidate, txnID, versions, detail); appendErr != nil {

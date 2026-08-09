@@ -59,14 +59,25 @@ func applyRequireFixture(t *testing.T, gate applyGate) (string, *runstore.Store,
 	return root, store, candidateID
 }
 
-// applyFixtureResultTree commits the candidate's file to learn its tree, then
+// applyFixtureCandidateFiles is what the candidate would write into the checkout.
+var applyFixtureCandidateFiles = []struct{ name, contents string }{
+	{"applied.txt", "candidate result\n"},
+	{"second.txt", "second result\n"},
+}
+
+// applyFixtureResultTree commits the candidate's files to learn their tree, then
 // restores the checkout to the base so `apply` has real work to do.
 func applyFixtureResultTree(t *testing.T, root, baseCommit string) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, "applied.txt"), []byte("candidate result\n"), 0o600); err != nil {
-		t.Fatal(err)
+	// Two paths, so a failed apply can be checked for having left the *other*
+	// one alone rather than only the path a test happened to sabotage.
+	for _, file := range applyFixtureCandidateFiles {
+		if err := os.WriteFile(filepath.Join(root, file.name), []byte(file.contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Add by name: `-A` would track .partitur, which the reset below then wipes.
+		runGit(t, root, "add", file.name)
 	}
-	runGit(t, root, "add", "applied.txt")
 	runGit(t, root, "commit", "--quiet", "-m", "candidate")
 	resultTree := "git-" + applyFixtureGit(t, root, "rev-parse", "--show-object-format") + ":" +
 		applyFixtureGit(t, root, "rev-parse", "HEAD^{tree}")
@@ -75,8 +86,10 @@ func applyFixtureResultTree(t *testing.T, root, baseCommit string) string {
 		t.Fatalf("base commit %q is not qualified", baseCommit)
 	}
 	runGit(t, root, "reset", "--hard", "--quiet", baseObject)
-	if err := os.Remove(filepath.Join(root, "applied.txt")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatal(err)
+	for _, file := range applyFixtureCandidateFiles {
+		if err := os.Remove(filepath.Join(root, file.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -426,5 +439,49 @@ func TestApplyRequireEvidenceOffTheCandidateRefuses(t *testing.T) {
 	}
 	if countEvents(journal.Events, runstate.EventApplyStarted) != 0 {
 		t.Fatal("refused apply opened a transaction")
+	}
+}
+
+// A candidate that cannot be laid down must fail cleanly: DESIGN §8 step 3
+// restores the touched paths to the base tree and re-verifies the base hash,
+// and exit 5 belongs to `--recover` alone.
+func TestApplySabotagedPatchFailsCleanly(t *testing.T) {
+	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	// The candidate creates applied.txt. Squat that path with different content,
+	// ignored so the computed worktree tree still equals the candidate base and
+	// the checkout still reads as clean.
+	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\napplied.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "applied.txt"), []byte("squatter\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, contents, stderr := applyRequireCheckout(t, root)
+	if code != 4 || contents != "squatter\n" {
+		t.Fatalf("apply exit=%d contents=%q stderr=%q", code, contents, stderr)
+	}
+	// The other touched path is the one the sabotage did not name: a rollback
+	// that only undid the failing hunk would leave it behind.
+	if _, err := os.Stat(filepath.Join(root, "second.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("second touched path survived the failed apply: %v", err)
+	}
+	// Re-verify the base from disk, not from the exit code: nothing tracked may
+	// differ, so the checkout still computes to the candidate's base tree.
+	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("checkout is not back at the base: %q", status)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventApplyStarted) != 1 ||
+		countEvents(journal.Events, runstate.EventApplyFailed) != 1 ||
+		countEvents(journal.Events, runstate.EventApplyRecoveryRequired) != 0 {
+		t.Fatalf("journal=%v", eventKinds(journal.Events))
+	}
+	// No temporary index may outlive a failed apply either.
+	leftovers, err := filepath.Glob(filepath.Join(root, ".git", "partitur-apply-index-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary indexes=%v err=%v", leftovers, err)
 	}
 }
