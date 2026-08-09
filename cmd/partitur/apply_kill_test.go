@@ -540,3 +540,88 @@ func TestApplyRollbackRefusesToLeaveTheCheckout(t *testing.T) {
 		t.Fatalf("recover after the refused rollback exit=%d stderr=%q", code, stderr)
 	}
 }
+
+// TestApplyRollbackFailureContinuationsStayRecoverable exercises the two
+// rollback-failure continuations the containment test does not reach. All three
+// must land in the same place — the transaction interrupted, the projection
+// APPLYING with no durable cause, and `--recover` free to conclude — because §8
+// gives the cause to recovery and the exit table gives 6 to the invocation.
+func TestApplyRollbackFailureContinuationsStayRecoverable(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+
+	for _, continuation := range []struct {
+		name string
+		// sabotage runs while the apply is held after the checkout was written.
+		sabotage func(*testing.T, string)
+		// repair undoes it so the following recover can observe the checkout.
+		repair func(*testing.T, string)
+	}{
+		{
+			// The tree cannot be recomputed at all: no temporary index can be
+			// created, so the rollback is unverifiable rather than failed.
+			name: "the working tree cannot be recomputed",
+			sabotage: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, ".git"), 0o500); err != nil {
+					t.Fatal(err)
+				}
+			},
+			repair: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, ".git"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			// The rollback runs and restores every touched path, but a path
+			// outside the touched set moved the tree away from the base — which
+			// the rollback has no mandate to restore.
+			name: "the restored tree still differs from the base",
+			sabotage: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, resumeFixtureUntouchedFile), []byte("moved\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			repair: func(*testing.T, string) {},
+		},
+	} {
+		t.Run(continuation.name, func(t *testing.T) {
+			root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+			environment := applyKillEnvironment(t)
+			release := pauseAtPoint(t, partitur, root, environment, faultpoint.PointApplyCheckoutMutated, "apply", "run-1")
+			continuation.sabotage(t, root)
+			code := release()
+			continuation.repair(t, root)
+
+			if code != 6 {
+				t.Fatalf("interrupted apply exit=%d, want the interrupted-transaction code", code)
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countEvents(journal.Events, runstate.EventApplyStarted) != 1 ||
+				countEvents(journal.Events, runstate.EventApplyFailed) != 0 ||
+				countEvents(journal.Events, runstate.EventApplyCompleted) != 0 ||
+				countEvents(journal.Events, runstate.EventApplyRecoveryRequired) != 0 {
+				t.Fatalf("journal=%v", eventKinds(journal.Events))
+			}
+			// APPLYING is recoverable by definition, so recovery must reach a
+			// conclusion of its own rather than refuse the entry state.
+			code, _, stderr := runCommandBinary(t, partitur, root, environment, "apply", "run-1", "--recover")
+			if code != 4 && code != 5 && code != 0 {
+				t.Fatalf("recover after the interrupted apply exit=%d stderr=%q", code, stderr)
+			}
+			journal, err = store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countEvents(journal.Events, runstate.EventApplyRecoveryRequired) != 1 {
+				t.Fatalf("recovery recorded no single cause: %v", eventKinds(journal.Events))
+			}
+		})
+	}
+}

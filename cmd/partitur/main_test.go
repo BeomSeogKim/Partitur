@@ -1815,8 +1815,9 @@ func resumeFixtureWithInputs(t *testing.T, terminal string, snapshot, resolvedCa
 }
 
 const (
-	resumeFixtureBaseFile     = "base.txt"
-	resumeFixtureBaseContents = "base\n"
+	resumeFixtureBaseFile      = "base.txt"
+	resumeFixtureUntouchedFile = "untouched.txt"
+	resumeFixtureBaseContents  = "base\n"
 )
 
 func resumeFixtureRepository(t *testing.T, root string) (string, string) {
@@ -1839,7 +1840,12 @@ func resumeFixtureRepository(t *testing.T, root string) (string, string) {
 	if err := os.WriteFile(filepath.Join(root, resumeFixtureBaseFile), []byte(resumeFixtureBaseContents), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	git("add", resumeFixtureBaseFile)
+	// A second tracked file no candidate touches, so a test can move the tree
+	// away from the base by a path the rollback has no mandate to restore.
+	if err := os.WriteFile(filepath.Join(root, resumeFixtureUntouchedFile), []byte(resumeFixtureBaseContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", resumeFixtureBaseFile, resumeFixtureUntouchedFile)
 	git("commit", "--quiet", "-m", "fixture")
 	format := git("rev-parse", "--show-object-format")
 	return "git-" + format + ":" + git("rev-parse", "HEAD"), "git-" + format + ":" + git("rev-parse", "HEAD^{tree}")
