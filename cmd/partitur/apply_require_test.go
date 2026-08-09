@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -115,6 +116,20 @@ func (gate applyGate) gateMode() string {
 	return gate.humanGate
 }
 
+// reviewCriterion is declared only where the gate needs it. A declared review
+// criterion makes `status` demand the findings artifact behind the REVIEWED
+// mark, which a gate that never asks for review has no reason to produce.
+func (gate applyGate) reviewCriterion() string {
+	if len(gate.predicates) == 0 && !slices.Contains(gate.require, "reviewed") {
+		return ""
+	}
+	return `      review:
+        - id: goal-review
+          findings: findings
+          rubric: [requirement_coverage]
+`
+}
+
 func applyRequireScore(gate applyGate) []byte {
 	return []byte(fmt.Sprintf(`score: "0.2"
 name: apply-require-fixture
@@ -143,16 +158,12 @@ movements:
       hard:
         - id: command-passes
           run: ["true"]
-      review:
-        - id: goal-review
-          findings: findings
-          rubric: [requirement_coverage]
-      human_gate: %s
+%s      human_gate: %s
 policy:
   allowed_paths: ["**"]
   budget:
     active_wall_clock_min: 10
-`, strings.Join(gate.require, ", "), strings.Join(gate.predicates, ", "), gate.gateMode()))
+`, strings.Join(gate.require, ", "), strings.Join(gate.predicates, ", "), gate.reviewCriterion(), gate.gateMode()))
 }
 
 // appendApplyRequireRun journals the run that earns the marks: one final
