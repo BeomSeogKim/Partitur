@@ -565,3 +565,83 @@ func TestApplyBeforeItsTransactionRefusesRatherThanPromisingRecovery(t *testing.
 		t.Fatalf("recover from a never-started transaction exit=%d stderr=%q", code, stderr.String())
 	}
 }
+
+// TestApplyReportsRecoverableWhenItsFirstAppendFails covers the other side of
+// the exit-6 boundary. Writing apply.started can fail with the line already on
+// disk and only its sync lost, and replay would then project APPLYING. The
+// command cannot distinguish that from a write that never landed, so it must
+// report the recoverable reading: exit 2 asserts nothing was written, and that
+// assertion can be false.
+func TestApplyReportsRecoverableWhenItsFirstAppendFails(t *testing.T) {
+	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	journalPath := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	before, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Readable, so every precondition still passes; unwritable, so the first
+	// durable append of the transaction is what fails.
+	if err := os.Chmod(journalPath, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(journalPath, 0o600) })
+
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"apply", "run-1"}, &stdout, &stderr)
+	if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "partitur apply run-1 --recover") {
+		t.Fatalf("failed first append exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("the refused append still changed the journal")
+	}
+	if _, err := store.ReadJournal("run-1"); err != nil {
+		t.Fatalf("journal is no longer replayable: %v", err)
+	}
+}
+
+// TestRecoverReportsRecoverableWhenItsAppendFails is the same boundary on the
+// recovery side. Past its entry check the application is already nonterminal,
+// so a failure there — including one whose event may have reached the disk —
+// leaves a transaction `--recover` can resume, never a refused precondition.
+func TestRecoverReportsRecoverableWhenItsAppendFails(t *testing.T) {
+	root, store, candidateID := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := input.Projection.State.ApplicationCandidate
+	if candidate == nil || candidate.ID != candidateID {
+		t.Fatalf("fixture candidate = %+v", candidate)
+	}
+	// Open a transaction the way a crash would leave one, so recovery is the
+	// legal entry rather than a normal apply.
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		_, err := tx.At("fixture.apply.started").Append(resumeEvent("run-1", runstate.EventApplyStarted, map[string]any{
+			"txn_id": "apply-fixture", "candidate_id": candidate.ID,
+			"before_tree": candidate.BaseTree, "result_tree": candidate.ResultTree,
+			"touched_paths":     []any{},
+			"recovery":          map[string]any{"base_tree": candidate.BaseTree, "result_tree": candidate.ResultTree},
+			"identity_versions": resumeIdentityVersions(),
+		}))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	journalPath := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+	if err := os.Chmod(journalPath, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(journalPath, 0o600) })
+
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"apply", "run-1", "--recover"}, &stdout, &stderr)
+	if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "partitur apply run-1 --recover") {
+		t.Fatalf("failed recovery append exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}

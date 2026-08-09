@@ -63,6 +63,11 @@ func (store *Store) Apply(ctx context.Context, runID runstate.RunID, recoverOnly
 		}
 		if recoverOnly {
 			result, err = store.recoverApplication(ctx, transaction, &state)
+			// Past its entry check the application is already nonterminal, so any
+			// failure here leaves a transaction that `--recover` may resume.
+			if err != nil && !errors.Is(err, ErrApplicationNotAllowed) {
+				err = interruptedIfFailed(err)
+			}
 			return err
 		}
 		result, err = store.applyCandidate(ctx, transaction, &state, input.Score)
@@ -112,7 +117,11 @@ func (store *Store) applyCandidate(
 		"recovery":          map[string]any{"base_tree": candidate.BaseTree, "result_tree": candidate.ResultTree},
 		"identity_versions": versions,
 	}); err != nil {
-		return ApplicationResult{}, err
+		// The line may already be on disk with only its sync having failed, in
+		// which case replay projects APPLYING and `--recover` is valid. The
+		// command cannot tell, so it reports the recoverable reading: exit 2
+		// would assert that nothing was written, and that assertion can be false.
+		return ApplicationResult{}, interruptedIfFailed(err)
 	}
 	// The two sides of the durable seam: the transaction is recorded but the
 	// checkout is untouched, and the checkout is written but nothing says so yet.
