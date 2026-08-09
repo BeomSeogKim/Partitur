@@ -295,17 +295,21 @@ func applicationMarks(state runstate.State, compiled *score.Score, final runstat
 		if len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria) != 0 {
 			marks["VERIFIED"] = true
 		}
+		resolution := state.ResolvedHumanGates[attemptID]
 		if len(view.Acceptance.ReviewCriteria) == 1 {
 			marks["REVIEWED"] = true
-			if acceptance.ReviewOutcome == "CLEAN" {
+			// Stored review evidence only ever holds CLEAN or CONTESTED.
+			// OVERRIDDEN is derived from the matching human-gate resolution — the
+			// same projection `status` reports — so reading the raw field here
+			// would make the lenient predicate unsatisfiable by an override.
+			switch runstate.ProjectedReviewOutcome(acceptance, resolution, attempt.ScoreRevision) {
+			case "CLEAN":
 				marks["REVIEW_CLEAN"] = true
 				marks["REVIEW_CLEAN_OR_OVERRIDDEN"] = true
-			}
-			if acceptance.ReviewOutcome == "OVERRIDDEN" {
+			case "OVERRIDDEN":
 				marks["REVIEW_CLEAN_OR_OVERRIDDEN"] = true
 			}
 		}
-		resolution := state.ResolvedHumanGates[attemptID]
 		if resolution.Disposition == "approved" && resolution.ScoreRevision == state.ScoreHead.Revision && resolution.Scope.SubjectTree == subjectTree {
 			marks["APPROVED"] = true
 		}

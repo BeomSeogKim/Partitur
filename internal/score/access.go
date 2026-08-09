@@ -95,6 +95,11 @@ func (s *Score) Execution() ExecutionView {
 		if expectation.ApplyGate == nil {
 			return result
 		}
+		// A require-path gate carries no `waived` key at all, so its demands have
+		// to survive that absence: reading them before the waiver check is what
+		// stops the apply judgment from looping over an empty require list.
+		result.ApplyGateRequire = slices.Clone(expectation.ApplyGate.Require)
+		result.ApplyGatePredicates = slices.Clone(expectation.ApplyGate.Predicates)
 		if expectation.ApplyGate.Waived == nil {
 			return result
 		}
@@ -102,8 +107,6 @@ func (s *Score) Execution() ExecutionView {
 		if expectation.ApplyGate.Reason != nil {
 			result.WaiverReason = *expectation.ApplyGate.Reason
 		}
-		result.ApplyGateRequire = slices.Clone(expectation.ApplyGate.Require)
-		result.ApplyGatePredicates = slices.Clone(expectation.ApplyGate.Predicates)
 	}
 	return result
 }

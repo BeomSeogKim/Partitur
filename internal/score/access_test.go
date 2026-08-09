@@ -29,6 +29,8 @@ func TestExecutionReadSurface(t *testing.T) {
 		VerificationExpectationPresent: true,
 		FinalMovementID:                "verify",
 		GateWaived:                     false,
+		ApplyGateRequire:               []string{"verified", "reviewed", "approved"},
+		ApplyGatePredicates:            []string{"no_unresolved_blocking_findings"},
 	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Execution() = %#v, want %#v", got, want)
 	}
