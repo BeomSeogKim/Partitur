@@ -527,3 +527,41 @@ func TestApplySabotagedPatchFailsCleanly(t *testing.T) {
 		t.Fatalf("temporary indexes=%v err=%v", leftovers, err)
 	}
 }
+
+// TestApplyBeforeItsTransactionRefusesRatherThanPromisingRecovery pins the
+// boundary the exit table draws. Code 6 promises a continuation — "Application
+// remains APPLYING and recoverable with apply --recover" — so a failure before
+// apply.started is durable may not claim it: the projection is still
+// NOT_APPLIED and recovery correctly refuses, leaving the caller with an
+// instruction that cannot work.
+func TestApplyBeforeItsTransactionRefusesRatherThanPromisingRecovery(t *testing.T) {
+	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	// Take write permission off .git, so the first fallible step — computing the
+	// checkout's tree through a temporary index — fails with nothing recorded.
+	if err := os.Chmod(filepath.Join(root, ".git"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, ".git"), 0o700) })
+
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"apply", "run-1"}, &stdout, &stderr)
+	if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "precondition refused") {
+		t.Fatalf("pre-transaction failure exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventApplyStarted) != 0 {
+		t.Fatalf("a refused apply opened a transaction: %v", journal.Events)
+	}
+	// The continuation exit 6 would have named is genuinely unusable from here,
+	// which is why naming it would have been the defect rather than a nicety.
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"apply", "run-1", "--recover"}, &stdout, &stderr); code != 2 ||
+		!strings.Contains(stderr.String(), "--recover is refused from") {
+		t.Fatalf("recover from a never-started transaction exit=%d stderr=%q", code, stderr.String())
+	}
+}

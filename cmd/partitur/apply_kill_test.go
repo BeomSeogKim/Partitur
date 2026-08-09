@@ -559,6 +559,10 @@ func TestApplyRollbackFailureContinuationsStayRecoverable(t *testing.T) {
 		sabotage func(*testing.T, string)
 		// repair undoes it so the following recover can observe the checkout.
 		repair func(*testing.T, string)
+		// The recovery each continuation must reach — they differ, and accepting
+		// either would let one branch stand in for the other.
+		recoverCode int
+		resolution  runstate.EventType
 	}{
 		{
 			// The tree cannot be recomputed at all: no temporary index can be
@@ -574,6 +578,9 @@ func TestApplyRollbackFailureContinuationsStayRecoverable(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
+			// The patch did land and nothing undid it, so once the tree can be
+			// read again recovery owes the candidate its completion.
+			recoverCode: 0, resolution: runstate.EventApplyCompleted,
 		},
 		{
 			// The rollback runs and restores every touched path, but a path
@@ -586,6 +593,8 @@ func TestApplyRollbackFailureContinuationsStayRecoverable(t *testing.T) {
 				}
 			},
 			repair: func(*testing.T, string) {},
+			// The tree matches neither candidate tree, so recovery may not guess.
+			recoverCode: 5, resolution: runstate.EventApplyRecoveryRequired,
 		},
 	} {
 		t.Run(continuation.name, func(t *testing.T) {
@@ -612,15 +621,20 @@ func TestApplyRollbackFailureContinuationsStayRecoverable(t *testing.T) {
 			// APPLYING is recoverable by definition, so recovery must reach a
 			// conclusion of its own rather than refuse the entry state.
 			code, _, stderr := runCommandBinary(t, partitur, root, environment, "apply", "run-1", "--recover")
-			if code != 4 && code != 5 && code != 0 {
+			if code != continuation.recoverCode {
 				t.Fatalf("recover after the interrupted apply exit=%d stderr=%q", code, stderr)
 			}
 			journal, err = store.ReadJournal("run-1")
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The cause is appended before every classification, so the tail is
+			// what separates one recovery conclusion from another.
 			if countEvents(journal.Events, runstate.EventApplyRecoveryRequired) != 1 {
 				t.Fatalf("recovery recorded no single cause: %v", eventKinds(journal.Events))
+			}
+			if last := journal.Events[len(journal.Events)-1].Type; last != continuation.resolution {
+				t.Fatalf("recovery journal tail=%v", eventKinds(journal.Events))
 			}
 		})
 	}

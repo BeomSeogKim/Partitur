@@ -23,6 +23,12 @@ import (
 
 var ErrApplicationNotAllowed = errors.New("application is not allowed")
 
+// ErrApplicationInterrupted marks a failure that happened *after* apply.started
+// was durable. Only then is the projection APPLYING and the `--recover`
+// continuation usable, which is what the exit table's code 6 promises; anything
+// that fails before the transaction starts is an ordinary refused precondition.
+var ErrApplicationInterrupted = errors.New("application transaction was interrupted")
+
 type ApplicationOutcome string
 
 const (
@@ -127,7 +133,7 @@ func (store *Store) applyCandidate(
 			err := appendApplicationEvent(transaction, state, runstate.EventApplyCompleted, map[string]any{
 				"txn_id": txnID, "candidate_id": candidate.ID, "result_tree": candidate.ResultTree, "identity_versions": versions,
 			})
-			return ApplicationResult{Outcome: ApplicationOutcomeApplied}, err
+			return ApplicationResult{Outcome: ApplicationOutcomeApplied}, interruptedIfFailed(err)
 		}
 		if treeErr != nil {
 			patchErr = treeErr
@@ -144,20 +150,29 @@ func (store *Store) applyCandidate(
 			// `--recover` concludes after a crash. A normal apply that cannot
 			// verify its own rollback is an interrupted transaction, so it leaves
 			// the projection APPLYING and hands the user `--recover`.
-			return ApplicationResult{}, fmt.Errorf("apply failed: %v; rollback failed: %w", patchErr, restoreErr)
+			return ApplicationResult{}, fmt.Errorf("%w: apply failed: %v; rollback failed: %v", ErrApplicationInterrupted, patchErr, restoreErr)
 		}
 		restored, err = applicationWorktreeTree(ctx, store.root)
 	}
 	if err != nil {
-		return ApplicationResult{}, fmt.Errorf("rollback tree unverifiable: %w", err)
+		return ApplicationResult{}, fmt.Errorf("%w: rollback tree unverifiable: %v", ErrApplicationInterrupted, err)
 	}
 	if restored != candidate.BaseTree {
-		return ApplicationResult{}, fmt.Errorf("rollback tree %q does not match base %q", restored, candidate.BaseTree)
+		return ApplicationResult{}, fmt.Errorf("%w: rollback tree %q does not match base %q", ErrApplicationInterrupted, restored, candidate.BaseTree)
 	}
 	err = appendApplicationEvent(transaction, state, runstate.EventApplyFailed, map[string]any{
 		"txn_id": txnID, "candidate_id": candidate.ID, "failure_detail": patchErr.Error(), "rollback_verified": true, "identity_versions": versions,
 	})
-	return ApplicationResult{Outcome: ApplicationOutcomeFailedClean, Detail: patchErr.Error()}, err
+	return ApplicationResult{Outcome: ApplicationOutcomeFailedClean, Detail: patchErr.Error()}, interruptedIfFailed(err)
+}
+
+// interruptedIfFailed marks a post-start failure so the CLI can tell the caller
+// the transaction is genuinely recoverable.
+func interruptedIfFailed(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %v", ErrApplicationInterrupted, err)
 }
 
 func (store *Store) recoverApplication(ctx context.Context, transaction *Txn, state *runstate.State) (ApplicationResult, error) {

@@ -446,12 +446,15 @@ func runApply(requestedID string, recoverOnly bool, stderr io.Writer) int {
 	}
 	result, err := store.Apply(context.Background(), runstate.RunID(requestedID), recoverOnly)
 	if err != nil {
-		if errors.Is(err, runstore.ErrApplicationNotAllowed) {
-			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
-			return 2
+		// Only a failure after apply.started may advertise --recover: before it
+		// the projection is still NOT_APPLIED, which recovery rightly refuses, so
+		// exit 6 would name a continuation the caller cannot use.
+		if errors.Is(err, runstore.ErrApplicationInterrupted) {
+			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "application", "partitur apply "+requestedID+" --recover", err.Error())
+			return 6
 		}
-		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "application", "partitur apply "+requestedID+" --recover", err.Error())
-		return 6
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
 	}
 	switch result.Outcome {
 	case runstore.ApplicationOutcomeApplied, runstore.ApplicationOutcomeAlreadyApplied:
