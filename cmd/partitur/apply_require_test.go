@@ -566,13 +566,14 @@ func TestApplyBeforeItsTransactionRefusesRatherThanPromisingRecovery(t *testing.
 	}
 }
 
-// TestApplyReportsRecoverableWhenItsFirstAppendFails covers the other side of
-// the exit-6 boundary. Writing apply.started can fail with the line already on
-// disk and only its sync lost, and replay would then project APPLYING. The
-// command cannot distinguish that from a write that never landed, so it must
-// report the recoverable reading: exit 2 asserts nothing was written, and that
-// assertion can be false.
-func TestApplyReportsRecoverableWhenItsFirstAppendFails(t *testing.T) {
+// TestApplyRefusesWhenItsFirstAppendLeavesNothing pins the other side of the
+// exit-6 boundary by measuring instead of reasoning. A failed append may or may
+// not have put its line on disk, and no reasoning about where the failure
+// happened can settle that — so the outcome comes from re-reading the
+// projection. Here the journal could not even be opened, so nothing durable
+// exists, the projection is NOT_APPLIED, and a refusal is the truthful answer:
+// exit 6 would name a recovery that refuses.
+func TestApplyRefusesWhenItsFirstAppendLeavesNothing(t *testing.T) {
 	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
 	journalPath := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
 	before, err := os.ReadFile(journalPath)
@@ -589,25 +590,34 @@ func TestApplyReportsRecoverableWhenItsFirstAppendFails(t *testing.T) {
 	t.Chdir(root)
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"apply", "run-1"}, &stdout, &stderr)
-	if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "partitur apply run-1 --recover") {
-		t.Fatalf("failed first append exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
 	after, err := os.ReadFile(journalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The assertion order matters: the journal being byte-identical is what
+	// makes exit 2 the honest code rather than a guess.
 	if !bytes.Equal(before, after) {
 		t.Fatal("the refused append still changed the journal")
+	}
+	if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "precondition refused") {
+		t.Fatalf("failed first append exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if _, err := store.ReadJournal("run-1"); err != nil {
 		t.Fatalf("journal is no longer replayable: %v", err)
 	}
+	// And the continuation exit 6 would have named is indeed unusable.
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"apply", "run-1", "--recover"}, &stdout, &stderr); code != 2 ||
+		!strings.Contains(stderr.String(), "--recover is refused from") {
+		t.Fatalf("recover from a never-started transaction exit=%d stderr=%q", code, stderr.String())
+	}
 }
 
-// TestRecoverReportsRecoverableWhenItsAppendFails is the same boundary on the
-// recovery side. Past its entry check the application is already nonterminal,
-// so a failure there — including one whose event may have reached the disk —
-// leaves a transaction `--recover` can resume, never a refused precondition.
+// TestRecoverReportsRecoverableWhenItsAppendFails is the same boundary read from
+// the other direction. Here a transaction is already durable, so whatever the
+// failed append did, the surviving projection is APPLYING — and exit 6's promise
+// of a usable `--recover` is true no matter where the failure landed.
 func TestRecoverReportsRecoverableWhenItsAppendFails(t *testing.T) {
 	root, store, candidateID := applyRequireFixture(t, applyGate{require: []string{"verified"}})
 	input, err := store.LoadRunInput("run-1")

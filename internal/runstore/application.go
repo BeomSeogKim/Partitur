@@ -23,10 +23,9 @@ import (
 
 var ErrApplicationNotAllowed = errors.New("application is not allowed")
 
-// ErrApplicationInterrupted marks a failure that happened *after* apply.started
-// was durable. Only then is the projection APPLYING and the `--recover`
-// continuation usable, which is what the exit table's code 6 promises; anything
-// that fails before the transaction starts is an ordinary refused precondition.
+// ErrApplicationInterrupted marks a failure whose surviving projection is
+// APPLYING — the one state in which the exit table's code 6 tells the truth,
+// because only then is the `--recover` continuation it names usable.
 var ErrApplicationInterrupted = errors.New("application transaction was interrupted")
 
 type ApplicationOutcome string
@@ -63,17 +62,47 @@ func (store *Store) Apply(ctx context.Context, runID runstate.RunID, recoverOnly
 		}
 		if recoverOnly {
 			result, err = store.recoverApplication(ctx, transaction, &state)
-			// Past its entry check the application is already nonterminal, so any
-			// failure here leaves a transaction that `--recover` may resume.
-			if err != nil && !errors.Is(err, ErrApplicationNotAllowed) {
-				err = interruptedIfFailed(err)
-			}
+		} else {
+			result, err = store.applyCandidate(ctx, transaction, &state, input.Score)
+		}
+		if err == nil || errors.Is(err, ErrApplicationNotAllowed) {
 			return err
 		}
-		result, err = store.applyCandidate(ctx, transaction, &state, input.Score)
+		// What the caller is told must describe the projection that survived, not
+		// the code path that failed. A durable append can fail with its line
+		// already on disk, and no amount of reasoning about *where* the failure
+		// happened can settle whether the transaction exists — so re-read it
+		// under the same lock and let the projection answer.
+		result, err = store.applicationFailureOutcome(transaction, movementSeed(initial), err)
 		return err
 	})
 	return result, err
+}
+
+// applicationFailureOutcome converts a failure into the outcome its surviving
+// projection justifies. §6 makes that projection the authoritative surface for
+// the application state; this keeps the exit code from claiming otherwise.
+func (store *Store) applicationFailureOutcome(transaction *Txn, seed []runstate.MovementSeed, cause error) (ApplicationResult, error) {
+	state, projectErr := transaction.project(seed)
+	if projectErr != nil {
+		// The journal no longer replays, so nothing can be asserted about the
+		// transaction. Report it as interrupted: naming a recovery the operator
+		// can run beats claiming a refusal that may be false.
+		return ApplicationResult{}, fmt.Errorf("%w: %v (projection unreadable: %v)", ErrApplicationInterrupted, cause, projectErr)
+	}
+	switch state.Application.State {
+	case runstate.ApplicationApplied:
+		return ApplicationResult{Outcome: ApplicationOutcomeApplied}, nil
+	case runstate.ApplicationFailedClean:
+		return ApplicationResult{Outcome: ApplicationOutcomeFailedClean, Detail: cause.Error()}, nil
+	case runstate.ApplicationRecoveryRequired:
+		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: cause.Error()}, nil
+	case runstate.ApplicationApplying:
+		return ApplicationResult{}, fmt.Errorf("%w: %v", ErrApplicationInterrupted, cause)
+	default:
+		// Nothing durable exists, so "nothing was written" is true here.
+		return ApplicationResult{}, cause
+	}
 }
 
 func (store *Store) applyCandidate(
@@ -121,7 +150,7 @@ func (store *Store) applyCandidate(
 		// which case replay projects APPLYING and `--recover` is valid. The
 		// command cannot tell, so it reports the recoverable reading: exit 2
 		// would assert that nothing was written, and that assertion can be false.
-		return ApplicationResult{}, interruptedIfFailed(err)
+		return ApplicationResult{}, err
 	}
 	// The two sides of the durable seam: the transaction is recorded but the
 	// checkout is untouched, and the checkout is written but nothing says so yet.
@@ -142,7 +171,7 @@ func (store *Store) applyCandidate(
 			err := appendApplicationEvent(transaction, state, runstate.EventApplyCompleted, map[string]any{
 				"txn_id": txnID, "candidate_id": candidate.ID, "result_tree": candidate.ResultTree, "identity_versions": versions,
 			})
-			return ApplicationResult{Outcome: ApplicationOutcomeApplied}, interruptedIfFailed(err)
+			return ApplicationResult{Outcome: ApplicationOutcomeApplied}, err
 		}
 		if treeErr != nil {
 			patchErr = treeErr
@@ -159,29 +188,20 @@ func (store *Store) applyCandidate(
 			// `--recover` concludes after a crash. A normal apply that cannot
 			// verify its own rollback is an interrupted transaction, so it leaves
 			// the projection APPLYING and hands the user `--recover`.
-			return ApplicationResult{}, fmt.Errorf("%w: apply failed: %v; rollback failed: %v", ErrApplicationInterrupted, patchErr, restoreErr)
+			return ApplicationResult{}, fmt.Errorf("apply failed: %v; rollback failed: %v", patchErr, restoreErr)
 		}
 		restored, err = applicationWorktreeTree(ctx, store.root)
 	}
 	if err != nil {
-		return ApplicationResult{}, fmt.Errorf("%w: rollback tree unverifiable: %v", ErrApplicationInterrupted, err)
+		return ApplicationResult{}, fmt.Errorf("rollback tree unverifiable: %v", err)
 	}
 	if restored != candidate.BaseTree {
-		return ApplicationResult{}, fmt.Errorf("%w: rollback tree %q does not match base %q", ErrApplicationInterrupted, restored, candidate.BaseTree)
+		return ApplicationResult{}, fmt.Errorf("rollback tree %q does not match base %q", restored, candidate.BaseTree)
 	}
 	err = appendApplicationEvent(transaction, state, runstate.EventApplyFailed, map[string]any{
 		"txn_id": txnID, "candidate_id": candidate.ID, "failure_detail": patchErr.Error(), "rollback_verified": true, "identity_versions": versions,
 	})
-	return ApplicationResult{Outcome: ApplicationOutcomeFailedClean, Detail: patchErr.Error()}, interruptedIfFailed(err)
-}
-
-// interruptedIfFailed marks a post-start failure so the CLI can tell the caller
-// the transaction is genuinely recoverable.
-func interruptedIfFailed(err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%w: %v", ErrApplicationInterrupted, err)
+	return ApplicationResult{Outcome: ApplicationOutcomeFailedClean, Detail: patchErr.Error()}, err
 }
 
 func (store *Store) recoverApplication(ctx context.Context, transaction *Txn, state *runstate.State) (ApplicationResult, error) {
