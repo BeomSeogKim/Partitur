@@ -494,7 +494,7 @@ func TestApplyRollbackRefusesToLeaveTheCheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
-	root, _, _ := applyRequireFixtureWithNestedPath(t)
+	root, store, _ := applyRequireFixtureWithNestedPath(t)
 	environment := applyKillEnvironment(t)
 
 	// The name has to be the one the touched path resolves to through the
@@ -516,9 +516,27 @@ func TestApplyRollbackRefusesToLeaveTheCheckout(t *testing.T) {
 	if err := os.Symlink(outside, nested); err != nil {
 		t.Fatal(err)
 	}
-	release()
-
+	// Refusing containment is an interrupted transaction, not a `--recover`
+	// verdict: §8 reserves exit 5 and RECOVERY_REQUIRED for what recovery
+	// concludes, so this leaves the projection APPLYING and hands over `--recover`.
+	if code := release(); code != 6 {
+		t.Fatalf("rollback refused for containment exit=%d, want the interrupted-transaction code", code)
+	}
 	if kept, err := os.ReadFile(precious); err != nil || string(kept) != "precious\n" {
 		t.Fatalf("rollback reached outside the checkout: contents=%q err=%v", kept, err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventApplyStarted) != 1 ||
+		countEvents(journal.Events, runstate.EventApplyFailed) != 0 ||
+		countEvents(journal.Events, runstate.EventApplyRecoveryRequired) != 0 {
+		t.Fatalf("journal=%v", eventKinds(journal.Events))
+	}
+	// And it really is recoverable from there rather than stuck.
+	code, _, stderr := runCommandBinary(t, partitur, root, environment, "apply", "run-1", "--recover")
+	if code != 5 || !strings.Contains(stderr, "matches neither candidate tree") {
+		t.Fatalf("recover after the refused rollback exit=%d stderr=%q", code, stderr)
 	}
 }

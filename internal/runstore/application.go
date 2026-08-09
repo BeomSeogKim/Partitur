@@ -140,27 +140,19 @@ func (store *Store) applyCandidate(
 	restored, err := applicationWorktreeTree(ctx, store.root)
 	if err == nil && restored != candidate.BaseTree {
 		if restoreErr := applicationRestore(ctx, store.root, candidate.BaseTree, touched); restoreErr != nil {
-			detail := "apply failed: " + patchErr.Error() + "; rollback failed: " + restoreErr.Error()
-			if appendErr := store.applicationRecoveryRequired(transaction, state, candidate, txnID, versions, detail); appendErr != nil {
-				return ApplicationResult{}, appendErr
-			}
-			return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: detail}, nil
+			// Not RECOVERY_REQUIRED: §8 reserves that — and exit 5 — for what
+			// `--recover` concludes after a crash. A normal apply that cannot
+			// verify its own rollback is an interrupted transaction, so it leaves
+			// the projection APPLYING and hands the user `--recover`.
+			return ApplicationResult{}, fmt.Errorf("apply failed: %v; rollback failed: %w", patchErr, restoreErr)
 		}
 		restored, err = applicationWorktreeTree(ctx, store.root)
 	}
 	if err != nil {
-		detail := "rollback tree unverifiable: " + err.Error()
-		if appendErr := store.applicationRecoveryRequired(transaction, state, candidate, txnID, versions, detail); appendErr != nil {
-			return ApplicationResult{}, appendErr
-		}
-		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: detail}, nil
+		return ApplicationResult{}, fmt.Errorf("rollback tree unverifiable: %w", err)
 	}
 	if restored != candidate.BaseTree {
-		detail := fmt.Sprintf("rollback tree %q does not match base %q", restored, candidate.BaseTree)
-		if appendErr := store.applicationRecoveryRequired(transaction, state, candidate, txnID, versions, detail); appendErr != nil {
-			return ApplicationResult{}, appendErr
-		}
-		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: detail}, nil
+		return ApplicationResult{}, fmt.Errorf("rollback tree %q does not match base %q", restored, candidate.BaseTree)
 	}
 	err = appendApplicationEvent(transaction, state, runstate.EventApplyFailed, map[string]any{
 		"txn_id": txnID, "candidate_id": candidate.ID, "failure_detail": patchErr.Error(), "rollback_verified": true, "identity_versions": versions,
@@ -216,12 +208,6 @@ func (store *Store) recoverApplication(ctx context.Context, transaction *Txn, st
 	default:
 		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: fmt.Sprintf("checkout tree %q matches neither candidate tree", tree)}, nil
 	}
-}
-
-func (store *Store) applicationRecoveryRequired(transaction *Txn, state *runstate.State, candidate runstate.ApplicationCandidate, txnID string, versions map[string]any, detail string) error {
-	return appendApplicationEvent(transaction, state, runstate.EventApplyRecoveryRequired, map[string]any{
-		"txn_id": txnID, "candidate_id": candidate.ID, "failure_detail": detail, "identity_versions": versions,
-	})
 }
 
 func (store *Store) applicationPreconditions(ctx context.Context, selected runstate.RunID, state runstate.State, compiled *score.Score) error {
