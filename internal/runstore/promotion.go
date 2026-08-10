@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -149,16 +150,7 @@ func (store *Store) recoverPromotion(ctx context.Context, transaction *Txn, stat
 		}
 		return store.writePromotedScore(transaction, state, target)
 	default:
-		if state.Promotion.State == runstate.PromotionPromoting {
-			if err := appendPromotionEvent(transaction, state, runstate.EventScorePromotionRecoveryRequired, map[string]any{
-				"txn_id": state.Promotion.TransactionID, "candidate_id": target.candidate.ID,
-				"identity_versions": target.versions, "observed_root_file_hash": observed,
-				"failure_detail": "root file hash matches neither expected nor target",
-			}); err != nil {
-				return PromotionResult{}, err
-			}
-		}
-		return PromotionResult{Outcome: PromotionOutcomeRecoveryRequired, Detail: "root file hash matches neither expected nor target"}, nil
+		return store.haltPromotionForOperator(transaction, state, target, observed)
 	}
 }
 
@@ -215,9 +207,13 @@ func (store *Store) promotionTarget(runID runstate.RunID, state runstate.State) 
 	if err != nil {
 		return promotionTarget{}, err
 	}
-	contents, err := store.fs.ReadFile(filepath.Join(store.root, ".partitur", "runs", string(runID), "scores", fmt.Sprintf("revision-%d.yaml", state.ScoreHead.Revision)))
+	snapshot := filepath.Join(store.root, ".partitur", "runs", string(runID), "scores", fmt.Sprintf("revision-%d.yaml", state.ScoreHead.Revision))
+	contents, err := store.fs.ReadFile(snapshot)
 	if err != nil {
-		return promotionTarget{}, fmt.Errorf("read promotion target snapshot: %w", err)
+		if errors.Is(err, os.ErrNotExist) {
+			return promotionTarget{}, fmt.Errorf("%w: required promotion target snapshot %q is missing", ErrPromotionNotAllowed, snapshot)
+		}
+		return promotionTarget{}, fmt.Errorf("%w: required promotion target snapshot %q is unreadable: %v", ErrPromotionNotAllowed, snapshot, err)
 	}
 	if hash := rawHash(contents); hash != string(state.ScoreHead.FileHash) {
 		return promotionTarget{}, fmt.Errorf("promotion target hash %q does not match pinned head %q", hash, state.ScoreHead.FileHash)
@@ -272,6 +268,22 @@ func (store *Store) writePromotedScore(transaction *Txn, state *runstate.State, 
 		return PromotionResult{}, errors.New("promotion temporary bytes differ from target snapshot")
 	}
 	store.probe.Reached(faultpoint.PointPromotionBeforeRootRename)
+	current, err := store.fs.ReadFile(root)
+	if err != nil {
+		cleanup()
+		return PromotionResult{}, fmt.Errorf("re-read root score before promotion rename: %w", err)
+	}
+	observed := rawHash(current)
+	if observed != target.expectedHash {
+		cleanup()
+		if observed == target.targetHash {
+			if err := appendPromotionEvent(transaction, state, runstate.EventScorePromoted, target.promotedPayload(state.Promotion.TransactionID)); err != nil {
+				return PromotionResult{}, err
+			}
+			return PromotionResult{Outcome: PromotionOutcomePromoted}, nil
+		}
+		return store.haltPromotionForOperator(transaction, state, target, observed)
+	}
 	if err := store.fs.Rename(temporary, root); err != nil {
 		cleanup()
 		return PromotionResult{}, fmt.Errorf("rename promoted root score: %w", err)
@@ -284,6 +296,19 @@ func (store *Store) writePromotedScore(transaction *Txn, state *runstate.State, 
 		return PromotionResult{}, err
 	}
 	return PromotionResult{Outcome: PromotionOutcomePromoted}, nil
+}
+
+func (store *Store) haltPromotionForOperator(transaction *Txn, state *runstate.State, target promotionTarget, observed string) (PromotionResult, error) {
+	if state.Promotion.State == runstate.PromotionPromoting {
+		if err := appendPromotionEvent(transaction, state, runstate.EventScorePromotionRecoveryRequired, map[string]any{
+			"txn_id": state.Promotion.TransactionID, "candidate_id": target.candidate.ID,
+			"identity_versions": target.versions, "observed_root_file_hash": observed,
+			"failure_detail": "root file hash matches neither expected nor target",
+		}); err != nil {
+			return PromotionResult{}, err
+		}
+	}
+	return PromotionResult{Outcome: PromotionOutcomeRecoveryRequired, Detail: "root file hash matches neither expected nor target"}, nil
 }
 
 func appendPromotionEvent(transaction *Txn, state *runstate.State, eventType runstate.EventType, payload map[string]any) error {

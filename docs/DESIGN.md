@@ -3726,7 +3726,7 @@ score.promotion_started { expected_root_file_hash, target_snapshot_file_hash, ca
 → score.promoted + fsync
 ```
 
-`promote-score --recover`, under the lock: root **file** hash == target → complete
+At the rename boundary and during `promote-score --recover`, under the lock: root **file** hash == target → complete
 `score.promoted` idempotently under the original transaction id; root file hash == expected → resume the *same*
 transaction (a repeated `score.promotion_started` is an idempotent resume, never a second
 promotion); anything else stays `RECOVERY_REQUIRED`, because the root was changed by
@@ -3754,10 +3754,10 @@ authoritative surface for `application.state` and its cause.
 |---|---|
 | 0 | Promotion reached `PROMOTED` |
 | 1 | Usage error |
-| 2 | Run selection or another command precondition was refused under the global exit-code table, including a CAS conflict because the root file hash differs from `expected_root_file_hash` before promotion starts |
+| 2 | Run selection or another command precondition was refused under the global exit-code table, including a missing or unreadable pinned target snapshot, or a CAS conflict because the root file hash differs from `expected_root_file_hash` before promotion starts |
 | 3 | Not used: `promote-score` performs neither validation nor amendment rejection |
 | 4 | Not used: promotion has no verified-clean failure outcome |
-| 5 | `promote-score --recover` found the root file hash matching neither the expected nor target hash and left Promotion `RECOVERY_REQUIRED`; stderr names that promotion recovery state and cause; the run remains `SUCCEEDED` |
+| 5 | A normal promotion's rename-boundary check or `promote-score --recover` found the root file hash matching neither the expected nor target hash and left Promotion `RECOVERY_REQUIRED`; stderr names that promotion recovery state and cause; the run remains `SUCCEEDED` |
 | 6 | This `promote-score` invocation was operationally interrupted after its transaction started; Promotion remains `PROMOTING` and recoverable with `partitur promote-score <run-id> --recover`; the run remains `SUCCEEDED` |
 
 `apply` evaluates the selected run's candidate against the expectation of **the same run

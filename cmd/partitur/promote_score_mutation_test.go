@@ -112,12 +112,28 @@ func TestMutationPromoteScoreConjuncts(t *testing.T) {
 			testName:    "TestPromoteScoreRefusesCASConflictAndAlreadyPromotedWithoutChangingRoot",
 		},
 		{
+			name:        "promotion rechecks the root hash at the rename boundary",
+			source:      "internal/runstore/promotion.go",
+			before:      "if observed != target.expectedHash {",
+			after:       "if observed == target.expectedHash {",
+			packagePath: "./cmd/partitur",
+			testName:    "TestPromoteScoreRenameTimeCASConflictLeavesUserRootAndHalts",
+		},
+		{
 			name:        "recover requires the original promotion candidate",
 			source:      "internal/runstore/promotion.go",
 			before:      "if state.Promotion.CandidateID != target.candidate.ID {",
 			after:       "if state.Promotion.CandidateID == target.candidate.ID {",
 			packagePath: "./cmd/partitur",
 			testName:    "TestPromoteScoreRecoverRequiresOriginalCandidate",
+		},
+		{
+			name:        "recover refuses a missing pinned promotion snapshot",
+			source:      "internal/runstore/promotion.go",
+			before:      "if errors.Is(err, os.ErrNotExist) {",
+			after:       "if !errors.Is(err, os.ErrNotExist) {",
+			packagePath: "./cmd/partitur",
+			testName:    "TestPromoteScoreRecoverRefusesMissingTargetSnapshot",
 		},
 		{
 			name:        "target-hash recovery completes the original transaction",

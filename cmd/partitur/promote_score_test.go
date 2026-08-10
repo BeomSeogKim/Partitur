@@ -202,6 +202,33 @@ func TestPromoteScoreRefusesCASConflictAndAlreadyPromotedWithoutChangingRoot(t *
 	}
 }
 
+func TestPromoteScoreRenameTimeCASConflictLeavesUserRootAndHalts(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	root, store, expected, _ := promotionRecoveryFixture(t)
+	userRoot := append(append([]byte(nil), expected...), []byte("# formatting-only edit\n")...)
+	release := pauseAtPoint(t, partitur, root, applyKillEnvironment(t), faultpoint.PointPromotionBeforeRootRename, "promote-score", "run-1")
+	if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), userRoot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := release(); code != 5 {
+		t.Fatalf("rename-time conflict exit=%d, want 5", code)
+	}
+	if rootBytes, err := os.ReadFile(filepath.Join(root, "partitur.yaml")); err != nil || !bytes.Equal(rootBytes, userRoot) {
+		t.Fatalf("rename-time conflict overwrote user root: err=%v root=%q", err, rootBytes)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 1 || countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 || countEvents(journal.Events, runstate.EventScorePromoted) != 0 {
+		t.Fatalf("rename-time conflict journal=%v", eventKinds(journal.Events))
+	}
+}
+
 func TestParsePromoteScoreArgs(t *testing.T) {
 	for _, test := range []struct {
 		args              []string
@@ -312,6 +339,32 @@ func TestPromoteScoreRecoveryHaltLeavesJournalFixed(t *testing.T) {
 	}
 	if after := applyReadJournalBytes(t, root); after != before {
 		t.Fatalf("second halt rewrote journal:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestPromoteScoreRecoverRefusesMissingTargetSnapshot(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	root, store, _, _ := promotionRecoveryFixture(t)
+	environment := applyKillEnvironment(t)
+	killAtPoint(t, partitur, partiturRepository(t, root), environment, faultpoint.PointPromotionBeforeRootRename, "promote-score", "run-1")
+	snapshot := filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml")
+	if err := os.Remove(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runCommandBinary(t, partitur, root, environment, "promote-score", "run-1", "--recover")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "required promotion target snapshot") || !strings.Contains(stderr, "is missing") || strings.Contains(stderr, "is unreadable") || !strings.Contains(stderr, "revision-2.yaml") {
+		t.Fatalf("missing target recovery exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 1 || countEvents(journal.Events, runstate.EventScorePromoted) != 0 || countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 0 {
+		t.Fatalf("missing target recovery journal=%v", eventKinds(journal.Events))
 	}
 }
 
