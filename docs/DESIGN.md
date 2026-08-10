@@ -342,7 +342,7 @@ conflating them would let the core silently destroy a user's comments or formatt
 | Hash | Over | Used for |
 |---|---|---|
 | `score_hash` (semantic) | the canonical score **AST** (`partitur/score`, Appendix A) | `base_revision`/`base_hash` staleness, snapshot identity, amendment no-op detection, `execution_dependency_hash` |
-| `score_file_hash` (raw) | the **exact bytes** of the file (`sha256:<hex>`) | the `promote-score` compare-and-swap and the byte-exact write |
+| `score_file_hash` (raw) | the **exact bytes** of the file (`sha256:<hex>`) | the `promote-score` pre-rename hash check and the byte-exact write |
 
 The semantic hash deliberately ignores comments and formatting, which is correct for
 "did the meaning change?" and **wrong** for "may I overwrite this file?". Promotion
@@ -357,8 +357,8 @@ revision number alone cannot reproduce a run:
   `score_file_hash` at that moment.
 - Amendments modify **only the run's snapshot chain** — the root `partitur.yaml` is never
   overwritten automatically. The explicit `promote-score` command copies a run revision
-  back to the root score; promotion is a compare-and-swap against the recorded root
-  **file** hash, and surfaces a conflict if the root file has changed since.
+  back to the root score; promotion checks the recorded root **file** hash before
+  renaming, and surfaces a conflict if the root file has changed before that check.
 - Resume works from the run's snapshot, never from the current root `partitur.yaml`.
   If the root score claims the same revision number but its semantic hash differs from the
   snapshot, the core **refuses to resume and halts** with `root_snapshot_divergence` (Appendix D) —
@@ -3136,7 +3136,7 @@ partitur resume          # resume after interruption; recovers by Appendix C, th
                          #   lease only when §6 authorizes it
 partitur apply           # apply the candidate to the checkout (§8)
 partitur apply --recover           # only from APPLYING | RECOVERY_REQUIRED
-partitur promote-score             # copy a run revision to partitur.yaml (CAS, §1, §8)
+partitur promote-score             # copy a run revision to partitur.yaml (§1, §8)
 partitur promote-score --recover   # only from PROMOTING | RECOVERY_REQUIRED
 partitur version         # prints the core version; no run state is read or written
 ```
@@ -3532,7 +3532,7 @@ cast produce `binding_missing`, which is a validation result about content that 
 |---|---|
 | 0 | success |
 | 1 | usage error: unknown command, missing or malformed operand |
-| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state (including a missing, obsoleted, already-resolved, or wrong-type decision addressed by `answer` or gate `approve`), dirty checkout, lock held, unwritable output stream, or a promotion CAS conflict whose root file hash differs from `expected_root_file_hash` |
+| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state (including a missing, obsoleted, already-resolved, or wrong-type decision addressed by `answer` or gate `approve`), dirty checkout, lock held, unwritable output stream, or a promotion pre-start root-hash conflict |
 | 3 | validation failed: `partitur validate`, pre-run validation for `partitur run`, or a rejected amendment |
 | 4 | a command's durable transaction completed unsuccessfully: a run reached terminal `FAILED` or `CANCELLED`, or Application reached `FAILED_CLEAN` after a verified rollback |
 | 5 | recovery halt — a command's durable transaction cannot proceed and needs an operator: a run halt names an Appendix D reason; Application or Promotion remains `RECOVERY_REQUIRED` when its `--recover` cannot determine a safe result |
@@ -3726,11 +3726,21 @@ score.promotion_started { expected_root_file_hash, target_snapshot_file_hash, ca
 → score.promoted + fsync
 ```
 
-`promote-score --recover`, under the lock: root **file** hash == target → complete
+At the rename boundary and during `promote-score --recover`, under the lock: root **file** hash == target → complete
 `score.promoted` idempotently under the original transaction id; root file hash == expected → resume the *same*
 transaction (a repeated `score.promotion_started` is an idempotent resume, never a second
 promotion); anything else stays `RECOVERY_REQUIRED`, because the root was changed by
-something else and the CAS can no longer decide.
+something else and the recorded hashes can no longer decide. Recovery first removes only that
+transaction's `.partitur.yaml.promote-<txn-id>-*` leftovers. If a target snapshot is missing,
+unreadable, or its raw hash no longer matches the pinned head, `NOT_PROMOTED` refuses before
+`score.promotion_started`; `PROMOTING` instead appends `score.promotion_recovery_required` with
+that named cause and remains `RECOVERY_REQUIRED`.
+
+This is a pre-rename check, **not** a compare-and-swap: POSIX provides no portable operation that
+both verifies the old root bytes and replaces that pathname. A writer can therefore land after the
+final hash read and before `rename`; its bytes can be replaced without a conflict event. The state
+lock narrows that window to writers outside Partitur's lock, but cannot close it, and recovery can
+only classify the bytes that survived.
 
 **`partitur apply` exit mapping.** The following table is exhaustive for `apply`; the run
 remains terminal `SUCCEEDED` on every shipping outcome, and `status --json` remains the
@@ -3754,10 +3764,10 @@ authoritative surface for `application.state` and its cause.
 |---|---|
 | 0 | Promotion reached `PROMOTED` |
 | 1 | Usage error |
-| 2 | Run selection or another command precondition was refused under the global exit-code table, including a CAS conflict because the root file hash differs from `expected_root_file_hash` before promotion starts |
+| 2 | Run selection or another command precondition was refused under the global exit-code table, including a missing, unreadable, or hash-mismatched pinned target snapshot found before `score.promotion_started`, or a root-hash conflict before that event |
 | 3 | Not used: `promote-score` performs neither validation nor amendment rejection |
 | 4 | Not used: promotion has no verified-clean failure outcome |
-| 5 | `promote-score --recover` found the root file hash matching neither the expected nor target hash and left Promotion `RECOVERY_REQUIRED`; stderr names that promotion recovery state and cause; the run remains `SUCCEEDED` |
+| 5 | A started promotion found a missing, unreadable, or hash-mismatched pinned target snapshot, or its rename-boundary check / `promote-score --recover` found the root file hash matching neither the expected nor target hash; it appended or retained Promotion `RECOVERY_REQUIRED`, and stderr names that cause; the run remains `SUCCEEDED` |
 | 6 | This `promote-score` invocation was operationally interrupted after its transaction started; Promotion remains `PROMOTING` and recoverable with `partitur promote-score <run-id> --recover`; the run remains `SUCCEEDED` |
 
 `apply` evaluates the selected run's candidate against the expectation of **the same run
@@ -4128,7 +4138,7 @@ report derived from the before/after ASTs.
 
 **Snapshot bytes are canonical, not pretty-printed.** An amendment operates on canonical JSON but
 persists a YAML snapshot whose exact bytes later become the `promote-score` target (§8), so a
-non-deterministic emitter would make the promotion CAS depend on formatting luck. Amended snapshots
+non-deterministic emitter would make the promotion pre-rename check depend on formatting luck. Amended snapshots
 are therefore emitted by a **fixed deterministic serializer**: keys in canonical order (A.1), two-space
 indentation, block scalars for any string containing a newline, double-quoted scalars only where YAML
 requires quoting, no flow collections, no anchors or aliases, LF endings, one trailing newline. The
@@ -4450,7 +4460,7 @@ with the above — a category error here silently aliases unrelated objects:
 | Identity | Form | Note |
 |---|---|---|
 | Artifact instance content | `sha256:<hex>` over raw file bytes (§1) | Not an AST; the bytes are the artifact. |
-| Score **file** content | `sha256:<hex>` over raw file bytes (§1) | `score_file_hash`, for the promotion CAS. Deliberately distinct from `partitur/score`. |
+| Score **file** content | `sha256:<hex>` over raw file bytes (§1) | `score_file_hash`, for the promotion pre-rename hash check. Deliberately distinct from `partitur/score`. |
 | Git trees and commits | `git-sha1:<hex>` / `git-sha256:<hex>` | **Must** carry the object format. A bare hex string would alias two different objects across a repository-format migration, and the prefix makes the mistake impossible to make silently. |
 
 ### A.4.1 `partitur/criterion-spec`
@@ -4779,7 +4789,7 @@ reason is chosen once and carried.
 
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
-| `run.started` | ✓ | run_id | — | Run → `RUNNING`; records base commit/tree, score snapshot hash, resolved-cast hash, root-score hash for CAS |
+| `run.started` | ✓ | run_id | — | Run → `RUNNING`; records base commit/tree, score snapshot hash, resolved-cast hash, root-score hash for promotion's pre-rename check |
 | `run.succeeded` | ✓ | run_id | Run `RUNNING` | Run → `SUCCEEDED`. On the **waived** path also carries the full candidate payload and binding (§8) |
 | `run.failed` | ✓ | run_id | Run `RUNNING`/`WAITING_HUMAN` | Run → `FAILED`; carries reason (Appendix D) |
 | `run.cancelled` | ✓ | run_id | Run nonterminal | Run → `CANCELLED`. When it terminalizes a fenced driver it also carries `fenced_epoch`, the epoch the authority moved to, so recovery projects the fence rather than inferring it (§6). Carries the affected movement and attempt ids and projects their cancellation **atomically**, so a crash mid-cancel cannot leave a cancelled run with a running attempt |
@@ -4797,7 +4807,7 @@ run.started {
   base_tree,                      # git-native; the candidate's base_tree (§8)
   score_hash,                     # partitur/score — semantic snapshot identity
   score_file_hash,                # sha256: raw bytes of the root score AT RUN START, for the
-                                  #   promotion CAS (§1, §8)
+                                  #   promotion pre-rename hash check (§1, §8)
   resolved_cast_hash,             # partitur/resolved-cast
   identity_versions
 }
@@ -5486,7 +5496,7 @@ apply.recovery_resolved {
 
 score.promotion_started {
   txn_id, candidate_id, identity_versions,
-  expected_root_file_hash,        # sha256: raw bytes — the CAS operand
+  expected_root_file_hash,        # sha256: raw bytes — checked before rename
   target_snapshot_file_hash,      # sha256: raw bytes to be written
   target_revision
 }
@@ -5495,7 +5505,7 @@ score.promoted { txn_id, candidate_id, identity_versions, target_revision,
 score.promotion_recovery_required {
   txn_id, candidate_id, identity_versions,
   observed_root_file_hash?,       # present when the root was readable: it matched neither the
-                                  #   expected nor the target hash, so the CAS can no longer
+                                  #   expected nor the target hash, so the recorded hashes can no longer
                                   #   decide and something else changed the root (§8)
   failure_detail
 }

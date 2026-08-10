@@ -269,6 +269,9 @@ func runWithReaders(
 	if requestedID, recoverOnly, ok := parseApplyArgs(args); ok {
 		return runApply(requestedID, recoverOnly, stderr)
 	}
+	if requestedID, recoverOnly, ok := parsePromoteScoreArgs(args); ok {
+		return runPromoteScore(requestedID, recoverOnly, stderr)
+	}
 	if len(args) == 1 && args[0] == "run" {
 		preparation, preparationResult := prepare()
 		if preparationResult.Refusal != nil {
@@ -326,7 +329,7 @@ func runWithReaders(
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, init, validate, run, resume, answer, approve, amend, apply, cancel, status, logs")
+	fmt.Fprintln(w, "commands: version, init, validate, run, resume, answer, approve, amend, apply, promote-score, cancel, status, logs")
 }
 
 func initializeRepository() error {
@@ -469,6 +472,51 @@ func runApply(requestedID string, recoverOnly bool, stderr io.Writer) int {
 		return 5
 	default:
 		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "application", "partitur apply "+requestedID+" --recover", "application produced no outcome")
+		return 6
+	}
+}
+
+func parsePromoteScoreArgs(args []string) (runID string, recoverOnly bool, ok bool) {
+	if (len(args) != 2 && len(args) != 3) || len(args) == 0 || args[0] != "promote-score" || args[1] == "" || strings.HasPrefix(args[1], "-") {
+		return "", false, false
+	}
+	if len(args) == 2 {
+		return args[1], false, true
+	}
+	if args[2] != "--recover" {
+		return "", false, false
+	}
+	return args[1], true, true
+}
+
+func runPromoteScore(requestedID string, recoverOnly bool, stderr io.Writer) int {
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	if err != nil {
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	result, err := store.PromoteScore(context.Background(), runstate.RunID(requestedID), recoverOnly)
+	if err != nil {
+		if errors.Is(err, runstore.ErrPromotionInterrupted) {
+			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "promotion", "partitur promote-score "+requestedID+" --recover", err.Error())
+			return 6
+		}
+		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+		return 2
+	}
+	switch result.Outcome {
+	case runstore.PromotionOutcomePromoted, runstore.PromotionOutcomeAlreadyPromoted:
+		return 0
+	case runstore.PromotionOutcomeRecoveryRequired:
+		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", requestedID, result.Detail)
+		return 5
+	default:
+		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "promotion", "partitur promote-score "+requestedID+" --recover", "promotion produced no outcome")
 		return 6
 	}
 }

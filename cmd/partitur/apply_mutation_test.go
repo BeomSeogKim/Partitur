@@ -146,10 +146,21 @@ func TestMutationApplyConjuncts(t *testing.T) {
 			testName:    "TestParseApplyArgs",
 		},
 		{
-			name:        "apply parser accepts only the recover spelling",
-			source:      "cmd/partitur/main.go",
-			before:      `args[2] != "--recover"`,
-			after:       `args[2] == "--recover"`,
+			name:   "apply parser accepts only the recover spelling",
+			source: "cmd/partitur/main.go",
+			// Anchored through the following function name: `promote-score` parses
+			// its own `--recover` with the identical clause, so the bare text
+			// appears twice and the harness refuses an ambiguous anchor.
+			before: "if args[2] != \"--recover\" {\n" +
+				"\t\treturn \"\", false, false\n" +
+				"\t}\n" +
+				"\treturn args[1], true, true\n" +
+				"}\n\nfunc runApply",
+			after: "if args[2] == \"--recover\" {\n" +
+				"\t\treturn \"\", false, false\n" +
+				"\t}\n" +
+				"\treturn args[1], true, true\n" +
+				"}\n\nfunc runApply",
 			packagePath: "./cmd/partitur",
 			testName:    "TestParseApplyArgs",
 		},

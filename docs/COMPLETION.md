@@ -79,7 +79,7 @@ denominator cannot change without changing this document.
 | `promote-score` |
 | `version` |
 
-Currently red: twelve of the thirteen are dispatched.
+Currently green: thirteen of the thirteen are dispatched.
 
 > This row proves dispatch, not behaviour — a command could be dispatched and do nothing. The
 > obligation that each command's outcomes are exercised is an outstanding prerequisite, not a row
