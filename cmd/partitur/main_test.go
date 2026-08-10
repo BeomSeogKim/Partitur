@@ -310,7 +310,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, cancel, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, promote-score, cancel, status, logs\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -469,7 +469,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, cancel, status, logs\n" {
+				stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, promote-score, cancel, status, logs\n" {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
