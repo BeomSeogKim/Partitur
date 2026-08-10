@@ -21,6 +21,38 @@ func TestMutationApplyConjuncts(t *testing.T) {
 		wantOutcome                                        mutationtest.Outcome
 	}{
 		{
+			name:        "verified evidence requires the final movement acceptance spec hash",
+			source:      "internal/runstore/application.go",
+			before:      "acceptance.SpecHash != expectedSpecHash",
+			after:       "acceptance.SpecHash == expectedSpecHash",
+			packagePath: "./cmd/partitur",
+			testName:    "TestApplyRequireVerifiedRefusesAcceptancePlansMissingDeclaredHardCriteria/acceptance_hash_does_not_match_the_final_movement",
+		},
+		{
+			name:        "verified evidence covers declared artifact hard criteria",
+			source:      "internal/runstore/application.go",
+			before:      "for _, criterion := range view.Acceptance.ArtifactCriteria {",
+			after:       "for _, criterion := range []score.ArtifactCriterionView{} {",
+			packagePath: "./cmd/partitur",
+			testName:    "TestApplyRequireVerifiedRefusesAcceptancePlansMissingDeclaredHardCriteria/plan_omits_a_declared_artifact_criterion",
+		},
+		{
+			name:        "verified evidence covers declared run hard criteria",
+			source:      "internal/runstore/application.go",
+			before:      "for _, criterion := range view.Acceptance.RunCriteria {",
+			after:       "for _, criterion := range []score.RunCriterionView{} {",
+			packagePath: "./cmd/partitur",
+			testName:    "TestApplyRequireVerifiedRefusesAcceptancePlansMissingDeclaredHardCriteria/empty_plan_omits_the_declared_run_criterion",
+		},
+		{
+			name:        "verified hard-criterion coverage rejects an unplanned criterion",
+			source:      "internal/runstore/application.go",
+			before:      "!slices.Contains(acceptance.PlannedCriterionIDs, criterionID)",
+			after:       "slices.Contains(acceptance.PlannedCriterionIDs, criterionID)",
+			packagePath: "./cmd/partitur",
+			testName:    "TestApplyRequireVerifiedMaterializesCandidate",
+		},
+		{
 			name:        "apply parser rejects a two-argument length as malformed",
 			source:      "cmd/partitur/main.go",
 			before:      `if (len(args) != 2 && len(args) != 3) || len(args) == 0 || args[0] != "apply" || args[1] == "" || strings.HasPrefix(args[1], "-") {`,

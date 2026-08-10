@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/score"
@@ -301,9 +302,12 @@ func applicationJudgment(state runstate.State, compiled *score.Score) error {
 	if execution.FinalMovementID == "" {
 		return fmt.Errorf("%w: final movement is missing", ErrApplicationNotAllowed)
 	}
-	marks := applicationMarks(state, compiled, runstate.MovementID(execution.FinalMovementID), candidate.ResultTree)
+	marks, verifiedFailure := applicationMarks(state, compiled, runstate.MovementID(execution.FinalMovementID), candidate.ResultTree)
 	for _, required := range execution.ApplyGateRequire {
 		if !marks[strings.ToUpper(required)] {
+			if strings.EqualFold(required, "verified") && verifiedFailure != "" {
+				return fmt.Errorf("%w: required verified evidence is absent: %s", ErrApplicationNotAllowed, verifiedFailure)
+			}
 			return fmt.Errorf("%w: required %s evidence is absent", ErrApplicationNotAllowed, required)
 		}
 	}
@@ -324,18 +328,29 @@ func applicationJudgment(state runstate.State, compiled *score.Score) error {
 	return nil
 }
 
-func applicationMarks(state runstate.State, compiled *score.Score, final runstate.MovementID, subjectTree string) map[string]bool {
+func applicationMarks(state runstate.State, compiled *score.Score, final runstate.MovementID, subjectTree string) (map[string]bool, string) {
 	marks := map[string]bool{}
 	view, ok := applicationMovement(compiled, final)
 	if !ok {
-		return marks
+		return marks, ""
 	}
+	plan, err := acceptance.Compile(view)
+	if err != nil {
+		return marks, "final movement acceptance plan cannot be compiled"
+	}
+	verifiedFailure := ""
 	for attemptID, attempt := range state.Attempts {
 		if attempt.MovementID != final || attempt.ScoreRevision != state.ScoreHead.Revision || attempt.State != runstate.AttemptCompleted {
 			continue
 		}
 		acceptance, ok := state.Acceptances[attemptID]
-		if !ok || !acceptance.EvaluationCompleted || acceptance.SubjectTree != subjectTree || !applicationCriteriaPassed(acceptance) {
+		if !ok || !acceptance.EvaluationCompleted || acceptance.SubjectTree != subjectTree {
+			continue
+		}
+		if failure := applicationCriteriaFailure(acceptance, plan.Hash(), view); failure != "" {
+			if verifiedFailure == "" {
+				verifiedFailure = failure
+			}
 			continue
 		}
 		if len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria) != 0 {
@@ -360,7 +375,7 @@ func applicationMarks(state runstate.State, compiled *score.Score, final runstat
 			marks["APPROVED"] = true
 		}
 	}
-	return marks
+	return marks, verifiedFailure
 }
 
 func applicationMovement(compiled *score.Score, id runstate.MovementID) (score.MovementView, bool) {
@@ -372,14 +387,29 @@ func applicationMovement(compiled *score.Score, id runstate.MovementID) (score.M
 	return score.MovementView{}, false
 }
 
-func applicationCriteriaPassed(acceptance runstate.Acceptance) bool {
+func applicationCriteriaFailure(acceptance runstate.Acceptance, expectedSpecHash runstate.Hash, view score.MovementView) string {
+	if acceptance.SpecHash != expectedSpecHash {
+		return "acceptance spec hash does not match the final movement"
+	}
+	declaredHardCriterionIDs := make([]runstate.CriterionID, 0, len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria))
+	for _, criterion := range view.Acceptance.ArtifactCriteria {
+		declaredHardCriterionIDs = append(declaredHardCriterionIDs, runstate.CriterionID(criterion.ID))
+	}
+	for _, criterion := range view.Acceptance.RunCriteria {
+		declaredHardCriterionIDs = append(declaredHardCriterionIDs, runstate.CriterionID(criterion.ID))
+	}
+	for _, criterionID := range declaredHardCriterionIDs {
+		if !slices.Contains(acceptance.PlannedCriterionIDs, criterionID) {
+			return fmt.Sprintf("declared hard criterion %q is missing from the acceptance plan", criterionID)
+		}
+	}
 	for _, id := range acceptance.PlannedCriterionIDs {
 		record, ok := acceptance.Criteria[id]
 		if !ok || !record.Completed || record.Outcome != "PASS" {
-			return false
+			return fmt.Sprintf("planned criterion %q is not a completed PASS", id)
 		}
 	}
-	return true
+	return ""
 }
 
 func appendApplicationEvent(transaction *Txn, state *runstate.State, eventType runstate.EventType, payload map[string]any) error {

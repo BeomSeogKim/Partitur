@@ -11,9 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/score"
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
@@ -36,6 +38,15 @@ type applyGate struct {
 	// evidenceSubjectIsBase binds the whole acceptance to the base tree, which
 	// detaches every mark from the candidate at once.
 	evidenceSubjectIsBase bool
+	// plannedCriterionIDs overrides the journaled plan. It is intentionally
+	// available only to the malformed-evidence apply oracles below.
+	plannedCriterionIDs []string
+	// declaredArtifactHard adds a second declared hard check, so the oracle can
+	// prove coverage for artifact criteria independently of hard.run.
+	declaredArtifactHard bool
+	// acceptanceSpecHash overrides the journaled hash for the malformed-evidence
+	// oracle that proves the score-plan correspondence is checked.
+	acceptanceSpecHash string
 }
 
 // applyRequireFixture builds a SUCCEEDED run whose candidate materializes one
@@ -189,12 +200,22 @@ movements:
       hard:
         - id: command-passes
           run: ["true"]
+%s
 %s      human_gate: %s
 policy:
   allowed_paths: ["**"]
   budget:
     active_wall_clock_min: 10
-`, strings.Join(gate.require, ", "), strings.Join(gate.predicates, ", "), gate.reviewCriterion(), gate.gateMode()))
+`, strings.Join(gate.require, ", "), strings.Join(gate.predicates, ", "), gate.artifactCriterion(), gate.reviewCriterion(), gate.gateMode()))
+}
+
+func (gate applyGate) artifactCriterion() string {
+	if !gate.declaredArtifactHard {
+		return ""
+	}
+	return `        - id: findings-present
+          artifact: findings
+`
 }
 
 // appendApplyRequireRun journals the run that earns the marks: one final
@@ -228,11 +249,23 @@ func appendApplyRequireRun(t *testing.T, store *runstore.Store, baseTree, result
 	if gate.gateSubjectIsBase {
 		gateTree = baseTree
 	}
+	plannedCriterionIDs := gate.plannedCriterionIDs
+	if plannedCriterionIDs == nil {
+		plannedCriterionIDs = []string{"command-passes"}
+	}
+	acceptanceSpecHash := applyRequireAcceptanceSpecHash(t, gate)
+	if gate.acceptanceSpecHash != "" {
+		acceptanceSpecHash = gate.acceptanceSpecHash
+	}
+	criterionOutcomes := make([]any, len(plannedCriterionIDs))
+	for index, id := range plannedCriterionIDs {
+		criterionOutcomes[index] = map[string]any{
+			"criterion_id": id, "criterion_spec_hash": "sha256:criterion", "outcome": "PASS",
+		}
+	}
 	evaluation := map[string]any{
-		"subject_tree": evidenceTree, "acceptance_spec_hash": "sha256:acceptance", "identity_versions": versions,
-		"criterion_outcomes": []any{map[string]any{
-			"criterion_id": "command-passes", "criterion_spec_hash": "sha256:criterion", "outcome": "PASS",
-		}},
+		"subject_tree": evidenceTree, "acceptance_spec_hash": acceptanceSpecHash, "identity_versions": versions,
+		"criterion_outcomes": criterionOutcomes,
 	}
 	blockers := []any{}
 	if gate.reviewOutcome == "CONTESTED" {
@@ -269,19 +302,23 @@ func appendApplyRequireRun(t *testing.T, store *runstore.Store, baseTree, result
 		attempt(runstate.EventPerformerCompleted, map[string]any{"session_hint_stored": false}),
 		attempt(runstate.EventVerificationPassed, map[string]any{}),
 		attempt(runstate.EventAcceptanceStarted, map[string]any{
-			"subject_tree": evidenceTree, "acceptance_spec_hash": "sha256:acceptance",
-			"planned_criterion_ids": []any{"command-passes"}, "identity_versions": versions,
+			"subject_tree": evidenceTree, "acceptance_spec_hash": acceptanceSpecHash,
+			"planned_criterion_ids": applyRequireStringsToAny(plannedCriterionIDs), "identity_versions": versions,
 		}),
-		attempt(runstate.EventCriterionStarted, map[string]any{
-			"criterion_id": "command-passes", "criterion_spec_hash": "sha256:criterion",
-			"subject_tree": evidenceTree, "identity_versions": versions,
-		}),
-		attempt(runstate.EventCriterionCompleted, map[string]any{
-			"criterion_id": "command-passes", "criterion_spec_hash": "sha256:criterion",
-			"subject_tree": evidenceTree, "outcome": "PASS", "identity_versions": versions,
-		}),
-		attempt(runstate.EventAcceptanceEvaluationCompleted, evaluation),
 	}
+	for _, id := range plannedCriterionIDs {
+		events = append(events,
+			attempt(runstate.EventCriterionStarted, map[string]any{
+				"criterion_id": id, "criterion_spec_hash": "sha256:criterion",
+				"subject_tree": evidenceTree, "identity_versions": versions,
+			}),
+			attempt(runstate.EventCriterionCompleted, map[string]any{
+				"criterion_id": id, "criterion_spec_hash": "sha256:criterion",
+				"subject_tree": evidenceTree, "outcome": "PASS", "identity_versions": versions,
+			}),
+		)
+	}
+	events = append(events, attempt(runstate.EventAcceptanceEvaluationCompleted, evaluation))
 	if gate.resolveGate {
 		request := map[string]any{
 			"decision_id": "decision-1", "decision_type": "human_gate", "gate_id": "gate-1",
@@ -322,6 +359,40 @@ func appendApplyRequireRun(t *testing.T, store *runstore.Store, baseTree, result
 	return candidateID
 }
 
+func applyRequireStringsToAny(values []string) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = value
+	}
+	return result
+}
+
+func applyRequireAcceptanceSpecHash(t *testing.T, gate applyGate) string {
+	t.Helper()
+	compiled, diagnostics := score.Compile(applyRequireScore(gate))
+	if len(diagnostics) != 0 {
+		t.Fatalf("score diagnostics=%v", diagnostics)
+	}
+	view, ok := applicationMovementForTest(compiled, "check")
+	if !ok {
+		t.Fatal("check movement is missing")
+	}
+	plan, err := acceptance.Compile(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(plan.Hash())
+}
+
+func applicationMovementForTest(compiled *score.Score, id string) (score.MovementView, bool) {
+	for _, movement := range compiled.Movements() {
+		if movement.ID == id {
+			return movement, true
+		}
+	}
+	return score.MovementView{}, false
+}
+
 // applyRequireCheckout runs `apply` and reports the exit code alongside what the
 // checkout holds afterwards, which is the only evidence that separates a granted
 // judgment from a refused one.
@@ -352,6 +423,56 @@ func TestApplyRequireVerifiedMaterializesCandidate(t *testing.T) {
 	}
 	if tail := journal.Events[len(journal.Events)-2:]; tail[0].Type != runstate.EventApplyStarted || tail[1].Type != runstate.EventApplyCompleted {
 		t.Fatalf("application journal tail=%v", eventKinds(tail))
+	}
+}
+
+func TestApplyRequireVerifiedRefusesAcceptancePlansMissingDeclaredHardCriteria(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		gate       applyGate
+		wantDetail string
+	}{
+		{
+			name:       "acceptance hash does not match the final movement",
+			gate:       applyGate{require: []string{"verified"}, acceptanceSpecHash: "sha256:not-the-final-movement"},
+			wantDetail: "acceptance spec hash does not match the final movement",
+		},
+		{
+			name:       "empty plan omits the declared run criterion",
+			gate:       applyGate{require: []string{"verified"}, plannedCriterionIDs: []string{}},
+			wantDetail: `declared hard criterion \"command-passes\" is missing from the acceptance plan`,
+		},
+		{
+			name:       "plan names only an undeclared criterion",
+			gate:       applyGate{require: []string{"verified"}, plannedCriterionIDs: []string{"not-declared"}},
+			wantDetail: `declared hard criterion \"command-passes\" is missing from the acceptance plan`,
+		},
+		{
+			name: "plan omits a declared artifact criterion",
+			gate: applyGate{
+				require: []string{"verified"}, declaredArtifactHard: true,
+				plannedCriterionIDs: []string{"command-passes"},
+			},
+			wantDetail: `declared hard criterion \"findings-present\" is missing from the acceptance plan`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root, store, _ := applyRequireFixture(t, testCase.gate)
+			code, contents, stderr := applyRequireCheckout(t, root)
+			if code != 2 || contents != "" || !strings.Contains(stderr, testCase.wantDetail) {
+				t.Fatalf("apply exit=%d contents=%q stderr=%q", code, contents, stderr)
+			}
+			if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+				t.Fatalf("refused apply changed the checkout: %q", status)
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countEvents(journal.Events, runstate.EventApplyStarted) != 0 {
+				t.Fatal("refused apply opened a transaction")
+			}
+		})
 	}
 }
 
