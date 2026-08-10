@@ -112,6 +112,29 @@ func TestMutationPromoteScoreConjuncts(t *testing.T) {
 			testName:    "TestPromoteScoreRefusesPreStartRootHashConflictAndAlreadyPromotedWithoutChangingRoot",
 		},
 		{
+			name:   "target snapshot failure returns before promotion starts",
+			source: "internal/runstore/promotion.go",
+			before: "target, err := store.promotionTarget(transaction.runID, *state)\n" +
+				"\tif err != nil {\n" +
+				"\t\treturn PromotionResult{}, err\n" +
+				"\t}\n" +
+				"\tif err := promotionPreconditions(*state); err != nil {",
+			after: "target, err := store.promotionTarget(transaction.runID, *state)\n" +
+				"\tif err != nil {\n" +
+				"\t\tversions, versionErr := applicationIdentityVersions(*state.ApplicationCandidate)\n" +
+				"\t\tif versionErr != nil {\n" +
+				"\t\t\treturn PromotionResult{}, versionErr\n" +
+				"\t\t}\n" +
+				"\t\tif appendErr := appendPromotionEvent(transaction, state, runstate.EventScorePromotionStarted, map[string]any{\"txn_id\": \"mutation-pre-start\", \"candidate_id\": state.ApplicationCandidate.ID, \"identity_versions\": versions, \"expected_root_file_hash\": \"\", \"target_snapshot_file_hash\": \"\", \"target_revision\": state.ScoreHead.Revision}); appendErr != nil {\n" +
+				"\t\t\treturn PromotionResult{}, appendErr\n" +
+				"\t\t}\n" +
+				"\t\treturn PromotionResult{}, err\n" +
+				"\t}\n" +
+				"\tif err := promotionPreconditions(*state); err != nil {",
+			packagePath: "./cmd/partitur",
+			testName:    "TestPromoteScoreRefusesPreStartPinnedTargetSnapshotFailures/missing",
+		},
+		{
 			name:        "promotion rechecks the root hash at the rename boundary",
 			source:      "internal/runstore/promotion.go",
 			before:      "if observed != target.expectedHash {",

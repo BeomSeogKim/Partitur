@@ -202,6 +202,82 @@ func TestPromoteScoreRefusesPreStartRootHashConflictAndAlreadyPromotedWithoutCha
 	}
 }
 
+// TestPromoteScoreRefusesPreStartPinnedTargetSnapshotFailures proves that a
+// target snapshot is validated before promotion becomes a transaction. A
+// directory is a portable unreadable-file fixture: unlike chmod, it does not
+// depend on the test user or filesystem permission model.
+func TestPromoteScoreRefusesPreStartPinnedTargetSnapshotFailures(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+		want   []string
+	}{
+		{
+			name: "missing",
+			mutate: func(t *testing.T, snapshot string) {
+				t.Helper()
+				if err := os.Remove(snapshot); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: []string{"required promotion target snapshot", "is missing"},
+		},
+		{
+			name: "unreadable",
+			mutate: func(t *testing.T, snapshot string) {
+				t.Helper()
+				if err := os.Remove(snapshot); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(snapshot, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: []string{"required promotion target snapshot", "is unreadable"},
+		},
+		{
+			name: "hash mismatched",
+			mutate: func(t *testing.T, snapshot string) {
+				t.Helper()
+				if err := os.WriteFile(snapshot, []byte("mismatched promotion snapshot\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: []string{"promotion target hash", "does not match pinned head"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, store, _, _ := promotionRecoveryFixture(t)
+			rootPath := filepath.Join(root, "partitur.yaml")
+			before, err := os.ReadFile(rootPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(t, filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml"))
+
+			code, stdout, stderr := promoteScoreCLI(t, root, false)
+			if code != 2 || stdout != "" {
+				t.Fatalf("pre-start %s target exit=%d stdout=%q stderr=%q", test.name, code, stdout, stderr)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(stderr, want) {
+					t.Fatalf("pre-start %s target stderr=%q, want %q", test.name, stderr, want)
+				}
+			}
+			if after, err := os.ReadFile(rootPath); err != nil || !bytes.Equal(after, before) {
+				t.Fatalf("pre-start %s target changed root: err=%v after=%q", test.name, err, after)
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 0 {
+				t.Fatalf("pre-start %s target started promotion: journal=%v", test.name, eventKinds(journal.Events))
+			}
+		})
+	}
+}
+
 func TestPromoteScoreRenameTimeRootChangeLeavesUserRootAndHalts(t *testing.T) {
 	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
