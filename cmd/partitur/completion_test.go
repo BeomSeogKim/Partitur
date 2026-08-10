@@ -25,8 +25,24 @@ func TestCompletionCommandDispatchClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The colour is part of the claim, not a caption on it. A row that reads red
+	// while every command dispatches merely understates; one that reads green
+	// while any is missing is the overstatement this lock exists to prevent, and
+	// leaving the word unchecked would let the document flip it by itself.
+	colour := regexp.MustCompile(`Currently (red|green): [a-z-]+ of the [a-z-]+ are dispatched\.`).
+		FindStringSubmatch(string(completion))
+	if colour == nil {
+		t.Fatal("the command row states no dispatch claim")
+	}
+	want := "red"
+	if len(dispatched) == len(members) {
+		want = "green"
+	}
+	if colour[1] != want {
+		t.Fatalf("command row claims %q with %d of %d dispatched, want %q", colour[1], len(dispatched), len(members), want)
+	}
 	assertCountClaim(t, string(completion),
-		regexp.MustCompile(`Currently red: ([a-z-]+) of the ([a-z-]+) are dispatched\.`),
+		regexp.MustCompile(`Currently (?:red|green): ([a-z-]+) of the ([a-z-]+) are dispatched\.`),
 		len(dispatched), len(members),
 	)
 }
