@@ -31,3 +31,6 @@ service-account*.json
 
 # Delegated-agent scratch caches (GOCACHE etc.) — never committed
 .tmp/
+
+# Codex/omo local tool artifacts
+.omo/

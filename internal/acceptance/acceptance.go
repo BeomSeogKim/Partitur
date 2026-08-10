@@ -142,6 +142,49 @@ func (plan *Plan) Hash() runstate.Hash {
 	return plan.specHash
 }
 
+// CriterionSpecHashes returns the compiled criterion identities in plan order.
+func (plan *Plan) CriterionSpecHashes() []runstate.Hash {
+	if plan == nil {
+		return nil
+	}
+	hashes := make([]runstate.Hash, len(plan.criteria))
+	for index, criterion := range plan.criteria {
+		hashes[index] = criterion.specHash
+	}
+	return hashes
+}
+
+// DeclaresHardCriteria reports whether this plan can earn VERIFIED. Generated
+// criteria close integrity holes but cannot earn the mark on their own.
+func (plan *Plan) DeclaresHardCriteria() bool {
+	return plan != nil && plan.declaredHard > 0
+}
+
+// HasReviewCriterion reports whether this plan can earn REVIEWED.
+func (plan *Plan) HasReviewCriterion() bool {
+	if plan == nil {
+		return false
+	}
+	for _, criterion := range plan.criteria {
+		if criterion.review {
+			return true
+		}
+	}
+	return false
+}
+
+// SatisfiesAcceptance reports whether recorded acceptance evidence is exactly
+// the compiled plan and every planned criterion completed with PASS.
+func (plan *Plan) SatisfiesAcceptance(recorded runstate.Acceptance) bool {
+	if plan == nil || recorded.SpecHash != plan.specHash {
+		return false
+	}
+	return plan.matchesCriteria(recorded.PlannedCriterionIDs, func(index int, id runstate.CriterionID) bool {
+		record, ok := recorded.Criteria[id]
+		return ok && record.SpecHash == plan.criteria[index].specHash && record.Completed && record.Outcome == "PASS"
+	})
+}
+
 // Compile builds the effective acceptance plan. Declared criteria retain
 // declaration order; generated checks retain output declaration order.
 func Compile(movement score.MovementView) (*Plan, error) {
@@ -584,11 +627,24 @@ func completeStarted(plan *Plan, evaluation Evaluation, outcomes []CriterionOutc
 }
 
 func allCriteriaPass(plan *Plan, outcomes []CriterionOutcome) bool {
-	if len(outcomes) != len(plan.criteria) {
+	if plan == nil {
 		return false
 	}
+	ids := make([]runstate.CriterionID, len(outcomes))
 	for index, outcome := range outcomes {
-		if outcome.CriterionID != plan.criteria[index].id || outcome.Outcome != "PASS" {
+		ids[index] = runstate.CriterionID(outcome.CriterionID)
+	}
+	return plan.matchesCriteria(ids, func(index int, _ runstate.CriterionID) bool {
+		return outcomes[index].Outcome == "PASS"
+	})
+}
+
+func (plan *Plan) matchesCriteria(ids []runstate.CriterionID, passed func(int, runstate.CriterionID) bool) bool {
+	if len(ids) != len(plan.criteria) {
+		return false
+	}
+	for index, id := range ids {
+		if id != runstate.CriterionID(plan.criteria[index].id) || !passed(index, id) {
 			return false
 		}
 	}

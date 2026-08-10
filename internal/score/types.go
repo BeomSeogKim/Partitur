@@ -116,6 +116,8 @@ type ExecutionView struct {
 	FinalMovementID                string
 	GateWaived                     bool
 	WaiverReason                   string
+	ApplyGateRequire               []string
+	ApplyGatePredicates            []string
 }
 
 // ResolvedQuestionView is one finalized score question in its A.5 disposition.
