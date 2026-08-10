@@ -4,27 +4,33 @@ revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository.
+  Exercise one real, recovery-capable Partitur write attempt against this repository,
+  and let `apply` carry its result onto the checkout.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The performer must
+  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
   change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op.
+  from the required result so that the captured change set is not a no-op, and so that
+  the checkout `apply` runs against initially differs from the candidate.
 
 verification:
   expectation:
     intent: none
     apply_gate:
-      waived: true
-      reason: "Unit 4.4 apply is unavailable; this score records only the five currently reachable reference-workflow properties."
+      require: [verified, approved]
+  final_movement: check
 
 parts:
   writer:
     capabilities: [repo_read, repo_write, shell]
+  verifier:
+    capabilities: [repo_read, shell]
+    read_only: true
 
 movements:
   - id: write-marker
     part: writer
+    needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
       Replace the entire contents of reference-workflow/marker.txt with exactly one line:
@@ -34,6 +40,20 @@ movements:
     outputs:
       - id: marker-change
         kind: change_set
+    acceptance:
+      hard:
+        - id: marker-written
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+
+  - id: check
+    part: verifier
+    needs: [write-marker]
+    grants: [repo_read, shell]
+    instruction: |
+      Confirm that reference-workflow/marker.txt holds exactly the line
+      `partitur reference workflow` followed by one LF byte, and nothing else.
+      Report what you observed. Change no file.
+    inputs: [marker-change]
     acceptance:
       hard:
         - id: marker-is-reference-workflow

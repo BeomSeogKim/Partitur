@@ -12,3 +12,6 @@ bindings:
   writer:
     performer: codex
     fallbacks: [claude]
+  verifier:
+    performer: codex
+    fallbacks: [claude]

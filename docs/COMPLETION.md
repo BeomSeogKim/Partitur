@@ -201,7 +201,13 @@ loosely worded version of these and demonstrate nothing:
 | a kill at a durable point that **leaves a recovery obligation** — the cut between a durable `attempt.completed` and an absent `movement.succeeded` — so the first `resume` must append `movement.succeeded` under Appendix C's movement-succeeded row, and a second `resume` must append nothing | a kill at an already-fixed-point state makes "the required recovery" empty, so `resume` demonstrates nothing; naming a point with a pending obligation is what forces real recovery, and the second invocation is what proves the fixpoint |
 | `apply` onto a checkout that **initially differs**, whose final tree equals the pinned candidate | applying onto a checkout that already matches proves nothing about the apply path |
 
-Currently red: no reference score is committed.
+Currently red: the score is committed and its apply gate is no longer waived, but no run has been
+recorded that carries all six properties on both platforms.
+
+> This row is the reason a reference score cannot be trusted to declare its own difficulty. The
+> gate above reads `require: [verified, approved]` because the movement carries a hard criterion
+> and `human_gate: always` — a score declaring a waived gate, or no gate, would satisfy a loosely
+> worded version of this row while demonstrating nothing about `apply`.
 
 ## 6. Verification matrices
 
