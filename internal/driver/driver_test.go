@@ -1316,6 +1316,80 @@ func TestLiveReadOnlyReviewerReceivesContributedBaseAndProducesReviewEvidence(t 
 	t.Fatal("target movement missing from status")
 }
 
+// A movement whose acceptance rests on a command rather than an artifact
+// approves zero artifact instances. The success event still has to carry the
+// approved set as an array, because §B.6 types that field as one and the
+// journal's own validator enforces it.
+func TestLiveAttemptSucceedsWhenItApprovesNoArtifacts(t *testing.T) {
+	document := sliceScore()
+	final := document["movements"].([]any)[0].(map[string]any)
+	command := map[string]any{
+		"id": "command", "part": "reader", "grants": []any{"repo_read"},
+		"instruction": "Run the command.",
+		"acceptance":  map[string]any{"hard": []any{map[string]any{"id": "command-passes", "run": []any{"true"}}}},
+	}
+	final["needs"] = []any{"command"}
+	document["movements"] = []any{command, final}
+	preparation := prepareRunnableFixture(t, document, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	if err := started.Run.BindDriver(authority); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := executeLiveReaderAttempt(
+		t, preparation.RepositoryRoot, authority, started.RunID, input, attempt,
+		input.BaseTree, input.BaseTree, "", artifactFreeSuccessDependencies(t),
+	)
+	if len(state.Artifacts) != 0 {
+		t.Fatalf("artifacts = %#v, want none approved", state.Artifacts)
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	succeeded := 0
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventMovementSucceeded {
+			continue
+		}
+		succeeded++
+		var payload struct {
+			ApprovedArtifactInstanceIDs *[]string `json:"approved_artifact_instance_ids"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.ApprovedArtifactInstanceIDs == nil {
+			t.Fatalf("approved_artifact_instance_ids = null, want an empty array: %s", event.Payload)
+		}
+		if len(*payload.ApprovedArtifactInstanceIDs) != 0 {
+			t.Fatalf("approved artifact instances = %#v, want none", *payload.ApprovedArtifactInstanceIDs)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("movement.succeeded events = %d, want 1", succeeded)
+	}
+}
+
 func TestLiveReviewSubjectInputRendersReservedBriefContract(t *testing.T) {
 	preparation, store, authority, started, _, _ := fanInReviewFixture(t)
 	defer authority.Release()
@@ -1848,6 +1922,33 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 		newID:             workspace.NewID,
 		workspaceStart:    workspace.Start,
 	}
+}
+
+func artifactFreeSuccessDependencies(t *testing.T) dependencies {
+	t.Helper()
+	adapterDirectory := t.TempDir()
+	adapterPath := filepath.Join(adapterDirectory, "partitur-adapter-codex")
+	const fakeAdapter = `#!/bin/sh
+IFS= read -r ignored
+printf '%s\n' '{"jsonrpc":"2.0","id":"probe","result":{"protocol":2,"adapter":{"id":"codex","version":"fixture"},"capabilities":{"repo_read":true,"repo_write":true,"shell":false,"network":false,"resumable_sessions":false,"models":[{"id":"gpt-5.6-sol","aliases":[]}]},"enforcement":{"path_grants":true,"read_only":true,"network_grants":true,"shell_grants":true,"read_grants":true}}}'
+IFS= read -r ignored
+printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}'
+`
+	if err := os.WriteFile(adapterPath, []byte(fakeAdapter), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", adapterDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	trampoline := filepath.Join(adapterDirectory, "partitur-trampoline")
+	command := exec.Command("go", "build", "-o", trampoline, "./cmd/partitur-trampoline")
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate driver test source")
+	}
+	command.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build trampoline: %v\n%s", err, output)
+	}
+	return dependencies{probe: faultpoint.Nop{}, client: adapter.NewClient(), resolveTrampoline: func() (string, error) { return trampoline, nil }, now: time.Now, newID: workspace.NewID, workspaceStart: workspace.Start}
 }
 
 func reviewSuccessDependencies(t *testing.T, subjectTree string) dependencies {
