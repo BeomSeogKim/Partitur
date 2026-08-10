@@ -1994,7 +1994,7 @@ func artifactIDs(
 	state runstate.State,
 	attemptID runstate.AttemptID,
 ) []string {
-	var result []string
+	result := make([]string, 0, len(state.Artifacts))
 	for id, artifact := range state.Artifacts {
 		if artifact.AttemptID == attemptID {
 			result = append(result, string(id))
