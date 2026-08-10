@@ -38,8 +38,13 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Go's per-package test timeout defaults to 10m, which the heaviest
+      # packages now approach on a CI runner: `cmd/partitur` measures 412s
+      # under -race locally and the runners are roughly half the speed. A
+      # timeout panic reads as a hang, not as a suite that grew — so the bound
+      # is stated rather than inherited.
       - name: Race
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -timeout=30m ./...
 
       # Keep this in the OS matrix: beyond catalogue parity, the kill harness
       # probes the session-sweeping and fencing assumptions on each runner.
@@ -59,8 +64,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Each mutation spawns a child `go test`, so this package's cost grows
+      # with the catalogue: `cmd/partitur` measures 336s locally and timed out
+      # against the inherited 10m default on the runner once the apply
+      # conjuncts landed. The bound is explicit so the next addition fails on
+      # its merits rather than on a clock.
       - name: Mutation proofs
-        run: go test -tags=mutation -count=1 ./...
+        run: go test -tags=mutation -count=1 -timeout=40m ./...
 
   # `spikes` is a nested module, so the root job's `./...` never reaches it.
   # The suites are compatibility probes, not just a compile check: they assert
