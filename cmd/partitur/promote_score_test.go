@@ -160,7 +160,7 @@ func TestPromoteScoreRequiresAppliedCandidateAndWritesExactSnapshotBytes(t *test
 	}
 }
 
-func TestPromoteScoreRefusesCASConflictAndAlreadyPromotedWithoutChangingRoot(t *testing.T) {
+func TestPromoteScoreRefusesPreStartRootHashConflictAndAlreadyPromotedWithoutChangingRoot(t *testing.T) {
 	root, store, _ := promotionFixture(t, true)
 	changed := []byte("score: changed by another writer\n")
 	if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), changed, 0o600); err != nil {
@@ -168,10 +168,10 @@ func TestPromoteScoreRefusesCASConflictAndAlreadyPromotedWithoutChangingRoot(t *
 	}
 	code, stdout, stderr := promoteScoreCLI(t, root, false)
 	if code != 2 || stdout != "" || !strings.Contains(stderr, "does not match expected") {
-		t.Fatalf("CAS conflict exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		t.Fatalf("pre-start root-hash conflict exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if rootBytes, err := os.ReadFile(filepath.Join(root, "partitur.yaml")); err != nil || !bytes.Equal(rootBytes, changed) {
-		t.Fatalf("CAS conflict changed root: err=%v root=%q", err, rootBytes)
+		t.Fatalf("pre-start root-hash conflict changed root: err=%v root=%q", err, rootBytes)
 	}
 
 	// Restore the recorded operand, promote once, then show a second normal
@@ -202,7 +202,7 @@ func TestPromoteScoreRefusesCASConflictAndAlreadyPromotedWithoutChangingRoot(t *
 	}
 }
 
-func TestPromoteScoreRenameTimeCASConflictLeavesUserRootAndHalts(t *testing.T) {
+func TestPromoteScoreRenameTimeRootChangeLeavesUserRootAndHalts(t *testing.T) {
 	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -290,6 +290,9 @@ func TestPromoteScoreKillCutsRecoverToPromotedFixedPoint(t *testing.T) {
 			if rootBytes, err := os.ReadFile(filepath.Join(root, "partitur.yaml")); err != nil || !bytes.Equal(rootBytes, target) {
 				t.Fatalf("recovered root err=%v root=%q target=%q", err, rootBytes, target)
 			}
+			if leftovers, err := filepath.Glob(filepath.Join(root, ".partitur.yaml.promote-*")); err != nil || len(leftovers) != 0 {
+				t.Fatalf("promotion temporaries after recovery = %q, err=%v", leftovers, err)
+			}
 			journal, err = store.ReadJournal("run-1")
 			if err != nil {
 				t.Fatal(err)
@@ -342,7 +345,7 @@ func TestPromoteScoreRecoveryHaltLeavesJournalFixed(t *testing.T) {
 	}
 }
 
-func TestPromoteScoreRecoverRefusesMissingTargetSnapshot(t *testing.T) {
+func TestPromoteScoreRecoverHaltsMissingTargetSnapshot(t *testing.T) {
 	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -356,15 +359,41 @@ func TestPromoteScoreRecoverRefusesMissingTargetSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr := runCommandBinary(t, partitur, root, environment, "promote-score", "run-1", "--recover")
-	if code != 2 || stdout != "" || !strings.Contains(stderr, "required promotion target snapshot") || !strings.Contains(stderr, "is missing") || strings.Contains(stderr, "is unreadable") || !strings.Contains(stderr, "revision-2.yaml") {
+	if code != 5 || stdout != "" || !strings.Contains(stderr, "required promotion target snapshot") || !strings.Contains(stderr, "is missing") || strings.Contains(stderr, "is unreadable") || !strings.Contains(stderr, "revision-2.yaml") {
 		t.Fatalf("missing target recovery exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	journal, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 1 || countEvents(journal.Events, runstate.EventScorePromoted) != 0 || countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 0 {
+	if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 1 || countEvents(journal.Events, runstate.EventScorePromoted) != 0 || countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
 		t.Fatalf("missing target recovery journal=%v", eventKinds(journal.Events))
+	}
+}
+
+func TestPromoteScoreRecoverHaltsMismatchedTargetSnapshot(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	root, store, _, _ := promotionRecoveryFixture(t)
+	environment := applyKillEnvironment(t)
+	killAtPoint(t, partitur, partiturRepository(t, root), environment, faultpoint.PointPromotionBeforeRootRename, "promote-score", "run-1")
+	snapshot := filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml")
+	if err := os.WriteFile(snapshot, []byte("mismatched promotion snapshot\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runCommandBinary(t, partitur, root, environment, "promote-score", "run-1", "--recover")
+	if code != 5 || stdout != "" || !strings.Contains(stderr, "promotion target hash") || !strings.Contains(stderr, "does not match pinned head") {
+		t.Fatalf("mismatched target recovery exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 1 || countEvents(journal.Events, runstate.EventScorePromoted) != 0 || countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
+		t.Fatalf("mismatched target recovery journal=%v", eventKinds(journal.Events))
 	}
 }
 
@@ -390,11 +419,18 @@ func TestPromoteScoreRecoverRequiresOriginalCandidate(t *testing.T) {
 	}
 	before := applyReadJournalBytes(t, root)
 	code, stdout, stderr := promoteScoreCLI(t, root, true)
-	if code != 2 || stdout != "" || !strings.Contains(stderr, "promotion candidate is unavailable") {
+	if code != 5 || stdout != "" || !strings.Contains(stderr, "promotion candidate is unavailable") {
 		t.Fatalf("wrong candidate recover exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	if after := applyReadJournalBytes(t, root); after != before {
-		t.Fatalf("wrong candidate recovery rewrote journal:\nbefore=%s\nafter=%s", before, after)
+	if after := applyReadJournalBytes(t, root); after == before {
+		t.Fatal("wrong candidate recovery did not record a durable halt")
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
+		t.Fatalf("wrong candidate recovery journal=%v", eventKinds(journal.Events))
 	}
 }
 

@@ -36,8 +36,8 @@ type PromotionResult struct {
 
 // PromoteScore atomically replaces the editable root score with the exact
 // pinned bytes of a succeeded run's latest revision. The state lock covers the
-// CAS, journal, and rename so no command can separate the recorded judgment
-// from the file it authorizes.
+// pre-rename hash check, journal, and rename so no command can separate the
+// recorded judgment from the file it authorizes.
 func (store *Store) PromoteScore(ctx context.Context, runID runstate.RunID, recoverOnly bool) (PromotionResult, error) {
 	var result PromotionResult
 	err := store.Mutate(runID, "", func(transaction *Txn) error {
@@ -54,7 +54,8 @@ func (store *Store) PromoteScore(ctx context.Context, runID runstate.RunID, reco
 		} else {
 			result, err = store.promoteScore(ctx, transaction, &state)
 		}
-		if err == nil || errors.Is(err, ErrPromotionNotAllowed) {
+		if err == nil || (errors.Is(err, ErrPromotionNotAllowed) &&
+			(state.Promotion.State == runstate.PromotionNotPromoted || state.Promotion.State == runstate.PromotionPromoted)) {
 			return err
 		}
 		result, err = store.promotionFailureOutcome(transaction, movementSeed(initial), err)
@@ -74,7 +75,15 @@ func (store *Store) promotionFailureOutcome(transaction *Txn, seed []runstate.Mo
 	case runstate.PromotionRecoveryRequired:
 		return PromotionResult{Outcome: PromotionOutcomeRecoveryRequired, Detail: cause.Error()}, nil
 	case runstate.PromotionPromoting:
-		return PromotionResult{}, fmt.Errorf("%w: %v", ErrPromotionInterrupted, cause)
+		recorded, err := store.promotionTransaction(transaction.runID, state.Promotion.TransactionID)
+		if err != nil {
+			return PromotionResult{}, fmt.Errorf("%w: %v (re-read promotion transaction: %v)", ErrPromotionInterrupted, cause, err)
+		}
+		result, err := store.haltPromotionForOperator(transaction, &state, recorded.payload, cause.Error(), "")
+		if err != nil {
+			return PromotionResult{}, fmt.Errorf("%w: %v (record promotion recovery halt: %v)", ErrPromotionInterrupted, cause, err)
+		}
+		return result, nil
 	default:
 		return PromotionResult{}, cause
 	}
@@ -116,6 +125,9 @@ func (store *Store) recoverPromotion(ctx context.Context, transaction *Txn, stat
 	if state.Promotion.State != runstate.PromotionPromoting && state.Promotion.State != runstate.PromotionRecoveryRequired {
 		return PromotionResult{}, fmt.Errorf("%w: --recover is refused from %s", ErrPromotionNotAllowed, state.Promotion.State)
 	}
+	if err := store.sweepPromotionTemporaries(state.Promotion.TransactionID); err != nil {
+		return PromotionResult{}, err
+	}
 	target, err := store.promotionTarget(transaction.runID, *state)
 	if err != nil {
 		return PromotionResult{}, err
@@ -150,7 +162,7 @@ func (store *Store) recoverPromotion(ctx context.Context, transaction *Txn, stat
 		}
 		return store.writePromotedScore(transaction, state, target)
 	default:
-		return store.haltPromotionForOperator(transaction, state, target, observed)
+		return store.haltPromotionForOperator(transaction, state, target.startedPayload(state.Promotion.TransactionID), "root file hash matches neither expected nor target", observed)
 	}
 }
 
@@ -251,7 +263,7 @@ func (store *Store) promotionTransaction(runID runstate.RunID, txnID string) (re
 
 func (store *Store) writePromotedScore(transaction *Txn, state *runstate.State, target promotionTarget) (PromotionResult, error) {
 	root := filepath.Join(store.root, "partitur.yaml")
-	temporary, err := store.fs.WriteTemp(store.root, ".partitur.yaml.promote-*", target.contents, 0o600)
+	temporary, err := store.fs.WriteTemp(store.root, promotionTemporaryPattern(state.Promotion.TransactionID), target.contents, 0o600)
 	if err != nil {
 		return PromotionResult{}, fmt.Errorf("write promotion temporary: %w", err)
 	}
@@ -282,7 +294,7 @@ func (store *Store) writePromotedScore(transaction *Txn, state *runstate.State, 
 			}
 			return PromotionResult{Outcome: PromotionOutcomePromoted}, nil
 		}
-		return store.haltPromotionForOperator(transaction, state, target, observed)
+		return store.haltPromotionForOperator(transaction, state, target.startedPayload(state.Promotion.TransactionID), "root file hash matches neither expected nor target", observed)
 	}
 	if err := store.fs.Rename(temporary, root); err != nil {
 		cleanup()
@@ -298,17 +310,46 @@ func (store *Store) writePromotedScore(transaction *Txn, state *runstate.State, 
 	return PromotionResult{Outcome: PromotionOutcomePromoted}, nil
 }
 
-func (store *Store) haltPromotionForOperator(transaction *Txn, state *runstate.State, target promotionTarget, observed string) (PromotionResult, error) {
+func (store *Store) haltPromotionForOperator(transaction *Txn, state *runstate.State, startedPayload map[string]any, detail, observed string) (PromotionResult, error) {
 	if state.Promotion.State == runstate.PromotionPromoting {
-		if err := appendPromotionEvent(transaction, state, runstate.EventScorePromotionRecoveryRequired, map[string]any{
-			"txn_id": state.Promotion.TransactionID, "candidate_id": target.candidate.ID,
-			"identity_versions": target.versions, "observed_root_file_hash": observed,
-			"failure_detail": "root file hash matches neither expected nor target",
-		}); err != nil {
+		payload := map[string]any{
+			"txn_id": state.Promotion.TransactionID, "candidate_id": stringValue(startedPayload, "candidate_id"),
+			"identity_versions": startedPayload["identity_versions"], "failure_detail": detail,
+		}
+		if observed != "" {
+			payload["observed_root_file_hash"] = observed
+		}
+		if err := appendPromotionEvent(transaction, state, runstate.EventScorePromotionRecoveryRequired, payload); err != nil {
 			return PromotionResult{}, err
 		}
 	}
-	return PromotionResult{Outcome: PromotionOutcomeRecoveryRequired, Detail: "root file hash matches neither expected nor target"}, nil
+	return PromotionResult{Outcome: PromotionOutcomeRecoveryRequired, Detail: detail}, nil
+}
+
+func promotionTemporaryPattern(transactionID string) string {
+	return ".partitur.yaml.promote-" + transactionID + "-*"
+}
+
+func (store *Store) sweepPromotionTemporaries(transactionID string) error {
+	entries, err := os.ReadDir(store.root)
+	if err != nil {
+		return fmt.Errorf("read promotion temporary directory: %w", err)
+	}
+	pattern := promotionTemporaryPattern(transactionID)
+	for _, entry := range entries {
+		if !matchesPromotionTemporary(entry.Name(), pattern) {
+			continue
+		}
+		if err := store.fs.Remove(filepath.Join(store.root, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove promotion temporary %q: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+func matchesPromotionTemporary(name, pattern string) bool {
+	matched, err := filepath.Match(pattern, name)
+	return err == nil && matched
 }
 
 func appendPromotionEvent(transaction *Txn, state *runstate.State, eventType runstate.EventType, payload map[string]any) error {

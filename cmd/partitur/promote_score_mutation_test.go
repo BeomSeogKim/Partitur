@@ -104,12 +104,12 @@ func TestMutationPromoteScoreConjuncts(t *testing.T) {
 			testName:    "TestPromoteScoreRecoveryHaltLeavesJournalFixed",
 		},
 		{
-			name:        "promotion compares the root hash with the recorded expected hash",
+			name:        "promotion checks the root hash before it starts",
 			source:      "internal/runstore/promotion.go",
 			before:      "if rawHash(root) != target.expectedHash {",
 			after:       "if rawHash(root) == target.expectedHash {",
 			packagePath: "./cmd/partitur",
-			testName:    "TestPromoteScoreRefusesCASConflictAndAlreadyPromotedWithoutChangingRoot",
+			testName:    "TestPromoteScoreRefusesPreStartRootHashConflictAndAlreadyPromotedWithoutChangingRoot",
 		},
 		{
 			name:        "promotion rechecks the root hash at the rename boundary",
@@ -117,7 +117,7 @@ func TestMutationPromoteScoreConjuncts(t *testing.T) {
 			before:      "if observed != target.expectedHash {",
 			after:       "if observed == target.expectedHash {",
 			packagePath: "./cmd/partitur",
-			testName:    "TestPromoteScoreRenameTimeCASConflictLeavesUserRootAndHalts",
+			testName:    "TestPromoteScoreRenameTimeRootChangeLeavesUserRootAndHalts",
 		},
 		{
 			name:        "recover requires the original promotion candidate",
@@ -128,12 +128,40 @@ func TestMutationPromoteScoreConjuncts(t *testing.T) {
 			testName:    "TestPromoteScoreRecoverRequiresOriginalCandidate",
 		},
 		{
-			name:        "recover refuses a missing pinned promotion snapshot",
+			name:        "missing pinned promotion snapshot remains named",
 			source:      "internal/runstore/promotion.go",
 			before:      "if errors.Is(err, os.ErrNotExist) {",
 			after:       "if !errors.Is(err, os.ErrNotExist) {",
 			packagePath: "./cmd/partitur",
-			testName:    "TestPromoteScoreRecoverRefusesMissingTargetSnapshot",
+			testName:    "TestPromoteScoreRecoverHaltsMissingTargetSnapshot",
+		},
+		{
+			name:        "mismatched pinned promotion snapshot halts",
+			source:      "internal/runstore/promotion.go",
+			before:      "if hash := rawHash(contents); hash != string(state.ScoreHead.FileHash) {",
+			after:       "if hash := rawHash(contents); hash == string(state.ScoreHead.FileHash) {",
+			packagePath: "./cmd/partitur",
+			testName:    "TestPromoteScoreRecoverHaltsMismatchedTargetSnapshot",
+		},
+		{
+			name:   "a started promotion records its target failure",
+			source: "internal/runstore/promotion.go",
+			before: "case runstate.PromotionPromoting:\n" +
+				"\t\trecorded, err := store.promotionTransaction(transaction.runID, state.Promotion.TransactionID)",
+			after: "case runstate.PromotionNotPromoted:\n" +
+				"\t\trecorded, err := store.promotionTransaction(transaction.runID, state.Promotion.TransactionID)",
+			packagePath: "./cmd/partitur",
+			testName:    "TestPromoteScoreRecoverHaltsMissingTargetSnapshot",
+		},
+		{
+			name:   "recovery sweeps its own promotion temporaries",
+			source: "internal/runstore/promotion.go",
+			before: "if err := store.sweepPromotionTemporaries(state.Promotion.TransactionID); err != nil {\n" +
+				"\t\treturn PromotionResult{}, err\n" +
+				"\t}\n",
+			after:       "",
+			packagePath: "./cmd/partitur",
+			testName:    "TestPromoteScoreKillCutsRecoverToPromotedFixedPoint/before_root_rename",
 		},
 		{
 			name:        "target-hash recovery completes the original transaction",
@@ -154,7 +182,7 @@ func TestMutationPromoteScoreConjuncts(t *testing.T) {
 		{
 			name:        "neither-hash recovery halts for an operator",
 			source:      "internal/runstore/promotion.go",
-			before:      "return PromotionResult{Outcome: PromotionOutcomeRecoveryRequired, Detail: \"root file hash matches neither expected nor target\"}, nil",
+			before:      "return PromotionResult{Outcome: PromotionOutcomeRecoveryRequired, Detail: detail}, nil",
 			after:       "return PromotionResult{Outcome: PromotionOutcomePromoted}, nil",
 			packagePath: "./cmd/partitur",
 			testName:    "TestPromoteScoreRecoveryHaltLeavesJournalFixed",

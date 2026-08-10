@@ -57,7 +57,8 @@ func TestShippingExitMappingsAreSpecified(t *testing.T) {
 	// Then
 	assertShippingOutcomeCode(t, applyCodes, "FAILED_CLEAN", 4)
 	assertShippingOutcomeCode(t, applyCodes, "matching neither `base_tree` nor `result_tree`", 5)
-	assertShippingOutcomeCode(t, promotionCodes, "CAS conflict", 2)
+	assertShippingOutcomeCode(t, promotionCodes, "before `score.promotion_started`", 2)
+	assertShippingOutcomeCode(t, promotionCodes, "A started promotion found a missing", 5)
 	assertShippingOutcomeCode(t, promotionCodes, "matching neither the expected nor target hash", 5)
 }
 
@@ -79,7 +80,8 @@ func TestShippingExitMappingsStayInsideGlobalCategories(t *testing.T) {
 	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 4, "FAILED_CLEAN", "FAILED_CLEAN")
 	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 5,
 		"Application `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
-	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 2, "CAS conflict", "CAS conflict")
+	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 2,
+		"before `score.promotion_started`", "promotion pre-start root-hash conflict")
 	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 5,
 		"Promotion `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
 	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 6,
