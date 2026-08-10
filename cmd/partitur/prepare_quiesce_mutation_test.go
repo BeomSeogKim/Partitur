@@ -159,6 +159,9 @@ func copyPrepareQuiesceRepository(destination, source string) error {
 			}
 			return nil
 		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
 		target := filepath.Join(destination, relative)
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o700)
