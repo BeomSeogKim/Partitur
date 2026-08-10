@@ -316,6 +316,56 @@ func TestGeneratedChecksParticipateInAcceptanceSpecHash(t *testing.T) {
 	}
 }
 
+func TestPlanSatisfiesRecordedAcceptance(t *testing.T) {
+	plan := &Plan{
+		specHash:     "sha256:acceptance-plan",
+		criteria:     []criterion{{id: "declared-hard"}, {id: "partitur.artifact.findings", generated: true}},
+		declaredHard: 1,
+	}
+	complete := func() runstate.Acceptance {
+		return runstate.Acceptance{
+			SpecHash:            plan.Hash(),
+			PlannedCriterionIDs: []runstate.CriterionID{"declared-hard", "partitur.artifact.findings"},
+			Criteria: map[runstate.CriterionID]runstate.CriterionRecord{
+				"declared-hard":              {Completed: true, Outcome: "PASS"},
+				"partitur.artifact.findings": {Completed: true, Outcome: "PASS"},
+			},
+		}
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*runstate.Acceptance)
+		want   bool
+	}{
+		{name: "exact complete ordered plan", want: true},
+		{name: "different acceptance spec", mutate: func(value *runstate.Acceptance) { value.SpecHash = "sha256:other" }},
+		{name: "missing generated criterion", mutate: func(value *runstate.Acceptance) { value.PlannedCriterionIDs = value.PlannedCriterionIDs[:1] }},
+		{name: "out of order criterion", mutate: func(value *runstate.Acceptance) {
+			value.PlannedCriterionIDs[0], value.PlannedCriterionIDs[1] = value.PlannedCriterionIDs[1], value.PlannedCriterionIDs[0]
+		}},
+		{name: "incomplete planned criterion", mutate: func(value *runstate.Acceptance) {
+			record := value.Criteria["partitur.artifact.findings"]
+			record.Completed = false
+			value.Criteria["partitur.artifact.findings"] = record
+		}},
+		{name: "non-pass planned criterion", mutate: func(value *runstate.Acceptance) {
+			record := value.Criteria["partitur.artifact.findings"]
+			record.Outcome = "FAIL"
+			value.Criteria["partitur.artifact.findings"] = record
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			value := complete()
+			if testCase.mutate != nil {
+				testCase.mutate(&value)
+			}
+			if got := plan.SatisfiesAcceptance(value); got != testCase.want {
+				t.Fatalf("SatisfiesAcceptance() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestEvaluateRecordsFixedOrderAndRepeatsSubjectBinding(t *testing.T) {
 	movement := movementFixture()
 	movement.Outputs = append(movement.Outputs, score.OutputView{

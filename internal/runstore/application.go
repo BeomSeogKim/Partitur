@@ -302,11 +302,11 @@ func applicationJudgment(state runstate.State, compiled *score.Score) error {
 	if execution.FinalMovementID == "" {
 		return fmt.Errorf("%w: final movement is missing", ErrApplicationNotAllowed)
 	}
-	marks, verifiedFailure := applicationMarks(state, compiled, runstate.MovementID(execution.FinalMovementID), candidate.ResultTree)
+	marks, markFailures := applicationMarks(state, compiled, runstate.MovementID(execution.FinalMovementID), candidate.ResultTree)
 	for _, required := range execution.ApplyGateRequire {
 		if !marks[strings.ToUpper(required)] {
-			if strings.EqualFold(required, "verified") && verifiedFailure != "" {
-				return fmt.Errorf("%w: required verified evidence is absent: %s", ErrApplicationNotAllowed, verifiedFailure)
+			if failure := markFailures[strings.ToUpper(required)]; failure != "" {
+				return fmt.Errorf("%w: required %s evidence is absent: %s", ErrApplicationNotAllowed, required, failure)
 			}
 			return fmt.Errorf("%w: required %s evidence is absent", ErrApplicationNotAllowed, required)
 		}
@@ -328,36 +328,36 @@ func applicationJudgment(state runstate.State, compiled *score.Score) error {
 	return nil
 }
 
-func applicationMarks(state runstate.State, compiled *score.Score, final runstate.MovementID, subjectTree string) (map[string]bool, string) {
+func applicationMarks(state runstate.State, compiled *score.Score, final runstate.MovementID, subjectTree string) (map[string]bool, map[string]string) {
 	marks := map[string]bool{}
+	failures := map[string]string{}
 	view, ok := applicationMovement(compiled, final)
 	if !ok {
-		return marks, ""
+		return marks, failures
 	}
 	plan, err := acceptance.Compile(view)
 	if err != nil {
-		return marks, "final movement acceptance plan cannot be compiled"
+		return marks, failures
 	}
-	verifiedFailure := ""
 	for attemptID, attempt := range state.Attempts {
 		if attempt.MovementID != final || attempt.ScoreRevision != state.ScoreHead.Revision || attempt.State != runstate.AttemptCompleted {
 			continue
 		}
-		acceptance, ok := state.Acceptances[attemptID]
-		if !ok || !acceptance.EvaluationCompleted || acceptance.SubjectTree != subjectTree {
-			continue
-		}
-		if failure := applicationCriteriaFailure(acceptance, plan.Hash(), view); failure != "" {
-			if verifiedFailure == "" {
-				verifiedFailure = failure
-			}
-			continue
-		}
-		if len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria) != 0 {
-			marks["VERIFIED"] = true
-		}
+		acceptance, present := state.Acceptances[attemptID]
+		satisfiesPlan := present && acceptance.EvaluationCompleted && acceptance.SubjectTree == subjectTree && plan.SatisfiesAcceptance(acceptance)
 		resolution := state.ResolvedHumanGates[attemptID]
-		if len(view.Acceptance.ReviewCriteria) == 1 {
+		if resolution.Disposition == "approved" && resolution.ScoreRevision == state.ScoreHead.Revision && resolution.Scope.SubjectTree == subjectTree {
+			marks["APPROVED"] = true
+		}
+		if !present || !acceptance.EvaluationCompleted || acceptance.SubjectTree != subjectTree {
+			continue
+		}
+		if plan.DeclaresHardCriteria() && satisfiesPlan {
+			marks["VERIFIED"] = true
+		} else if plan.DeclaresHardCriteria() && failures["VERIFIED"] == "" {
+			failures["VERIFIED"] = "recorded acceptance does not satisfy the final movement plan"
+		}
+		if plan.HasReviewCriterion() && satisfiesPlan {
 			marks["REVIEWED"] = true
 			// Stored review evidence only ever holds CLEAN or CONTESTED.
 			// OVERRIDDEN is derived from the matching human-gate resolution — the
@@ -370,12 +370,11 @@ func applicationMarks(state runstate.State, compiled *score.Score, final runstat
 			case "OVERRIDDEN":
 				marks["REVIEW_CLEAN_OR_OVERRIDDEN"] = true
 			}
-		}
-		if resolution.Disposition == "approved" && resolution.ScoreRevision == state.ScoreHead.Revision && resolution.Scope.SubjectTree == subjectTree {
-			marks["APPROVED"] = true
+		} else if plan.HasReviewCriterion() && failures["REVIEWED"] == "" {
+			failures["REVIEWED"] = "recorded acceptance does not satisfy the final movement plan"
 		}
 	}
-	return marks, verifiedFailure
+	return marks, failures
 }
 
 func applicationMovement(compiled *score.Score, id runstate.MovementID) (score.MovementView, bool) {
@@ -385,31 +384,6 @@ func applicationMovement(compiled *score.Score, id runstate.MovementID) (score.M
 		}
 	}
 	return score.MovementView{}, false
-}
-
-func applicationCriteriaFailure(acceptance runstate.Acceptance, expectedSpecHash runstate.Hash, view score.MovementView) string {
-	if acceptance.SpecHash != expectedSpecHash {
-		return "acceptance spec hash does not match the final movement"
-	}
-	declaredHardCriterionIDs := make([]runstate.CriterionID, 0, len(view.Acceptance.ArtifactCriteria)+len(view.Acceptance.RunCriteria))
-	for _, criterion := range view.Acceptance.ArtifactCriteria {
-		declaredHardCriterionIDs = append(declaredHardCriterionIDs, runstate.CriterionID(criterion.ID))
-	}
-	for _, criterion := range view.Acceptance.RunCriteria {
-		declaredHardCriterionIDs = append(declaredHardCriterionIDs, runstate.CriterionID(criterion.ID))
-	}
-	for _, criterionID := range declaredHardCriterionIDs {
-		if !slices.Contains(acceptance.PlannedCriterionIDs, criterionID) {
-			return fmt.Sprintf("declared hard criterion %q is missing from the acceptance plan", criterionID)
-		}
-	}
-	for _, id := range acceptance.PlannedCriterionIDs {
-		record, ok := acceptance.Criteria[id]
-		if !ok || !record.Completed || record.Outcome != "PASS" {
-			return fmt.Sprintf("planned criterion %q is not a completed PASS", id)
-		}
-	}
-	return ""
 }
 
 func appendApplicationEvent(transaction *Txn, state *runstate.State, eventType runstate.EventType, payload map[string]any) error {
