@@ -526,6 +526,18 @@ func TestApplySabotagedPatchFailsCleanly(t *testing.T) {
 	if err != nil || len(leftovers) != 0 {
 		t.Fatalf("temporary indexes=%v err=%v", leftovers, err)
 	}
+	// FAILED_CLEAN is a normal apply entry state. Once the obstruction is gone,
+	// retrying must be able to materialize the same candidate.
+	if err := os.Remove(filepath.Join(root, "applied.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, contents, stderr = applyRequireCheckout(t, root)
+	if code != 0 || contents != "candidate result\n" || stderr != "" {
+		t.Fatalf("retry after failed-clean exit=%d contents=%q stderr=%q", code, contents, stderr)
+	}
 }
 
 // TestApplyBeforeItsTransactionRefusesRatherThanPromisingRecovery pins the

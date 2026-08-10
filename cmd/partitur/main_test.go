@@ -709,6 +709,29 @@ func TestParseAmendArgs(t *testing.T) {
 	}
 }
 
+func TestParseApplyArgs(t *testing.T) {
+	for _, test := range []struct {
+		args              []string
+		wantRun           string
+		wantRecover, want bool
+	}{
+		{args: []string{"apply", "run-1"}, wantRun: "run-1", want: true},
+		{args: []string{"apply", "run-1", "--recover"}, wantRun: "run-1", wantRecover: true, want: true},
+		{args: nil},
+		{args: []string{"apply"}},
+		{args: []string{"apply", "run-1", "--recover", "extra"}},
+		{args: []string{"resume", "run-1"}},
+		{args: []string{"apply", ""}},
+		{args: []string{"apply", "--run"}},
+		{args: []string{"apply", "run-1", "--resume"}},
+	} {
+		runID, recoverOnly, ok := parseApplyArgs(test.args)
+		if runID != test.wantRun || recoverOnly != test.wantRecover || ok != test.want {
+			t.Fatalf("parseApplyArgs(%v) = (%q, %t, %t), want (%q, %t, %t)", test.args, runID, recoverOnly, ok, test.wantRun, test.wantRecover, test.want)
+		}
+	}
+}
+
 func TestParseAnswerArgs(t *testing.T) {
 	for _, test := range []struct {
 		args             []string

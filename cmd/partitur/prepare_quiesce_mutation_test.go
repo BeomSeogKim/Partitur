@@ -96,12 +96,15 @@ func TestMutationParentPrepareInjectionGuards(t *testing.T) {
 		},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
-			assertPrepareQuiesceMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, mutation.packagePath, mutation.testName)
+			result := assertPrepareQuiesceMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, mutation.packagePath, mutation.testName)
+			if result.Outcome != mutationtest.Killed {
+				t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
+			}
 		})
 	}
 }
 
-func assertPrepareQuiesceMutationKilled(t *testing.T, environment mutationtest.GoEnvironment, source, before, after, packagePath, testName string) {
+func assertPrepareQuiesceMutationKilled(t *testing.T, environment mutationtest.GoEnvironment, source, before, after, packagePath, testName string) mutationtest.Result {
 	t.Helper()
 	_, current, _, ok := runtime.Caller(0)
 	if !ok {
@@ -139,9 +142,7 @@ func assertPrepareQuiesceMutationKilled(t *testing.T, environment mutationtest.G
 		TestNames:   []string{testName},
 		Environment: environment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1"),
 	})
-	if result.Outcome != mutationtest.Killed {
-		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
-	}
+	return result
 }
 
 func copyPrepareQuiesceRepository(destination, source string) error {

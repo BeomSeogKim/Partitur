@@ -229,6 +229,35 @@ func TestApplyUnderTheLockStaysObservable(t *testing.T) {
 	}
 }
 
+// TestApplyRollbackRestoresTouchedPathsBeforeReportingUnverifiable makes the
+// post-apply tree differ from both candidate trees through an untouched path.
+// The transaction remains interrupted, but the rollback still owes the touched
+// paths their base contents before it reports that broader mismatch.
+func TestApplyRollbackRestoresTouchedPathsBeforeReportingUnverifiable(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	root, _, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	release := pauseAtPoint(t, partitur, root, applyKillEnvironment(t), faultpoint.PointApplyCheckoutMutated, "apply", "run-1")
+	if err := os.WriteFile(filepath.Join(root, resumeFixtureUntouchedFile), []byte("moved\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := release(); code != 6 {
+		t.Fatalf("interrupted apply exit=%d, want 6", code)
+	}
+	if _, err := os.Stat(filepath.Join(root, "applied.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rollback left applied.txt: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "second.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rollback left second.txt: %v", err)
+	}
+	if contents := applyReadFile(t, root, resumeFixtureBaseFile); contents != "base\n" {
+		t.Fatalf("rollback left base path=%q", contents)
+	}
+}
+
 // pauseAtPoint starts the command, lets it run to the target point, and leaves
 // it blocked there holding whatever it holds. The returned function releases it
 // — and every point after it, so the command finishes on its own terms rather
