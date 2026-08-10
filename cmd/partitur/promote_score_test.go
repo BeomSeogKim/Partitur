@@ -369,6 +369,21 @@ func TestPromoteScoreRecoverHaltsMissingTargetSnapshot(t *testing.T) {
 	if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 1 || countEvents(journal.Events, runstate.EventScorePromoted) != 0 || countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
 		t.Fatalf("missing target recovery journal=%v", eventKinds(journal.Events))
 	}
+	before := applyReadJournalBytes(t, root)
+	code, _, stderr = runCommandBinary(t, partitur, root, environment, "promote-score", "run-1", "--recover")
+	if code != 5 || !strings.Contains(stderr, "required promotion target snapshot") || !strings.Contains(stderr, "is missing") {
+		t.Fatalf("second missing target recovery exit=%d stderr=%q", code, stderr)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
+		t.Fatalf("second missing target recovery journal=%v", eventKinds(journal.Events))
+	}
+	if after := applyReadJournalBytes(t, root); after != before {
+		t.Fatalf("second missing target recovery rewrote journal:\nbefore=%s\nafter=%s", before, after)
+	}
 }
 
 func TestPromoteScoreRecoverHaltsMismatchedTargetSnapshot(t *testing.T) {
@@ -394,6 +409,21 @@ func TestPromoteScoreRecoverHaltsMismatchedTargetSnapshot(t *testing.T) {
 	}
 	if countEvents(journal.Events, runstate.EventScorePromotionStarted) != 1 || countEvents(journal.Events, runstate.EventScorePromoted) != 0 || countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
 		t.Fatalf("mismatched target recovery journal=%v", eventKinds(journal.Events))
+	}
+	before := applyReadJournalBytes(t, root)
+	code, _, stderr = runCommandBinary(t, partitur, root, environment, "promote-score", "run-1", "--recover")
+	if code != 5 || !strings.Contains(stderr, "promotion target hash") || !strings.Contains(stderr, "does not match pinned head") {
+		t.Fatalf("second mismatched target recovery exit=%d stderr=%q", code, stderr)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
+		t.Fatalf("second mismatched target recovery journal=%v", eventKinds(journal.Events))
+	}
+	if after := applyReadJournalBytes(t, root); after != before {
+		t.Fatalf("second mismatched target recovery rewrote journal:\nbefore=%s\nafter=%s", before, after)
 	}
 }
 
@@ -431,6 +461,21 @@ func TestPromoteScoreRecoverRequiresOriginalCandidate(t *testing.T) {
 	}
 	if countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
 		t.Fatalf("wrong candidate recovery journal=%v", eventKinds(journal.Events))
+	}
+	before = applyReadJournalBytes(t, root)
+	code, _, stderr = promoteScoreCLI(t, root, true)
+	if code != 5 || !strings.Contains(stderr, "promotion candidate is unavailable") {
+		t.Fatalf("second wrong candidate recovery exit=%d stderr=%q", code, stderr)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
+		t.Fatalf("second wrong candidate recovery journal=%v", eventKinds(journal.Events))
+	}
+	if after := applyReadJournalBytes(t, root); after != before {
+		t.Fatalf("second wrong candidate recovery rewrote journal:\nbefore=%s\nafter=%s", before, after)
 	}
 }
 
