@@ -319,7 +319,7 @@ func TestGeneratedChecksParticipateInAcceptanceSpecHash(t *testing.T) {
 func TestPlanSatisfiesRecordedAcceptance(t *testing.T) {
 	plan := &Plan{
 		specHash:     "sha256:acceptance-plan",
-		criteria:     []criterion{{id: "declared-hard"}, {id: "partitur.artifact.findings", generated: true}},
+		criteria:     []criterion{{id: "declared-hard", specHash: "sha256:declared-hard"}, {id: "partitur.artifact.findings", specHash: "sha256:findings", generated: true}},
 		declaredHard: 1,
 	}
 	complete := func() runstate.Acceptance {
@@ -327,8 +327,8 @@ func TestPlanSatisfiesRecordedAcceptance(t *testing.T) {
 			SpecHash:            plan.Hash(),
 			PlannedCriterionIDs: []runstate.CriterionID{"declared-hard", "partitur.artifact.findings"},
 			Criteria: map[runstate.CriterionID]runstate.CriterionRecord{
-				"declared-hard":              {Completed: true, Outcome: "PASS"},
-				"partitur.artifact.findings": {Completed: true, Outcome: "PASS"},
+				"declared-hard":              {SpecHash: "sha256:declared-hard", Completed: true, Outcome: "PASS"},
+				"partitur.artifact.findings": {SpecHash: "sha256:findings", Completed: true, Outcome: "PASS"},
 			},
 		}
 	}
@@ -351,6 +351,11 @@ func TestPlanSatisfiesRecordedAcceptance(t *testing.T) {
 		{name: "non-pass planned criterion", mutate: func(value *runstate.Acceptance) {
 			record := value.Criteria["partitur.artifact.findings"]
 			record.Outcome = "FAIL"
+			value.Criteria["partitur.artifact.findings"] = record
+		}},
+		{name: "criterion hash does not match compiled criterion", mutate: func(value *runstate.Acceptance) {
+			record := value.Criteria["partitur.artifact.findings"]
+			record.SpecHash = "sha256:not-findings"
 			value.Criteria["partitur.artifact.findings"] = record
 		}},
 	} {

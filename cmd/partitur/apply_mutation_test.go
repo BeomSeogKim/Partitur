@@ -61,6 +61,14 @@ func TestMutationApplyConjuncts(t *testing.T) {
 			testName:    "TestPlanSatisfiesRecordedAcceptance/non-pass_planned_criterion",
 		},
 		{
+			name:        "acceptance plan requires each compiled criterion identity",
+			source:      "internal/acceptance/acceptance.go",
+			before:      "record.SpecHash == plan.criteria[index].specHash",
+			after:       "true",
+			packagePath: "./cmd/partitur",
+			testName:    "TestApplyRequireVerifiedRefusesCriterionSpecHashMismatch",
+		},
+		{
 			name:        "verified requires declared hard criteria",
 			source:      "internal/acceptance/acceptance.go",
 			before:      "return plan != nil && plan.declaredHard > 0",

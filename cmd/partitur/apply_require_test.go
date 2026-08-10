@@ -45,6 +45,10 @@ type applyGate struct {
 	// acceptanceSpecHash overrides the journaled hash for the malformed-evidence
 	// oracle that proves the score-plan correspondence is checked.
 	acceptanceSpecHash string
+	// criterionSpecHash overrides every recorded criterion identity for the
+	// malformed-evidence oracle that proves each criterion binds its compiled
+	// specification.
+	criterionSpecHash string
 }
 
 // applyRequireFixture builds a SUCCEEDED run whose candidate materializes one
@@ -238,18 +242,40 @@ func appendApplyRequireRun(t *testing.T, store *runstore.Store, baseTree, result
 		gateTree = baseTree
 	}
 	plan := applyRequirePlan(t, gate)
+	compiledCriterionIDs := applyRequirePlannedCriterionIDs(t, plan, evidenceTree)
+	compiledCriterionHashes := plan.CriterionSpecHashes()
+	if len(compiledCriterionIDs) != len(compiledCriterionHashes) {
+		t.Fatalf("compiled criterion ids=%d hashes=%d", len(compiledCriterionIDs), len(compiledCriterionHashes))
+	}
+	compiledCriterionHashByID := make(map[string]string, len(compiledCriterionIDs))
+	for index, id := range compiledCriterionIDs {
+		compiledCriterionHashByID[id] = string(compiledCriterionHashes[index])
+	}
 	plannedCriterionIDs := gate.plannedCriterionIDs
 	if plannedCriterionIDs == nil {
-		plannedCriterionIDs = applyRequirePlannedCriterionIDs(t, plan, evidenceTree)
+		plannedCriterionIDs = compiledCriterionIDs
 	}
 	acceptanceSpecHash := string(plan.Hash())
 	if gate.acceptanceSpecHash != "" {
 		acceptanceSpecHash = gate.acceptanceSpecHash
 	}
+	recordedCriterionHashes := make(map[string]string, len(plannedCriterionIDs))
+	for _, id := range plannedCriterionIDs {
+		criterionSpecHash := compiledCriterionHashByID[id]
+		if criterionSpecHash == "" {
+			// This oracle names a criterion that is absent from the compiled plan,
+			// so it has no canonical criterion hash to record.
+			criterionSpecHash = "sha256:criterion"
+		}
+		if gate.criterionSpecHash != "" {
+			criterionSpecHash = gate.criterionSpecHash
+		}
+		recordedCriterionHashes[id] = criterionSpecHash
+	}
 	criterionOutcomes := make([]any, len(plannedCriterionIDs))
 	for index, id := range plannedCriterionIDs {
 		criterionOutcomes[index] = map[string]any{
-			"criterion_id": id, "criterion_spec_hash": "sha256:criterion", "outcome": "PASS",
+			"criterion_id": id, "criterion_spec_hash": recordedCriterionHashes[id], "outcome": "PASS",
 		}
 	}
 	evaluation := map[string]any{
@@ -298,11 +324,11 @@ func appendApplyRequireRun(t *testing.T, store *runstore.Store, baseTree, result
 	for _, id := range plannedCriterionIDs {
 		events = append(events,
 			attempt(runstate.EventCriterionStarted, map[string]any{
-				"criterion_id": id, "criterion_spec_hash": "sha256:criterion",
+				"criterion_id": id, "criterion_spec_hash": recordedCriterionHashes[id],
 				"subject_tree": evidenceTree, "identity_versions": versions,
 			}),
 			attempt(runstate.EventCriterionCompleted, map[string]any{
-				"criterion_id": id, "criterion_spec_hash": "sha256:criterion",
+				"criterion_id": id, "criterion_spec_hash": recordedCriterionHashes[id],
 				"subject_tree": evidenceTree, "outcome": "PASS", "identity_versions": versions,
 			}),
 		)
@@ -469,6 +495,26 @@ func TestApplyRequireVerifiedRefusesAcceptancePlanMismatch(t *testing.T) {
 				t.Fatal("refused apply opened a transaction")
 			}
 		})
+	}
+}
+
+func TestApplyRequireVerifiedRefusesCriterionSpecHashMismatch(t *testing.T) {
+	root, store, _ := applyRequireFixture(t, applyGate{
+		require: []string{"verified"}, criterionSpecHash: "sha256:not-the-compiled-criterion",
+	})
+	code, contents, stderr := applyRequireCheckout(t, root)
+	if code != 2 || contents != "" || !strings.Contains(stderr, "required verified evidence is absent") {
+		t.Fatalf("apply exit=%d contents=%q stderr=%q", code, contents, stderr)
+	}
+	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("refused apply changed the checkout: %q", status)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(journal.Events, runstate.EventApplyStarted) != 0 {
+		t.Fatal("refused apply opened a transaction")
 	}
 }
 

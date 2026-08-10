@@ -142,6 +142,18 @@ func (plan *Plan) Hash() runstate.Hash {
 	return plan.specHash
 }
 
+// CriterionSpecHashes returns the compiled criterion identities in plan order.
+func (plan *Plan) CriterionSpecHashes() []runstate.Hash {
+	if plan == nil {
+		return nil
+	}
+	hashes := make([]runstate.Hash, len(plan.criteria))
+	for index, criterion := range plan.criteria {
+		hashes[index] = criterion.specHash
+	}
+	return hashes
+}
+
 // DeclaresHardCriteria reports whether this plan can earn VERIFIED. Generated
 // criteria close integrity holes but cannot earn the mark on their own.
 func (plan *Plan) DeclaresHardCriteria() bool {
@@ -167,9 +179,9 @@ func (plan *Plan) SatisfiesAcceptance(recorded runstate.Acceptance) bool {
 	if plan == nil || recorded.SpecHash != plan.specHash {
 		return false
 	}
-	return plan.matchesCriteria(recorded.PlannedCriterionIDs, func(_ int, id runstate.CriterionID) bool {
+	return plan.matchesCriteria(recorded.PlannedCriterionIDs, func(index int, id runstate.CriterionID) bool {
 		record, ok := recorded.Criteria[id]
-		return ok && record.Completed && record.Outcome == "PASS"
+		return ok && record.SpecHash == plan.criteria[index].specHash && record.Completed && record.Outcome == "PASS"
 	})
 }
 
