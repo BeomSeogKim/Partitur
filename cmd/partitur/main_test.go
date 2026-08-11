@@ -1797,6 +1797,11 @@ func resumeFixtureWithInputs(t *testing.T, terminal string, snapshot, resolvedCa
 	t.Helper()
 	root := t.TempDir()
 	baseCommit, baseTree := resumeFixtureRepository(t, root)
+	return resumeFixtureWithInputsAtRepository(t, root, baseCommit, baseTree, terminal, snapshot, resolvedCast)
+}
+
+func resumeFixtureWithInputsAtRepository(t *testing.T, root, baseCommit, baseTree, terminal string, snapshot, resolvedCast []byte) (string, *runstore.Store) {
+	t.Helper()
 	store, err := runstore.New(root, faultpoint.Nop{})
 	if err != nil {
 		t.Fatal(err)

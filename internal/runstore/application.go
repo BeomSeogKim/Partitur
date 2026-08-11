@@ -18,6 +18,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/protectedpath"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
@@ -118,7 +119,8 @@ func (store *Store) applyCandidate(
 	if state.Application.State != runstate.ApplicationNotApplied && state.Application.State != runstate.ApplicationFailedClean {
 		return ApplicationResult{}, fmt.Errorf("%w: normal apply is refused from %s", ErrApplicationNotAllowed, state.Application.State)
 	}
-	if err := store.applicationPreconditions(ctx, transaction.runID, *state, compiled); err != nil {
+	touched, err := store.applicationPreconditions(ctx, transaction.runID, *state, compiled)
+	if err != nil {
 		return ApplicationResult{}, err
 	}
 	candidate := *state.ApplicationCandidate
@@ -128,10 +130,6 @@ func (store *Store) applyCandidate(
 	}
 	if beforeTree != candidate.BaseTree {
 		return ApplicationResult{}, fmt.Errorf("%w: checkout tree %q does not match candidate base %q", ErrApplicationNotAllowed, beforeTree, candidate.BaseTree)
-	}
-	touched, err := applicationTouchedPaths(ctx, store.root, candidate.BaseTree, candidate.ResultTree)
-	if err != nil {
-		return ApplicationResult{}, err
 	}
 	versions, err := applicationIdentityVersions(candidate)
 	if err != nil {
@@ -255,16 +253,16 @@ func (store *Store) recoverApplication(ctx context.Context, transaction *Txn, st
 	}
 }
 
-func (store *Store) applicationPreconditions(ctx context.Context, selected runstate.RunID, state runstate.State, compiled *score.Score) error {
+func (store *Store) applicationPreconditions(ctx context.Context, selected runstate.RunID, state runstate.State, compiled *score.Score) ([]string, error) {
 	if state.Run != runstate.RunSucceeded || state.ApplicationCandidate == nil {
-		return fmt.Errorf("%w: selected run is not succeeded with a candidate", ErrApplicationNotAllowed)
+		return nil, fmt.Errorf("%w: selected run is not succeeded with a candidate", ErrApplicationNotAllowed)
 	}
 	if compiled == nil || compiled.Revision() != state.ScoreHead.Revision || state.ApplicationCandidate.Revision != state.ScoreHead.Revision {
-		return fmt.Errorf("%w: candidate or expectation is not bound to the current head", ErrApplicationNotAllowed)
+		return nil, fmt.Errorf("%w: candidate or expectation is not bound to the current head", ErrApplicationNotAllowed)
 	}
 	ids, err := store.RunIDs()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, id := range ids {
 		if id == "" {
@@ -272,19 +270,37 @@ func (store *Store) applicationPreconditions(ctx context.Context, selected runst
 		}
 		input, err := store.LoadRunInput(id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if id != selected && !input.Projection.State.Run.Terminal() {
-			return fmt.Errorf("%w: active run %q exists", ErrApplicationNotAllowed, id)
+			return nil, fmt.Errorf("%w: active run %q exists", ErrApplicationNotAllowed, id)
 		}
 	}
 	if err := applicationJudgment(state, compiled); err != nil {
-		return err
+		return nil, err
 	}
 	if err := applicationClean(ctx, store.root); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	touched, err := applicationTouchedPaths(ctx, store.root, state.ApplicationCandidate.BaseTree, state.ApplicationCandidate.ResultTree)
+	if err != nil {
+		return nil, err
+	}
+	// The raw diff is what `applicationPatch` will materialize, and the comparison
+	// projection defends neither §2 name: it omits state-directory paths, so no
+	// tree equality can object to them, and it keeps the root score, so a candidate
+	// that rewrites `partitur.yaml` compares equal and applies. Refusing here keeps
+	// both out of the checkout, and keeps it a precondition — before the seam, so
+	// nothing durable claims a transaction that never had one.
+	protected := protectedpath.WorktreeNames()
+	for _, path := range touched {
+		for _, name := range protected {
+			if path == name || strings.HasPrefix(path, name+"/") {
+				return nil, fmt.Errorf("%w: candidate modifies protected path %q", ErrApplicationNotAllowed, path)
+			}
+		}
+	}
+	return touched, nil
 }
 
 func applicationJudgment(state runstate.State, compiled *score.Score) error {
@@ -502,7 +518,7 @@ func applicationTouchedPaths(ctx context.Context, root, baseTree, resultTree str
 	if err != nil {
 		return nil, err
 	}
-	output, err := applicationGitOutput(ctx, root, nil, nil, "diff", "--name-only", "-z", base, result)
+	output, err := applicationGitOutput(ctx, root, nil, nil, "diff", "--no-renames", "--name-only", "-z", base, result)
 	if err != nil {
 		return nil, err
 	}
