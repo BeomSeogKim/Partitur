@@ -71,8 +71,35 @@ func applyRequireFixtureWithNestedPath(t *testing.T) (string, *runstore.Store, s
 
 func applyRequireFixtureWithFiles(t *testing.T, gate applyGate, files []applyFixtureFile) (string, *runstore.Store, string) {
 	t.Helper()
-	root, store := resumeFixtureWithInputs(
+	return applyRequireFixtureWithBaseFiles(t, gate, nil, files)
+}
+
+// applyRequireFixtureWithBaseFiles adds only the paths a case needs tracked in
+// its base tree, so a rename oracle does not widen every resume fixture.
+func applyRequireFixtureWithBaseFiles(t *testing.T, gate applyGate, baseFiles, files []applyFixtureFile) (string, *runstore.Store, string) {
+	t.Helper()
+	root := t.TempDir()
+	baseCommit, baseTree := resumeFixtureRepository(t, root)
+	for _, file := range baseFiles {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, file.name)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, file.name), []byte(file.contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, root, "add", file.name)
+	}
+	if len(baseFiles) != 0 {
+		runGit(t, root, "commit", "--quiet", "-m", "fixture base files")
+		format := applyFixtureGit(t, root, "rev-parse", "--show-object-format")
+		baseCommit = "git-" + format + ":" + applyFixtureGit(t, root, "rev-parse", "HEAD")
+		baseTree = "git-" + format + ":" + applyFixtureGit(t, root, "rev-parse", "HEAD^{tree}")
+	}
+	_, store := resumeFixtureWithInputsAtRepository(
 		t,
+		root,
+		baseCommit,
+		baseTree,
 		"",
 		applyRequireScore(gate),
 		[]byte("cast: \"0.1\"\nperformers:\n  reviewer:\n    adapter: adapter\n    model: model\nbindings:\n  reviewer:\n    performer: reviewer\n"),
@@ -81,17 +108,18 @@ func applyRequireFixtureWithFiles(t *testing.T, gate applyGate, files []applyFix
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseTree, baseCommit := input.BaseTree, input.BaseCommit
+	baseTree, baseCommit = input.BaseTree, input.BaseCommit
 	resultTree := applyFixtureResultTree(t, root, baseCommit, files)
 	candidateID := appendApplyRequireRun(t, store, baseTree, resultTree, gate)
 	return root, store, candidateID
 }
 
-// applyFixtureFile is one path the candidate would write into the checkout.
+// applyFixtureFile is one candidate-tree path write or removal.
 type applyFixtureFile struct {
 	name     string
 	contents string
 	inBase   bool
+	remove   bool
 }
 
 // applyFixtureCandidateFiles is the default candidate: two additions and one
@@ -110,6 +138,10 @@ func applyFixtureResultTree(t *testing.T, root, baseCommit string, files []apply
 	// Two paths, so a failed apply can be checked for having left the *other*
 	// one alone rather than only the path a test happened to sabotage.
 	for _, file := range files {
+		if file.remove {
+			runGit(t, root, "rm", "--quiet", file.name)
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, file.name)), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +160,7 @@ func applyFixtureResultTree(t *testing.T, root, baseCommit string, files []apply
 	}
 	runGit(t, root, "reset", "--hard", "--quiet", baseObject)
 	for _, file := range files {
-		if file.inBase {
+		if file.inBase || file.remove {
 			// The reset already restored it; removing it would dirty the checkout.
 			continue
 		}
