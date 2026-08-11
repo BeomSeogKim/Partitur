@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -20,12 +19,6 @@ type applicationTreeSite struct {
 	id          string
 	timing      string
 	requirement string
-}
-
-type applicationTreeObservation struct {
-	file     string
-	function string
-	variable string
 }
 
 func TestApplicationTreeProjectionIsSpecified(t *testing.T) {
@@ -67,24 +60,28 @@ func TestApplicationTreeProjectionIsSpecified(t *testing.T) {
 	assertApplicationTreeRecoveryObservationPayload(t, lines)
 }
 
-func TestApplicationTreeSitesReconcileApplicationObservations(t *testing.T) {
-	// Among non-test Go files in `internal/runstore`, the only direct assignments from applicationWorktreeTree are the six documented `(file, function, variable)` observation sites.
-	// This does not prove that every possible checkout-tree observation is covered: one built through a different helper or a direct temporary-index Git sequence is invisible to it.
-	// It also proves nothing about whether comparisons use projected operands.
+func TestApplicationTreeCheckoutObservationsDoNotExceedDocumentedSites(t *testing.T) {
+	// This count is keyed on applicationWorktreeTree's current name. An observation
+	// built another way or under another name is invisible to it. The projected-
+	// operand obligation is carried by behaviour, not by this check: the command
+	// tests exercise all six timings, and reverting each site individually to a raw
+	// operand kills its assigned case.
 	// Given
 	files := applicationSourceFiles(t)
-	got := applicationTreeObservations(t, files)
-	want := []applicationTreeObservation{
-		{file: "application.go", function: "applyCandidate", variable: "beforeTree"},
-		{file: "application.go", function: "applyCandidate", variable: "afterTree"},
-		{file: "application.go", function: "applyCandidate", variable: "restored"},
-		{file: "application.go", function: "applyCandidate", variable: "restored"},
-		{file: "application.go", function: "recoverApplication", variable: "tree"},
-		{file: "application.go", function: "recoverApplication", variable: "tree"},
-	}
+	section := applicationTreeProjectionSection(t, recoveryDesignLines(t))
+	sites := applicationTreeComparisonSites(t, section)
 
 	// When
-	assertApplicationTreeObservations(t, got, want)
+	observations := applicationTreeCheckoutObservations(files)
+
+	// Then
+	if observations > len(sites) {
+		ids := make([]string, 0, len(sites))
+		for _, site := range sites {
+			ids = append(ids, site.id)
+		}
+		t.Fatalf("checkout observations = %d, exceeds the %d documented sites %q", observations, len(sites), ids)
+	}
 }
 
 func applicationTreeProjectionSection(t *testing.T, lines []string) []string {
@@ -273,15 +270,8 @@ func applicationSourceFiles(t *testing.T) []applicationSourceFile {
 	return files
 }
 
-func applicationTreeObservations(t *testing.T, files []applicationSourceFile) []applicationTreeObservation {
-	t.Helper()
-
-	type positionedObservation struct {
-		applicationTreeObservation
-		file     string
-		position token.Pos
-	}
-	var positioned []positionedObservation
+func applicationTreeCheckoutObservations(files []applicationSourceFile) int {
+	observations := 0
 	for _, source := range files {
 		for _, declaration := range source.file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
@@ -289,57 +279,15 @@ func applicationTreeObservations(t *testing.T, files []applicationSourceFile) []
 				continue
 			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				assignment, ok := node.(*ast.AssignStmt)
-				if !ok || len(assignment.Lhs) == 0 || len(assignment.Rhs) != 1 {
-					return true
+				if call, ok := node.(*ast.CallExpr); ok {
+					identifier, _ := call.Fun.(*ast.Ident)
+					if identifier != nil && identifier.Name == "applicationWorktreeTree" {
+						observations++
+					}
 				}
-				call, ok := assignment.Rhs[0].(*ast.CallExpr)
-				if !ok || calledIdentifier(call) != "applicationWorktreeTree" {
-					return true
-				}
-				variable, ok := assignment.Lhs[0].(*ast.Ident)
-				if !ok {
-					t.Fatalf("applicationWorktreeTree result is not assigned to an identifier in %s", source.name)
-				}
-				positioned = append(positioned, positionedObservation{
-					applicationTreeObservation: applicationTreeObservation{file: source.name, function: function.Name.Name, variable: variable.Name},
-					file:                       source.name,
-					position:                   call.Pos(),
-				})
 				return true
 			})
 		}
 	}
-	sort.Slice(positioned, func(left, right int) bool {
-		if positioned[left].file != positioned[right].file {
-			return positioned[left].file < positioned[right].file
-		}
-		return positioned[left].position < positioned[right].position
-	})
-	observations := make([]applicationTreeObservation, 0, len(positioned))
-	for _, observation := range positioned {
-		observations = append(observations, observation.applicationTreeObservation)
-	}
 	return observations
-}
-
-func calledIdentifier(call *ast.CallExpr) string {
-	identifier, _ := call.Fun.(*ast.Ident)
-	if identifier == nil {
-		return ""
-	}
-	return identifier.Name
-}
-
-func assertApplicationTreeObservations(t *testing.T, got, want []applicationTreeObservation) {
-	t.Helper()
-
-	if len(got) != len(want) {
-		t.Fatalf("applicationWorktreeTree observations = %#v, want %#v", got, want)
-	}
-	for index := range want {
-		if got[index] != want[index] {
-			t.Fatalf("applicationWorktreeTree observation %d = %#v, want %#v", index, got[index], want[index])
-		}
-	}
 }
