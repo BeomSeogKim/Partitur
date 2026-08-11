@@ -201,8 +201,23 @@ loosely worded version of these and demonstrate nothing:
 | a kill at a durable point that **leaves a recovery obligation** — the cut between a durable `attempt.completed` and an absent `movement.succeeded` — so the first `resume` must append `movement.succeeded` under Appendix C's movement-succeeded row, and a second `resume` must append nothing | a kill at an already-fixed-point state makes "the required recovery" empty, so `resume` demonstrates nothing; naming a point with a pending obligation is what forces real recovery, and the second invocation is what proves the fixpoint |
 | `apply` onto a checkout that **initially differs**, whose final tree equals the pinned candidate | applying onto a checkout that already matches proves nothing about the apply path |
 
-Currently red: the score is committed and its apply gate is no longer waived, but no run has been
-recorded that carries all six properties on both platforms.
+Currently green, on evidence recorded 2026-08-12 at `main` = `b504f643`: one run per platform
+carried all six properties, driving the real CLI against this repository with the real `codex`
+performer.
+
+| Platform | Run | Property 5's cut | Property 6 |
+|---|---|---|---|
+| macOS (darwin 25.5.0, arm64) | `019ff186-3528-7e99-81e0-171856267241` | `recovery.attempt.completed`; first `resume` appended `movement.succeeded`, second appended nothing | `apply` exit 0 onto a checkout at the candidate's `base_tree`, final tree equal to the candidate's `result_tree` |
+| Linux (`linux/arm64`, kernel 6.12.76) | `019ff2fd-9a3c-765a-b158-ca042a79ad5c` | same | same |
+
+Both runs produced the same `candidate_id` and the same trees. Property 6 was checked against the
+tree, not against the command's exit status: the checkout stood at the candidate's `base_tree`
+before `apply` and equalled its `result_tree` after.
+
+Property 5 remains reachable deterministically only with a `-tags=faultprobe` build and the
+receipt rendezvous, accepted as part of this row's procedure on 2026-08-08 on the condition that
+the evidence keeps recording which binary each property needed. Five of the six were confirmed
+with ordinary production-CLI commands; that condition still holds and this row does not erode it.
 
 > This row is the reason a reference score cannot be trusted to declare its own difficulty. The
 > gate above reads `require: [verified, approved]` because the movement carries a hard criterion
