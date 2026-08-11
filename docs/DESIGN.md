@@ -3532,7 +3532,7 @@ cast produce `binding_missing`, which is a validation result about content that 
 |---|---|
 | 0 | success |
 | 1 | usage error: unknown command, missing or malformed operand |
-| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state (including a missing, obsoleted, already-resolved, or wrong-type decision addressed by `answer` or gate `approve`), dirty checkout, lock held, unwritable output stream, or a promotion pre-start root-hash conflict |
+| 2 | precondition refused: missing or unreadable required input, unreadable discovered input, no active run, wrong projection state (including a missing, obsoleted, already-resolved, or wrong-type decision addressed by `answer` or gate `approve`), dirty checkout, lock held, unwritable output stream, a candidate raw diff naming a protected worktree path, or a promotion pre-start root-hash conflict |
 | 3 | validation failed: `partitur validate`, pre-run validation for `partitur run`, or a rejected amendment |
 | 4 | a command's durable transaction completed unsuccessfully: a run reached terminal `FAILED` or `CANCELLED`, or Application reached `FAILED_CLEAN` after a verified rollback |
 | 5 | recovery halt — a command's durable transaction cannot proceed and needs an operator: a run halt names an Appendix D reason; Application or Promotion remains `RECOVERY_REQUIRED` when its `--recover` cannot determine a safe result |
@@ -3682,11 +3682,51 @@ Per-movement floors are unchanged: §2 rule 2 still guarantees that every **succ
 non-superseded attempt. The apply judgment, however, is made on the candidate — never summed
 over movements.
 
+**Application-tree projection.** The raw candidate `base_tree` and `result_tree` remain the
+canonical Git-tree identities recorded by §5. For §8 alone, an **application tree** is the Git
+tree formed in a temporary index after removing the repository state-directory entry `.partitur`
+and every descendant. For a checkout, the temporary index starts from `HEAD` and stages its
+current contents before that removal. For a recorded candidate tree, the temporary index starts by
+reading that recorded tree before the same removal. In both cases the temporary index is written as
+a tree without modifying the user's index or `HEAD`.
+
+This is a comparison projection, not a change-set or candidate-identity projection. It excludes
+the state directory only: `partitur.yaml` remains in the application tree and in every comparison.
+The source score is protected under §2, but it is not part of the repository state directory.
+
+| Rule | Value |
+|---|---|
+| state-directory-paths | excluded |
+| candidate-identity | raw |
+| candidate-comparisons | projected |
+| cleanliness | state-directory paths allowed |
+| root-score | included |
+| candidate-diff | protected worktree paths forbidden |
+
+The checkout is clean for `apply` when it has no tracked or untracked change outside the state
+directory. Before `apply.started`, the core computes the **raw** candidate diff from `base_tree`
+to `result_tree`. If that diff names a protected worktree path under §2, `apply` refuses the
+candidate as a precondition and appends no application event. This diff check is independent of
+the application-tree comparison: it prevents `applicationPatch` from materializing a protected
+path even though the comparison projection omits state-directory paths.
+
+The following table is exhaustive: each named checkout-tree observation uses an application tree,
+and every listed candidate operand is projected immediately before its comparison.
+
+| Site | Timing | Required application-tree use |
+|---|---|---|
+| precondition | before `apply.started` | compare checkout with candidate `base_tree` |
+| post-apply | after applying the candidate patch | compare checkout with candidate `result_tree` |
+| rollback-before-restore | after a patch failure and before restore | compare checkout with candidate `base_tree` |
+| rollback-after-restore | after restoring touched paths | compare checkout with candidate `base_tree` |
+| recovery-cause-observation | before recording `apply.recovery_required` | observe checkout |
+| recovery-resolution | after recording the recovery cause | compare checkout with candidate `base_tree` and `result_tree` |
+
 **`apply` preconditions** (under the state lock): no other active run exists in the
 repository; the selected run is terminal `SUCCEEDED`; the checkout is clean and its
-**computed working tree** equals the candidate `base_tree`, computed with a temporary Git
-index over current tracked contents (modes, additions, deletions included) — the user's
-index and `HEAD` are never modified.
+**application tree** equals the candidate `base_tree` application tree. The checkout application
+tree is computed with a temporary Git index over current tracked contents (modes, additions,
+deletions included) — the user's index and `HEAD` are never modified.
 
 Applying is not a run state. The run stays terminal `SUCCEEDED` forever and the separate
 per-run **application projection** tracks shipping (§6). A normal `apply` starts a
@@ -3697,10 +3737,11 @@ transaction only from `NOT_APPLIED` or `FAILED_CLEAN`; in `APPLIED` it returns a
 1. record + fsync apply.started {candidate_id, before_tree, touched_paths, recovery info}
                                                                         → APPLYING
 2. dry-run the candidate patch, then apply it to the working checkout
-3. recompute the working tree:
-     == result_tree  → apply.completed                                  → APPLIED
+3. recompute the application tree:
+     == candidate result application tree  → apply.completed            → APPLIED
      otherwise       → restore exactly the touched paths to the base tree,
-                       re-verify the base hash, record apply.failed      → FAILED_CLEAN
+                       re-verify the base application tree, record apply.failed
+                                                                        → FAILED_CLEAN
 4. if a crash interrupts and recovery cannot verify the base was restored → RECOVERY_REQUIRED
 ```
 
@@ -3708,9 +3749,10 @@ transaction only from `NOT_APPLIED` or `FAILED_CLEAN`; in `APPLIED` it returns a
 under the lock and **appends the explicit recovery-required event** before recovery
 proceeds, so the projection always has an authoritative cause (Appendix B).
 `partitur apply --recover` then re-examines the checkout under the lock — tree equals
-`base_tree` → `apply.recovery_resolved {outcome: rolled_back}` → `FAILED_CLEAN`; tree equals
-`result_tree` → `apply.completed` → `APPLIED`; anything else stays `RECOVERY_REQUIRED`. The
-core never claims "nothing was applied" unless it verified it.
+the candidate base application tree → `apply.recovery_resolved {outcome: rolled_back}` →
+`FAILED_CLEAN`; tree equals the candidate result application tree → `apply.completed` →
+`APPLIED`; anything else stays `RECOVERY_REQUIRED`. The core never claims "nothing was applied"
+unless it verified it.
 
 **`promote-score`.** Only the latest revision of a `SUCCEEDED` run may be promoted, at most
 one *successful* promotion, and only after `apply.completed` for the same candidate.
@@ -3750,7 +3792,7 @@ authoritative surface for `application.state` and its cause.
 |---|---|
 | 0 | Application reached `APPLIED`, including the idempotent already-applied result |
 | 1 | Usage error |
-| 2 | Run selection or another command precondition was refused under the global exit-code table, including an application projection outside the legal normal or `--recover` entry states |
+| 2 | Run selection or another command precondition was refused under the global exit-code table, including an application projection outside the legal normal or `--recover` entry states or a candidate raw diff naming a protected worktree path |
 | 3 | Not used: `apply` performs neither validation nor amendment rejection |
 | 4 | Application reached `FAILED_CLEAN`: `apply.failed`, or a `--recover` that verified the restored base tree, recorded that outcome; stderr names the verified clean rollback |
 | 5 | `apply --recover` inspected a tree matching neither `base_tree` nor `result_tree` and left Application `RECOVERY_REQUIRED`; stderr names that application recovery state and cause; the run remains `SUCCEEDED` |
@@ -5484,8 +5526,8 @@ apply.failed    {
 }
 apply.recovery_required {
   txn_id, candidate_id, identity_versions,
-  observed_tree?,                 # what inspection under the lock actually found, when it
-                                  #   could be computed
+  observed_tree?,                 # application tree observed under the lock, when it could be
+                                  #   computed
   failure_detail
 }
 apply.recovery_resolved {
