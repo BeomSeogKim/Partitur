@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -29,6 +32,9 @@ const applyProtectedPathContents = "injected\n"
 // contents, same touched-path count, same depth, same leading dot. A refusal
 // keyed on how many paths the candidate touches, or on the path being nested,
 // or on the directory beginning with a dot, applies the control and is caught.
+// Cleanliness permits state-directory residue, so the state-directory case also
+// asserts that its candidate path is absent after refusal. A before/after state-
+// directory comparison would include the command's legitimate journal writes.
 func TestApplyRefusesACandidateThatWritesAProtectedPath(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
@@ -61,8 +67,11 @@ func TestApplyRefusesACandidateThatWritesAProtectedPath(t *testing.T) {
 			if code != 2 || contents != "" {
 				t.Fatalf("apply exit=%d contents=%q stderr=%q", code, contents, stderr)
 			}
-			if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-				t.Fatalf("refused apply changed the checkout: %q", status)
+			applyFixtureApplicationClean(t, root)
+			if testCase.path == ".partitur/injected.txt" {
+				if _, err := os.Stat(filepath.Join(root, testCase.path)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("refused apply materialized protected path %q: %v", testCase.path, err)
+				}
 			}
 			if started != 0 {
 				t.Fatal("refused apply opened a transaction")
@@ -83,9 +92,7 @@ func TestApplyRefusesACandidateThatRenamesAProtectedPath(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("apply exit=%d, want 2", code)
 	}
-	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-		t.Fatalf("refused apply changed the checkout: %q", status)
-	}
+	applyFixtureApplicationClean(t, root)
 	journal, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)

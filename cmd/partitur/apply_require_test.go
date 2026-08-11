@@ -168,10 +168,25 @@ func applyFixtureResultTree(t *testing.T, root, baseCommit string, files []apply
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	return resultTree
+}
+
+// applyFixtureGitIgnored reports the excludes entry that ignores path, or the
+// empty string when nothing does. `check-ignore` exits 1 for a path it does not
+// ignore, which is not an error here, so it cannot go through applyFixtureGit.
+func applyFixtureGitIgnored(t *testing.T, root, path string) string {
+	t.Helper()
+	command := exec.Command("git", "check-ignore", "--no-index", "-v", path)
+	command.Dir = root
+	output, err := command.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return ""
+		}
+		t.Fatalf("git check-ignore %q: %v", path, err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func applyFixtureGit(t *testing.T, root string, arguments ...string) string {
@@ -183,6 +198,48 @@ func applyFixtureGit(t *testing.T, root string, arguments ...string) string {
 		t.Fatalf("git %v: %v", arguments, err)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// applyFixtureProjectedTree independently projects a recorded fixture tree so
+// an end-to-end journal assertion can name the checkout observation it expects.
+func applyFixtureProjectedTree(t *testing.T, root, tree string) string {
+	t.Helper()
+	_, object, ok := strings.Cut(tree, ":")
+	if !ok {
+		t.Fatalf("tree %q is not qualified", tree)
+	}
+	index, err := os.CreateTemp(filepath.Join(root, ".git"), "partitur-test-index-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := index.Name()
+	if err := index.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(indexPath) })
+	environment := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	for _, arguments := range [][]string{
+		{"read-tree", object},
+		{"rm", "--cached", "--ignore-unmatch", "-r", ".partitur"},
+	} {
+		command := exec.Command("git", arguments...)
+		command.Dir = root
+		command.Env = environment
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", arguments, err, output)
+		}
+	}
+	command := exec.Command("git", "write-tree")
+	command.Dir = root
+	command.Env = environment
+	treeObject, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "git-" + applyFixtureGit(t, root, "rev-parse", "--show-object-format") + ":" + strings.TrimSpace(string(treeObject))
 }
 
 func (gate applyGate) gateMode() string {
@@ -473,6 +530,176 @@ func applyRequireCheckout(t *testing.T, root string) (int, string, string) {
 	return code, string(contents), stderr.String()
 }
 
+// applyFixtureApplicationClean asserts the same cleanliness boundary as §8:
+// state-directory residue is allowed, but every other status entry is a
+// checkout change.
+func applyFixtureApplicationClean(t *testing.T, root string) {
+	t.Helper()
+	status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all")
+	for _, line := range strings.Split(status, "\n") {
+		if line == "" {
+			continue
+		}
+		path := line[3:]
+		if path == ".partitur/" || strings.HasPrefix(path, ".partitur/") {
+			continue
+		}
+		t.Fatalf("checkout changed outside the state directory: %q", status)
+	}
+}
+
+type applyFixtureStateDirectoryShape struct {
+	name    string
+	tracked []string
+}
+
+// applyRequireFixtureWithStateDirectoryShape puts the fixture repository in a
+// state-directory shape production can create before recording its candidate.
+func applyRequireFixtureWithStateDirectoryShape(t *testing.T, shape applyFixtureStateDirectoryShape) (string, *runstore.Store) {
+	t.Helper()
+	root := t.TempDir()
+	baseCommit, baseTree := resumeFixtureRepository(t, root)
+	stateDirectory := filepath.Join(root, ".partitur")
+	if err := os.MkdirAll(stateDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDirectory, ".gitignore"), []byte(initIgnoreContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDirectory, "cast.yaml"), []byte("cast: \"0.1\"\nperformers: {}\nbindings: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range shape.tracked {
+		runGit(t, root, "add", path)
+	}
+	if len(shape.tracked) != 0 {
+		runGit(t, root, "commit", "--quiet", "-m", "fixture state directory")
+		format := applyFixtureGit(t, root, "rev-parse", "--show-object-format")
+		baseCommit = "git-" + format + ":" + applyFixtureGit(t, root, "rev-parse", "HEAD")
+		baseTree = "git-" + format + ":" + applyFixtureGit(t, root, "rev-parse", "HEAD^{tree}")
+	}
+	if tracked := strings.Fields(applyFixtureGit(t, root, "ls-files", ".partitur")); !slices.Equal(tracked, shape.tracked) {
+		t.Fatalf("tracked state-directory paths=%q, want %q", tracked, shape.tracked)
+	}
+	// An inherited global or system excludes file naming `.partitur/` would leave
+	// `ls-files` empty exactly as not committing does, so the untracked shape would
+	// silently become an *ignored* one — a fourth shape wearing the third's name,
+	// which is the substitution this matrix exists to catch.
+	for _, path := range []string{".partitur/.gitignore", ".partitur/cast.yaml"} {
+		if slices.Contains(shape.tracked, path) {
+			continue
+		}
+		if ignored := applyFixtureGitIgnored(t, root, path); ignored != "" {
+			t.Fatalf("fixture path %q is ignored: %s", path, ignored)
+		}
+	}
+	_, store := resumeFixtureWithInputsAtRepository(
+		t,
+		root,
+		baseCommit,
+		baseTree,
+		"",
+		applyRequireScore(applyGate{require: []string{"verified"}}),
+		[]byte("cast: \"0.1\"\nperformers:\n  reviewer:\n    adapter: adapter\n    model: model\nbindings:\n  reviewer:\n    performer: reviewer\n"),
+	)
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultTree := applyFixtureResultTree(t, root, input.BaseCommit, applyFixtureCandidateFiles)
+	appendApplyRequireRun(t, store, input.BaseTree, resultTree, applyGate{require: []string{"verified"}})
+	return root, store
+}
+
+// TestApplyRefusesACheckoutThatMovedAwayFromTheCandidateBase covers what the
+// six site tests do not: they prove each comparison uses projected operands,
+// not that the precondition comparison happens at all. Neutering it entirely
+// left the whole suite green — measured — because every other apply fixture
+// runs from a checkout already at the candidate base.
+//
+// The moved checkout is committed rather than left dirty, so `applicationClean`
+// cannot refuse it first and the refusal has to come from the tree comparison.
+// The unmoved case is the control: same shape, same candidate, same gate.
+func TestApplyRefusesACheckoutThatMovedAwayFromTheCandidateBase(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		moved bool
+	}{
+		{name: "checkout at the candidate base"},
+		{name: "checkout moved away", moved: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root, store := applyRequireFixtureWithStateDirectoryShape(t, applyFixtureStateDirectoryShape{
+				name: "tracked", tracked: []string{".partitur/.gitignore", ".partitur/cast.yaml"},
+			})
+			if testCase.moved {
+				if err := os.WriteFile(filepath.Join(root, "unrelated.txt"), []byte("moved\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, root, "add", "unrelated.txt")
+				runGit(t, root, "commit", "--quiet", "-m", "move the checkout off the candidate base")
+			}
+
+			code, contents, stderr := applyRequireCheckout(t, root)
+
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := countEvents(journal.Events, runstate.EventApplyStarted)
+			if !testCase.moved {
+				if code != 0 || contents != "candidate result\n" || stderr != "" || started != 1 {
+					t.Fatalf("apply exit=%d contents=%q stderr=%q started=%d", code, contents, stderr, started)
+				}
+				return
+			}
+			if code != 2 || contents != "" || started != 0 {
+				t.Fatalf("apply exit=%d contents=%q stderr=%q started=%d", code, contents, stderr, started)
+			}
+			applyFixtureApplicationClean(t, root)
+		})
+	}
+}
+
+// TestApplyProjectsBothApplicationTreeOperandsAcrossStateDirectoryShapes runs
+// the real command against repository shapes that differ only in how `.partitur`
+// participates in Git. A recorded candidate tree carries the state directory only
+// where the shape commits it, and the checkout tree stages it whenever it is
+// present at all, so the two disagree in opposite directions across the shapes.
+// §8 equality holds in every shape only when both operands are projected
+// immediately before comparison.
+func TestApplyProjectsBothApplicationTreeOperandsAcrossStateDirectoryShapes(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+	for _, shape := range []applyFixtureStateDirectoryShape{
+		{name: "tracked", tracked: []string{".partitur/.gitignore", ".partitur/cast.yaml"}},
+		{name: "untracked and unignored"},
+		{name: "mixed", tracked: []string{".partitur/cast.yaml"}},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			root, store := applyRequireFixtureWithStateDirectoryShape(t, shape)
+			applyFixtureApplicationClean(t, root)
+			code, stdout, stderr := runCommandBinary(t, partitur, root, applyKillEnvironment(t), "apply", "run-1")
+			if code != 0 || stdout != "" || stderr != "" {
+				t.Fatalf("apply exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if contents := applyReadFile(t, root, "applied.txt"); contents != "candidate result\n" {
+				t.Fatalf("applied checkout contents=%q", contents)
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countEvents(journal.Events, runstate.EventApplyStarted) != 1 || countEvents(journal.Events, runstate.EventApplyCompleted) != 1 {
+				t.Fatalf("application journal=%v", eventKinds(journal.Events))
+			}
+		})
+	}
+}
+
 func TestApplyRequireVerifiedMaterializesCandidate(t *testing.T) {
 	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
 	code, contents, stderr := applyRequireCheckout(t, root)
@@ -516,9 +743,7 @@ func TestApplyRequireVerifiedRefusesAcceptancePlanMismatch(t *testing.T) {
 			if code != 2 || contents != "" || !strings.Contains(stderr, "required verified evidence is absent") {
 				t.Fatalf("apply exit=%d contents=%q stderr=%q", code, contents, stderr)
 			}
-			if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-				t.Fatalf("refused apply changed the checkout: %q", status)
-			}
+			applyFixtureApplicationClean(t, root)
 			journal, err := store.ReadJournal("run-1")
 			if err != nil {
 				t.Fatal(err)
@@ -538,9 +763,7 @@ func TestApplyRequireVerifiedRefusesCriterionSpecHashMismatch(t *testing.T) {
 	if code != 2 || contents != "" || !strings.Contains(stderr, "required verified evidence is absent") {
 		t.Fatalf("apply exit=%d contents=%q stderr=%q", code, contents, stderr)
 	}
-	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-		t.Fatalf("refused apply changed the checkout: %q", status)
-	}
+	applyFixtureApplicationClean(t, root)
 	journal, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)
@@ -560,9 +783,7 @@ func TestApplyRequireVerifiedRefusesAcceptancePlanMissingCoreGeneratedCriterion(
 	if code != 2 || contents != "" || !strings.Contains(stderr, "required verified evidence is absent") {
 		t.Fatalf("apply exit=%d contents=%q stderr=%q", code, contents, stderr)
 	}
-	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-		t.Fatalf("refused apply changed the checkout: %q", status)
-	}
+	applyFixtureApplicationClean(t, root)
 	journal, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)
@@ -733,10 +954,26 @@ func TestApplyRequireEvidenceOffTheCandidateRefuses(t *testing.T) {
 // and exit 5 belongs to `--recover` alone.
 func TestApplySabotagedPatchFailsCleanly(t *testing.T) {
 	root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
+	assertApplySabotagedPatchFailsCleanly(t, root, store)
+}
+
+// TestApplySabotagedPatchFailsCleanlyWithTrackedStateDirectory makes the raw
+// candidate base differ from its application tree. The rollback observations
+// must compare against the projected base before and after restoration.
+func TestApplySabotagedPatchFailsCleanlyWithTrackedStateDirectory(t *testing.T) {
+	root, store := applyRequireFixtureWithStateDirectoryShape(t, applyFixtureStateDirectoryShape{
+		name:    "tracked",
+		tracked: []string{".partitur/.gitignore", ".partitur/cast.yaml"},
+	})
+	assertApplySabotagedPatchFailsCleanly(t, root, store)
+}
+
+func assertApplySabotagedPatchFailsCleanly(t *testing.T, root string, store *runstore.Store) {
+	t.Helper()
 	// The candidate creates applied.txt. Squat that path with different content,
 	// ignored so the computed worktree tree still equals the candidate base and
 	// the checkout still reads as clean.
-	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\napplied.txt\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("applied.txt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "applied.txt"), []byte("squatter\n"), 0o600); err != nil {
@@ -753,9 +990,7 @@ func TestApplySabotagedPatchFailsCleanly(t *testing.T) {
 	}
 	// Re-verify the base from disk, not from the exit code: nothing tracked may
 	// differ, so the checkout still computes to the candidate's base tree.
-	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-		t.Fatalf("checkout is not back at the base: %q", status)
-	}
+	applyFixtureApplicationClean(t, root)
 	journal, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)
@@ -775,7 +1010,7 @@ func TestApplySabotagedPatchFailsCleanly(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "applied.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	code, contents, stderr = applyRequireCheckout(t, root)
