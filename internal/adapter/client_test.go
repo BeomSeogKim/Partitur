@@ -318,7 +318,13 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 	armed := time.Now()
 	report := client.ProbeAll([]string{"fake"})
 	elapsed := time.Since(armed)
-	assertDiagnosticKinds(t, report, DiagnosticDeadline)
+	// This fixture owns only its recorded pids; host-wide enumeration may add
+	// cleanup_unverifiable for an unrelated process. The helper documents the
+	// sibling tests that reject a sweep reporting failure after succeeding.
+	assertDeadlineWithOnlyCleanupUnverifiable(t, report)
+	if len(report.Probes) != 0 {
+		t.Fatalf("failed report unexpectedly contains probes: %#v", report.Probes)
+	}
 	data, err := os.ReadFile(marker)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, sweepFixtureDiagnosis(marker, report, armed, elapsed))
@@ -557,6 +563,39 @@ func assertDiagnosticKinds(t *testing.T, report Report, want ...DiagnosticKind) 
 	}
 	if len(report.Probes) != 0 {
 		t.Fatalf("failed report unexpectedly contains probes: %#v", report.Probes)
+	}
+}
+
+// assertDeadlineWithOnlyCleanupUnverifiable keeps this tree-kill test scoped
+// to its fixture while rejecting unrelated diagnostics. It intentionally
+// permits at most one cleanup_unverifiable from a foreign process after both
+// fixture pids are gone.
+// TestDeadlineCoversResponseAndCleanExit asserts the exact diagnostic list;
+// the following Execute tests reject a post-sweep failure through their error
+// assertions: TestExecuteCancelAfterEOFStillArmsTheGrace,
+// TestExecuteCancellationBoundsBlockedRequestWrites,
+// TestExecuteCancelGraceTimeoutForcesVerifiedEmptySweep,
+// TestExecuteCancelResponseWithoutAcknowledgementTimesOutAndSweeps, and
+// TestExecuteCancelGraceSurvivesOutputAndProcessDrain.
+func assertDeadlineWithOnlyCleanupUnverifiable(t *testing.T, report Report) {
+	t.Helper()
+	deadlineCount := 0
+	cleanupUnverifiableCount := 0
+	for _, diagnostic := range report.Diagnostics {
+		switch diagnostic.Kind {
+		case DiagnosticDeadline:
+			deadlineCount++
+		case DiagnosticCleanupUnverifiable:
+			cleanupUnverifiableCount++
+		default:
+			t.Fatalf("diagnostic kinds = %#v, want deadline_exceeded and only cleanup_unverifiable extras", report.Diagnostics)
+		}
+	}
+	if deadlineCount != 1 {
+		t.Fatalf("deadline_exceeded diagnostics = %d, want 1; report = %#v", deadlineCount, report)
+	}
+	if cleanupUnverifiableCount > 1 {
+		t.Fatalf("cleanup_unverifiable diagnostics = %d, want at most 1; report = %#v", cleanupUnverifiableCount, report)
 	}
 }
 
