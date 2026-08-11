@@ -14,6 +14,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 )
 
@@ -94,6 +95,126 @@ func TestApplyKillCutsResolveToBothSides(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestApplyKillCutsResolveToBothSidesWithTrackedStateDirectory covers the
+// recovery observations whose raw candidate operands include `.partitur` but
+// whose checkout observations must not. It reads the first observation from
+// the journal because the durable cause, not a helper's local value, is §8's
+// recovery record.
+func TestApplyKillCutsResolveToBothSidesWithTrackedStateDirectory(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitur := buildE2EBinary(t, repositoryRoot, t.TempDir(), "partitur")
+
+	for _, cut := range []struct {
+		name        string
+		point       faultpoint.PointID
+		recoverCode int
+		observedRaw func(baseTree, resultTree string) string
+		resolution  runstate.EventType
+	}{
+		{
+			name:        "base checkout rolls back",
+			point:       faultpoint.PointApplyTransactionStarted,
+			recoverCode: 4,
+			observedRaw: func(baseTree, _ string) string {
+				return baseTree
+			},
+			resolution: runstate.EventApplyRecoveryResolved,
+		},
+		{
+			name:        "result checkout completes",
+			point:       faultpoint.PointApplyCheckoutMutated,
+			recoverCode: 0,
+			observedRaw: func(_, resultTree string) string {
+				return resultTree
+			},
+			resolution: runstate.EventApplyCompleted,
+		},
+	} {
+		t.Run(cut.name, func(t *testing.T) {
+			root, store := applyRequireFixtureWithStateDirectoryShape(t, applyFixtureStateDirectoryShape{
+				name:    "tracked",
+				tracked: []string{".partitur/.gitignore", ".partitur/cast.yaml"},
+			})
+			input, err := store.LoadRunInput("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := cut.observedRaw(input.BaseTree, mustApplyCandidateResultTree(t, store))
+			wantObserved := applyFixtureProjectedTree(t, root, raw)
+			if wantObserved == raw {
+				t.Fatalf("fixture did not separate raw tree %q from its application tree", raw)
+			}
+
+			environment := applyKillEnvironment(t)
+			killAtPoint(t, partitur, partiturRepository(t, root), environment, cut.point, "apply", "run-1")
+			code, stdout, stderr := runCommandBinary(t, partitur, root, environment, "apply", "run-1", "--recover")
+			if code != cut.recoverCode || stdout != "" {
+				t.Fatalf("recover exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed := applyRecoveryObservedTree(t, journal.Events)
+			if observed != wantObserved {
+				t.Fatalf("recovery cause observed_tree=%q, want projected checkout tree %q", observed, wantObserved)
+			}
+			if last := journal.Events[len(journal.Events)-1].Type; last != cut.resolution {
+				t.Fatalf("recovery journal tail=%v", eventKinds(journal.Events))
+			}
+		})
+	}
+}
+
+func mustApplyCandidateResultTree(t *testing.T, store *runstore.Store) string {
+	t.Helper()
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal.Events {
+		if event.Type != runstate.EventApplicationCandidateRecorded {
+			continue
+		}
+		var payload struct {
+			ResultTree string `json:"result_tree"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.ResultTree == "" {
+			t.Fatal("application candidate has no result tree")
+		}
+		return payload.ResultTree
+	}
+	t.Fatal("application candidate was not recorded")
+	return ""
+}
+
+func applyRecoveryObservedTree(t *testing.T, events []runstate.Event) string {
+	t.Helper()
+	for _, event := range events {
+		if event.Type != runstate.EventApplyRecoveryRequired {
+			continue
+		}
+		var payload struct {
+			ObservedTree string `json:"observed_tree"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.ObservedTree == "" {
+			t.Fatalf("recovery cause has no observed_tree: %s", event.Payload)
+		}
+		return payload.ObservedTree
+	}
+	t.Fatalf("recovery cause missing from journal: %v", eventKinds(events))
+	return ""
 }
 
 // TestApplyKillLeavingAnUnverifiableCheckoutHalts covers the third outcome: a
@@ -430,9 +551,7 @@ func TestApplyRestoresTouchedPathsAfterALateChange(t *testing.T) {
 			t.Fatalf("%s survived the rollback: %v", file.name, err)
 		}
 	}
-	if status := applyFixtureGit(t, root, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
-		t.Fatalf("checkout is not back at the base: %q", status)
-	}
+	applyFixtureApplicationClean(t, root)
 	journal, err := store.ReadJournal("run-1")
 	if err != nil {
 		t.Fatal(err)

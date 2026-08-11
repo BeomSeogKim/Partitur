@@ -77,9 +77,6 @@ func TestApplyMaterializesCandidateWithoutChangingHeadOrIndex(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "applied.txt")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte(".partitur/\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	compositionHash, err := workspace.CandidateCompositionHash(baseTree, nil, "")
 	if err != nil {
 		t.Fatal(err)

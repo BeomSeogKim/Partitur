@@ -128,7 +128,11 @@ func (store *Store) applyCandidate(
 	if err != nil {
 		return ApplicationResult{}, err
 	}
-	if beforeTree != candidate.BaseTree {
+	baseTree, err := applicationCandidateTree(ctx, store.root, candidate.BaseTree)
+	if err != nil {
+		return ApplicationResult{}, err
+	}
+	if beforeTree != baseTree {
 		return ApplicationResult{}, fmt.Errorf("%w: checkout tree %q does not match candidate base %q", ErrApplicationNotAllowed, beforeTree, candidate.BaseTree)
 	}
 	versions, err := applicationIdentityVersions(candidate)
@@ -166,7 +170,8 @@ func (store *Store) applyCandidate(
 	}
 	if patchErr == nil {
 		afterTree, treeErr := applicationWorktreeTree(ctx, store.root)
-		if treeErr == nil && afterTree == candidate.ResultTree {
+		resultTree, resultTreeErr := applicationCandidateTree(ctx, store.root, candidate.ResultTree)
+		if treeErr == nil && resultTreeErr == nil && afterTree == resultTree {
 			err := appendApplicationEvent(transaction, state, runstate.EventApplyCompleted, map[string]any{
 				"txn_id": txnID, "candidate_id": candidate.ID, "result_tree": candidate.ResultTree, "identity_versions": versions,
 			})
@@ -174,6 +179,8 @@ func (store *Store) applyCandidate(
 		}
 		if treeErr != nil {
 			patchErr = treeErr
+		} else if resultTreeErr != nil {
+			patchErr = resultTreeErr
 		} else {
 			patchErr = fmt.Errorf("applied checkout tree %q does not match candidate result %q", afterTree, candidate.ResultTree)
 		}
@@ -181,7 +188,8 @@ func (store *Store) applyCandidate(
 	// A patch that never attached leaves the base tree already in place, and
 	// reversing work that was never done fails. Only undo what was laid down.
 	restored, err := applicationWorktreeTree(ctx, store.root)
-	if err == nil && restored != candidate.BaseTree {
+	baseTree, baseTreeErr := applicationCandidateTree(ctx, store.root, candidate.BaseTree)
+	if err == nil && baseTreeErr == nil && restored != baseTree {
 		if restoreErr := applicationRestore(ctx, store.root, candidate.BaseTree, touched); restoreErr != nil {
 			// Not RECOVERY_REQUIRED: §8 reserves that — and exit 5 — for what
 			// `--recover` concludes after a crash. A normal apply that cannot
@@ -190,11 +198,15 @@ func (store *Store) applyCandidate(
 			return ApplicationResult{}, fmt.Errorf("apply failed: %v; rollback failed: %v", patchErr, restoreErr)
 		}
 		restored, err = applicationWorktreeTree(ctx, store.root)
+		baseTree, baseTreeErr = applicationCandidateTree(ctx, store.root, candidate.BaseTree)
 	}
 	if err != nil {
 		return ApplicationResult{}, fmt.Errorf("rollback tree unverifiable: %v", err)
 	}
-	if restored != candidate.BaseTree {
+	if baseTreeErr != nil {
+		return ApplicationResult{}, fmt.Errorf("rollback candidate base tree unverifiable: %v", baseTreeErr)
+	}
+	if restored != baseTree {
 		return ApplicationResult{}, fmt.Errorf("rollback tree %q does not match base %q", restored, candidate.BaseTree)
 	}
 	err = appendApplicationEvent(transaction, state, runstate.EventApplyFailed, map[string]any{
@@ -237,13 +249,21 @@ func (store *Store) recoverApplication(ctx context.Context, transaction *Txn, st
 	if treeErr != nil {
 		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: treeErr.Error()}, nil
 	}
+	baseTree, err := applicationCandidateTree(ctx, store.root, candidate.BaseTree)
+	if err != nil {
+		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: err.Error()}, nil
+	}
+	resultTree, err := applicationCandidateTree(ctx, store.root, candidate.ResultTree)
+	if err != nil {
+		return ApplicationResult{Outcome: ApplicationOutcomeRecoveryRequired, Detail: err.Error()}, nil
+	}
 	switch tree {
-	case candidate.BaseTree:
+	case baseTree:
 		err := appendApplicationEvent(transaction, state, runstate.EventApplyRecoveryResolved, map[string]any{
 			"txn_id": state.Application.TransactionID, "candidate_id": candidate.ID, "outcome": "rolled_back", "identity_versions": versions,
 		})
 		return ApplicationResult{Outcome: ApplicationOutcomeFailedClean}, err
-	case candidate.ResultTree:
+	case resultTree:
 		err := appendApplicationEvent(transaction, state, runstate.EventApplyCompleted, map[string]any{
 			"txn_id": state.Application.TransactionID, "candidate_id": candidate.ID, "result_tree": candidate.ResultTree, "identity_versions": versions,
 		})
@@ -482,6 +502,8 @@ func applicationTemporaryIndex(ctx context.Context, root string) (string, func()
 	return path, func() { _ = os.Remove(path) }, nil
 }
 
+// applicationWorktreeTree computes the checkout-side application tree without
+// touching the user's index or HEAD.
 func applicationWorktreeTree(ctx context.Context, root string) (string, error) {
 	path, cleanup, err := applicationTemporaryIndex(ctx, root)
 	if err != nil {
@@ -495,10 +517,35 @@ func applicationWorktreeTree(ctx context.Context, root string) (string, error) {
 	if err := applicationGit(ctx, root, environment, nil, "add", "-A"); err != nil {
 		return "", err
 	}
+	return applicationProjectedIndexTree(ctx, root, environment)
+}
+
+// applicationCandidateTree projects a recorded candidate tree through the same
+// state-directory removal as the checkout-side application tree.
+func applicationCandidateTree(ctx context.Context, root, tree string) (string, error) {
+	object, err := applicationObjectID(tree)
+	if err != nil {
+		return "", err
+	}
+	path, cleanup, err := applicationTemporaryIndex(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	environment := []string{"GIT_INDEX_FILE=" + path}
+	if err := applicationGit(ctx, root, environment, nil, "read-tree", object); err != nil {
+		return "", err
+	}
+	return applicationProjectedIndexTree(ctx, root, environment)
+}
+
+// applicationProjectedIndexTree removes state-directory entries from an
+// already seeded temporary index and writes the resulting application tree.
+func applicationProjectedIndexTree(ctx context.Context, root string, environment []string) (string, error) {
 	if err := applicationGit(ctx, root, environment, nil, "rm", "--cached", "--ignore-unmatch", "-r", ".partitur"); err != nil {
 		return "", err
 	}
-	tree, err := applicationGitOutput(ctx, root, environment, nil, "write-tree")
+	treeObject, err := applicationGitOutput(ctx, root, environment, nil, "write-tree")
 	if err != nil {
 		return "", err
 	}
@@ -506,7 +553,7 @@ func applicationWorktreeTree(ctx context.Context, root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "git-" + strings.TrimSpace(string(format)) + ":" + strings.TrimSpace(string(tree)), nil
+	return "git-" + strings.TrimSpace(string(format)) + ":" + strings.TrimSpace(string(treeObject)), nil
 }
 
 func applicationTouchedPaths(ctx context.Context, root, baseTree, resultTree string) ([]string, error) {
