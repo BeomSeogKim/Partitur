@@ -444,16 +444,19 @@ func TestFixtureReaperIsRegisteredByInstallFake(t *testing.T) {
 	if os.Getenv(fakeReaperRegistrationEnv) != "" {
 		// This matches execute_test.go's direct setup: installFake is the only
 		// registration point, and the client supplies no fixture owner identity.
+		// hang_no_response ignores SIGTERM and never exits on its own, while the
+		// injected session controller cannot sweep it. That makes it certain the
+		// cleanup reaper sees a survivor; premature_eof could exit before cleanup.
 		directory := t.TempDir()
 		installFake(t, directory, "fake")
 		client := newClient([]string{
 			"PATH=" + directory,
-			fakeModeEnv + "=premature_eof",
+			fakeModeEnv + "=hang_no_response",
 			fakeFixtureDirectoryEnv + "=" + directory,
 		}, 200*time.Millisecond, 20*time.Millisecond)
 		client.sessions = failingSessionController{}
 		report := client.ProbeAll([]string{"fake"})
-		assertDiagnosticKinds(t, report, DiagnosticCleanupUnverifiable, DiagnosticPrematureEOF)
+		assertDiagnosticKinds(t, report, DiagnosticCleanupUnverifiable, DiagnosticDeadline)
 		return
 	}
 
@@ -569,7 +572,7 @@ func TestSessionLeadership(t *testing.T) {
 }
 
 func TestCleanupUnverifiableIsAggregated(t *testing.T) {
-	client, _ := newFakeClientWithFixtureDirectory(t, "premature_eof", "", 200*time.Millisecond, 20*time.Millisecond)
+	client := fakeClient(t, "premature_eof", time.Millisecond)
 	client.sessions = failingSessionController{}
 	report := client.ProbeAll([]string{"fake"})
 	assertDiagnosticKinds(t, report, DiagnosticCleanupUnverifiable, DiagnosticPrematureEOF)
