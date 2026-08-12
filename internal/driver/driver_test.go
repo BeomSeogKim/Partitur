@@ -761,6 +761,156 @@ func TestLiveBetweenUnitEntryRejectsOpenExecution(t *testing.T) {
 	t.Fatal("open execution interval entered live between-unit path")
 }
 
+func TestLiveBetweenUnitEntryAcceptsMatchingLeaseAndAuthority(t *testing.T) {
+	_, store, authority, start := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !liveBetweenUnitEntry(input.Projection, store, authority) {
+		t.Fatal("matching lease and authority did not enter live between-unit path")
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsLeaseReadError(t *testing.T) {
+	// Construction-only lock: ReadLease returns a zero lease with its error, so
+	// removing the err operand is still rejected by later lease operands. The
+	// matching control is TestLiveBetweenUnitEntryAcceptsMatchingLeaseAndAuthority.
+	preparation, store, authority, start := liveEntryFixture(t)
+	leasePath := filepath.Join(preparation.RepositoryRoot, ".partitur", "runs", string(start.RunID), "driver.lease")
+	if err := os.WriteFile(leasePath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveBetweenUnitEntry(input.Projection, store, authority) {
+		t.Fatal("unreadable lease entered live between-unit path")
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsAbsentLease(t *testing.T) {
+	// Construction-only lock: an absent lease is also the zero lease, so removing
+	// !present remains rejected by later lease operands. The matching control is
+	// TestLiveBetweenUnitEntryAcceptsMatchingLeaseAndAuthority.
+	_, store, authority, start := liveEntryFixture(t)
+	removeLiveEntryLease(t, store, authority, start.RunID)
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveBetweenUnitEntry(input.Projection, store, authority) {
+		t.Fatal("absent lease entered live between-unit path")
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsNilProjectedOwner(t *testing.T) {
+	// Removing this operand makes the following PID dereference panic. The
+	// mutation runner treats a panic as a non-result, so its operator anchor uses
+	// TestLiveBetweenUnitEntryAcceptsMatchingLeaseAndAuthority.
+	_, store, authority, start := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Projection.State.Authority.Owner = nil
+	if liveBetweenUnitEntry(input.Projection, store, authority) {
+		t.Fatal("nil projected authority owner entered live between-unit path")
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsProjectedEpochMismatch(t *testing.T) {
+	for _, delta := range []int64{-1, 1} {
+		t.Run(fmt.Sprintf("delta_%d", delta), func(t *testing.T) {
+			_, store, authority, start := liveEntryFixture(t)
+			defer authority.Release()
+			input, err := store.LoadRunInput(start.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input.Projection.State.Authority.Epoch = uint64(int64(input.Projection.State.Authority.Epoch) + delta)
+			if liveBetweenUnitEntry(input.Projection, store, authority) {
+				t.Fatal("projected authority epoch mismatch entered live between-unit path")
+			}
+		})
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsProjectedPIDMismatch(t *testing.T) {
+	for _, delta := range []int{-1, 1} {
+		t.Run(fmt.Sprintf("delta_%d", delta), func(t *testing.T) {
+			_, store, authority, start := liveEntryFixture(t)
+			defer authority.Release()
+			input, err := store.LoadRunInput(start.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input.Projection.State.Authority.Owner.PID += delta
+			if liveBetweenUnitEntry(input.Projection, store, authority) {
+				t.Fatal("projected authority PID mismatch entered live between-unit path")
+			}
+		})
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsProjectedStartIdentityMismatch(t *testing.T) {
+	_, store, authority, start := liveEntryFixture(t)
+	defer authority.Release()
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Projection.State.Authority.Owner.Start = nil
+	if liveBetweenUnitEntry(input.Projection, store, authority) {
+		t.Fatal("projected authority start-identity mismatch entered live between-unit path")
+	}
+}
+
+func TestLiveBetweenUnitEntryRejectsDriverHeldLeaseIdentityMismatch(t *testing.T) {
+	_, store, authority, start := liveEntryFixture(t)
+	lease := removeLiveEntryLease(t, store, authority, start.RunID)
+	lease.Token += "-replacement"
+	if err := store.Mutate(start.RunID, "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("test.live_entry.replace_lease").CreateLease(true, lease)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(start.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Authority.Epoch != lease.Epoch ||
+		input.Projection.State.Authority.Owner.PID != lease.PID ||
+		!reflect.DeepEqual(input.Projection.State.Authority.Owner.Start, lease.Start) {
+		t.Fatal("fixture changed a projected authority field checked before MatchesLease")
+	}
+	if authority.MatchesLease(lease.Identity()) {
+		t.Fatal("replacement lease unexpectedly matches the driver-held token")
+	}
+	if liveBetweenUnitEntry(input.Projection, store, authority) {
+		t.Fatal("lease that mismatches the driver-held identity entered live between-unit path")
+	}
+}
+
+func removeLiveEntryLease(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID) runstore.Lease {
+	t.Helper()
+	lease, present, err := store.ReadLease(runID)
+	if err != nil || !present {
+		t.Fatalf("read fixture lease: present=%t err=%v", present, err)
+	}
+	if err := store.Mutate(runID, "", func(transaction *runstore.Txn) error {
+		_, err := transaction.At("test.live_entry.remove_lease").CompareRemoveLease(lease.Identity())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return lease
+}
+
 func TestLiveMovementCompositionTerminalBindsItsEvidence(t *testing.T) {
 	_, store, authority, started := liveEntryFixture(t)
 	defer authority.Release()
