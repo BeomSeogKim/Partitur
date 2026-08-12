@@ -24,11 +24,17 @@ import (
 )
 
 const (
-	fakeModeEnv            = "PARTITUR_ADAPTER_TEST_MODE"
-	fakeMarkerEnv          = "PARTITUR_ADAPTER_TEST_MARKER"
-	vendorModeEnv          = "PARTITUR_EXECUTE_VENDOR_MODE"
-	vendorOutEnv           = "PARTITUR_EXECUTE_VENDOR_OUTPUT"
-	incidentalTestDeadline = 10 * time.Second
+	fakeModeEnv              = "PARTITUR_ADAPTER_TEST_MODE"
+	fakeMarkerEnv            = "PARTITUR_ADAPTER_TEST_MARKER"
+	fakeFixtureDirectoryEnv  = "PARTITUR_ADAPTER_TEST_FIXTURE_DIRECTORY"
+	fakeFixtureOwnerPIDEnv   = "PARTITUR_ADAPTER_TEST_FIXTURE_OWNER_PID"
+	fakeFixtureOwnerStartEnv = "PARTITUR_ADAPTER_TEST_FIXTURE_OWNER_START"
+	fakeBrokenSweepEnv       = "PARTITUR_ADAPTER_TEST_BREAK_FIXTURE_SWEEP"
+	fakeInterruptMarkerEnv   = "PARTITUR_ADAPTER_TEST_INTERRUPT_MARKER"
+	vendorModeEnv            = "PARTITUR_EXECUTE_VENDOR_MODE"
+	vendorOutEnv             = "PARTITUR_EXECUTE_VENDOR_OUTPUT"
+	incidentalTestDeadline   = 10 * time.Second
+	fakeFixtureRecordPrefix  = ".partitur-adapter-fixture-"
 	// One suffix per fixture step, never rewritten: a single stage file would
 	// have to be truncated and replaced, and a sweep landing inside that
 	// rewrite leaves a file whose contents say nothing.
@@ -349,6 +355,153 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 	}
 }
 
+func TestFixtureChildInheritsTestOwnerIdentity(t *testing.T) {
+	// The child must watch the test binary, not its spawning fixture. Its
+	// durable record is written before the owner watch can run, so this proves
+	// the configured identity independently of cleanup timing.
+	marker := filepath.Join(t.TempDir(), "pids")
+	wantOwner, err := processByPID(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, fixtureDirectory := newFakeClientWithFixtureDirectory(
+		t,
+		"session_tree_hang",
+		marker,
+		50*time.Millisecond,
+		40*time.Millisecond,
+	)
+	report := client.ProbeAll([]string{"fake"})
+	assertDeadlineWithOnlyCleanupUnverifiable(t, report)
+
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		t.Fatalf("marker = %q, want the fake's pid and its child's", data)
+	}
+	childPID, err := strconv.Atoi(fields[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := readFakeFixtureRecord(t, fixtureDirectory, childPID)
+	if got, want := record.owner, (fakeFixtureOwner{pid: os.Getpid(), start: wantOwner.Start}); got != want {
+		t.Fatalf("child fixture owner = %#v, want test binary %#v", got, want)
+	}
+}
+
+func TestFixtureReaperReportsSurvivingSessionTree(t *testing.T) {
+	if os.Getenv(fakeBrokenSweepEnv) != "" {
+		marker := filepath.Join(t.TempDir(), "pids")
+		client := deadlineSubjectFakeClient(
+			t,
+			"session_tree_hang",
+			marker,
+			50*time.Millisecond,
+			40*time.Millisecond,
+		)
+		client.sessions = parentOnlySessionController{}
+		report := client.ProbeAll([]string{"fake"})
+		assertDiagnosticKinds(t, report, DiagnosticDeadline)
+		data, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fields := strings.Fields(string(data)); len(fields) != 2 {
+			t.Fatalf("marker = %q, want the fake's pid and its child's", data)
+		}
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestFixtureReaperReportsSurvivingSessionTree$")
+	command.Env = replaceEnvironment(os.Environ(), map[string]string{fakeBrokenSweepEnv: "1"})
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("broken session sweep passed:\n%s", output)
+	}
+	if got := strings.Count(string(output), "fixture survived assertions"); got != 1 {
+		t.Fatalf("broken session sweep fixture failures = %d, want 1 child fixture:\n%s", got, output)
+	}
+}
+
+func TestFixtureOwnerWatchReapsAfterTestBinarySIGKILL(t *testing.T) {
+	if marker := os.Getenv(fakeInterruptMarkerEnv); marker != "" {
+		deadlineSubjectFakeClient(t, "session_tree_hang", marker, 10*time.Second, 40*time.Millisecond).
+			ProbeAll([]string{"fake"})
+		t.Fatal("fixture owner survived its intended SIGKILL")
+	}
+
+	marker := filepath.Join(t.TempDir(), "pids")
+	command := exec.Command(os.Args[0], "-test.run=^TestFixtureOwnerWatchReapsAfterTestBinarySIGKILL$")
+	command.Env = replaceEnvironment(os.Environ(), map[string]string{fakeInterruptMarkerEnv: marker})
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fields := waitForFixturePIDs(t, marker)
+	fixtures := make([]processRecord, len(fields))
+	for index, field := range fields {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		process, err := processByPID(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixtures[index] = process
+	}
+	t.Cleanup(func() {
+		for _, fixture := range fixtures {
+			if process, err := processByPID(fixture.PID); err == nil && !process.IsZombie && process.Start == fixture.Start {
+				t.Errorf("fixture %d survived test-owner SIGKILL; reaping", fixture.PID)
+				_ = syscall.Kill(fixture.PID, syscall.SIGKILL)
+			}
+		}
+	})
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("fixture owner survived SIGKILL")
+	}
+	for _, fixture := range fixtures {
+		deadline := time.Now().Add(time.Second)
+		for {
+			process, err := processByPID(fixture.PID)
+			if isProcessGone(err) || err == nil && (process.IsZombie || process.Start != fixture.Start) {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("fixture %d survived test-owner SIGKILL", fixture.PID)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
+func waitForFixturePIDs(t *testing.T, marker string) []string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(marker)
+		if err == nil {
+			fields := strings.Fields(string(data))
+			if len(fields) == 2 {
+				return fields
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("fixture marker %q was not written with two pids", marker)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestSessionLeadership(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "identity")
 	report := fakeClientWithMarker(t, "session_identity", marker, 20*time.Millisecond).ProbeAll([]string{"fake"})
@@ -469,12 +622,22 @@ func TestSortReportDeterministic(t *testing.T) {
 
 type failingSessionController struct{}
 
+type parentOnlySessionController struct{}
+
 func (failingSessionController) verifyEmpty(int, string) (bool, error) {
 	return false, errors.New("injected enumeration failure")
 }
 
 func (failingSessionController) terminate(int, string, time.Duration) error {
 	return errors.New("injected enumeration failure")
+}
+
+func (parentOnlySessionController) verifyEmpty(int, string) (bool, error) {
+	return false, nil
+}
+
+func (parentOnlySessionController) terminate(sid int, _ string, _ time.Duration) error {
+	return syscall.Kill(sid, syscall.SIGKILL)
 }
 
 func fakeClient(t *testing.T, mode string, grace time.Duration) *Client {
@@ -499,14 +662,33 @@ func deadlineSubjectFakeClient(
 }
 
 func newFakeClient(t *testing.T, mode, marker string, deadline, grace time.Duration) *Client {
+	client, _ := newFakeClientWithFixtureDirectory(t, mode, marker, deadline, grace)
+	return client
+}
+
+func newFakeClientWithFixtureDirectory(
+	t *testing.T,
+	mode, marker string,
+	deadline, grace time.Duration,
+) (*Client, string) {
 	t.Helper()
 	directory := t.TempDir()
 	installFake(t, directory, "fake")
-	environment := []string{"PATH=" + directory, fakeModeEnv + "=" + mode}
+	owner, err := processByPID(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := []string{
+		"PATH=" + directory,
+		fakeModeEnv + "=" + mode,
+		fakeFixtureDirectoryEnv + "=" + directory,
+		fakeFixtureOwnerPIDEnv + "=" + strconv.Itoa(owner.PID),
+		fakeFixtureOwnerStartEnv + "=" + owner.Start,
+	}
 	if marker != "" {
 		environment = append(environment, fakeMarkerEnv+"="+marker)
 	}
-	return newClient(environment, deadline, grace)
+	return newClient(environment, deadline, grace), directory
 }
 
 func installFake(t *testing.T, directory, adapterID string) {
@@ -519,6 +701,7 @@ func installFake(t *testing.T, directory, adapterID string) {
 	if err := os.Symlink(executable, path); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { reapFakeFixtures(t, directory) })
 }
 
 func buildAdapter(t *testing.T, directory, adapterID string) {
@@ -699,7 +882,142 @@ func environmentEntryName(entry string) string {
 	return entry
 }
 
+type fakeFixtureOwner struct {
+	pid   int
+	start string
+}
+
+type fakeFixture struct {
+	directory string
+	owner     fakeFixtureOwner
+}
+
+type fakeFixtureRecord struct {
+	process processRecord
+	owner   fakeFixtureOwner
+}
+
+func startFakeFixture() fakeFixture {
+	directory := os.Getenv(fakeFixtureDirectoryEnv)
+	if directory == "" {
+		directory = filepath.Dir(os.Args[0])
+	}
+	fixture := fakeFixture{directory: directory, owner: fakeFixtureOwnerFromEnvironment()}
+	if fixture.owner.pid <= 0 {
+		fixture.owner.pid = os.Getppid()
+		if owner, err := processByPID(fixture.owner.pid); err == nil {
+			fixture.owner.start = owner.Start
+		}
+	}
+	if process, err := processByPID(os.Getpid()); err == nil {
+		recordFakeFixture(directory, process, fixture.owner)
+	}
+	go fixture.watchOwner()
+	return fixture
+}
+
+func fakeFixtureOwnerFromEnvironment() fakeFixtureOwner {
+	pid, err := strconv.Atoi(os.Getenv(fakeFixtureOwnerPIDEnv))
+	if err != nil || pid <= 0 {
+		return fakeFixtureOwner{}
+	}
+	return fakeFixtureOwner{pid: pid, start: os.Getenv(fakeFixtureOwnerStartEnv)}
+}
+
+func (fixture fakeFixture) watchOwner() {
+	if fixture.owner.pid <= 0 {
+		return
+	}
+	for {
+		time.Sleep(20 * time.Millisecond)
+		if fixture.owner.start == "" {
+			if err := syscall.Kill(fixture.owner.pid, 0); errors.Is(err, syscall.ESRCH) {
+				os.Exit(0)
+			}
+			continue
+		}
+		owner, err := processByPID(fixture.owner.pid)
+		if isProcessGone(err) || err == nil && (owner.IsZombie || owner.Start != fixture.owner.start) {
+			os.Exit(0)
+		}
+	}
+}
+
+func recordFakeFixture(directory string, process processRecord, owner fakeFixtureOwner) {
+	path := filepath.Join(directory, fakeFixtureRecordPrefix+strconv.Itoa(process.PID))
+	_ = os.WriteFile(path, []byte(fmt.Sprintf("%d\t%s\t%d\t%s\n", process.PID, process.Start, owner.pid, owner.start)), 0o600)
+}
+
+func readFakeFixtureRecord(t *testing.T, directory string, pid int) fakeFixtureRecord {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(directory, fakeFixtureRecordPrefix+strconv.Itoa(pid)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := parseFakeFixtureRecord(data)
+	if err != nil {
+		t.Fatalf("fake fixture record for %d: %v", pid, err)
+	}
+	return record
+}
+
+func reapFakeFixtures(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Errorf("read fake fixture directory %q: %v", directory, err)
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), fakeFixtureRecordPrefix) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Errorf("read fake fixture record %q: %v", entry.Name(), err)
+			continue
+		}
+		record, err := parseFakeFixtureRecord(data)
+		if err != nil {
+			t.Errorf("fake fixture record %q: %v", entry.Name(), err)
+			continue
+		}
+		process, err := processByPID(record.process.PID)
+		if isProcessGone(err) || err == nil && (process.IsZombie || process.Start != record.process.Start) {
+			continue
+		}
+		if err != nil {
+			t.Errorf("inspect fake fixture %d: %v", record.process.PID, err)
+			continue
+		}
+		t.Errorf("partitur-adapter fixture survived assertions: pid=%d start=%s; reaping", record.process.PID, process.Start)
+		if err := syscall.Kill(record.process.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("reap fake fixture %d: %v", record.process.PID, err)
+		}
+	}
+}
+
+func parseFakeFixtureRecord(data []byte) (fakeFixtureRecord, error) {
+	fields := strings.Split(strings.TrimSuffix(string(data), "\n"), "\t")
+	if len(fields) != 4 {
+		return fakeFixtureRecord{}, fmt.Errorf("%q, want process and owner identities", data)
+	}
+	processPID, err := strconv.Atoi(fields[0])
+	if err != nil || processPID <= 0 {
+		return fakeFixtureRecord{}, fmt.Errorf("process pid = %q", fields[0])
+	}
+	ownerPID, err := strconv.Atoi(fields[2])
+	if err != nil || ownerPID <= 0 {
+		return fakeFixtureRecord{}, fmt.Errorf("owner pid = %q", fields[2])
+	}
+	return fakeFixtureRecord{
+		process: processRecord{PID: processPID, Start: fields[1]},
+		owner:   fakeFixtureOwner{pid: ownerPID, start: fields[3]},
+	}, nil
+}
+
 func runFakeAdapter(mode string) {
+	fixture := startFakeFixture()
 	adapterID := strings.TrimPrefix(filepath.Base(os.Args[0]), "partitur-adapter-")
 	marker := os.Getenv(fakeMarkerEnv)
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
@@ -926,7 +1244,12 @@ func runFakeAdapter(mode string) {
 		}
 		stamp(sweepStageSpawning)
 		child := exec.Command(os.Args[0])
-		child.Env = replaceEnvironment(os.Environ(), map[string]string{fakeModeEnv: "child_hang"})
+		child.Env = replaceEnvironment(os.Environ(), map[string]string{
+			fakeModeEnv:              "child_hang",
+			fakeFixtureDirectoryEnv:  fixture.directory,
+			fakeFixtureOwnerPIDEnv:   strconv.Itoa(fixture.owner.pid),
+			fakeFixtureOwnerStartEnv: fixture.owner.start,
+		})
 		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := child.Start(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "spawn failed: %v\n", err)
