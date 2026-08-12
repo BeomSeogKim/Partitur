@@ -387,11 +387,10 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 
 func TestFixtureChildInheritsTestOwnerIdentity(t *testing.T) {
 	if marker := os.Getenv(fakeParentInterruptMarkerEnv); marker != "" {
-		watchNestedTestOwnerLease(t)
 		// These fixtures deliberately carry this nested test binary's identity.
 		// The parent starts the child directly, without Client cleanup, so the
 		// outer test can kill only that parent and observe child inheritance.
-		directory := filepath.Dir(marker)
+		directory := requireFakeFixtureGuardDirectory(t)
 		installFake(t, directory, "fake")
 		owner, err := processByPID(os.Getpid())
 		if err != nil {
@@ -423,6 +422,7 @@ func TestFixtureChildInheritsTestOwnerIdentity(t *testing.T) {
 	}
 	command.Env = replaceEnvironment(os.Environ(), map[string]string{
 		fakeParentInterruptMarkerEnv: marker,
+		fakeFixtureDirectoryEnv:      directory,
 		fakeNestedOwnerPIDEnv:        strconv.Itoa(owner.PID),
 		fakeNestedOwnerStartEnv:      owner.Start,
 	})
@@ -496,7 +496,6 @@ func TestFixtureChildInheritsTestOwnerIdentity(t *testing.T) {
 
 func TestFixtureReaperReportsSurvivingSessionTree(t *testing.T) {
 	if os.Getenv(fakeBrokenSweepEnv) != "" {
-		watchNestedTestOwnerLease(t)
 		// These fixtures deliberately carry the outer test-binary identity, not
 		// this nested binary's. The nested lease still makes this binary die if
 		// the outer binary is killed, but the fixtures must outlive this run so
@@ -560,7 +559,6 @@ func TestFixtureReaperReportsSurvivingSessionTree(t *testing.T) {
 
 func TestFixtureReaperIsRegisteredByInstallFake(t *testing.T) {
 	if os.Getenv(fakeReaperRegistrationEnv) != "" {
-		watchNestedTestOwnerLease(t)
 		// This matches execute_test.go's direct setup: installFake is the only
 		// registration point, and the client supplies no fixture owner identity.
 		// hang_no_response ignores SIGTERM and never exits on its own, while the
@@ -645,7 +643,6 @@ func TestFixtureOwnerWatchReapsAfterTestBinarySIGKILL(t *testing.T) {
 	}
 
 	if marker := os.Getenv(fakeInterruptMarkerEnv); marker != "" {
-		watchNestedTestOwnerLease(t)
 		// The hand-built client intentionally omits the owner environment, so
 		// startFakeFixture must select this test binary through its PPID fallback.
 		directory := requireFakeFixtureGuardDirectory(t)
@@ -661,10 +658,16 @@ func TestFixtureOwnerWatchReapsAfterTestBinarySIGKILL(t *testing.T) {
 
 	directory := t.TempDir()
 	marker := filepath.Join(directory, "pids")
+	owner, err := processByPID(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command(os.Args[0], "-test.run=^TestFixtureOwnerWatchReapsAfterTestBinarySIGKILL$")
 	command.Env = replaceEnvironment(os.Environ(), map[string]string{
 		fakeOuterInterruptMarkerEnv: marker,
 		fakeFixtureDirectoryEnv:     directory,
+		fakeNestedOwnerPIDEnv:       strconv.Itoa(owner.PID),
+		fakeNestedOwnerStartEnv:     owner.Start,
 	})
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
@@ -680,8 +683,7 @@ func TestFixtureOwnerWatchReapsAfterTestBinarySIGKILL(t *testing.T) {
 	})
 	fields := waitForFixturePIDs(t, marker)
 	innerPID = waitForFixturePID(t, marker+".inner")
-	innerProcessPID := innerPID
-	inner, err := processByPID(innerProcessPID)
+	inner, err := processByPID(innerPID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,6 +738,7 @@ func waitForFixturePID(t *testing.T, marker string) int {
 
 func requireFakeFixtureGuardDirectory(t *testing.T) string {
 	t.Helper()
+	watchNestedTestOwnerLease(t)
 	directory := os.Getenv(fakeFixtureDirectoryEnv)
 	if directory == "" {
 		t.Fatal("fixture guard directory is absent")
