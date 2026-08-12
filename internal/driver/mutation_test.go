@@ -141,6 +141,27 @@ func TestMutationAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t *t
 	assertDriverMutationKilled(t, "TestCompleteAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains", goEnvironment, "driver.go", "} else if present {", "} else if present && false { // mutation: normal driver authority ignored")
 }
 
+func TestMutationLiveBetweenUnitEntryRejectsEachLeaseAndAuthorityConjunct(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	for _, test := range []struct {
+		name, behaviouralTest, before, after string
+	}{
+		{"lease read error", "TestLiveBetweenUnitEntryAcceptsMatchingLeaseAndAuthority", "err != nil || !present", "err == nil || !present"},
+		{"lease absent", "TestLiveBetweenUnitEntryAcceptsMatchingLeaseAndAuthority", "err != nil || !present", "err != nil || present"},
+		{"projected owner nil", "TestLiveBetweenUnitEntryAcceptsMatchingLeaseAndAuthority", "state.Authority.Owner == nil", "state.Authority.Owner != nil"},
+		{"epoch greater", "TestLiveBetweenUnitEntryRejectsProjectedEpochMismatch/delta_-1", "state.Authority.Epoch != lease.Epoch", "state.Authority.Epoch > lease.Epoch"},
+		{"epoch less", "TestLiveBetweenUnitEntryRejectsProjectedEpochMismatch/delta_1", "state.Authority.Epoch != lease.Epoch", "state.Authority.Epoch < lease.Epoch"},
+		{"PID greater", "TestLiveBetweenUnitEntryRejectsProjectedPIDMismatch/delta_-1", "state.Authority.Owner.PID != lease.PID", "state.Authority.Owner.PID > lease.PID"},
+		{"PID less", "TestLiveBetweenUnitEntryRejectsProjectedPIDMismatch/delta_1", "state.Authority.Owner.PID != lease.PID", "state.Authority.Owner.PID < lease.PID"},
+		{"start identity", "TestLiveBetweenUnitEntryRejectsProjectedStartIdentityMismatch", "!reflect.DeepEqual(state.Authority.Owner.Start, lease.Start)", "reflect.DeepEqual(state.Authority.Owner.Start, lease.Start)"},
+		{"driver-held lease identity", "TestLiveBetweenUnitEntryRejectsDriverHeldLeaseIdentityMismatch", "!authority.MatchesLease(lease.Identity())", "authority.MatchesLease(lease.Identity())"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertDriverMutationKilled(t, test.behaviouralTest, goEnvironment, "driver.go", test.before, test.after)
+		})
+	}
+}
+
 func TestMutationExecutionDependencyHashBindsDeliveredArtifactID(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestExecutionDependencyHashBindsDeliveredArtifactInstance(t)
