@@ -49,6 +49,18 @@ const (
 	sweepStageWritten  = ".written"
 )
 
+const fakeParentInterruptMarkerEnv = "PARTITUR_ADAPTER_TEST_PARENT_INTERRUPT_MARKER"
+
+// A child that watched its spawning fixture instead of the test binary would
+// observe that fixture's SIGKILL within one poll and exit, so two intervals
+// give it a second opportunity. This bound holds for the untagged suite only,
+// and lengthening it buys nothing: under -race the child can reach
+// startFakeFixture after its parent has already died, read a reparented and
+// therefore live ppid, and never exit no matter how long it is watched.
+// Measured against that exact evasion: red 8 of 8 untagged, green 5 of 5 under
+// -race. The untagged gate is what locks this care; -race cannot.
+const fixtureChildParentDeathObservation = 2 * fakeFixtureOwnerWatchPoll
+
 var fakeFixtureSurvivalAllowedAfterUnverifiableSweep = map[string]struct{}{
 	// This is the complete inventory of tests that deliberately make session
 	// enumeration unverifiable. TestFixtureReaperReportsSurvivingSessionTree
@@ -370,38 +382,102 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 }
 
 func TestFixtureChildInheritsTestOwnerIdentity(t *testing.T) {
-	// The child must watch the test binary, not its spawning fixture. Its
-	// durable record is written before the owner watch can run, so this proves
-	// the configured identity independently of cleanup timing.
-	marker := filepath.Join(t.TempDir(), "pids")
-	wantOwner, err := processByPID(os.Getpid())
-	if err != nil {
-		t.Fatal(err)
+	if marker := os.Getenv(fakeParentInterruptMarkerEnv); marker != "" {
+		// This test binary is the live owner for both fixtures. The parent starts
+		// the child directly, without Client cleanup, so the outer test can kill
+		// only that parent and observe the child's owner behavior.
+		directory := filepath.Dir(marker)
+		installFake(t, directory, "fake")
+		owner, err := processByPID(os.Getpid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent := exec.Command(filepath.Join(directory, "partitur-adapter-fake"))
+		parent.Env = replaceEnvironment(os.Environ(), map[string]string{
+			fakeModeEnv:              "session_tree_hang",
+			fakeMarkerEnv:            marker,
+			fakeFixtureDirectoryEnv:  directory,
+			fakeFixtureOwnerPIDEnv:   strconv.Itoa(owner.PID),
+			fakeFixtureOwnerStartEnv: owner.Start,
+		})
+		if err := parent.Start(); err != nil {
+			t.Fatal(err)
+		}
+		go func() { _ = parent.Wait() }()
+		for {
+			time.Sleep(time.Hour)
+		}
 	}
-	client, fixtureDirectory := newFakeClientWithFixtureDirectory(
-		t,
-		"session_tree_hang",
-		marker,
-		50*time.Millisecond,
-		40*time.Millisecond,
-	)
-	report := client.ProbeAll([]string{"fake"})
-	assertDeadlineWithOnlyCleanupUnverifiable(t, report)
 
-	data, err := os.ReadFile(marker)
+	marker := filepath.Join(t.TempDir(), "pids")
+	command := exec.Command(os.Args[0], "-test.run=^TestFixtureChildInheritsTestOwnerIdentity$")
+	command.Env = replaceEnvironment(os.Environ(), map[string]string{fakeParentInterruptMarkerEnv: marker})
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := waitForFixturePIDs(t, marker)
+	parentPID, err := strconv.Atoi(fixtures[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) != 2 {
-		t.Fatalf("marker = %q, want the fake's pid and its child's", data)
-	}
-	childPID, err := strconv.Atoi(fields[1])
+	parent, err := processByPID(parentPID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := readFakeFixtureRecord(t, fixtureDirectory, childPID)
-	if got, want := record.owner, (fakeFixtureOwner{pid: os.Getpid(), start: wantOwner.Start}); got != want {
+	childPID, err := strconv.Atoi(fixtures[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := processByPID(childPID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testOwner, err := processByPID(command.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		if process, err := processByPID(child.PID); err == nil && !process.IsZombie && process.Start == child.Start {
+			_ = syscall.Kill(child.PID, syscall.SIGKILL)
+		}
+	})
+	if err := syscall.Kill(parentPID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	parentReapDeadline := time.Now().Add(fixtureOwnerReapTimeout)
+	for {
+		_, err := processByPID(parent.PID)
+		if isProcessGone(err) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !time.Now().Before(parentReapDeadline) {
+			t.Fatalf("spawning parent %d remained observable after SIGKILL", parent.PID)
+		}
+		time.Sleep(fakeFixtureOwnerWatchPoll)
+	}
+
+	deadline := time.Now().Add(fixtureChildParentDeathObservation)
+	for {
+		owner, err := processByPID(testOwner.PID)
+		if err != nil || owner.IsZombie || owner.Start != testOwner.Start {
+			t.Fatalf("test-binary owner did not remain live: process = %#v, err = %v", owner, err)
+		}
+		process, err := processByPID(child.PID)
+		if err != nil || process.IsZombie || process.Start != child.Start {
+			t.Fatalf("child fixture exited after its spawning parent was SIGKILLed while test owner remained live: process = %#v, err = %v", process, err)
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(fakeFixtureOwnerWatchPoll)
+	}
+	record := readFakeFixtureRecord(t, filepath.Dir(marker), childPID)
+	if got, want := record.owner, (fakeFixtureOwner{pid: testOwner.PID, start: testOwner.Start}); got != want {
 		t.Fatalf("child fixture owner = %#v, want test binary %#v", got, want)
 	}
 }
