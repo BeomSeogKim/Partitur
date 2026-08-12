@@ -261,6 +261,16 @@ cut elsewhere. Because one oracle step has one event shape, the assertions do no
 actor (E.2 `cancel.interval_stopped_to_terminal`), so this leaves no endpoint obligation
 undischarged; what it leaves unreached is the second live state, not a second assertion.
 
+E.2 coverage is therefore keyed per endpoint pair, as required by
+[`COMPLETION.md`](COMPLETION.md) §4, not per producer. Where two producers begin with the same
+durable and external semantic preconditions and the recovery assertion does not branch on the
+actor, one executed `(edge id, endpoint)` record covers that endpoint for both: a different call
+stack alone creates no additional edge. If a producer creates a materially different recovery
+state or consequence, this equivalence does not apply; Appendix E.4's branch expansion must
+classify that crash cut, possibly by refining an existing edge or adding a new one. Appendix E.4
+also distinguishes that per-cut classification obligation from the executed records required per
+catalogue edge; the harness must not substitute either obligation for the other.
+
 Enumerate the interleavings of their step sequences to a bounded depth and evaluate the oracles below
 at each. This is a model-checking shape, not a stress test: the value is exhaustiveness over a small
 state space. A stress test passing ten thousand random schedules proves less than one covering all
@@ -292,13 +302,39 @@ These span more than one edge and attach to no single crash window, so they are 
 
 1. **At most one pending prepare**, and never two `amendment.approved` for one proposal.
 2. **Cancellation outranks approval.** No `amendment.approved` after a durable `cancel.requested`.
-3. **Recovery is idempotent.** Running it twice from the same durable state produces no additional
-   events.
-4. **Recovery is deterministic.** Two runs from identical durable state produce identical journals.
+3. **Recovery is idempotent in both forms below.** Both are required; the first does not imply the
+   second.
+   - **Repeated resume after convergence:** after one recovery has reached its fixed point, another
+     `resume` appends no event and leaves the semantic recovery state unchanged.
+   - **First recovery from one pre-recovery durable state:** clone the complete durable and external
+     preconditions before recovery. Recover one clone once and the other clone twice; after the
+     second clone converges, their semantic recovery states and recovery action traces are equal.
+4. **Recovery is deterministic.** Clone the complete durable and external preconditions before
+   recovery; independent recoveries produce equal semantic journals, projections, and action traces.
 
-Checks 3 and 4 compare **semantic** recovery state and action. Timestamps, generated identifiers, and
-diagnostics are excluded — comparing them would fail on differences that carry no meaning, and a
-check that cries wolf is a check that gets disabled.
+Checks 3 and 4 compare the following **semantic recovery state and action**. The state comparison
+retains the ordered event sequence and, for every non-diagnostic event, its type, sequence position,
+run and score revision, movement, part, and attempt identity, causation relationship, and all
+payload fields; it also retains every exported durable projection field produced from that sequence.
+The action comparison retains each decision's recovery `CaseID`, either its named halt or its
+action, and every field of that action, including its `ActionKind`, ordered steps, continuation, and
+replan outcome. The command result comparison retains exit class and named halt even when stderr
+wording is not retained.
+
+Before comparison, generated identifiers are alpha-renamed independently by identifier class in
+first-occurrence order: for example the first generated decision and interval become `decision#1`
+and `interval#1`. Every later occurrence or reference to the same original identifier maps to the
+same canonical name, including references across envelopes, payloads, projection fields, and
+actions. Stable input identities and content hashes are retained verbatim. Every timestamp value,
+whether in an envelope, payload, projection, or action, is removed, but each timestamp field's
+required presence is retained and event order remains the journal's sequence order. Diagnostics are
+excluded entirely: `log` and `progress` events and command stdout/stderr are not inputs to the
+comparison. No other retained value may be discarded merely because it differs between runs.
+
+These comparisons must be non-vacuous: their extractor must reject an empty event, projection, or
+action domain where the fixture promises one, and the comparison suite must demonstrate that it
+distinguishes two deliberately different seeds whose retained semantic consequences differ. A
+normalizer or comparison that cannot make that distinction does not satisfy checks 3 or 4.
 
 ### Post-recovery convergence
 
@@ -311,15 +347,35 @@ interval close before terminal or approval, terminal or approval before lease re
 is a check on the fixed point:
 
 > After a non-halted recovery reaches its fixed point, no in-scope terminal control state retains an
-> open interval, a released session or process, or residual lease, sidecar, or staging state; and no
+> open interval, a released session or process, or residual `resume`-owned state in
+> `.partitur/runs/<run-id>/driver.lease`, `.partitur/runs/<run-id>/driver.quiesced.<prepare-id>`,
+> `.partitur/runs/<run-id>/prepares/<prepare-id>.json`, `.partitur/work/<run-id>/`, a
+> `.partitur/runs/<run-id>/scores/revision-*.yaml` not referenced by the journal, an
+> `.partitur/runs/<run-id>/inputs/*/revision-*/subject-tree.json` not bound by `attempt.started`, or
+> an original `.partitur/runs/<run-id>/proposals/*.json` not referenced by a durable route on the
+> active path; quarantined copies are durable forensic results, not residue. No
 > in-scope durable consequence remains unrealized — a completed attempt has its movement success, a
 > failed movement has its run failure, a criterion error has its acceptance failure, and completed
 > evaluation has its required gate request.
 
-This is not a general liveness claim. An unresolved blocking decision legitimately converges in
-`WAITING_HUMAN`; a named recovery halt stops before the fixed point; and the separate
-`apply --recover` and `promote-score --recover` projections remain outside this `resume` convergence
-oracle.
+The oracle must inspect those concrete families; a glob that matches nothing without proving the
+family's expected root and injected positive case is not evidence of absence. Application and
+promotion temporaries are excluded because their command-specific recovery owns them.
+
+Every recovery result belongs to exactly one partition: **named halt**, **`WAITING_HUMAN`**,
+**ordinary `resume` fixed point**, or **command-specific recovery**. A fixture declares its
+command-specific branch as exactly `none`, `application`, or `promotion`; the oracle must require
+the declaration and durable projection to agree, never infer the declaration from the projection.
+`application` requires an unsettled application projection owned by `apply --recover`, and
+`promotion` requires an unsettled promotion projection owned by `promote-score --recover`. A
+command-specific declaration with a settled projection fails, as does an unsettled projection under
+`none` or the other command. In particular, `APPLYING`, application `RECOVERY_REQUIRED`, `PROMOTING`,
+and promotion `RECOVERY_REQUIRED` remain failures unless their matching declared branch or another
+norm explicitly permits them. The default declaration is `none`, preserving the existing assertion
+that both projections are settled.
+
+This partition is not a general liveness claim. An unresolved blocking decision legitimately lands
+in `WAITING_HUMAN`, while a named recovery halt stops before any fixed point is claimed.
 
 ## What this harness is not
 
