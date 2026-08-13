@@ -62,7 +62,7 @@ exit surface; until then, it has no harness fixture.
 
 ## Selection manifest
 
-This gate reaches thirty-eight E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirty-nine E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -175,7 +175,7 @@ required; the criterion set is not implied by the adapter set.
 
 | Edge | Selection | Driven by | Reason |
 |---|---|---|---|
-| `acceptance.subject_pinned_to_started` | not reached by this gate's cuts | — | No subject-pinning production capture fixture |
+| `acceptance.subject_pinned_to_started` | B → R | core recovery | A real writer is killed at the static post-pin probe and at the `acceptance.acceptance.started` receipt. The probe is required because production returns but does not publish the attempt-scoped subject-ref receipt to the harness observer |
 
 ### Evidence and lifecycle consequences
 
@@ -228,7 +228,7 @@ stated Appendix E branch.
 | `execute.adapter_swept_to_interval_stopped` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `execute.interval_stopped_to_outcome` | reachable | §4 execute completion; E.2 | Adapter execute crash fixture |
 | `change_set.captured_to_recorded` | reachable | §5; B.3; C.2 `RC-RESUME-016`; E.2 | `integration/composition` writer-change-set fixture kills the real writer capture at both endpoints |
-| `acceptance.subject_pinned_to_started` | not reached by this gate's cuts | §7; C.2 `RC-RESUME-018`; E.2 | No subject-pinning production capture fixture |
+| `acceptance.subject_pinned_to_started` | reachable | §7; C.2 `RC-RESUME-018`; E.2 | `TestAcceptanceSubjectPinnedToStartedKillCuts` kills a real writer after its subject ref is durable and after `acceptance.started`; recovery dispatches `RC-RESUME-018`, binds the event to the ref tree, and fails with `worktree_lost` when the pre-event worktree is removed. The left cut uses a probe because the returned attempt-scoped ref receipt is not published to the production receipt observer |
 | `composition.movement_evidence_to_terminal` | reachable | B.3; C.1 `RC-RESUME-011`; E.2 | `integration/composition` has conflict-verdict and no-verdict Git-failure fan-in fixtures; each kills both sides of the durable movement composition evidence/terminal cut |
 | `composition.candidate_evidence_to_terminal` | reachable | B.3; C.1 `RC-RESUME-011`; E.2 | `integration/composition` has conflict-verdict and no-verdict Git-failure candidate fixtures; each kills both sides of the durable candidate composition evidence/terminal cut |
 | `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |

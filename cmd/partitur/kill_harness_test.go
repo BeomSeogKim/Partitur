@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,6 +51,21 @@ type killHarnessJSONResult struct {
 	err    error
 }
 
+const (
+	// Only the failure path observes this, so a generous bound costs nothing on
+	// a green run and a tight one risks misclassifying an exited child as live
+	// under battery load - which would silently retarget every assertion that
+	// anchors on the exited-child message.
+	killHarnessExitObservationTimeout = 5 * time.Second
+	killHarnessReapTimeout            = 5 * time.Second
+)
+
+type killHarnessWait struct {
+	done     chan struct{}
+	err      error
+	exitCode int
+}
+
 var receiptKillHarnessRun struct {
 	once    sync.Once
 	records map[receiptKillKey]bool
@@ -65,6 +81,13 @@ var prepareQuiesceKillHarnessRun struct {
 }
 
 var supersessionKillHarnessRun struct {
+	once   sync.Once
+	passed map[string]bool
+	err    error
+	output string
+}
+
+var acceptanceSubjectKillHarnessRun struct {
 	once   sync.Once
 	passed map[string]bool
 	err    error
@@ -466,6 +489,12 @@ func reachableKillHarnessEdges(t *testing.T) map[string]bool {
 		}
 		coverage[string(edge)]++
 	}
+	for endpoint, passed := range acceptanceSubjectKillHarnessRecords(t) {
+		if !passed {
+			t.Fatalf("acceptance subject kill harness did not pass %q", endpoint)
+		}
+		coverage[string(faultpoint.EdgeAcceptanceSubjectPinnedToStarted)]++
+	}
 	reachable := make(map[string]bool)
 	for edge, count := range coverage {
 		if count != 2 {
@@ -477,6 +506,29 @@ func reachableKillHarnessEdges(t *testing.T) map[string]bool {
 		t.Fatal("kill harness declares no reachable edges")
 	}
 	return reachable
+}
+
+func acceptanceSubjectKillHarnessRecords(t *testing.T) map[string]bool {
+	t.Helper()
+	acceptanceSubjectKillHarnessRun.once.Do(func() {
+		root, err := filepath.Abs(filepath.Join("..", ".."))
+		if err != nil {
+			acceptanceSubjectKillHarnessRun.err = err
+			return
+		}
+		acceptanceSubjectKillHarnessRun.passed, acceptanceSubjectKillHarnessRun.output, acceptanceSubjectKillHarnessRun.err = runKillHarnessJSON(
+			root,
+			"./cmd/partitur",
+			"^TestAcceptanceSubjectPinnedToStartedKillCuts$",
+		)
+	})
+	if acceptanceSubjectKillHarnessRun.err != nil {
+		t.Fatalf("acceptance subject kill harness: %v\n%s", acceptanceSubjectKillHarnessRun.err, acceptanceSubjectKillHarnessRun.output)
+	}
+	return map[string]bool{
+		"subject_pinned":     acceptanceSubjectKillHarnessRun.passed["TestAcceptanceSubjectPinnedToStartedKillCuts/subject_pinned"],
+		"acceptance_started": acceptanceSubjectKillHarnessRun.passed["TestAcceptanceSubjectPinnedToStartedKillCuts/acceptance_started"],
+	}
 }
 
 func receiptKillHarnessRecords(t *testing.T) map[receiptKillKey]bool {
@@ -1045,12 +1097,17 @@ func killAtPoint(
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
+	wait := startKillHarnessWait(command)
+	defer reapKillHarnessChild(t, command, wait)
 	_ = notifyWrite.Close()
 	_ = releaseRead.Close()
 
 	scanner := bufio.NewScanner(notifyRead)
 	for {
-		point, pid := nextKillPoint(t, scanner)
+		point, pid, err := scanNextKillPoint(scanner)
+		if err != nil {
+			t.Fatal(killHarnessScanFailure(arguments[0], target, err, wait))
+		}
 		if point != target {
 			if _, err := releaseWrite.Write([]byte{1}); err != nil {
 				t.Fatalf("release %q: %v", point, err)
@@ -1064,7 +1121,8 @@ func killAtPoint(
 			_ = syscall.Kill(-pid, syscall.SIGKILL)
 		}
 		_ = releaseWrite.Close()
-		if err := command.Wait(); err == nil {
+		<-wait.done
+		if wait.err == nil {
 			t.Fatalf("%q at %q exited successfully\nstdout:\n%s\nstderr:\n%s", arguments[0], target, &stdout, &stderr)
 		}
 		break
@@ -1080,8 +1138,90 @@ func killAtPoint(
 	return runID
 }
 
+func startKillHarnessWait(command *exec.Cmd) *killHarnessWait {
+	wait := &killHarnessWait{done: make(chan struct{})}
+	go func() {
+		wait.err = command.Wait()
+		wait.exitCode = command.ProcessState.ExitCode()
+		close(wait.done)
+	}()
+	return wait
+}
+
+func killHarnessScanFailure(command string, target faultpoint.PointID, scanErr error, wait *killHarnessWait) error {
+	return killHarnessScanFailureWithin(command, target, scanErr, wait, killHarnessExitObservationTimeout)
+}
+
+// killHarnessScanFailureWithin takes the bound so the live-child case can be
+// exercised without waiting out the production one. The distinction is what the
+// probe-removal mutation anchors on: a child that finished without reaching the
+// point is a different fact from a scan error against a child still running.
+func killHarnessScanFailureWithin(command string, target faultpoint.PointID, scanErr error, wait *killHarnessWait, within time.Duration) error {
+	timer := time.NewTimer(within)
+	defer timer.Stop()
+	select {
+	case <-wait.done:
+		return fmt.Errorf("%q completed with exit %d without reaching requested faultpoint %q", command, wait.exitCode, target)
+	case <-timer.C:
+		return fmt.Errorf("%q probe scan failed while child was still running before requested faultpoint %q: %w", command, target, scanErr)
+	}
+}
+
+func reapKillHarnessChild(t *testing.T, command *exec.Cmd, wait *killHarnessWait) {
+	t.Helper()
+	select {
+	case <-wait.done:
+		return
+	default:
+	}
+	_ = command.Process.Kill()
+	select {
+	case <-wait.done:
+	case <-time.After(killHarnessReapTimeout):
+		t.Errorf("timed out after %s reaping kill-harness child pid %d", killHarnessReapTimeout, command.Process.Pid)
+	}
+}
+
+func TestKillHarnessDistinguishesExitedChildFromLiveScanFailure(t *testing.T) {
+	t.Run("exited child", func(t *testing.T) {
+		command := exec.Command("sh", "-c", "exit 7")
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		wait := startKillHarnessWait(command)
+		err := killHarnessScanFailure("run", faultpoint.PointAcceptanceSubjectPinned, errors.New("read probe: file already closed"), wait)
+		if got, want := err.Error(), `"run" completed with exit 7 without reaching requested faultpoint "acceptance.subject_pinned"`; got != want {
+			t.Fatalf("failure = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("live child", func(t *testing.T) {
+		command := exec.Command("sh", "-c", "sleep 30")
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		wait := startKillHarnessWait(command)
+		defer reapKillHarnessChild(t, command, wait)
+		err := killHarnessScanFailureWithin("run", faultpoint.PointAcceptanceSubjectPinned, errors.New("read probe: file already closed"), wait, 50*time.Millisecond)
+		if got, want := err.Error(), `"run" probe scan failed while child was still running before requested faultpoint "acceptance.subject_pinned": read probe: file already closed`; got != want {
+			t.Fatalf("failure = %q, want %q", got, want)
+		}
+		if strings.Contains(err.Error(), "completed with exit") {
+			t.Fatalf("live-child failure used exited-child signature: %v", err)
+		}
+	})
+}
+
 func nextKillPoint(t *testing.T, scanner *bufio.Scanner) (faultpoint.PointID, int) {
 	t.Helper()
+	point, pid, err := scanNextKillPoint(scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return point, pid
+}
+
+func scanNextKillPoint(scanner *bufio.Scanner) (faultpoint.PointID, int, error) {
 	type reached struct {
 		point faultpoint.PointID
 		pid   int
@@ -1090,7 +1230,11 @@ func nextKillPoint(t *testing.T, scanner *bufio.Scanner) (faultpoint.PointID, in
 	ready := make(chan reached, 1)
 	go func() {
 		if !scanner.Scan() {
-			ready <- reached{err: scanner.Err()}
+			err := scanner.Err()
+			if err == nil {
+				err = io.EOF
+			}
+			ready <- reached{err: err}
 			return
 		}
 		fields := strings.Fields(scanner.Text())
@@ -1104,12 +1248,11 @@ func nextKillPoint(t *testing.T, scanner *bufio.Scanner) (faultpoint.PointID, in
 	select {
 	case result := <-ready:
 		if result.err != nil || result.point == "" || result.pid <= 0 {
-			t.Fatalf("probe notification = %#v", result)
+			return "", 0, fmt.Errorf("probe notification = %#v", result)
 		}
-		return result.point, result.pid
+		return result.point, result.pid, nil
 	case <-time.After(15 * time.Second):
-		t.Fatal("timed out waiting for faultpoint probe")
-		return "", 0
+		return "", 0, errors.New("timed out waiting for faultpoint probe")
 	}
 }
 

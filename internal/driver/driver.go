@@ -1138,6 +1138,9 @@ func ExecuteAttempt(
 		if err != nil {
 			return stopped(result, err)
 		}
+		// At this point the writer subject ref is durable and
+		// acceptance.started has not been appended.
+		dependencies.probe.Reached(faultpoint.PointAcceptanceSubjectPinned)
 		subjectTree = subject.Tree
 	} else if movement.ID == execution.Score.Execution().FinalMovementID {
 		subjectTree = execution.CandidateTree
