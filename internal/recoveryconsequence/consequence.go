@@ -113,6 +113,12 @@ func Handles(caseID recovery.CaseID) bool {
 	return ok
 }
 
+// HandlesStep reports whether the catalog owns this exact step route.
+func HandlesStep(caseID recovery.CaseID, kind recovery.ActionKind, step recovery.ActionStep) bool {
+	entry := catalog[caseID]
+	return entry.kind == kind && entry.steps[step] != nil
+}
+
 // Cases returns the catalog's implemented case IDs.
 func Cases() []recovery.CaseID {
 	cases := make([]recovery.CaseID, 0, len(catalog))

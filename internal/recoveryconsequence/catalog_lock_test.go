@@ -89,6 +89,15 @@ func TestCatalogAndRecoveryDispatchFailClosed(t *testing.T) {
 	}
 }
 
+// This mismatched kind is not planner-reachable. It directly pins the
+// defensive boundary that prevents one catalogued route from claiming another
+// route's step handler.
+func TestHandlesStepRejectsCataloguedCaseWithMismatchedKind(t *testing.T) {
+	if HandlesStep(recovery.CaseHumanGateApproved, recovery.ActionProceedAcceptance, recovery.StepAppendAttemptCompleted) {
+		t.Fatal("catalogued step was claimed under a mismatched action kind")
+	}
+}
+
 // TestCatalogWitnessesArePlannerSelected makes the catalog lock prove more
 // than registration: every catalogued consequence is selected from replayed
 // planner input, with its action (and, where applicable, step order) intact.
