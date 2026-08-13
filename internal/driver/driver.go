@@ -1205,6 +1205,7 @@ func ExecuteAttempt(
 			}, request)
 		},
 		FailureDispositionFor: func(runResult acceptance.RunCriterionResult) (runstate.Disposition, error) {
+			dependencies.probe.Reached(faultpoint.PointAcceptanceNonPassCompleted)
 			remaining := remainingAfter(remainingMS, dependencies.now().Sub(acceptanceOpened).Milliseconds())
 			if runResult.DeadlineTied {
 				remaining = 0

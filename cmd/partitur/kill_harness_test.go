@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -111,6 +112,9 @@ func TestSubprocessKillHarness(t *testing.T) {
 			for _, fixture := range fixturesForKillEdge(edge) {
 				fixture := fixture
 				t.Run(fixture.name, func(t *testing.T) {
+					if edge.id == faultpoint.EdgeAcceptanceCriterionErrorToFailed && os.Geteuid() == 0 {
+						t.Fatal("criterion-error kill fixture requires non-root permission enforcement")
+					}
 					for _, side := range []struct {
 						name  string
 						point faultpoint.PointID
@@ -122,8 +126,14 @@ func TestSubprocessKillHarness(t *testing.T) {
 						t.Run(side.name, func(t *testing.T) {
 							repository, environment := fixture.build(t, bin, vendor)
 							runID := killAtPoint(t, partitur, repository, environment, side.point)
+							if edge.id == faultpoint.EdgeAcceptanceCriterionErrorToFailed {
+								restoreCriterionErrorFixtureWorktree(t, repository, runID)
+							}
 							assertCrashedStateBeforeResume(t, repository, runID, side.point)
 							assertRecoveryFixedPoint(t, partitur, repository, environment, runID, expectedFailureFor(side.point))
+							if edge.id == faultpoint.EdgeAcceptanceCriterionErrorToFailed {
+								assertCriterionErrorEndpoint(t, readHarnessEvents(t, repository, runID), true)
+							}
 							if fixture.gateMode != "" {
 								assertHumanGateFixture(t, readHarnessJournal(t, repository, runID), fixture.gateMode, fixture.reviewOutcome)
 							}
@@ -281,6 +291,7 @@ func nonCancellationKillHarnessEdges() []killEdge {
 		{faultpoint.EdgeExecuteIntervalStoppedToOutcome, faultpoint.PointExecuteIntervalStopped, faultpoint.PointExecuteOutcomeRecorded, killHarnessRepository},
 		{faultpoint.EdgeLifecycleAttemptCompletedToMovementSucceeded, faultpoint.PointLifecycleAttemptCompleted, faultpoint.PointLifecycleMovementSucceeded, killHarnessRepository},
 		{faultpoint.EdgeLifecycleMovementFailedToRunFailed, faultpoint.PointLifecycleMovementFailed, faultpoint.PointLifecycleRunFailed, movementFailureKillHarnessRepository},
+		{faultpoint.EdgeAcceptanceCriterionErrorToFailed, faultpoint.PointAcceptanceNonPassCompleted, faultpoint.PointAcceptanceFailureRecorded, criterionErrorKillHarnessRepository},
 		{faultpoint.EdgeAcceptanceEvaluationCompletedToDecisionRequested, faultpoint.PointAcceptanceEvaluationCompleted, faultpoint.PointHumanGateDecisionRequested, humanGateKillHarnessRepository},
 		{faultpoint.EdgeChangeSetCapturedToRecorded, faultpoint.PointChangeSetCaptured, faultpoint.PointChangeSetRecorded, nil},
 		{faultpoint.EdgeCompositionMovementEvidenceToTerminal, faultpoint.PointCompositionMovementEvidence, faultpoint.PointCompositionMovementTerminal, nil},
@@ -880,6 +891,27 @@ func movementFailureKillHarnessRepository(t *testing.T, bin, vendor string) (str
 	return repository, fixtureOutcomeEnvironment(environment, "task_failed")
 }
 
+func criterionErrorKillHarnessRepository(t *testing.T, bin, vendor string) (string, []string) {
+	score := runScore()
+	criterion := score["movements"].([]any)[0].(map[string]any)["acceptance"].(map[string]any)["hard"].([]any)[1].(map[string]any)
+	criterion["run"] = []any{"chmod", "000", "."}
+	return killHarnessRepositoryWithInputs(t, bin, vendor, score, runCast())
+}
+
+func restoreCriterionErrorFixtureWorktree(t *testing.T, repository, runID string) {
+	t.Helper()
+	worktrees, err := filepath.Glob(filepath.Join(repository, ".partitur", "work", runID, "*", "worktree"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(worktrees) != 1 {
+		t.Fatalf("criterion-error fixture worktrees=%d, want one", len(worktrees))
+	}
+	if err := os.Chmod(worktrees[0], 0o700); err != nil {
+		t.Fatalf("restore criterion-error fixture worktree: %v", err)
+	}
+}
+
 func killHarnessRepositoryWithInputs(
 	t *testing.T,
 	bin, vendor string,
@@ -922,6 +954,19 @@ func readHarnessJournal(t *testing.T, repository string, runID string) []byte {
 		t.Fatal(err)
 	}
 	return journal
+}
+
+func readHarnessEvents(t *testing.T, repository, runID string) []runstate.Event {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return journal.Events
 }
 
 func hashMismatchScore() map[string]any {
@@ -1086,6 +1131,8 @@ func expectedFailureFor(point faultpoint.PointID) *expectedFailure {
 		return nil
 	case faultpoint.PointLifecycleMovementFailed, faultpoint.PointLifecycleRunFailed:
 		return &expectedFailure{event: runstate.EventAttemptFailed, kind: "task_failed", terminalReason: "retries_exhausted", runReason: "movement_failed"}
+	case faultpoint.PointAcceptanceNonPassCompleted, faultpoint.PointAcceptanceFailureRecorded:
+		return &expectedFailure{event: runstate.EventAcceptanceFailed, reason: "criterion_errored", terminalReason: "retries_exhausted"}
 	case faultpoint.PointAcceptanceEvaluationCompleted, faultpoint.PointHumanGateDecisionRequested:
 		return nil
 	default:
@@ -1099,6 +1146,8 @@ const (
 	crashedStateProjectionOnly crashedStateExpectation = iota
 	crashedStateMovementFailed
 	crashedStateRunFailed
+	crashedStateCriterionErrorRecorded
+	crashedStateAcceptanceFailureRecorded
 )
 
 func crashedStateExpectationFor(point faultpoint.PointID) crashedStateExpectation {
@@ -1129,6 +1178,10 @@ func crashedStateExpectationFor(point faultpoint.PointID) crashedStateExpectatio
 		return crashedStateMovementFailed
 	case faultpoint.PointLifecycleRunFailed:
 		return crashedStateRunFailed
+	case faultpoint.PointAcceptanceNonPassCompleted:
+		return crashedStateCriterionErrorRecorded
+	case faultpoint.PointAcceptanceFailureRecorded:
+		return crashedStateAcceptanceFailureRecorded
 	case faultpoint.PointAcceptanceEvaluationCompleted, faultpoint.PointHumanGateDecisionRequested:
 		return crashedStateProjectionOnly
 	default:
@@ -1179,9 +1232,108 @@ func assertCrashedStateBeforeResume(t *testing.T, repository, runID string, poin
 		if !state.Run.Terminal() {
 			t.Fatalf("crashed projection at %s is nonterminal: %q", point, state.Run)
 		}
+	case crashedStateCriterionErrorRecorded:
+		assertCriterionErrorEndpoint(t, journal.Events, false)
+	case crashedStateAcceptanceFailureRecorded:
+		assertCriterionErrorEndpoint(t, journal.Events, true)
 	default:
 		t.Fatalf("unknown crashed-state expectation for point %q", point)
 	}
+}
+
+func assertCriterionErrorEndpoint(t *testing.T, events []runstate.Event, wantAcceptanceFailure bool) {
+	t.Helper()
+	if err := validateCriterionErrorEndpoint(events, wantAcceptanceFailure); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func validateCriterionErrorEndpoint(events []runstate.Event, wantAcceptanceFailure bool) error {
+	const wantCriterionID = "command-passes"
+
+	errorCount := 0
+	errorIndex := -1
+	errorCriterionID := ""
+	errorDetail := ""
+	for index, event := range events {
+		if event.Type != runstate.EventCriterionCompleted {
+			continue
+		}
+		payload, err := decodeCriterionErrorPayload(event)
+		if err != nil {
+			return err
+		}
+		if payload["outcome"] != "ERROR" {
+			continue
+		}
+		errorCount++
+		errorIndex = index
+		errorCriterionID, _ = payload["criterion_id"].(string)
+		errorDetail, _ = payload["error_detail"].(string)
+	}
+	if errorCount != 1 {
+		return fmt.Errorf("criterion.completed ERROR count=%d, want one", errorCount)
+	}
+	if errorDetail != "workspace_verification_failed" {
+		return fmt.Errorf("criterion.completed ERROR detail=%q, want workspace_verification_failed", errorDetail)
+	}
+	if errorCriterionID != wantCriterionID {
+		return fmt.Errorf("criterion.completed ERROR criterion_id=%q, want %q", errorCriterionID, wantCriterionID)
+	}
+	for _, event := range events[errorIndex+1:] {
+		if event.Type == runstate.EventCriterionStarted {
+			return errors.New("criterion.started appears after criterion.completed ERROR")
+		}
+	}
+
+	failureCount := 0
+	failureCriterionID := ""
+	failureReason := ""
+	for _, event := range events {
+		if event.Type != runstate.EventAcceptanceFailed {
+			continue
+		}
+		failureCount++
+		payload, err := decodeCriterionErrorPayload(event)
+		if err != nil {
+			return err
+		}
+		failureCriterionID, _ = payload["failed_criterion_id"].(string)
+		failureReason, _ = payload["reason"].(string)
+	}
+	if !wantAcceptanceFailure {
+		if failureCount != 0 {
+			return fmt.Errorf("acceptance.failed count=%d at left endpoint, want zero", failureCount)
+		}
+		return nil
+	}
+	if failureCount != 1 {
+		return fmt.Errorf("acceptance.failed count=%d at right endpoint, want one", failureCount)
+	}
+	if failureCriterionID != errorCriterionID {
+		return fmt.Errorf("acceptance.failed criterion_id=%q, want erroring criterion %q", failureCriterionID, errorCriterionID)
+	}
+	if failureReason != "criterion_errored" {
+		return fmt.Errorf("acceptance.failed reason=%q, want criterion_errored", failureReason)
+	}
+	return nil
+}
+
+func decodeCriterionErrorPayload(event runstate.Event) (map[string]any, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("decode %s payload: %w", event.Type, err)
+	}
+	return payload, nil
+}
+
+func decodeHarnessEventPayload(t *testing.T, event runstate.Event) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode %s payload: %v", event.Type, err)
+	}
+	return payload
 }
 
 func journalContainsEvent(events []runstate.Event, want runstate.EventType) bool {
