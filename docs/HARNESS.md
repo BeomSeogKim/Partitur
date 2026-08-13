@@ -301,6 +301,27 @@ harness evaluates them by resuming at the edge and checking what E.2 states.
 These span more than one edge and attach to no single crash window, so they are the harness's own.
 
 1. **At most one pending prepare**, and never two `amendment.approved` for one proposal.
+   `TestCrossEdgePrepareCheckProductionSubprocess` observes the ordered decoded journal and exported
+   projection while production `approve` is paused after `amendment.approval_prepared`, after the
+   approver and driver are killed, and after production `resume` converges. The prepare is observed
+   positively at both pre-recovery points; recovery then observes its terminal
+   `amendment.approved` exactly once, after the prepare, and no pending prepare.
+
+   The pending-prepare conjunct is reachable from the live driver proposal path, CLI `amend` auto
+   approval, and CLI `approve --approve`; its observation points span
+   `prepare.prepared_to_observed`, the three quiesce edges, and the supersession commit edges.
+   Cancellation can abandon that prepare but cannot create one, while `resume` can only complete or
+   abandon the prepare it observed. No reachable interleaving can create two today: every producer
+   takes the state lock, and both the disposition guard and ordered projector reject a second
+   `amendment.approval_prepared` before the first is terminal.
+
+   The per-proposal approval conjunct is reachable only at the shared commit table entered by the
+   live approver or by `resume`, including a crash after the durable `prepare.commit.approved`
+   receipt and before command exit. No reachable retry can append a second approval today: the
+   first ordered approval clears its matching pending prepare in the same projection transition,
+   so re-entry has no matching commit-ready prepare. A decoded synthetic table supplies the
+   otherwise unreachable negative controls: two simultaneous prepares fail, two approvals for one
+   proposal fail, and two ordered approvals for different proposals pass.
 2. **Cancellation outranks approval.** No `amendment.approved` after a durable `cancel.requested`.
 3. **Recovery is idempotent in both forms below.** Both are required; the first does not imply the
    second.

@@ -106,6 +106,16 @@ func TestMutationParentPrepareInjectionGuards(t *testing.T) {
 
 func assertPrepareQuiesceMutationKilled(t *testing.T, environment mutationtest.GoEnvironment, source, before, after, packagePath, testName string) mutationtest.Result {
 	t.Helper()
+	return assertPrepareQuiesceMutationKilledWithTargets(t, environment, source, before, after, packagePath, testName, []string{testName})
+}
+
+// assertPrepareQuiesceMutationKilledWithTargets separates the run pattern from
+// the targeted test names. A table test reports its failures per subtest, so a
+// caller whose fixture uses t.Run must name the leaves: mutationtest treats a
+// failure that is neither a target nor an ancestor of one as a non-target
+// failure, and Killed requires every named target to fail.
+func assertPrepareQuiesceMutationKilledWithTargets(t *testing.T, environment mutationtest.GoEnvironment, source, before, after, packagePath, testPattern string, testNames []string) mutationtest.Result {
+	t.Helper()
 	_, current, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve command test source directory")
@@ -138,8 +148,8 @@ func assertPrepareQuiesceMutationKilled(t *testing.T, environment mutationtest.G
 	result := mutationtest.Run(ctx, mutationtest.Child{
 		Dir:         copyRoot,
 		Package:     packagePath,
-		TestPattern: testName,
-		TestNames:   []string{testName},
+		TestPattern: testPattern,
+		TestNames:   testNames,
 		Environment: environment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1"),
 	})
 	return result
