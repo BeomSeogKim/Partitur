@@ -979,6 +979,34 @@ func TestPlanC3RowsAndAdjacentStates(t *testing.T) {
 	}
 }
 
+func TestPlanStartAcceptanceWriterWorktreeRequirement(t *testing.T) {
+	verifiedWriter := func(worktree WorktreeState) Input {
+		input := withVerificationPassed(withChangeSet(withRepoWrite(c2Input(runstate.AttemptVerifying))))
+		input.Observations.Worktree = worktree
+		return input
+	}
+
+	t.Run("missing writer worktree fails before acceptance", func(t *testing.T) {
+		got := PlanAttempt(verifiedWriter(WorktreeMissing))
+		assertDecision(t, got, CaseStartAcceptance, ActionFailWorktreeLost, "", true)
+		if got.Action.FailureKind != "task_failed" || got.Action.FailureReason != "worktree_lost" {
+			t.Fatalf("failure = %q/%q, want task_failed/worktree_lost", got.Action.FailureKind, got.Action.FailureReason)
+		}
+	})
+
+	t.Run("present writer worktree starts acceptance", func(t *testing.T) {
+		got := PlanAttempt(verifiedWriter(WorktreePresent))
+		assertDecision(t, got, CaseStartAcceptance, ActionAppendAcceptanceStarted, "", false)
+	})
+
+	t.Run("reader does not require writer subject worktree", func(t *testing.T) {
+		input := withVerificationPassed(c2Input(runstate.AttemptVerifying))
+		input.Observations.Worktree = WorktreeMissing
+		got := PlanAttempt(input)
+		assertDecision(t, got, CaseStartAcceptance, ActionAppendAcceptanceStarted, "", false)
+	})
+}
+
 func TestPlanC3PrecedenceAndHalts(t *testing.T) {
 	t.Run("recorded acceptance failure precedes criterion evidence", func(t *testing.T) {
 		input := withCriterion(withAcceptanceFailure(c3Input("c1")), "c1", true, "FAIL")
