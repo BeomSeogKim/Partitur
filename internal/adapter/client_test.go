@@ -1303,7 +1303,26 @@ func (fixture fakeFixture) watchOwner() {
 
 func recordFakeFixture(directory string, process processRecord, owner fakeFixtureOwner) error {
 	path := filepath.Join(directory, fakeFixtureRecordPrefix+strconv.Itoa(process.PID))
-	return os.WriteFile(path, []byte(fmt.Sprintf("%d\t%s\t%d\t%s\n", process.PID, process.Start, owner.pid, owner.start)), 0o600)
+	// The temporary name deliberately does not carry fakeFixtureRecordPrefix, so
+	// a partially written record is invisible to every scanner in this file - all
+	// of which filter on that prefix. Renaming either one without the other
+	// re-opens the window this function exists to close.
+	temporary, err := os.CreateTemp(directory, "partitur-adapter-fixture-record-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+
+	data := []byte(fmt.Sprintf("%d\t%s\t%d\t%s\n", process.PID, process.Start, owner.pid, owner.start))
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
 }
 
 func readFakeFixtureRecord(t *testing.T, directory string, pid int) fakeFixtureRecord {
