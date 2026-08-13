@@ -738,6 +738,11 @@ func PlanAttempt(input Input) Decision {
 		decision.Action.AttemptID = attempt.AttemptID
 		return decision
 	}
+	if attempt.State == runstate.AttemptVerifying && movementHasRepoWrite(input.Projection.State, attempt.MovementID) &&
+		(attempt.ChangeSetRecorded || hasVerificationPassed(input.Projection.State, attempt.AttemptID)) &&
+		!attempt.AcceptanceStarted && input.Observations.Worktree == WorktreeMissing {
+		return recoveryFailureAction(CaseStartAcceptance, ActionFailWorktreeLost, attempt.AttemptID, "task_failed", "worktree_lost", []ActionStep{StepClassifyAndAppendFailure})
+	}
 	if attempt.State == runstate.AttemptVerifying && (attempt.ChangeSetRecorded || hasVerificationPassed(input.Projection.State, attempt.AttemptID)) && !attempt.AcceptanceStarted {
 		decision := action(CaseStartAcceptance, ActionAppendAcceptanceStarted, false)
 		decision.Action.AttemptID = attempt.AttemptID
