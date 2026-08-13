@@ -62,7 +62,7 @@ exit surface; until then, it has no harness fixture.
 
 ## Selection manifest
 
-This gate reaches thirty-seven E.2 edges. Each receives a crash injected **on either side of each
+This gate reaches thirty-eight E.2 edges. Each receives a crash injected **on either side of each
 endpoint**, followed by the fixed-point recovery check below. The other E.2 edges are **not reached
 by this gate's cuts**; their recorded, clause-cited dispositions appear in the gate-cut table below.
 They are not claims that those edges are unreachable.
@@ -234,7 +234,7 @@ stated Appendix E branch.
 | `lifecycle.attempt_completed_to_movement_succeeded` | reachable | §7 lifecycle; E.2 | One-movement lifecycle crash fixture |
 | `lifecycle.movement_failed_to_run_failed` | reachable | §7 lifecycle; E.2 | Real `run` subprocess matrix uses a terminal adapter-failure fixture at both endpoints; before `resume`, the crashed journal and projection prove the durable movement-failed/run-failed cut window |
 | `lifecycle.draft_performer_completed_to_no_blocking_failure` | reachable | §2 draft result boundary; C.2 `RC-RESUME-050`, `RC-RESUME-039`; E.2 | `TestDraftResultBoundaryKillCuts` kills a real draft interview after `attempt.performer_completed` and `attempt.failed`. The first cut appends `draft_no_blocking_output`, realizes it through `RC-RESUME-039`, and leaves `acceptance.started` absent; the second resume is a fixed point at both cuts |
-| `acceptance.criterion_error_to_failed` | not reached by this gate's cuts | §7 acceptance; E.2 | No criterion-error fixture |
+| `acceptance.criterion_error_to_failed` | reachable | §7 acceptance; E.2 | On non-root runners, a real run criterion makes subject verification error after starting by removing worktree permissions. The harness restores those permissions before checking the crashed endpoint and fixed-point recovery; an explicit UID-0 guard rejects runners on which the permission failure is ineffective. The subprocess matrix kills after the durable ERROR completion and after the resulting acceptance failure |
 | `acceptance.evaluation_completed_to_decision_requested` | reachable | §7 acceptance; E.2 | Real `run` subprocess fixture cuts both the completed evaluation with the gate request absent and the durable gate request |
 
 ## Execution model — deterministic interleaving, not a self-racing process

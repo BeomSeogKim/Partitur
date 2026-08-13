@@ -76,6 +76,7 @@ const (
 	PointExecuteAdapterSwept              PointID = "execute.adapter_swept"
 	PointExecuteIntervalStopped           PointID = "execute.interval_stopped"
 	PointExecuteOutcomeRecorded           PointID = "execute.outcome_recorded"
+	PointAcceptanceNonPassCompleted       PointID = "acceptance.run_criterion_non_pass_completed"
 	PointAcceptanceFailureRecorded        PointID = "acceptance.failure_recorded"
 	PointAcceptanceEvaluationCompleted    PointID = "acceptance.evaluation_completed"
 	PointHumanGateDecisionRequested       PointID = "human_gate.decision_requested"
