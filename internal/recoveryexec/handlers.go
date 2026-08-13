@@ -319,6 +319,9 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 			return err
 		}
 		if subject.Ref != "" {
+			// At this point the recovered writer subject ref is durable and
+			// acceptance.started has not been appended.
+			execution.Store.Reached(faultpoint.PointAcceptanceSubjectPinned)
 			matched, err := workspace.VerifyRecoverySubject(
 				execution.Store.RepositoryRoot(),
 				filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.Driver.RunID()), string(action.AttemptID), "worktree"),

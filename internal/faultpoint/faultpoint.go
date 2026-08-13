@@ -86,6 +86,7 @@ const (
 	PointLifecycleRunFailed               PointID = "lifecycle.run_failed"
 	PointChangeSetCaptured                PointID = "change_set.captured"
 	PointChangeSetRecorded                PointID = "change_set.recorded"
+	PointAcceptanceSubjectPinned          PointID = "acceptance.subject_pinned"
 	PointCompositionMovementEvidence      PointID = "composition.movement_evidence_recorded"
 	PointCompositionMovementTerminal      PointID = "composition.movement_terminal_recorded"
 	PointCompositionCandidateEvidence     PointID = "composition.candidate_evidence_recorded"
