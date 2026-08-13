@@ -15,6 +15,44 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
 )
 
+func TestMutationHandlesStepRequiresMatchingKind(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, current, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve recovery consequence source directory")
+	}
+	copyRoot := filepath.Join(t.TempDir(), "partitur")
+	if err := copyMutationRepository(copyRoot, filepath.Clean(filepath.Join(filepath.Dir(current), "..", ".."))); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(copyRoot, "internal", "recoveryconsequence", "consequence.go")
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const before = "return entry.kind == kind && entry.steps[step] != nil"
+	const after = "return entry.steps[step] != nil"
+	if count := strings.Count(string(contents), before); count != 1 {
+		t.Fatalf("mutation anchor count=%d, want 1", count)
+	}
+	if err := os.WriteFile(source, []byte(strings.Replace(string(contents), before, after, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mutated, err := os.ReadFile(source)
+	if err != nil || !strings.Contains(string(mutated), after) || strings.Contains(string(mutated), before) {
+		t.Fatalf("mutation did not apply: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	result := mutationtest.Run(ctx, mutationtest.Child{Dir: copyRoot, Package: "./internal/recoveryconsequence", TestPattern: "TestHandlesStepRejectsCataloguedCaseWithMismatchedKind", TestNames: []string{"TestHandlesStepRejectsCataloguedCaseWithMismatchedKind"}, Environment: environment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1")})
+	if result.Outcome != mutationtest.Killed {
+		t.Fatalf("mutation non-kill: %s", result.Diagnostic())
+	}
+}
+
 func TestMutationFrozenRouteRecordVerification(t *testing.T) {
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {

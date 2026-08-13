@@ -188,7 +188,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 		cancelledMidStep := false
 		if len(action.Steps) != 0 {
 			for index, step := range action.Steps {
-				handler, ok := executor.stepHandler(decision.CaseID, step)
+				handler, ok := executor.stepHandler(decision.CaseID, action.Kind, step)
 				if !ok || handler == nil {
 					return result, fmt.Errorf("%w: %s", ErrUnreachableStep, step)
 				}
@@ -516,8 +516,8 @@ func (executor *Executor) authorizeDriver() error {
 	return nil
 }
 
-func (executor *Executor) stepHandler(caseID recovery.CaseID, step recovery.ActionStep) (StepHandler, bool) {
-	if recoveryconsequence.Handles(caseID) {
+func (executor *Executor) stepHandler(caseID recovery.CaseID, kind recovery.ActionKind, step recovery.ActionStep) (StepHandler, bool) {
+	if recoveryconsequence.HandlesStep(caseID, kind, step) {
 		return func(ctx context.Context, execution HandlerContext, action recovery.Action) error {
 			return recoveryconsequence.ApplyStep(ctx, execution, caseID, action, step)
 		}, true
