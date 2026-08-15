@@ -20,6 +20,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
@@ -1291,6 +1292,7 @@ const (
 	crashedStateRunFailed
 	crashedStateCriterionErrorRecorded
 	crashedStateAcceptanceFailureRecorded
+	crashedStateCriterionIdentityPublished
 )
 
 func crashedStateExpectationFor(point faultpoint.PointID) crashedStateExpectation {
@@ -1307,6 +1309,8 @@ func crashedStateExpectationFor(point faultpoint.PointID) crashedStateExpectatio
 		return crashedStateProjectionOnly
 	case faultpoint.PointLaunchAdapterGateReleased:
 		return crashedStateProjectionOnly
+	case faultpoint.PointLaunchCriterionIdentityPublished:
+		return crashedStateCriterionIdentityPublished
 	case faultpoint.PointExecuteAdapterSwept:
 		return crashedStateProjectionOnly
 	case faultpoint.PointExecuteIntervalStopped:
@@ -1379,8 +1383,42 @@ func assertCrashedStateBeforeResume(t *testing.T, repository, runID string, poin
 		assertCriterionErrorEndpoint(t, journal.Events, false)
 	case crashedStateAcceptanceFailureRecorded:
 		assertCriterionErrorEndpoint(t, journal.Events, true)
+	case crashedStateCriterionIdentityPublished:
+		assertCriterionIdentityPublishedBeforeRecord(t, repository, runID, journal.Events)
 	default:
 		t.Fatalf("unknown crashed-state expectation for point %q", point)
+	}
+}
+
+// assertCriterionIdentityPublishedBeforeRecord locks the precondition of the
+// cross-edge semantic fixture: the criterion handoff is durable enough to
+// identify a process, but its criterion.started receipt has not been written.
+func assertCriterionIdentityPublishedBeforeRecord(t *testing.T, repository, runID string, events []runstate.Event) {
+	t.Helper()
+	const criterionID = "command-passes"
+
+	launchDirectories, err := filepath.Glob(filepath.Join(repository, ".partitur", "work", runID, "*", "criterion-"+criterionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launchDirectories) != 1 {
+		t.Fatalf("crashed criterion handoff directories=%d, want one", len(launchDirectories))
+	}
+	observation, err := launch.ObserveHandoff(launchDirectories[0])
+	if err != nil {
+		t.Fatalf("observe crashed criterion handoff: %v", err)
+	}
+	if !observation.HasIdentity {
+		t.Fatalf("crashed criterion handoff at %s has no published identity", launchDirectories[0])
+	}
+	for _, event := range events {
+		if event.Type != runstate.EventCriterionStarted {
+			continue
+		}
+		payload := decodeHarnessEventPayload(t, event)
+		if payload["criterion_id"] == criterionID {
+			t.Fatalf("crashed journal at %s already has criterion.started for %q", faultpoint.PointLaunchCriterionIdentityPublished, criterionID)
+		}
 	}
 }
 
