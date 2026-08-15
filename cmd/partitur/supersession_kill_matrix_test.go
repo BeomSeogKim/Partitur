@@ -86,7 +86,7 @@ func TestSupersessionKillMatrix(t *testing.T) {
 
 			assertSupersessionCutState(t, repository, runID, scenario.endpoint, epoch)
 			assertSupersessionCrashAssertions(t, repository, runID, scenario.obligations, cut, epoch)
-			assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+			assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 			assertSupersessionFixedPoint(t, repository, runID, epoch)
 			for _, obligation := range scenario.obligations {
 				discharged[obligation] = true

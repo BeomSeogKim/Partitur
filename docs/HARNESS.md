@@ -433,6 +433,28 @@ The oracle must inspect those concrete families; a glob that matches nothing wit
 family's expected root and injected positive case is not evidence of absence. Application and
 promotion temporaries are excluded because their command-specific recovery owns them.
 
+The `resume` residue enumerator is mechanical, following `terminalCleanup` rather than a prose
+guess. Its lease family is the exact `driver.lease` pathname; its sidecar family is regular
+`driver.quiesced.<prepare-id>` entries other than the malformed bare prefix; and its staging
+families are regular `prepares/*.json` plan records plus the complete per-run
+`.partitur/work/<run-id>/` tree. The latter includes adapter and criterion launch handoff children,
+their temporary directories, and the attempt worktree without having to predict child names. That
+work tree is permitted only for a `WAITING_HUMAN` fixed point, where the human-gate fixture retains
+the accepted subject. Criterion captures under `runs/<run-id>/attempts/` are durable evidence, not
+resume staging; apply checkout state and promotion's root-level temporary files are owned by their
+respective `--recover` commands, so none belongs to this enumeration.
+
+The four effect implications are checked from the durable journal into its projection, never from
+the selected recovery case: **completed attempt → movement success** (`attempt.completed` then the
+matching `movement.succeeded`, projected `SUCCEEDED`); **failed movement → run failure**
+(`movement.failed` then `run.failed`, or its terminal `run_failed: true` effect, projected
+`FAILED`); **criterion error → acceptance failure**
+(`criterion.completed {outcome: ERROR}` then matching `acceptance.failed`, projected failed
+attempt); and **completed evaluation → required gate request** (a gate-required
+`acceptance.evaluation_completed` then its matching `decision.requested {decision_type:
+human_gate}`, projected pending or resolved human gate). These assert consequences recovery made
+durable, not merely the class that chose a continuation.
+
 Every recovery result belongs to exactly one partition: **named halt**, **`WAITING_HUMAN`**,
 **ordinary `resume` fixed point**, or **command-specific recovery**. A fixture declares its
 command-specific branch as exactly `none`, `application`, or `promotion`; the oracle must require

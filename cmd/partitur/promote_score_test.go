@@ -411,6 +411,9 @@ func TestPromoteScoreRecoveryHaltLeavesJournalFixed(t *testing.T) {
 	if countEvents(journal.Events, runstate.EventScorePromotionRecoveryRequired) != 1 {
 		t.Fatalf("halt journal=%v", eventKinds(journal.Events))
 	}
+	// This fixture has actually reached the command-specific state that the
+	// convergence oracle may exempt. The declaration remains fixture metadata.
+	assertFixedPointFixtureBranch(t, root, "run-1", fixedPointFixture{commandSpecificRecovery: fixedPointRecoveryPromotion})
 	before := applyReadJournalBytes(t, root)
 	code, _, stderr = runCommandBinary(t, partitur, root, environment, "promote-score", "run-1", "--recover")
 	if code != 5 || !strings.Contains(stderr, "matches neither expected nor target") {
