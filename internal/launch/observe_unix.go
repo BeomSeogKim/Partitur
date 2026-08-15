@@ -17,6 +17,7 @@ import (
 // MarkerFree proves only the narrow §4 property: no released mutator remains.
 type HandoffObservation struct {
 	Identity    runstate.ProcessIdentity
+	HasMarker   bool
 	HasIdentity bool
 	MarkerFree  bool
 	MarkerHeld  bool
@@ -46,15 +47,15 @@ func ObserveHandoff(launchDir string) (HandoffObservation, error) {
 		return HandoffObservation{}, err
 	}
 	if matched {
-		return HandoffObservation{Identity: identity, HasIdentity: true}, nil
+		return HandoffObservation{Identity: identity, HasMarker: true, HasIdentity: true}, nil
 	}
 	if err := syscall.Flock(int(marker.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
 		if unlockErr := syscall.Flock(int(marker.Fd()), syscall.LOCK_UN); unlockErr != nil {
 			return HandoffObservation{}, fmt.Errorf("release launch marker observation: %w", unlockErr)
 		}
-		return HandoffObservation{MarkerFree: true}, nil
+		return HandoffObservation{HasMarker: true, MarkerFree: true}, nil
 	} else if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
-		return HandoffObservation{MarkerHeld: true}, nil
+		return HandoffObservation{HasMarker: true, MarkerHeld: true}, nil
 	} else {
 		return HandoffObservation{}, fmt.Errorf("observe launch marker lock: %w", err)
 	}
