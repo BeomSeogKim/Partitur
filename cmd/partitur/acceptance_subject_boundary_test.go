@@ -39,7 +39,7 @@ func TestAcceptanceSubjectPinnedToStartedKillCuts(t *testing.T) {
 		if err := validateAcceptanceSubjectEndpoint(repository, runID, attemptID, false, false); err != nil {
 			t.Fatal(err)
 		}
-		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &acceptanceFailure)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &acceptanceFailure, fixedPointNoneFixture)
 		if err := validateAcceptanceSubjectEndpoint(repository, runID, attemptID, true, false); err != nil {
 			t.Fatal(err)
 		}
@@ -53,7 +53,7 @@ func TestAcceptanceSubjectPinnedToStartedKillCuts(t *testing.T) {
 		if err := os.Rename(worktree, worktree+".lost"); err != nil {
 			t.Fatal(err)
 		}
-		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &worktreeLostFailure)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &worktreeLostFailure, fixedPointNoneFixture)
 		if err := validateAcceptanceSubjectEndpoint(repository, runID, attemptID, false, true); err != nil {
 			t.Fatal(err)
 		}
@@ -68,7 +68,7 @@ func TestAcceptanceSubjectPinnedToStartedKillCuts(t *testing.T) {
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("remove subject ref: %v: %s", err, output)
 		}
-		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &acceptanceFailure)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &acceptanceFailure, fixedPointNoneFixture)
 		if err := validateAcceptanceSubjectEndpoint(repository, runID, attemptID, true, false); err != nil {
 			t.Fatal(err)
 		}
@@ -83,7 +83,7 @@ func TestAcceptanceSubjectPinnedToStartedKillCuts(t *testing.T) {
 		if err := validateAcceptanceSubjectEndpoint(repository, runID, attemptID, true, false); err != nil {
 			t.Fatal(err)
 		}
-		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &acceptanceFailure)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &acceptanceFailure, fixedPointNoneFixture)
 		if err := validateAcceptanceSubjectEndpoint(repository, runID, attemptID, true, false); err != nil {
 			t.Fatal(err)
 		}

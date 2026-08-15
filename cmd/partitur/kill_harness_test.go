@@ -100,7 +100,25 @@ type killFixture struct {
 	build         func(*testing.T, string, string) (string, []string)
 	gateMode      string
 	reviewOutcome string
+	fixedPoint    fixedPointFixture
 }
+
+// fixedPointFixture is fixture metadata, not a conclusion inferred from a
+// recovered projection. An unexpected unsettled projection must therefore
+// stay in the rejecting none branch instead of selecting its own exception.
+type fixedPointFixture struct {
+	commandSpecificRecovery fixedPointCommandSpecificRecovery
+}
+
+type fixedPointCommandSpecificRecovery string
+
+const (
+	fixedPointRecoveryNone        fixedPointCommandSpecificRecovery = "none"
+	fixedPointRecoveryApplication fixedPointCommandSpecificRecovery = "application"
+	fixedPointRecoveryPromotion   fixedPointCommandSpecificRecovery = "promotion"
+)
+
+var fixedPointNoneFixture = fixedPointFixture{commandSpecificRecovery: fixedPointRecoveryNone}
 
 type expectedFailure struct {
 	event          runstate.EventType
@@ -154,7 +172,7 @@ func TestSubprocessKillHarness(t *testing.T) {
 								restoreCriterionErrorFixtureWorktree(t, repository, runID)
 							}
 							assertCrashedStateBeforeResume(t, repository, runID, side.point)
-							assertRecoveryFixedPoint(t, partitur, repository, environment, runID, expectedFailureFor(side.point))
+							assertRecoveryFixedPoint(t, partitur, repository, environment, runID, expectedFailureFor(side.point), fixture.fixedPoint)
 							if edge.id == faultpoint.EdgeAcceptanceCriterionErrorToFailed {
 								assertCriterionErrorEndpoint(t, readHarnessEvents(t, repository, runID), true)
 							}
@@ -204,7 +222,7 @@ func TestRetryDispositionCanFollowExecuteCut(t *testing.T) {
 		if code != 0 || stdout != "" || stderr != "" {
 			t.Fatalf("retry recovery at %s: exit=%d stdout=%q stderr=%q", point, code, stdout, stderr)
 		}
-		assertFixedPointReplay(t, partitur, repository, environment, runID, journal)
+		assertFixedPointReplay(t, partitur, repository, environment, runID, journal, fixedPointNoneFixture)
 		t.Logf("recovery-selected retry at %s reached attempt.started", point)
 	}
 }
@@ -260,13 +278,13 @@ func TestFailureOutcomeHarness(t *testing.T) {
 				runID := runUncrashed(t, partitur, repository, environment)
 				journal := readHarnessJournal(t, repository, runID)
 				assertExpectedFailure(t, journal, scenario.expected)
-				assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &scenario.expected)
+				assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &scenario.expected, fixedPointNoneFixture)
 			})
 			t.Run("crashed_after_outcome", func(t *testing.T) {
 				repository, environment := killHarnessRepositoryWithInputs(t, bin, vendor, scenario.score, runCast())
 				environment = fixtureOutcomeEnvironment(environment, scenario.outcome)
 				runID := killAtPoint(t, partitur, repository, environment, faultpoint.PointExecuteOutcomeRecorded)
-				assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &scenario.recovered)
+				assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &scenario.recovered, fixedPointNoneFixture)
 			})
 		})
 	}
@@ -291,7 +309,7 @@ func TestAcceptanceFailureWindowHarness(t *testing.T) {
 	runID := killAtPoint(t, partitur, repository, environment, faultpoint.PointAcceptanceFailureRecorded)
 	assertRecoveryFixedPoint(t, partitur, repository, environment, runID, &expectedFailure{
 		event: runstate.EventAcceptanceFailed, reason: "artifact_hash_mismatch", terminalReason: "retries_exhausted",
-	})
+	}, fixedPointNoneFixture)
 }
 
 func killHarnessEdges() []killEdge {
@@ -329,11 +347,11 @@ func nonCancellationKillHarnessEdges() []killEdge {
 func fixturesForKillEdge(edge killEdge) []killFixture {
 	if edge.id == faultpoint.EdgeAcceptanceEvaluationCompletedToDecisionRequested {
 		return []killFixture{
-			{name: "always", build: humanGateKillHarnessRepository, gateMode: "always"},
-			{name: "on_contested", build: contestedHumanGateKillHarnessRepository, gateMode: "on_contested", reviewOutcome: "CONTESTED"},
+			{name: "always", build: humanGateKillHarnessRepository, gateMode: "always", fixedPoint: fixedPointNoneFixture},
+			{name: "on_contested", build: contestedHumanGateKillHarnessRepository, gateMode: "on_contested", reviewOutcome: "CONTESTED", fixedPoint: fixedPointNoneFixture},
 		}
 	}
-	return []killFixture{{name: "default", build: edge.fixture}}
+	return []killFixture{{name: "default", build: edge.fixture, fixedPoint: fixedPointNoneFixture}}
 }
 
 func assertHumanGateFixture(t *testing.T, journal []byte, gateMode, reviewOutcome string) {
@@ -1526,7 +1544,7 @@ func journalContainsEvent(events []runstate.Event, want runstate.EventType) bool
 	return false
 }
 
-func assertRecoveryFixedPoint(t *testing.T, binary, repository string, environment []string, runID string, expected *expectedFailure) {
+func assertRecoveryFixedPoint(t *testing.T, binary, repository string, environment []string, runID string, expected *expectedFailure, fixture fixedPointFixture) {
 	t.Helper()
 	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "resume", runID)
 	if code == 5 {
@@ -1552,7 +1570,7 @@ func assertRecoveryFixedPoint(t *testing.T, binary, repository string, environme
 		t.Fatalf("resume exit=%d, want failed fixed point %s/%s", code, expected.kind, expected.reason)
 	}
 	code, stdout, stderr = runCommandBinary(t, binary, repository, environment, "resume", runID)
-	assertFixedPointReplayResult(t, code, stdout, stderr, binary, repository, environment, runID, first)
+	assertFixedPointReplayResult(t, code, stdout, stderr, binary, repository, environment, runID, first, fixture)
 }
 
 func assertFixedPointReplay(
@@ -1561,10 +1579,11 @@ func assertFixedPointReplay(
 	environment []string,
 	runID string,
 	first []byte,
+	fixture fixedPointFixture,
 ) {
 	t.Helper()
 	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "resume", runID)
-	assertFixedPointReplayResult(t, code, stdout, stderr, binary, repository, environment, runID, first)
+	assertFixedPointReplayResult(t, code, stdout, stderr, binary, repository, environment, runID, first, fixture)
 }
 
 func assertFixedPointReplayResult(
@@ -1574,6 +1593,7 @@ func assertFixedPointReplayResult(
 	environment []string,
 	runID string,
 	first []byte,
+	fixture fixedPointFixture,
 ) {
 	t.Helper()
 	if code != 0 && code != 4 || stdout != "" || stderr != "" {
@@ -1587,10 +1607,7 @@ func assertFixedPointReplayResult(
 	if !bytes.Equal(first, second) {
 		t.Fatal("fixed-point replay appended duplicate durable events")
 	}
-	assertSettledFixedPointState(t, repository, runID)
-	if _, err := os.Stat(filepath.Join(repository, ".partitur", "runs", runID, "driver.lease")); !os.IsNotExist(err) {
-		t.Fatalf("driver lease after fixed-point recovery = %v", err)
-	}
+	assertSettledFixedPointState(t, repository, runID, fixture)
 	if _, err := os.Stat(filepath.Join(repository, ".partitur", "work", runID)); !os.IsNotExist(err) {
 		if !runWaitingForHumanGate(t, repository, runID) {
 			t.Fatalf("attempt worktree after fixed-point recovery = %v", err)
@@ -1621,7 +1638,9 @@ func runWaitingForHumanGate(t *testing.T, repository, runID string) bool {
 
 // assertSettledFixedPointState derives fixed-point checks from DESIGN §6's
 // durable projection rather than inferring quiescence from the journal bytes.
-func assertSettledFixedPointState(t *testing.T, repository, runID string) {
+// The fixture declares command-specific recovery before the projection is
+// inspected so an unexpected unsettled projection cannot exempt itself.
+func assertSettledFixedPointState(t *testing.T, repository, runID string, fixture fixedPointFixture) {
 	t.Helper()
 	store, err := runstore.New(repository, faultpoint.Nop{})
 	if err != nil {
@@ -1638,15 +1657,90 @@ func assertSettledFixedPointState(t *testing.T, repository, runID string) {
 	if state.PendingPrepare != nil {
 		t.Fatalf("pending prepare after fixed-point recovery = %+v", *state.PendingPrepare)
 	}
-	if state.Application.State == runstate.ApplicationApplying || state.Application.State == runstate.ApplicationRecoveryRequired {
-		t.Fatalf("unsettled application projection after fixed-point recovery = %+v", state.Application)
+	if err := fixedPointRecoveryBranchError(fixture, state); err != nil {
+		t.Fatal(err)
 	}
-	if state.Promotion.State == runstate.PromotionPromoting || state.Promotion.State == runstate.PromotionRecoveryRequired {
-		t.Fatalf("unsettled promotion projection after fixed-point recovery = %+v", state.Promotion)
+	journal, err := store.ReadJournal(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
 	}
 	assertSettledLifecycle(t, state)
 	assertRecordedSessionsEmpty(t, state)
+	gateModes := make(map[runstate.MovementID]string)
+	for _, movement := range input.Score.Movements() {
+		gateModes[runstate.MovementID(movement.ID)] = movement.Acceptance.HumanGate
+	}
+	assertRecoveryOutcomeImplications(t, journal.Events, gateModes, state)
+	assertNoResumeOwnedResiduals(t, repository, runID, state)
 	assertSettledCandidateAndRefs(t, repository, runID, input.BaseCommit, state)
+}
+
+// fixedPointRecoveryBranchError makes the convergence partition explicit:
+// a named halt returns before this function; surviving resume is either a
+// human wait, ordinary terminal convergence, or the fixture-declared
+// command-specific recovery state.
+func fixedPointRecoveryBranchError(fixture fixedPointFixture, state runstate.State) error {
+	if state.Run == runstate.RunWaitingHuman {
+		if fixture.commandSpecificRecovery != fixedPointRecoveryNone {
+			return fmt.Errorf("WAITING_HUMAN fixed point declares command-specific recovery %q", fixture.commandSpecificRecovery)
+		}
+		return fixedPointCommandSpecificProjectionError(fixedPointRecoveryNone, state)
+	}
+	if !state.Run.Terminal() {
+		return fmt.Errorf("non-halted fixed point lifecycle = %q", state.Run)
+	}
+	return fixedPointCommandSpecificProjectionError(fixture.commandSpecificRecovery, state)
+}
+
+// assertFixedPointFixtureBranch is used by the apply and promotion fixtures to
+// prove that each command-specific exception has a real durable witness before
+// the exception is enabled in the broader resume fixed-point helper.
+func assertFixedPointFixtureBranch(t *testing.T, repository, runID string, fixture fixedPointFixture) {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixedPointRecoveryBranchError(fixture, input.Projection.State); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fixedPointCommandSpecificProjectionError(declaration fixedPointCommandSpecificRecovery, state runstate.State) error {
+	switch declaration {
+	case fixedPointRecoveryNone:
+		// Keep the pre-reconciliation assertion exactly: ordinary convergence
+		// admits neither in-progress nor recovery-required command state.
+		if state.Application.State == runstate.ApplicationApplying || state.Application.State == runstate.ApplicationRecoveryRequired {
+			return fmt.Errorf("unsettled application projection after fixed-point recovery = %+v", state.Application)
+		}
+		if state.Promotion.State == runstate.PromotionPromoting || state.Promotion.State == runstate.PromotionRecoveryRequired {
+			return fmt.Errorf("unsettled promotion projection after fixed-point recovery = %+v", state.Promotion)
+		}
+		return nil
+	case fixedPointRecoveryApplication:
+		if state.Application.State != runstate.ApplicationRecoveryRequired {
+			return fmt.Errorf("application recovery declaration requires RECOVERY_REQUIRED application projection, got %+v", state.Application)
+		}
+		if state.Promotion.State == runstate.PromotionPromoting || state.Promotion.State == runstate.PromotionRecoveryRequired {
+			return fmt.Errorf("application recovery declaration retains unsettled promotion projection = %+v", state.Promotion)
+		}
+		return nil
+	case fixedPointRecoveryPromotion:
+		if state.Application.State == runstate.ApplicationApplying || state.Application.State == runstate.ApplicationRecoveryRequired {
+			return fmt.Errorf("promotion recovery declaration retains unsettled application projection = %+v", state.Application)
+		}
+		if state.Promotion.State != runstate.PromotionRecoveryRequired {
+			return fmt.Errorf("promotion recovery declaration requires RECOVERY_REQUIRED promotion projection, got %+v", state.Promotion)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown command-specific recovery declaration %q", declaration)
+	}
 }
 
 func assertSettledLifecycle(t *testing.T, state runstate.State) {
@@ -1718,6 +1812,181 @@ func assertSessionEmpty(t *testing.T, label string, identity runstate.ProcessIde
 	empty, err := adapter.SessionEmpty(identity)
 	if err != nil || !empty {
 		t.Fatalf("recorded %s session after fixed-point recovery: empty=%t err=%v", label, empty, err)
+	}
+}
+
+// assertRecoveryOutcomeImplications checks durable effects, rather than which
+// recovery case selected them. The four implications are intentionally named
+// here because Appendix E owns their edges while convergence proves their
+// effects were realized after recovery.
+func assertRecoveryOutcomeImplications(t *testing.T, events []runstate.Event, gateModes map[runstate.MovementID]string, state runstate.State) {
+	t.Helper()
+	if err := recoveryOutcomeImplicationsError(events, gateModes, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recoveryOutcomeImplicationsError(events []runstate.Event, gateModes map[runstate.MovementID]string, state runstate.State) error {
+	for index, event := range events {
+		switch event.Type {
+		case runstate.EventAttemptCompleted:
+			if !hasEventAfter(events, index, runstate.EventMovementSucceeded, event.MovementID, event.AttemptID) ||
+				state.Movements[event.MovementID] != runstate.MovementSucceeded {
+				return fmt.Errorf("completed attempt %q has no durable movement.succeeded effect", event.AttemptID)
+			}
+		case runstate.EventMovementFailed:
+			if !movementFailureProjectsRunFailure(events, index, event, state) {
+				return fmt.Errorf("failed movement %q has no durable run.failed effect", event.MovementID)
+			}
+		case runstate.EventCriterionCompleted:
+			payload, err := decodeFixedPointPayload(event)
+			if err != nil {
+				return err
+			}
+			if payload["outcome"] != "ERROR" {
+				continue
+			}
+			attempt, present := state.Attempts[event.AttemptID]
+			if !hasEventAfter(events, index, runstate.EventAcceptanceFailed, event.MovementID, event.AttemptID) ||
+				!present || attempt.State != runstate.AttemptFailed {
+				return fmt.Errorf("criterion ERROR for attempt %q has no durable acceptance.failed effect", event.AttemptID)
+			}
+		case runstate.EventAcceptanceEvaluationCompleted:
+			payload, err := decodeFixedPointPayload(event)
+			if err != nil {
+				return err
+			}
+			gateMode := gateModes[event.MovementID]
+			gateRequired := gateMode == "always" || (gateMode == "on_contested" && payload["review_outcome"] == "CONTESTED")
+			if !gateRequired {
+				continue
+			}
+			if !hasHumanGateDecisionAfter(events, index, event.MovementID, event.AttemptID) || !humanGateProjects(state, event.MovementID, event.AttemptID) {
+				return fmt.Errorf("completed evaluation for attempt %q has no durable human-gate request effect", event.AttemptID)
+			}
+		}
+	}
+	return nil
+}
+
+func movementFailureProjectsRunFailure(events []runstate.Event, index int, event runstate.Event, state runstate.State) bool {
+	if state.Run != runstate.RunFailed {
+		return false
+	}
+	if hasEventAfter(events, index, runstate.EventRunFailed, "", "") {
+		return true
+	}
+	payload, err := decodeFixedPointPayload(event)
+	return err == nil && payload["run_failed"] == true
+}
+
+func hasEventAfter(events []runstate.Event, after int, want runstate.EventType, movementID runstate.MovementID, attemptID runstate.AttemptID) bool {
+	for _, event := range events[after+1:] {
+		if event.Type != want {
+			continue
+		}
+		if movementID != "" && event.MovementID != movementID {
+			continue
+		}
+		if attemptID != "" && event.AttemptID != attemptID {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func hasHumanGateDecisionAfter(events []runstate.Event, after int, movementID runstate.MovementID, attemptID runstate.AttemptID) bool {
+	for _, event := range events[after+1:] {
+		if event.Type != runstate.EventDecisionRequested || event.MovementID != movementID || event.AttemptID != attemptID {
+			continue
+		}
+		payload, err := decodeFixedPointPayload(event)
+		if err == nil && payload["decision_type"] == "human_gate" {
+			return true
+		}
+	}
+	return false
+}
+
+func humanGateProjects(state runstate.State, movementID runstate.MovementID, attemptID runstate.AttemptID) bool {
+	for _, decision := range state.PendingDecisions {
+		if decision.Type == "human_gate" && decision.MovementID == movementID && decision.AttemptID == attemptID {
+			return true
+		}
+	}
+	resolution, present := state.ResolvedHumanGates[attemptID]
+	return present && resolution.MovementID == movementID
+}
+
+func decodeFixedPointPayload(event runstate.Event) (map[string]any, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("decode fixed-point %s payload: %w", event.Type, err)
+	}
+	return payload, nil
+}
+
+type resumeOwnedResidue struct {
+	family string
+	path   string
+}
+
+// resumeOwnedResiduals is a mechanical mirror of recovery terminalCleanup:
+// the lease, quiesce sidecars, prepare-plan staging, and the per-run work
+// staging tree are the families resume owns. Apply and promotion use their
+// own command paths and are deliberately not enumerated here.
+func resumeOwnedResiduals(repository, runID string) ([]resumeOwnedResidue, error) {
+	runRoot := filepath.Join(repository, ".partitur", "runs", runID)
+	entries, err := os.ReadDir(runRoot)
+	if err != nil {
+		return nil, fmt.Errorf("read fixed-point run root: %w", err)
+	}
+	residues := make([]resumeOwnedResidue, 0)
+	lease := filepath.Join(runRoot, "driver.lease")
+	if _, err := os.Lstat(lease); err == nil {
+		residues = append(residues, resumeOwnedResidue{family: "lease", path: lease})
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat fixed-point driver lease: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), "driver.quiesced.") && entry.Name() != "driver.quiesced." {
+			residues = append(residues, resumeOwnedResidue{family: "sidecar", path: filepath.Join(runRoot, entry.Name())})
+		}
+	}
+	prepares := filepath.Join(runRoot, "prepares")
+	entries, err = os.ReadDir(prepares)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read fixed-point prepare staging: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".json") {
+			residues = append(residues, resumeOwnedResidue{family: "prepare staging", path: filepath.Join(prepares, entry.Name())})
+		}
+	}
+	work := filepath.Join(repository, ".partitur", "work", runID)
+	if _, err := os.Lstat(work); err == nil {
+		residues = append(residues, resumeOwnedResidue{family: "attempt staging", path: work})
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat fixed-point attempt staging: %w", err)
+	}
+	return residues, nil
+}
+
+func assertNoResumeOwnedResiduals(t *testing.T, repository, runID string, state runstate.State) {
+	t.Helper()
+	residues, err := resumeOwnedResiduals(repository, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, residue := range residues {
+		// A human-gate wait retains the attempt worktree deliberately so the
+		// operator can inspect the accepted subject. The existing caller below
+		// still rejects that directory for every other state.
+		if residue.family == "attempt staging" && state.Run == runstate.RunWaitingHuman {
+			continue
+		}
+		t.Fatalf("resume-owned fixed-point residue = %+v", residue)
 	}
 }
 
