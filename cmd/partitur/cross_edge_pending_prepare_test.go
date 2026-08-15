@@ -85,7 +85,7 @@ func TestCrossEdgePrepareCheckProductionSubprocess(t *testing.T) {
 	killPausedRun(t, approver)
 	assertCrossEdgePrepareObservation(t, repository, runID, 1, 0, 0, true)
 
-	assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+	assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	assertCrossEdgePrepareObservation(t, repository, runID, 1, 1, 1, false)
 }
 

@@ -248,6 +248,10 @@ func TestApplyKillLeavingAnUnverifiableCheckoutHalts(t *testing.T) {
 		countEvents(journal.Events, runstate.EventApplyCompleted) != 0 {
 		t.Fatalf("halt journal=%v", eventKinds(journal.Events))
 	}
+	// This fixture has actually reached the command-specific state that the
+	// convergence oracle may exempt. The declaration is supplied by fixture
+	// metadata, never recovered from this projection.
+	assertFixedPointFixtureBranch(t, root, "run-1", fixedPointFixture{commandSpecificRecovery: fixedPointRecoveryApplication})
 
 	// The halt is the fixed point: repeating it appends no second cause.
 	before := applyReadJournalBytes(t, root)
