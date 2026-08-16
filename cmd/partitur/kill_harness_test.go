@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1302,58 +1303,6 @@ func expectedFailureFor(point faultpoint.PointID) *expectedFailure {
 	}
 }
 
-type crashedStateExpectation uint8
-
-const (
-	crashedStateProjectionOnly crashedStateExpectation = iota
-	crashedStateMovementFailed
-	crashedStateRunFailed
-	crashedStateCriterionErrorRecorded
-	crashedStateAcceptanceFailureRecorded
-	crashedStateCriterionIdentityPublished
-)
-
-func crashedStateExpectationFor(point faultpoint.PointID) crashedStateExpectation {
-	switch point {
-	case faultpoint.PointAuthorityGranted:
-		return crashedStateProjectionOnly
-	case faultpoint.PointAuthorityLeaseCreated:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLaunchAdapterMarkerHeld:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLaunchAdapterIdentityPublished:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLaunchAdapterIdentityRecorded:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLaunchAdapterGateReleased:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLaunchCriterionIdentityPublished:
-		return crashedStateCriterionIdentityPublished
-	case faultpoint.PointExecuteAdapterSwept:
-		return crashedStateProjectionOnly
-	case faultpoint.PointExecuteIntervalStopped:
-		return crashedStateProjectionOnly
-	case faultpoint.PointExecuteOutcomeRecorded:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLifecycleAttemptCompleted:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLifecycleMovementSucceeded:
-		return crashedStateProjectionOnly
-	case faultpoint.PointLifecycleMovementFailed:
-		return crashedStateMovementFailed
-	case faultpoint.PointLifecycleRunFailed:
-		return crashedStateRunFailed
-	case faultpoint.PointAcceptanceNonPassCompleted:
-		return crashedStateCriterionErrorRecorded
-	case faultpoint.PointAcceptanceFailureRecorded:
-		return crashedStateAcceptanceFailureRecorded
-	case faultpoint.PointAcceptanceEvaluationCompleted, faultpoint.PointHumanGateDecisionRequested:
-		return crashedStateProjectionOnly
-	default:
-		panic(fmt.Sprintf("no crashed-state expectation declared for point %q", point))
-	}
-}
-
 func assertCrashedStateBeforeResume(t *testing.T, repository, runID string, point faultpoint.PointID) {
 	t.Helper()
 	store, err := runstore.New(repository, faultpoint.Nop{})
@@ -1370,12 +1319,39 @@ func assertCrashedStateBeforeResume(t *testing.T, repository, runID string, poin
 	}
 	state := input.Projection.State
 
-	switch crashedStateExpectationFor(point) {
-	case crashedStateProjectionOnly:
-		// These points have no lifecycle-window invariant. Loading the durable
-		// journal and its projection is the explicit pre-resume observation.
-		return
-	case crashedStateMovementFailed:
+	switch point {
+	case faultpoint.PointAuthorityGranted:
+		assertAuthorityGrantedBeforeLease(t, store, runID, journal.Events, state)
+	case faultpoint.PointAuthorityLeaseCreated:
+		assertAuthorityLeaseCreatedBeforeSelection(t, store, runID, journal.Events, state)
+	case faultpoint.PointLaunchAdapterMarkerHeld:
+		assertAdapterMarkerHeldBeforeIdentity(t, repository, runID, journal.Events)
+	case faultpoint.PointLaunchAdapterIdentityPublished:
+		assertAdapterIdentityPublishedBeforeRecord(t, repository, runID, journal.Events)
+	case faultpoint.PointLaunchAdapterIdentityRecorded:
+		assertAdapterIdentityRecordedBeforeProbe(t, repository, runID, state)
+	case faultpoint.PointLaunchAdapterGateReleased:
+		// Gate release is a pipe write, so it leaves no durable fact that can
+		// distinguish this cut from identity_recorded after the process is killed.
+		// The preceding durable prefix is nevertheless material: the matching
+		// adapter identity is recorded and adapter capabilities are not yet.
+		assertAdapterIdentityRecordedBeforeProbe(t, repository, runID, state)
+	case faultpoint.PointLaunchCriterionIdentityPublished:
+		assertCriterionIdentityPublishedBeforeRecord(t, repository, runID, journal.Events)
+	case faultpoint.PointExecuteAdapterSwept:
+		// Session sweep is an external process action. After the harness kills
+		// that process group it cannot be observed again, so pin the durable
+		// interval it leaves open and require that it has no terminal record.
+		assertAdapterExecutionOpenBeforeStop(t, journal.Events, state)
+	case faultpoint.PointExecuteIntervalStopped:
+		assertAdapterExecutionStoppedBeforeOutcome(t, journal.Events, state)
+	case faultpoint.PointExecuteOutcomeRecorded:
+		assertAdapterOutcomeRecordedBeforeAcceptance(t, journal.Events, state)
+	case faultpoint.PointLifecycleAttemptCompleted:
+		assertAttemptCompletedBeforeMovementSuccess(t, journal.Events, state)
+	case faultpoint.PointLifecycleMovementSucceeded:
+		assertMovementSucceededBeforeLeaseRelease(t, store, runID, journal.Events, state)
+	case faultpoint.PointLifecycleMovementFailed:
 		if !journalContainsEvent(journal.Events, runstate.EventMovementFailed) {
 			t.Fatalf("crashed journal at %s has no durable movement.failed", point)
 		}
@@ -1385,7 +1361,7 @@ func assertCrashedStateBeforeResume(t *testing.T, repository, runID string, poin
 		if state.Run.Terminal() {
 			t.Fatalf("crashed projection at %s is terminal: %q", point, state.Run)
 		}
-	case crashedStateRunFailed:
+	case faultpoint.PointLifecycleRunFailed:
 		// The edge is ordered: run.failed alone would satisfy Apply, which
 		// accepts a run failure from RUNNING without a failed movement.
 		if !journalContainsEvent(journal.Events, runstate.EventMovementFailed) {
@@ -1397,15 +1373,279 @@ func assertCrashedStateBeforeResume(t *testing.T, repository, runID string, poin
 		if !state.Run.Terminal() {
 			t.Fatalf("crashed projection at %s is nonterminal: %q", point, state.Run)
 		}
-	case crashedStateCriterionErrorRecorded:
+	case faultpoint.PointAcceptanceNonPassCompleted:
 		assertCriterionErrorEndpoint(t, journal.Events, false)
-	case crashedStateAcceptanceFailureRecorded:
+	case faultpoint.PointAcceptanceFailureRecorded:
 		assertCriterionErrorEndpoint(t, journal.Events, true)
-	case crashedStateCriterionIdentityPublished:
-		assertCriterionIdentityPublishedBeforeRecord(t, repository, runID, journal.Events)
+	case faultpoint.PointAcceptanceEvaluationCompleted:
+		assertAcceptanceEvaluationCompletedBeforeHumanGate(t, journal.Events, state)
+	case faultpoint.PointHumanGateDecisionRequested:
+		assertHumanGateRequestedBeforeAttemptCompletion(t, journal.Events, state)
 	default:
-		t.Fatalf("unknown crashed-state expectation for point %q", point)
+		t.Fatalf("no crashed-state assertion declared for point %q", point)
 	}
+}
+
+func assertAuthorityGrantedBeforeLease(t *testing.T, store *runstore.Store, runID string, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	if !journalContainsEvent(events, runstate.EventAuthorityGranted) {
+		t.Fatalf("crashed authority.granted has no durable authority event")
+	}
+	if state.Authority.Owner == nil {
+		t.Fatalf("crashed authority.granted has no projected authority owner: %+v", state.Authority)
+	}
+	if state.Authority.Epoch == 0 {
+		t.Fatalf("crashed authority.granted has zero projected authority epoch")
+	}
+	lease, present, err := store.ReadLease(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if present {
+		t.Fatalf("crashed authority.granted already has durable driver lease: %+v", lease)
+	}
+}
+
+func assertAuthorityLeaseCreatedBeforeSelection(t *testing.T, store *runstore.Store, runID string, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	lease, present, err := store.ReadLease(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journalContainsEvent(events, runstate.EventAuthorityGranted) {
+		t.Fatalf("crashed authority.lease_created lacks durable authority event")
+	}
+	if state.Authority.Owner == nil {
+		t.Fatalf("crashed authority.lease_created lacks projected authority owner: %+v", state.Authority)
+	}
+	if !present {
+		t.Fatalf("crashed authority.lease_created lacks durable authority lease: %+v", lease)
+	}
+	if journalContainsEvent(events, runstate.EventPerformerSelected) {
+		t.Fatalf("crashed authority.lease_created already has performer.selected")
+	}
+	if len(state.Attempts) != 0 {
+		t.Fatalf("crashed authority.lease_created already selected a performer: attempts=%+v", state.Attempts)
+	}
+}
+
+func assertAdapterMarkerHeldBeforeIdentity(t *testing.T, repository, runID string, events []runstate.Event) {
+	t.Helper()
+	_, observation := crashedAdapterHandoff(t, repository, runID)
+	if !observation.HasMarker {
+		t.Fatalf("crashed adapter marker-held has no durable launch marker")
+	}
+	if observation.HasIdentity {
+		t.Fatalf("crashed adapter marker-held already has a published identity")
+	}
+	if journalContainsEvent(events, runstate.EventAttemptStarted) {
+		t.Fatalf("crashed adapter marker-held already records attempt.started")
+	}
+}
+
+func assertAdapterIdentityPublishedBeforeRecord(t *testing.T, repository, runID string, events []runstate.Event) {
+	t.Helper()
+	_, observation := crashedAdapterHandoff(t, repository, runID)
+	if !observation.HasIdentity {
+		t.Fatalf("crashed adapter identity-published has no published handoff identity")
+	}
+	if journalContainsEvent(events, runstate.EventAttemptStarted) {
+		t.Fatalf("crashed adapter identity-published already records attempt.started")
+	}
+}
+
+func assertAdapterIdentityRecordedBeforeProbe(t *testing.T, repository, runID string, state runstate.State) {
+	t.Helper()
+	_, observation := crashedAdapterHandoff(t, repository, runID)
+	if !observation.HasIdentity {
+		t.Fatalf("crashed adapter identity-recorded has no published handoff identity")
+	}
+	if len(state.AdapterLaunches) != 1 {
+		t.Fatalf("crashed adapter identity-recorded launches=%d, want one", len(state.AdapterLaunches))
+	}
+	for attemptID, recorded := range state.AdapterLaunches {
+		if !reflect.DeepEqual(recorded.Process, observation.Identity) {
+			t.Fatalf("crashed adapter identity-recorded launch for %q does not match published handoff: recorded=%+v published=%+v", attemptID, recorded.Process, observation.Identity)
+		}
+		if _, probed := state.AdapterObservations[attemptID]; probed {
+			t.Fatalf("crashed adapter identity-recorded already has adapter.probed for %q", attemptID)
+		}
+	}
+}
+
+func assertAdapterExecutionOpenBeforeStop(t *testing.T, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	if state.OpenExecution == nil {
+		t.Fatalf("crashed adapter sweep has no durable open adapter execution: %+v", state.OpenExecution)
+	}
+	if state.OpenExecution.Phase != "adapter" {
+		t.Fatalf("crashed adapter sweep has non-adapter open execution: %+v", state.OpenExecution)
+	}
+	if journalContainsEvent(events, runstate.EventExecutionStopped) {
+		t.Fatalf("crashed adapter sweep already records execution.stopped")
+	}
+}
+
+func assertAdapterExecutionStoppedBeforeOutcome(t *testing.T, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	if !journalContainsEvent(events, runstate.EventExecutionStopped) {
+		t.Fatalf("crashed execution-stopped lacks closed durable adapter interval")
+	}
+	if state.OpenExecution != nil {
+		t.Fatalf("crashed execution-stopped retains open execution: %+v", state.OpenExecution)
+	}
+	if adapterOutcomeRecorded(events) {
+		t.Fatalf("crashed execution-stopped already records adapter outcome")
+	}
+	if adapterAttemptState(state) != runstate.AttemptRunning {
+		t.Fatalf("crashed execution-stopped has attempt state %q, want RUNNING", adapterAttemptState(state))
+	}
+}
+
+func assertAdapterOutcomeRecordedBeforeAcceptance(t *testing.T, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	if !journalContainsEvent(events, runstate.EventPerformerCompleted) {
+		t.Fatalf("crashed adapter outcome lacks durable completed adapter result")
+	}
+	if adapterAttemptState(state) != runstate.AttemptVerifying {
+		t.Fatalf("crashed adapter outcome has attempt state %q, want VERIFYING", adapterAttemptState(state))
+	}
+	if journalContainsEvent(events, runstate.EventAcceptanceStarted) {
+		t.Fatalf("crashed adapter outcome already starts acceptance")
+	}
+	if len(state.Acceptances) != 0 {
+		t.Fatalf("crashed adapter outcome already starts acceptance: acceptances=%+v", state.Acceptances)
+	}
+}
+
+func assertAttemptCompletedBeforeMovementSuccess(t *testing.T, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	if !journalContainsEvent(events, runstate.EventAttemptCompleted) {
+		t.Fatalf("crashed attempt-completed lacks durable completed attempt")
+	}
+	if adapterAttemptState(state) != runstate.AttemptCompleted {
+		t.Fatalf("crashed attempt-completed has attempt state %q, want COMPLETED", adapterAttemptState(state))
+	}
+	if journalContainsEvent(events, runstate.EventMovementSucceeded) {
+		t.Fatalf("crashed attempt-completed already has movement.succeeded")
+	}
+	if state.Movements["inspect"] == runstate.MovementSucceeded {
+		t.Fatalf("crashed attempt-completed already has movement success: movement=%q", state.Movements["inspect"])
+	}
+}
+
+func assertMovementSucceededBeforeLeaseRelease(t *testing.T, store *runstore.Store, runID string, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	if !journalContainsEvent(events, runstate.EventMovementSucceeded) {
+		t.Fatalf("crashed movement-succeeded lacks durable final movement success event")
+	}
+	if state.Movements["inspect"] != runstate.MovementSucceeded {
+		t.Fatalf("crashed movement-succeeded has movement state %q", state.Movements["inspect"])
+	}
+	if state.Run != runstate.RunSucceeded {
+		t.Fatalf("crashed movement-succeeded has run state %q", state.Run)
+	}
+	_, present, err := store.ReadLease(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present {
+		t.Fatalf("crashed movement-succeeded already released driver lease")
+	}
+}
+
+func assertAcceptanceEvaluationCompletedBeforeHumanGate(t *testing.T, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	acceptance, attemptID := crashedAcceptance(t, state)
+	if !journalContainsEvent(events, runstate.EventAcceptanceEvaluationCompleted) {
+		t.Fatalf("crashed acceptance evaluation has no durable completed evaluation for %q", attemptID)
+	}
+	if !acceptance.EvaluationCompleted {
+		t.Fatalf("crashed acceptance evaluation is not projected completed for %q: %+v", attemptID, acceptance)
+	}
+	if hasPendingHumanGate(state, attemptID) {
+		t.Fatalf("crashed acceptance evaluation already has a projected human-gate request for %q", attemptID)
+	}
+	if journalContainsEvent(events, runstate.EventDecisionRequested) {
+		t.Fatalf("crashed acceptance evaluation already has a durable human-gate request for %q", attemptID)
+	}
+}
+
+func assertHumanGateRequestedBeforeAttemptCompletion(t *testing.T, events []runstate.Event, state runstate.State) {
+	t.Helper()
+	_, attemptID := crashedAcceptance(t, state)
+	if !journalContainsEvent(events, runstate.EventDecisionRequested) {
+		t.Fatalf("crashed human-gate request has no durable pending gate for %q", attemptID)
+	}
+	if !hasPendingHumanGate(state, attemptID) {
+		t.Fatalf("crashed human-gate request has no projected pending gate for %q", attemptID)
+	}
+	if journalContainsEvent(events, runstate.EventAttemptCompleted) {
+		t.Fatalf("crashed human-gate request already completes attempt %q", attemptID)
+	}
+	if adapterAttemptState(state) != runstate.AttemptVerifying {
+		t.Fatalf("crashed human-gate request has attempt state %q, want VERIFYING", adapterAttemptState(state))
+	}
+}
+
+func crashedAdapterHandoff(t *testing.T, repository, runID string) (string, launch.HandoffObservation) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(repository, ".partitur", "work", runID, "*", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handoffs []string
+	var observation launch.HandoffObservation
+	for _, path := range paths {
+		entry, err := os.Stat(path)
+		if err != nil || !entry.IsDir() {
+			continue
+		}
+		candidate, err := launch.ObserveHandoff(path)
+		if err != nil {
+			t.Fatalf("observe crashed adapter handoff %q: %v", path, err)
+		}
+		if !candidate.HasMarker {
+			continue
+		}
+		handoffs = append(handoffs, path)
+		observation = candidate
+	}
+	if len(handoffs) != 1 {
+		t.Fatalf("crashed adapter handoff directories=%d, want one: %v", len(handoffs), handoffs)
+	}
+	return handoffs[0], observation
+}
+
+func adapterOutcomeRecorded(events []runstate.Event) bool {
+	for _, event := range events {
+		switch event.Type {
+		case runstate.EventPerformerCompleted, runstate.EventAttemptFailed, runstate.EventAttemptBlocked:
+			return true
+		}
+	}
+	return false
+}
+
+func adapterAttemptState(state runstate.State) runstate.AttemptState {
+	if len(state.Attempts) != 1 {
+		return ""
+	}
+	for _, attempt := range state.Attempts {
+		return attempt.State
+	}
+	return ""
+}
+
+func crashedAcceptance(t *testing.T, state runstate.State) (runstate.Acceptance, runstate.AttemptID) {
+	t.Helper()
+	if len(state.Acceptances) != 1 {
+		t.Fatalf("crashed acceptance states=%d, want one", len(state.Acceptances))
+	}
+	for attemptID, acceptance := range state.Acceptances {
+		return acceptance, attemptID
+	}
+	panic("unreachable")
 }
 
 // assertCriterionIdentityPublishedBeforeRecord locks the precondition of the
