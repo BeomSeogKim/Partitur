@@ -323,6 +323,32 @@ These span more than one edge and attach to no single crash window, so they are 
    otherwise unreachable negative controls: two simultaneous prepares fail, two approvals for one
    proposal fail, and two ordered approvals for different proposals pass.
 2. **Cancellation outranks approval.** No `amendment.approved` after a durable `cancel.requested`.
+   `TestCrossEdgeCancellationCheckProductionSubprocess` reads the ordered decoded journal after a
+   production `cancel` reaches its terminal disposition with a pending prepare. It observes exactly
+   one `cancel.requested`, exactly one `run.cancelled`, the request before that disposition, and
+   either no approval or every approval strictly before the request. This is a positive ordering
+   oracle, not merely an absence check. The retained approval position is the last one, so a journal
+   that approves both before and after the request is rejected.
+
+   The approval-after-cancellation production violation is **not reached** by this harness's
+   interleavings. Every production `amendment.approved` append goes through
+   `Txn.approvePrepare` (`internal/runstore/prepare.go:412`), called only at :265, :272, :336, and
+   :357. `classifyPrepareCommit` returns the cancellation path when its locked projection has
+   `CancelRequested` (`internal/runstore/prepare.go:235-242`), and the fenced re-check refuses the
+   append when that same projection has it (`internal/runstore/prepare.go:307-315`).
+   `RequestCancellation` projects and appends `cancel.requested` inside its own `Store.Mutate`
+   transaction (`internal/runstore/cancellation.go:23-54`), so the fenced re-check closes the window
+   between classification and commit. This is not an impossibility claim. The watcher is not the
+   deciding point: it stops at the first ordered `cancel.requested`
+   (`internal/cancellation/watcher.go:170-176`); :185 merely clears its in-memory pending marker.
+
+   The projector does not duplicate this enforcement. `EventAmendmentApproved` never reads
+   `CancelRequested` (`internal/runstate/apply.go:769-866`), while `EventCancelRequested` sets that
+   flag without clearing the pending prepare (:884-888). The synthetic negative control therefore
+   appends a real prepared plan's matching approval after a durable cancellation, then a matching
+   terminal event; the real decoder and projector replay it cleanly, and this check rejects its
+   ordered journal. It is the only journal-level enforcement of this invariant. It does not claim to
+   catch a reachable production violation; the red control is synthetic.
 3. **Recovery is idempotent in both forms below.** Both are required; the first does not imply the
    second.
    - **Repeated resume after convergence:** after one recovery has reached its fixed point, another
