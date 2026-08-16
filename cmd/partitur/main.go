@@ -968,6 +968,8 @@ func newCancellationWaiter(store *runstore.Store, runID runstate.RunID) cancelwa
 
 func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {
 	executor := &recoveryexec.Executor{Store: store, RunID: runID, CoreFinalizer: amendmentexec.New().RebuildFinalization}
+	trace := recoveryDecisionTraceFromEnvironment()
+	executor.ObserveDecision = trace.Observe
 	executor.Load = func(context.Context) (recovery.Input, error) {
 		durable, err := store.LoadRunInput(runID)
 		if err != nil {
@@ -980,6 +982,9 @@ func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.
 		return recovery.Input{Projection: durable.Projection, Observations: observations}, nil
 	}
 	result, err := executor.Execute(ctx)
+	if traceErr := trace.Close(); err == nil && traceErr != nil {
+		err = traceErr
+	}
 	if executor.Driver != nil && result.Outcome != recoveryexec.OutcomeHalted && !terminalCleanupRan(result) {
 		if releaseErr := executor.Driver.Release(); err == nil && releaseErr != nil {
 			err = releaseErr

@@ -373,15 +373,39 @@ first-occurrence order: for example the first generated decision and interval be
 and `interval#1`. Every later occurrence or reference to the same original identifier maps to the
 same canonical name, including references across envelopes, payloads, projection fields, and
 actions. Stable input identities and content hashes are retained verbatim. Every timestamp value,
-whether in an envelope, payload, projection, or action, is removed, but each timestamp field's
-required presence is retained and event order remains the journal's sequence order. Diagnostics are
+whether in an envelope, payload, projection, or action, is replaced with `<timestamp>`, but each
+timestamp field's required presence is retained and event order remains the journal's sequence
+order. Before normalization, every clamped `execution.stopped` independently proves its
+`charged_duration` equals `min(max(0, observed_at - wall_start), remaining_at_start)`. The
+timestamp-derived `charged_duration` and its accumulated projected budget values are then replaced
+with declared sentinels, retaining their keys and the `charging` and `reason` classification. This
+means checks 3 and 4 do not prove independent recoveries charged the same amount; they prove each
+charge obeys the formula while all non-derived semantic consequences remain equal. Diagnostics are
 excluded entirely: `log` and `progress` events and command stdout/stderr are not inputs to the
-comparison. No other retained value may be discarded merely because it differs between runs.
+comparison. No other retained value may be discarded merely because it differs between runs;
+in particular, `criterion.completed.duration_ms` remains literal because this fixture does not
+exercise it and it is not derived from a normalized persisted timestamp pair.
+
+The completeness lock uses the normalizer's timestamp value classifier, rather than a second
+timestamp-key spelling list, and a closed vocabulary for budget magnitudes. It observes retained
+event payloads and the durable projection; envelope fields and the recovery action trace are
+normalized but outside its domain. Each observed retained timestamp or budget magnitude must have a
+path-specific normalization or a stated literal reason; therefore a valid timestamp such as
+`wall_start` is locked even though its key has no budget-shaped spelling. A budget magnitude is
+still recognized by name, because a bare integer cannot be identified by value.
 
 These comparisons must be non-vacuous: their extractor must reject an empty event, projection, or
 action domain where the fixture promises one, and the comparison suite must demonstrate that it
 distinguishes two deliberately different seeds whose retained semantic consequences differ. A
 normalizer or comparison that cannot make that distinction does not satisfy checks 3 or 4.
+
+The clone check declares every durable-file glob as required or deliberately absent. The
+criterion-launch prefix requires its initial score and `driver.lease` but records why it has no
+prepared plan, quiesce sidecar, or quarantine entry. A separate pending-human-prepare prefix
+requires and byte-compares `prepares/*.json`, the score snapshots, and the lease; the plan bytes
+are load-bearing because `plan_record_hash` digests the exact record. That fixture deliberately
+holds the driver before its quiesce acknowledgement and has discarded no artifact, so the recorded
+absence of sidecars and quarantine entries is part of its precondition rather than a silent pass.
 
 ### Post-recovery convergence
 

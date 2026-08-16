@@ -63,6 +63,10 @@ type Executor struct {
 	Load          LoadInput
 	CoreFinalizer func(context.Context, *runstore.Store, runstate.RunID) error
 
+	// ObserveDecision records each selected recovery decision. It is an
+	// observation seam: it neither selects nor changes an action.
+	ObserveDecision func(recovery.Decision)
+
 	// Steps is a test seam. A nil map selects the package's default handlers;
 	// a non-nil map is intentionally exact so tests can expose missing steps.
 	Steps map[recovery.ActionStep]StepHandler
@@ -105,6 +109,7 @@ func (executor *Executor) Execute(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	if halted.Halt != "" {
+		executor.observeDecision(halted)
 		return Result{Decision: halted, Outcome: OutcomeHalted}, nil
 	}
 	return executor.executeSelected(ctx, input, recovery.Plan(input), true)
@@ -121,6 +126,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 		if !decision.Valid() {
 			return result, fmt.Errorf("%w: %+v", ErrInvalidDecision, decision)
 		}
+		executor.observeDecision(decision)
 		result.Decision = decision
 		if decision.Halt != "" {
 			// Appendix B.7: a halt is intentionally not a journal event.
@@ -130,6 +136,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 		if runEligibleCleanup && executor.Store != nil && executor.RunID != "" && !eligibleCleanupCompleted && clearOwnerCut(input) {
 			if err := executor.cleanupUnreferencedRecoveryArtifacts(); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
+					executor.observeDecision(halted)
 					result.Decision = halted
 					result.Outcome = OutcomeHalted
 					return result, nil
@@ -142,6 +149,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 				return result, err
 			}
 			if halted.Halt != "" {
+				executor.observeDecision(halted)
 				result.Decision = halted
 				result.Outcome = OutcomeHalted
 				return result, nil
@@ -156,6 +164,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 		if action.Kind == recovery.ActionReclaimAuthority || (actionRequiresDriver(action) && executor.Driver == nil) {
 			if err := executor.acquireAuthority(input); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
+					executor.observeDecision(halted)
 					result.Decision = halted
 					result.Outcome = OutcomeHalted
 					return result, nil
@@ -167,6 +176,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 				return result, err
 			}
 			if halted.Halt != "" {
+				executor.observeDecision(halted)
 				result.Decision = halted
 				result.Outcome = OutcomeHalted
 				return result, nil
@@ -204,6 +214,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 							return result, reloadErr
 						}
 						if halted.Halt != "" {
+							executor.observeDecision(halted)
 							result.Decision = halted
 							result.Outcome = OutcomeHalted
 							return result, nil
@@ -215,6 +226,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 						break
 					}
 					if halted, ok := haltDecision(decision, err); ok {
+						executor.observeDecision(halted)
 						result.Decision = halted
 						result.Outcome = OutcomeHalted
 						return result, nil
@@ -228,6 +240,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 						return result, err
 					}
 					if halted.Halt != "" {
+						executor.observeDecision(halted)
 						result.Decision = halted
 						result.Outcome = OutcomeHalted
 						return result, nil
@@ -255,6 +268,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 						return result, reloadErr
 					}
 					if halted.Halt != "" {
+						executor.observeDecision(halted)
 						result.Decision = halted
 						result.Outcome = OutcomeHalted
 						return result, nil
@@ -277,6 +291,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 						return result, reloadErr
 					}
 					if halted.Halt != "" {
+						executor.observeDecision(halted)
 						result.Decision = halted
 						result.Outcome = OutcomeHalted
 						return result, nil
@@ -287,6 +302,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 					continue
 				}
 				if halted, ok := haltDecision(decision, err); ok {
+					executor.observeDecision(halted)
 					result.Decision = halted
 					result.Outcome = OutcomeHalted
 					return result, nil
@@ -299,6 +315,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 					return result, err
 				}
 				if halted.Halt != "" {
+					executor.observeDecision(halted)
 					result.Decision = halted
 					result.Outcome = OutcomeHalted
 					return result, nil
@@ -307,6 +324,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 				if clearOwnerCut(input) {
 					if err := executor.cleanupUnreferencedRecoveryArtifacts(); err != nil {
 						if halted, ok := haltDecision(decision, err); ok {
+							executor.observeDecision(halted)
 							result.Decision = halted
 							result.Outcome = OutcomeHalted
 							return result, nil
@@ -323,6 +341,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 					return result, err
 				}
 				if halted.Halt != "" {
+					executor.observeDecision(halted)
 					result.Decision = halted
 					result.Outcome = OutcomeHalted
 					return result, nil
@@ -344,6 +363,12 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 		}
 		result.Replans++
 		decision = recovery.Plan(input)
+	}
+}
+
+func (executor *Executor) observeDecision(decision recovery.Decision) {
+	if executor != nil && executor.ObserveDecision != nil {
+		executor.ObserveDecision(decision)
 	}
 }
 
