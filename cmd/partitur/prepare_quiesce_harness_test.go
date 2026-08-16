@@ -42,7 +42,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		assertPendingPrepare(t, repository, runID)
 		assertPrepareBarrier(t, repository, runID)
 		child.kill(t)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 
 	t.Run("prepare.prepared_to_observed/observed", func(t *testing.T) {
@@ -55,7 +55,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		assertNormalLeasePresent(t, repository, runID)
 		child.kill(t)
 		assertPrepareBarrier(t, repository, runID)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 
 	t.Run("quiesce.observed_to_swept/observed", func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		child.kill(t)
 		assertNoQuiesceSidecar(t, repository, runID)
 		before := readHarnessJournal(t, repository, string(runID))
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 		after := readHarnessJournal(t, repository, string(runID))
 		if bytes.Count(after, []byte(`"type":"amendment.quiesce_observed"`)) != bytes.Count(before, []byte(`"type":"amendment.quiesce_observed"`)) {
 			t.Fatal("resume reset or appended a quiesce receipt after the silent crash")
@@ -84,7 +84,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		child.waitProbe(t, faultpoint.PointQuiesceSessionsSwept)
 		child.kill(t)
 		assertNoQuiesceSidecar(t, repository, runID)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 
 	t.Run("quiesce.swept_to_lease_moved/swept", func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 			assertPendingPrepare(t, repository, runID)
 			assertNoQuiesceSidecar(t, repository, runID)
 			assertNormalLeasePresent(t, repository, runID)
-			assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+			assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 			assertPreparedApprovalFenced(t, repository, runID)
 		})
 
@@ -123,7 +123,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 			// matching-lease recovery sweep, whose probe is immediately after it.
 			resumeWithoutPoint(t, partitur, repository, environment, string(runID), faultpoint.PointSupersedeSessionsSwept)
 			assertPreparedApprovalUnfenced(t, repository, runID)
-			assertFixedPointReplay(t, partitur, repository, environment, string(runID), readHarnessJournal(t, repository, string(runID)))
+			assertFixedPointReplay(t, partitur, repository, environment, string(runID), readHarnessJournal(t, repository, string(runID)), fixedPointNoneFixture)
 		})
 	})
 
@@ -135,7 +135,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		child.waitReceipt(t, "prepare.ack.lease")
 		child.kill(t)
 		assertQuiesceSidecar(t, repository, runID)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 		assertPreparedApprovalUnfenced(t, repository, runID)
 	})
 
@@ -147,7 +147,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		child.waitReceipt(t, "prepare.ack.lease")
 		child.kill(t)
 		assertQuiesceSidecar(t, repository, runID)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 
 	t.Run("quiesce.lease_moved_to_commit_lock/commit_lock", func(t *testing.T) {
@@ -160,7 +160,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 		killAtPoint(t, partitur, repository, environment, faultpoint.PointQuiesceCommitLockHeld, "resume", string(runID))
 		assertPendingPrepare(t, repository, runID)
 		assertQuiesceSidecar(t, repository, runID)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 
 	t.Run("quiesce.lease_moved_to_commit_lock/lease_moved/cancellation_wins", func(t *testing.T) {
@@ -178,7 +178,7 @@ func TestPrepareQuiesceDriverKillCuts(t *testing.T) {
 			t.Fatalf("cancel after lease-move cut exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 		}
 		assertPrepareCancellationWins(t, repository, runID)
-		assertFixedPointReplay(t, partitur, repository, environment, string(runID), readHarnessJournal(t, repository, string(runID)))
+		assertFixedPointReplay(t, partitur, repository, environment, string(runID), readHarnessJournal(t, repository, string(runID)), fixedPointNoneFixture)
 	})
 
 	t.Run("quiesce.lease_moved_to_commit_lock/commit_lock/hash_mismatch_halts", func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {
 		assertPendingPrepare(t, repository, runID)
 		driver.kill(t)
 		killPausedRun(t, approver)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 
 	t.Run("prepare.prepared_to_observed/observed", func(t *testing.T) {
@@ -231,7 +231,7 @@ func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {
 		driver.kill(t)
 		killPausedRun(t, approver)
 		assertPrepareBarrier(t, repository, runID)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 
 	t.Run("prepare.commit/approved", func(t *testing.T) {
@@ -263,7 +263,7 @@ func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {
 		assertCommittedHumanApproval(t, repository, runID, decisionID)
 		driver.awaitExit(t)
 		killPausedRun(t, approver)
-		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil)
+		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
 }
 

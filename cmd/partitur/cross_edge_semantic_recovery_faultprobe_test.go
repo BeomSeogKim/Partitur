@@ -121,7 +121,7 @@ func recoverSemanticClone(t *testing.T, binary, repository string, environment [
 
 func assertSemanticCloneFixedPoint(t *testing.T, binary, repository string, environment []string, runID string, first []byte) {
 	t.Helper()
-	assertFixedPointReplay(t, binary, repository, environment, runID, first)
+	assertFixedPointReplay(t, binary, repository, environment, runID, first, fixedPointNoneFixture)
 }
 
 func recoveryClassification(t *testing.T, repository, runID string) recovery.Decision {
