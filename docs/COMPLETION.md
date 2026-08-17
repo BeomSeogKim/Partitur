@@ -45,6 +45,14 @@ Where a member set would need an editorial judgement about what counts as a memb
 does not carry the row at all. Those surfaces are recorded as outstanding prerequisites elsewhere,
 not as rows that look checkable and are not.
 
+Not every member set has a normative enumeration to be read from. Some are a **closure over code** —
+"the action kinds the between-unit planner can return" is a property of the planner, and no document
+owns it; writing one down would create a second, weaker source of truth rather than a stronger one.
+A row over such a set says so explicitly and states how its derivation **fails closed**, so that a
+construct the derivation cannot resolve stops it by name rather than shrinking it silently. That is
+the same protection the reconciliation gives an enumerated set, obtained the only way available when
+there is nothing to reconcile against.
+
 ### Kinds of check
 
 Every row states one, and a row that states none is not a row.
@@ -109,13 +117,14 @@ was projected, planned for, and recoverable while nothing in production ever app
 
 ## 3. Recovery
 
-**Green when** all six hold. **Mechanical**; the first four are existing locks.
+**Green when** all seven hold. **Mechanical**; the first four are existing locks.
 
 | Check |
 |---|
 | Every declared action kind has exactly one execution disposition |
 | Every registered step has a planner witness |
 | Every action kind the between-unit planner can return is dispatched by the live driver |
+| **Replacing any of those dispatch bodies with a refusal fails a named behavioural test, and the unknown-kind path carries its own witness** |
 | The planner is total over its declared axes |
 | The unit-owned deferral boundary is **unpopulated** |
 | **The boundary's type is named by no production file outside its declaration, and that declaration holds exactly the type, its registry, and its accessor** |
@@ -124,10 +133,35 @@ The first and last are separate on purpose. The disposition lock treats a unit-o
 permitted disposition, so it is satisfied today with several kinds unimplemented. Only the
 unpopulated boundary distinguishes "every kind is accounted for" from "every kind is done".
 
+The fourth check is what the third was missing. The third proves a switch case exists; a case that
+dispatches to a refusal satisfies it. So the fourth runs the cases: for each kind the harness copies
+the source, replaces only that kind's dispatch body with a refusal, and requires a named behavioural
+test to fail. The witness map is compared for equality with the derived set, so a new kind without a
+witness and a stale witness both fail rather than being skipped.
+
+Building it found that three of the seven kinds had no behavioural test reaching them through the
+switch, and that one of those was hidden behind a witness whose name matched but whose path did
+not — refusing that dispatch left the named test passing. Refuting a plausible mapping is what a
+per-kind *executed* harness is for, and what a per-kind claim could never do.
+
+> This row's third and fourth checks read a denominator derived from the planner's own source, not
+> from a normative enumeration: `DESIGN.md` does not name these Go action kinds, because the member
+> set is "what the planner can return" rather than something a document owns. The derivation fails
+> closed — an unresolvable return expression, an ambiguous construction, or any assignment replacing
+> a decision's `Action` value stops it by name, file and line. Closing the last of those by
+> recognising right-hand sides was attempted and abandoned: successive revisions were each evaded
+> one level down, and one caused production code to rename its error paths to satisfy the checker.
+> The guard now decides on the assignment target alone. Decision 0004 records the shape and the
+> limit — the harness proves a branch changes its named behavioural outcome, not that the branch
+> implements the semantically correct effect.
+
 The fifth check reads its population from `recovery.UnitOwnedDeferrals`, the single typed
 representation of that fact. It named a `map[ActionKind]string` until 2026-08-17; the map had no
 production caller, so it recorded the fact without expressing it. Decision 0003 records the
 replacement.
+
+The fifth check reads the registry directly rather than through its accessor, so a change that
+populates the registry and returns nil cannot pass it.
 
 The sixth is why the fifth is worth more than a count. An empty registry is satisfiable beside a
 second one, so emptiness alone says nothing about whether deferrals are recorded elsewhere. Naming
@@ -143,19 +177,10 @@ they are not on the list. Two review rounds each found a pattern the previous sc
 the trajectory recorded for the between-unit dispatch lock in section 3's note; equality against a
 fixed list is what leaves that trajectory.
 
-The fifth check reads the registry directly rather than through its accessor, so a change that
-populates the registry and returns nil cannot pass it.
-
 What the sixth check cannot reach is stated rather than implied. Code that never names the boundary
 — a bare map, a comment, a magic string — is not recognisable as a deferral by any lock, and
 rejecting such parallel representations stays with review. That residue is why this row pairs the
 two checks instead of claiming either one alone settles the question.
-
-> The between-unit dispatch lock recognizes a fixed set of return shapes and does not recognize
-> whole-field replacement of a decision's action. It proves what it proves. Closing that gap by
-> parser analysis was attempted and abandoned — successive revisions were each evaded one level
-> down, and one caused production code to rename its error paths to satisfy the checker. The
-> strengthening is an outstanding prerequisite, not a row here.
 
 ## 4. Fault-injection edges
 
@@ -331,13 +356,13 @@ without anyone deciding to move it.
 **It is a baseline audit, not yet the completion audit.** It carries only rows whose member set is
 pinned to a normative enumeration and whose green predicate is decidable today. Surfaces that need
 an artefact before they can be stated that way — an outcome matrix for commands, an inventory
-mapping normative clauses to their evidence, a strengthened dispatch lock, a claim manifest for
-documentation — are tracked as outstanding prerequisites, and each becomes a row here when its
-artefact exists.
+mapping normative clauses to their evidence, a claim manifest for documentation — are tracked as
+outstanding prerequisites, and each becomes a row here when its artefact exists.
 
-Two have since been promoted rather than dropped: the derived-event source-projection lock is
-section 7, and the single typed boundary for unit-owned deferrals is section 3's fifth and sixth
-checks. Both moved because their artefact exists, which is the only route out of this list.
+Three have since been promoted rather than dropped: the derived-event source-projection lock is
+section 7, the single typed boundary for unit-owned deferrals is section 3's fifth and sixth
+checks, and the strengthened dispatch lock is section 3's fourth. Each moved because its artefact
+exists, which is the only route out of this list.
 
 So the rule is explicit rather than implied:
 
