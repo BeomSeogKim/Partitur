@@ -117,11 +117,16 @@ was projected, planned for, and recoverable while nothing in production ever app
 | Every registered step has a planner witness |
 | Every action kind the between-unit planner can return is dispatched by the live driver |
 | The planner is total over its declared axes |
-| The named-unimplemented-action owner map is **empty** |
+| The unit-owned deferral boundary is **unpopulated** |
 
 The first and last are separate on purpose. The disposition lock treats a unit-owned refusal as a
-permitted disposition, so it is satisfied today with several kinds unimplemented. Only the empty
-owner map distinguishes "every kind is accounted for" from "every kind is done".
+permitted disposition, so it is satisfied today with several kinds unimplemented. Only the
+unpopulated boundary distinguishes "every kind is accounted for" from "every kind is done".
+
+The last check reads its population from `recovery.UnitOwnedDeferrals`, the single typed
+representation of that fact. It named a `map[ActionKind]string` until 2026-08-17; the map had no
+production caller, so it recorded the fact without expressing it. Decision 0003 records the
+replacement and what the accompanying lock does and does not prove.
 
 > The between-unit dispatch lock recognizes a fixed set of return shapes and does not recognize
 > whole-field replacement of a decision's action. It proves what it proves. Closing that gap by
