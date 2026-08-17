@@ -43,14 +43,19 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 		t.Fatalf("planner ActionKind count = %d, want 48", len(declared))
 	}
 
-	owners := recovery.UnimplementedActionOwners()
-	if len(owners) != 0 {
-		t.Fatalf("named unimplemented action count = %d, want 0", len(owners))
+	deferrals := recovery.UnitOwnedDeferrals()
+	if len(deferrals) != 0 {
+		t.Fatalf("unit-owned deferral count = %d, want 0", len(deferrals))
 	}
-	for kind, unit := range owners {
-		if !unitIdentifier.MatchString(unit) {
-			t.Fatalf("named unimplemented action %q owner = %q, want unit identifier such as 3.1", kind, unit)
+	deferred := make(map[recovery.ActionKind]string, len(deferrals))
+	for _, deferral := range deferrals {
+		if !unitIdentifier.MatchString(deferral.Unit) {
+			t.Fatalf("unit-owned deferral %q owner = %q, want unit identifier such as 3.1", deferral.Kind, deferral.Unit)
 		}
+		if _, duplicate := deferred[deferral.Kind]; duplicate {
+			t.Fatalf("unit-owned deferral %q has multiple owners", deferral.Kind)
+		}
+		deferred[deferral.Kind] = deferral.Unit
 	}
 	if len(stepDispatchedActionKinds) != 8 {
 		t.Fatalf("step-dispatched action count = %d, want 8", len(stepDispatchedActionKinds))
@@ -70,7 +75,7 @@ func TestRecoveryActionKindCompleteness(t *testing.T) {
 	bucketCounts := map[string]int{}
 	for kind := range declared {
 		buckets := make([]string, 0, 5)
-		if _, ok := owners[kind]; ok {
+		if _, ok := deferred[kind]; ok {
 			buckets = append(buckets, "named owner")
 		} else if _, ok := handlers[kind]; ok {
 			buckets = append(buckets, "defaultKinds")
