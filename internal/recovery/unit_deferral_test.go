@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -26,9 +27,25 @@ var unitOwnedDeferralExcluded = map[string]bool{
 	"vendor":             true,
 }
 
+// unitOwnedDeferralFileDeclarations is the complete declaration list the
+// boundary's file may contain. Pinning the whole list is what makes same-file
+// evasion impossible rather than merely harder: a helper returning the type, an
+// alias, or a second registry fails because it is not on the list, not because
+// a scan happened to recognise its shape. Successive pattern-recognising
+// revisions are the failure history this repository already records for the
+// between-unit dispatch lock.
+var unitOwnedDeferralFileDeclarations = []string{
+	"type UnitOwnedDeferral",
+	"var unitOwnedDeferrals",
+	"func UnitOwnedDeferrals",
+}
+
 func TestUnitOwnedDeferralBoundary(t *testing.T) {
-	if population := UnitOwnedDeferrals(); len(population) != 0 {
-		t.Fatalf("unit-owned deferral population = %d (%v), want 0", len(population), population)
+	// Read the registry directly rather than through the accessor. The lock
+	// runs in this package, so trusting the accessor would let a change that
+	// populates the registry and returns nil pass the population check.
+	if len(unitOwnedDeferrals) != 0 {
+		t.Fatalf("unit-owned deferral registry = %d (%v), want 0", len(unitOwnedDeferrals), unitOwnedDeferrals)
 	}
 
 	declarations, references := unitOwnedDeferralBoundary(t)
@@ -94,6 +111,16 @@ func unitOwnedDeferralBoundary(t *testing.T) ([]string, []string) {
 			}
 		}
 		if relative == unitOwnedDeferralDeclaration {
+			// The declaration file is exempt from the naming scan by
+			// construction, so it is the one place a parallel registry could
+			// hide. Assert its entire declaration list instead of scanning it:
+			// anything not on the list fails, including a helper whose own
+			// declaration never names the boundary.
+			actual := unitOwnedDeferralFileShape(file)
+			if !slices.Equal(actual, unitOwnedDeferralFileDeclarations) {
+				t.Fatalf("%s declares [%s], want exactly [%s]",
+					relative, strings.Join(actual, ", "), strings.Join(unitOwnedDeferralFileDeclarations, ", "))
+			}
 			return nil
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
@@ -111,6 +138,38 @@ func unitOwnedDeferralBoundary(t *testing.T) ([]string, []string) {
 	sort.Strings(declarations)
 	sort.Strings(references)
 	return declarations, unitOwnedDeferralUnique(references)
+}
+
+// unitOwnedDeferralFileShape renders every top-level declaration in the
+// boundary's file as "<kind> <name>", in source order, so the whole list can
+// be compared for equality.
+func unitOwnedDeferralFileShape(file *ast.File) []string {
+	var shape []string
+	for _, declaration := range file.Decls {
+		switch typed := declaration.(type) {
+		case *ast.FuncDecl:
+			name := typed.Name.Name
+			if typed.Recv != nil {
+				name = "method " + name
+			}
+			shape = append(shape, "func "+name)
+		case *ast.GenDecl:
+			kind := typed.Tok.String()
+			for _, specification := range typed.Specs {
+				switch value := specification.(type) {
+				case *ast.TypeSpec:
+					shape = append(shape, kind+" "+value.Name.Name)
+				case *ast.ValueSpec:
+					for _, name := range value.Names {
+						shape = append(shape, kind+" "+name.Name)
+					}
+				case *ast.ImportSpec:
+					shape = append(shape, kind+" "+value.Path.Value)
+				}
+			}
+		}
+	}
+	return shape
 }
 
 func unitOwnedDeferralNamed(node ast.Node) bool {
