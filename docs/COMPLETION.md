@@ -109,7 +109,7 @@ was projected, planned for, and recoverable while nothing in production ever app
 
 ## 3. Recovery
 
-**Green when** all five hold. **Mechanical**; the first four are existing locks.
+**Green when** all six hold. **Mechanical**; the first four are existing locks.
 
 | Check |
 |---|
@@ -118,15 +118,27 @@ was projected, planned for, and recoverable while nothing in production ever app
 | Every action kind the between-unit planner can return is dispatched by the live driver |
 | The planner is total over its declared axes |
 | The unit-owned deferral boundary is **unpopulated** |
+| **No production file outside that boundary's declaration names its type** |
 
 The first and last are separate on purpose. The disposition lock treats a unit-owned refusal as a
 permitted disposition, so it is satisfied today with several kinds unimplemented. Only the
 unpopulated boundary distinguishes "every kind is accounted for" from "every kind is done".
 
-The last check reads its population from `recovery.UnitOwnedDeferrals`, the single typed
+The fifth check reads its population from `recovery.UnitOwnedDeferrals`, the single typed
 representation of that fact. It named a `map[ActionKind]string` until 2026-08-17; the map had no
 production caller, so it recorded the fact without expressing it. Decision 0003 records the
-replacement and what the accompanying lock does and does not prove.
+replacement.
+
+The sixth is why the fifth is worth more than a count. An empty registry is satisfiable beside a
+second one, so emptiness alone says nothing about whether deferrals are recorded elsewhere. Naming
+is the predicate rather than construction: a composite-literal scan misses `[]T{{}}`, an elided
+element, a zero value, and a constructor's return type, while a value of a named type cannot be
+produced without its name appearing in some production signature.
+
+What the sixth check cannot reach is stated rather than implied. Code that never names the boundary
+— a bare map, a comment, a magic string — is not recognisable as a deferral by any lock, and
+rejecting such parallel representations stays with review. That residue is why this row pairs the
+two checks instead of claiming either one alone settles the question.
 
 > The between-unit dispatch lock recognizes a fixed set of return shapes and does not recognize
 > whole-field replacement of a decision's action. It proves what it proves. Closing that gap by
@@ -307,13 +319,14 @@ without anyone deciding to move it.
 
 **It is a baseline audit, not yet the completion audit.** It carries only rows whose member set is
 pinned to a normative enumeration and whose green predicate is decidable today. Surfaces that need
-an artefact before they can be stated that way — an outcome matrix for commands, a single typed
-boundary for unit-owned deferrals, an inventory mapping normative clauses to their evidence, a
-strengthened dispatch lock, a claim manifest for documentation — are tracked as outstanding
-prerequisites, and each becomes a row here when its artefact exists.
+an artefact before they can be stated that way — an outcome matrix for commands, an inventory
+mapping normative clauses to their evidence, a strengthened dispatch lock, a claim manifest for
+documentation — are tracked as outstanding prerequisites, and each becomes a row here when its
+artefact exists.
 
-The derived-event source-projection lock was the sixth of these. Its artefact exists, so it is
-now section 7 rather than a prerequisite.
+Two have since been promoted rather than dropped: the derived-event source-projection lock is
+section 7, and the single typed boundary for unit-owned deferrals is section 3's fifth and sixth
+checks. Both moved because their artefact exists, which is the only route out of this list.
 
 So the rule is explicit rather than implied:
 
