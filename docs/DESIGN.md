@@ -4728,6 +4728,15 @@ never appended on their own. The `log` and `progress` events of B.7 are
 **observational**: sanitized, bounded, journaled for later display, and read by no projection
 (§4 diagnostics privacy). Nothing observational can change state.
 
+**Run-terminal source.** `**Run-terminal source:** <condition>` is an assigned marking. Every
+event row in B.1–B.6 whose projection terminalizes the run MUST carry it exactly once, and no
+other event row may carry it. The marking's closed `<condition>` literal states when that
+terminalization occurs; its values are `always`, `final_movement`, and
+`final_human_gate_rejected_movement`. The marking exists so that the set of run-terminalizing
+events is read from an assigned syntax rather than inferred from prose — B.4's
+`decision.obsoleted` derives from exactly this set, and an inferred reading of it has already
+been shown to return five of six.
+
 **Idempotency semantics.** Effective uniqueness is the pair `(event_type, idem_key)`:
 
 - Same key, equivalent payload → **no-op**. This is what makes recovery replayable.
@@ -4832,13 +4841,13 @@ reason is chosen once and carried.
 | Type | sync | idem key | Legal from | Projection effect |
 |---|---|---|---|---|
 | `run.started` | ✓ | run_id | — | Run → `RUNNING`; records base commit/tree, score snapshot hash, resolved-cast hash, root-score hash for promotion's pre-rename check |
-| `run.succeeded` | ✓ | run_id | Run `RUNNING` | Run → `SUCCEEDED`. On the **waived** path also carries the full candidate payload and binding (§8) |
-| `run.failed` | ✓ | run_id | Run `RUNNING`/`WAITING_HUMAN` | Run → `FAILED`; carries reason (Appendix D) |
-| `run.cancelled` | ✓ | run_id | Run nonterminal | Run → `CANCELLED`. When it terminalizes a fenced driver it also carries `fenced_epoch`, the epoch the authority moved to, so recovery projects the fence rather than inferring it (§6). Carries the affected movement and attempt ids and projects their cancellation **atomically**, so a crash mid-cancel cannot leave a cancelled run with a running attempt |
+| `run.succeeded` | ✓ | run_id | Run `RUNNING` | Run → `SUCCEEDED`. On the **waived** path also carries the full candidate payload and binding (§8). **Run-terminal source:** `always` |
+| `run.failed` | ✓ | run_id | Run `RUNNING`/`WAITING_HUMAN` | Run → `FAILED`; carries reason (Appendix D). **Run-terminal source:** `always` |
+| `run.cancelled` | ✓ | run_id | Run nonterminal | Run → `CANCELLED`. When it terminalizes a fenced driver it also carries `fenced_epoch`, the epoch the authority moved to, so recovery projects the fence rather than inferring it (§6). Carries the affected movement and attempt ids and projects their cancellation **atomically**, so a crash mid-cancel cannot leave a cancelled run with a running attempt. **Run-terminal source:** `always` |
 | `movement.ready` | | movement_id | Movement `PENDING`, deps succeeded | Movement → `READY` |
 | `movement.started` | ✓ | movement_id | Movement `READY` | Movement → `RUNNING` |
-| `movement.succeeded` | ✓ | movement_id + attempt_id | Attempt `COMPLETED` | Movement → `SUCCEEDED`; approves its artifacts and change set. Requires `attempt.completed` first — the completion order is always attempt, then movement. For the **final movement** this same event carries the run's `SUCCEEDED` transition (§8) |
-| `movement.failed` | ✓ | movement_id | Movement `RUNNING`/`WAITING_HUMAN` | Movement → `FAILED`; reason ∈ Appendix D. For `human_gate_rejected` this **one** event atomically projects Attempt → `FAILED`, Movement → `FAILED`, and — for the final movement — Run → `FAILED`, charging no retry and no fallback. The idempotency key is always `movement_id`; the gate decision id is carried as causation and evidence, not as the key |
+| `movement.succeeded` | ✓ | movement_id + attempt_id | Attempt `COMPLETED` | Movement → `SUCCEEDED`; approves its artifacts and change set. Requires `attempt.completed` first — the completion order is always attempt, then movement. For the **final movement** this same event carries the run's `SUCCEEDED` transition (§8). **Run-terminal source:** `final_movement` |
+| `movement.failed` | ✓ | movement_id | Movement `RUNNING`/`WAITING_HUMAN` | Movement → `FAILED`; reason ∈ Appendix D. For `human_gate_rejected` this **one** event atomically projects Attempt → `FAILED`, Movement → `FAILED`, and — for the final movement — Run → `FAILED`, charging no retry and no fallback. The idempotency key is always `movement_id`; the gate decision id is carried as causation and evidence, not as the key. **Run-terminal source:** `final_human_gate_rejected_movement` |
 | `movement.cancelled` *derived* | — | source event_id + movement_id | — | Movement → `CANCELLED`; projected idempotently from `run.cancelled`. Not independently authoritative — an independent append would compete with `run.cancelled`'s atomic projection |
 
 **Payloads.**
@@ -5240,7 +5249,7 @@ acceptance.evaluation_completed {
 |---|---|---|---|---|
 | `decision.requested` | ✓ | decision_id | — | Adds to pending. **Always physically appended**, never only projected — the `sync: ✓` is real. What varies is the *source* it is derived from, and each decision has exactly one: a **question** from `attempt.blocked`'s `raised` entry; an **amendment or finalization** from `amendment.routed_human`, which alone carries `routed_reason` and `decision_type`; a **human gate** appended directly with no derivation. `decision_type ∈ {question, human_gate, amendment, finalization}` |
 | `decision.resolved` | ✓ | decision_id | pending | Removes from pending. Carries the answer, or for `human_gate` the `gate_id`, `subject_tree`, scope, and overridden finding instance ids (§8). **Never appended on any amendment path** (§9) |
-| `decision.obsoleted` *derived* | — | source event_id + decision_id | — | Terminally closes a pending decision — either raised on a superseded revision, or outstanding when the run went terminal. Derives from `amendment.approved` **or** from any event whose projection makes the run terminal |
+| `decision.obsoleted` *derived* | — | source event_id + decision_id | — | Terminally closes a pending decision — either raised on a superseded revision, or outstanding when the run went terminal. Derives from `amendment.approved` **or** from every Appendix B row carrying a **Run-terminal source:** marking |
 
 **Payloads.**
 
