@@ -178,6 +178,18 @@ func TestMutationPlanBetweenUnitRejectsWholeActionReplacement(t *testing.T) {
 	)
 }
 
+// TestMutationPlanBetweenUnitRejectsDereferencedActionReplacement pins the
+// shape a selector-only predicate missed: the assignment target is a
+// dereference, so its outermost node is not the Action selector. Review found
+// it; the guard now unwraps pointers and parentheses before judging.
+func TestMutationPlanBetweenUnitRejectsDereferencedActionReplacement(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledAt(t, "TestPlanBetweenUnitActionKindsHaveLiveDriverDispatch", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),
+		"decision := action(CaseScheduler, ActionAppendMovementReady, true)\n\t\tdecision.Action.MovementID = movement.ID",
+		"decision := action(CaseScheduler, ActionAppendMovementReady, true)\n\t\t*decision.Action = Action{Kind: ActionAppendMovementReady} // mutation: dereferenced Action replacement\n\t\tdecision.Action.MovementID = movement.ID",
+	)
+}
+
 // TestMutationPlanBetweenUnitLiveDispatchLiveness replaces each source-copy
 // dispatch body individually. The witnesses are intentionally a fixed mapping
 // compared for equality with the source-derived planner set: an added kind has

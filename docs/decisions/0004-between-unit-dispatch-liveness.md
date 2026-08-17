@@ -40,11 +40,24 @@ recorded event to the projected candidate and its contributors.
 
 ## Decision
 
-The derivation rejects every assignment whose left-hand side is an `Action`
-field in any production `internal/recovery` Go file. It does not interpret the
-right-hand side or attempt to prove its receiver's static type. This is
-deliberately conservative: no current production file performs such a write,
-and a future one stops the derivation with its file, line, and expression.
+The derivation rejects every assignment that **replaces the `Action` value** in
+any production `internal/recovery` Go file. The target is unwrapped through
+pointer dereferences and parentheses first, then judged by its outermost node,
+so `decision.Action = ...`, `*decision.Action = ...`, and `(*decision).Action =
+...` are all rejected. It does not interpret the right-hand side or attempt to
+prove its receiver's static type. No current production file performs such a
+write, and a future one stops the derivation with its file, line, and
+expression.
+
+The unwrapping is deliberate rather than incidental. A first draft matched only
+a bare selector, which review showed leaves `*decision.Action = Action{...}`
+outside the guard. A second draft inspected the whole left-hand subtree instead,
+and a negative control caught it rejecting `decision.Action.BlockedProposalRoute
+= &route` — a legitimate write to a field *inside* Action that production
+performs today. Passing that draft would have required editing production to
+satisfy a checker, the outcome this lock's own history names as worse than a
+written limit. Unwrap-then-judge separates replacing the value from writing
+through it without interpreting either.
 The same guard is applied to the executor sibling. Source-copy mutations that
 introduce a whole-field replacement prove both guards and require their named
 lock tests to run and fail.

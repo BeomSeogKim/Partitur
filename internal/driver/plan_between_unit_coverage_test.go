@@ -184,9 +184,26 @@ func rejectDecisionActionFieldWrites(t *testing.T, parsed recoveryPackage) {
 	}
 }
 
+// isDecisionActionFieldWrite reports whether an assignment target replaces the
+// Action value itself. The target is unwrapped through pointer dereferences and
+// parentheses first, so `decision.Action = ...`, `*decision.Action = ...`, and
+// `(*decision).Action = ...` are all caught while a write to a field *inside*
+// Action -- `decision.Action.BlockedProposalRoute = &route`, which production
+// does legitimately -- is not. Only the outermost node is judged, so this stays
+// a rule about the left-hand side rather than an interpretation of intent.
 func isDecisionActionFieldWrite(expression ast.Expr) bool {
-	field, ok := expression.(*ast.SelectorExpr)
-	return ok && field.Sel.Name == "Action"
+	for {
+		switch typed := expression.(type) {
+		case *ast.ParenExpr:
+			expression = typed.X
+		case *ast.StarExpr:
+			expression = typed.X
+		case *ast.SelectorExpr:
+			return typed.Sel != nil && typed.Sel.Name == "Action"
+		default:
+			return false
+		}
+	}
 }
 
 func decisionActionFieldWrite(t *testing.T, parsed recoveryPackage, node ast.Node) {
