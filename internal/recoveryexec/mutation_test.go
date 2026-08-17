@@ -33,6 +33,14 @@ func TestMutationRecoveryFanInSuccessorMaterializesAtComposedBase(t *testing.T) 
 	assertRecoveryMutationKilled(t, "TestRecoveryFanInSuccessorMaterializesAtComposedBase", goEnvironment, filepath.Join("internal", "recoveryexec", "handlers.go"), "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)", "workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)")
 }
 
+func TestMutationPlanBetweenUnitRecoveryExecutorRejectsWholeActionReplacement(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestPlanBetweenUnitActionKindsHaveRecoveryExecutor", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),
+		"decision := action(CaseScheduler, ActionAppendMovementReady, true)\n\t\tdecision.Action.MovementID = movement.ID",
+		"decision := action(CaseScheduler, ActionAppendMovementReady, true)\n\t\tdecision.Action = &Action{Kind: ActionAppendMovementReady} // mutation: whole Action replacement\n\t\tdecision.Action.MovementID = movement.ID",
+	)
+}
+
 func TestMutationRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot", goEnvironment,

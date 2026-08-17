@@ -26,22 +26,18 @@ import (
 // possible construction, a post-construction Kind write, and an alias of the
 // Decision or its Action all fail the test naming file, line and expression.
 //
-// It does NOT guarantee it against a selector written to defeat it. Replacing
-// the whole field -- decision.Action = &Action{Kind: ...} -- is not recognized,
-// and closing that led to a parser arms race: each of the six revisions of this
-// lock was escaped one level down, and the revision that tried to forbid refusal
-// bodies made production code rename its error paths to satisfy the parser,
-// which is a worse failure than a written limit. Appendix E's own totality
-// checker carries the same shape of caveat: it proves totality only relative to
-// its declared axes.
+// A whole-field replacement -- decision.Action = &Action{Kind: ...} -- is now
+// rejected from its left-hand side before return shapes are derived. The guard
+// scans every production file in internal/recovery, so it does not need to
+// recognize what the right-hand side means. The remaining source boundary is
+// short: a PlanBetweenUnit action must be exposed by the recovery package; an
+// unrecognized return shape fails closed rather than shrinking the denominator.
 //
-// It also does not guarantee that a dispatched case does useful work: a case
-// that dispatches to a refusal satisfies this lock.
-// TestLiveLoopFailsRunDirectlyWhenBudgetExhaustsBetweenMovements and its
-// charged-path sibling TestLiveChainTerminatesWhenBudgetExhaustsMidChain prove
-// the behavioural effect. A source-copy mutation-kill harness -- replacing each
-// dispatch body with a refusal and requiring those two to fail -- would close
-// that gap without touching production code, and is recorded as follow-up work.
+// A mutation-tagged source-copy harness replaces each selected dispatch body
+// with a refusal and requires that kind's named behavioural witness to fail.
+// It also mutates a selected action to an unknown kind and requires the
+// unknown-kind witness to fail. This proves per-kind dispatch liveness, not
+// that a dispatched case does the right work; that remains with each witness.
 func TestPlanBetweenUnitActionKindsHaveLiveDriverDispatch(t *testing.T) {
 	assertCoverageVacuityGuards(t)
 	selected := planBetweenUnitActionKinds(t)
@@ -145,6 +141,7 @@ func fatalGuardBody(body *ast.BlockStmt) bool {
 func planBetweenUnitActionKinds(t *testing.T) map[recovery.ActionKind]bool {
 	t.Helper()
 	parsed := parseRecoveryPackage(t)
+	rejectDecisionActionFieldWrites(t, parsed)
 
 	selected := make(map[recovery.ActionKind]bool)
 	visited := make(map[string]bool)
@@ -164,6 +161,59 @@ func planBetweenUnitActionKinds(t *testing.T) map[recovery.ActionKind]bool {
 	}
 	visit("PlanBetweenUnit")
 	return selected
+}
+
+// rejectDecisionActionFieldWrites rejects every production Action-field write
+// in recovery. The predicate is deliberately only the assignment left-hand
+// side: interpreting right-hand sides led to six evadeable parser revisions.
+func rejectDecisionActionFieldWrites(t *testing.T, parsed recoveryPackage) {
+	t.Helper()
+	for _, file := range parsed.files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			assignment, ok := node.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for _, left := range assignment.Lhs {
+				if isDecisionActionFieldWrite(left) {
+					decisionActionFieldWrite(t, parsed, assignment)
+				}
+			}
+			return true
+		})
+	}
+}
+
+// isDecisionActionFieldWrite reports whether an assignment target replaces the
+// Action value itself. The target is unwrapped through pointer dereferences and
+// parentheses first, so `decision.Action = ...`, `*decision.Action = ...`, and
+// `(*decision).Action = ...` are all caught while a write to a field *inside*
+// Action -- `decision.Action.BlockedProposalRoute = &route`, which production
+// does legitimately -- is not. Only the outermost node is judged, so this stays
+// a rule about the left-hand side rather than an interpretation of intent.
+func isDecisionActionFieldWrite(expression ast.Expr) bool {
+	for {
+		switch typed := expression.(type) {
+		case *ast.ParenExpr:
+			expression = typed.X
+		case *ast.StarExpr:
+			expression = typed.X
+		case *ast.SelectorExpr:
+			return typed.Sel != nil && typed.Sel.Name == "Action"
+		default:
+			return false
+		}
+	}
+}
+
+func decisionActionFieldWrite(t *testing.T, parsed recoveryPackage, node ast.Node) {
+	t.Helper()
+	var rendered bytes.Buffer
+	if err := format.Node(&rendered, parsed.fileSet, node); err != nil {
+		rendered.WriteString("<unprintable>")
+	}
+	position := parsed.fileSet.Position(node.Pos())
+	t.Fatalf("Decision Action field write is outside PlanBetweenUnit derivation at %s:%d: %s", position.Filename, position.Line, rendered.String())
 }
 
 func liveSchedulerDispatchKinds(t *testing.T, selected map[recovery.ActionKind]bool) map[recovery.ActionKind]bool {

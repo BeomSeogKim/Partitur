@@ -2694,6 +2694,54 @@ func TestLiveChainTerminatesWhenBudgetExhaustsMidChain(t *testing.T) {
 	}
 }
 
+// TestLiveRunLoopFailsRunningMovementOnBudgetExhaustion reaches the live C.4
+// switch rather than calling liveBudgetExhaustion directly. Its durable
+// movement.failed then run.failed effects are the witness for
+// ActionAppendBudgetFailure.
+func TestLiveRunLoopFailsRunningMovementOnBudgetExhaustion(t *testing.T) {
+	store, authority, runID, input, _ := liveChargedSuccessorAcceptanceFixture(t, "quality_retry")
+	defer authority.Release()
+	current := input.Projection.CurrentHeadAttempt
+	if current == nil {
+		t.Fatal("failed attempt is absent")
+	}
+	stopped := runstate.Event{
+		RunID: runID, ScoreRevision: input.Projection.State.ScoreHead.Revision,
+		MovementID: current.MovementID, AttemptID: current.AttemptID, Type: runstate.EventExecutionStopped,
+		Payload: testPayload(t, map[string]any{"interval_id": "acceptance", "reason": "normal", "charging": "measured", "charged_duration": 600000}),
+	}
+	if _, err := authority.Append(stopped, faultpoint.ReceiptAddress("test."+string(stopped.Type))); err != nil {
+		t.Fatal(err)
+	}
+	assertLiveSchedulerKind(t, store, authority, recovery.ActionAppendBudgetFailure)
+
+	control, err := cancellation.Watch(store, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Stop()
+	_ = liveRunLoop(context.Background(), Result{RunID: runID}, nil, store, authority, control, testDependencies())
+
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) < 2 {
+		t.Fatalf("journal has %d events, want budget terminal effects", len(journal.Events))
+	}
+	last := journal.Events[len(journal.Events)-2:]
+	if last[0].Type != runstate.EventMovementFailed || last[0].MovementID != current.MovementID || last[1].Type != runstate.EventRunFailed {
+		t.Fatalf("budget terminal events=%v, want movement.failed for %q then run.failed", last, current.MovementID)
+	}
+	state, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Movements[current.MovementID] != runstate.MovementFailed || state.Run != runstate.RunFailed {
+		t.Fatalf("budget terminal projection=%+v, want movement failed and run failed", state)
+	}
+}
+
 func TestLiveLoopFailsRunDirectlyWhenBudgetExhaustsBetweenMovements(t *testing.T) {
 	scoreDocument := writerFreeTwoMovementWaivedScore()
 	preparation := prepareRunnableFixture(t, scoreDocument, sliceCast())
@@ -2759,6 +2807,144 @@ func TestLiveLoopFailsRunDirectlyWhenBudgetExhaustsBetweenMovements(t *testing.T
 		if event.MovementID == "second" {
 			t.Fatalf("pending successor was scheduled after exhaustion: %+v", event)
 		}
+	}
+}
+
+// TestLiveRunLoopMaterializesRecordedSuccessor reaches the live C.4 switch
+// with an already-recorded disposition. The durable successor selection, not
+// the later adapter interruption, is the witness for ActionMaterializeSuccessor.
+func TestLiveRunLoopMaterializesRecordedSuccessor(t *testing.T) {
+	store, authority, runID, _, failed := liveChargedSuccessorFixture(t, "quality_retry")
+	defer authority.Release()
+	assertLiveSchedulerKind(t, store, authority, recovery.ActionMaterializeSuccessor)
+
+	control, err := cancellation.Watch(store, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Stop()
+	_ = liveRunLoop(context.Background(), Result{RunID: runID}, nil, store, authority, control, testDependencies())
+
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected *runstate.Event
+	for index := range journal.Events {
+		event := &journal.Events[index]
+		if event.Type == runstate.EventPerformerSelected && event.CausationID == failed.EventID {
+			selected = event
+			break
+		}
+	}
+	if selected == nil {
+		t.Fatalf("successor performer.selected caused by %q is absent from journal %v", failed.EventID, journal.Events)
+	}
+	payload := decodeDriverPayload(t, *selected)
+	if payload["reason"] != "quality_retry" {
+		t.Fatalf("successor selection payload=%v, want quality_retry", payload)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.Scheduler.PendingSuccessor != nil || input.Projection.CurrentHeadAttempt == nil {
+		t.Fatalf("successor projection pending=%+v current=%+v, want cleared pending successor and selected attempt", input.Projection.Scheduler.PendingSuccessor, input.Projection.CurrentHeadAttempt)
+	}
+}
+
+// TestLiveRunLoopRecordsApplicationCandidateFromCompletedWriters reaches the
+// live §8 composition case. The fixture begins after its writer movements have
+// completed but before any application candidate exists, so the recorded and
+// projected candidate are the durable witness for ActionComposeCandidate.
+func TestLiveRunLoopRecordsApplicationCandidateFromCompletedWriters(t *testing.T) {
+	_, store, authority, started, _, _ := candidateFanInCleanFixture(t)
+	defer authority.Release()
+	before, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range before.Events {
+		if event.Type == runstate.EventApplicationCandidateRecorded {
+			t.Fatalf("fixture already recorded application_candidate.recorded: %v", event)
+		}
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.ApplicationCandidate != nil {
+		t.Fatalf("fixture already projects application candidate: %+v", input.Projection.State.ApplicationCandidate)
+	}
+	assertLiveSchedulerKind(t, store, authority, recovery.ActionComposeCandidate)
+
+	control, err := cancellation.Watch(store, started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Stop()
+	_ = liveRunLoop(context.Background(), Result{RunID: started.RunID}, started.Run, store, authority, control, testDependencies())
+
+	after, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded *runstate.Event
+	for index := range after.Events {
+		event := &after.Events[index]
+		if event.Type == runstate.EventApplicationCandidateRecorded {
+			if recorded != nil {
+				t.Fatalf("live loop recorded multiple application candidates: %v", after.Events)
+			}
+			recorded = event
+		}
+	}
+	if recorded == nil {
+		t.Fatalf("live loop recorded no application_candidate.recorded event: %v", after.Events)
+	}
+	candidateState, err := authority.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := candidateState.ApplicationCandidate
+	if candidate == nil {
+		t.Fatal("application candidate is absent from the durable projection")
+	}
+	payload := decodeDriverPayload(t, *recorded)
+	if payload["candidate_id"] != candidate.ID || payload["base_tree"] != candidate.BaseTree ||
+		payload["result_tree"] != candidate.ResultTree || payload["candidate_composition_dependency_hash"] != string(candidate.CompositionDependencyHash) ||
+		payload["composition_environment_hash"] != string(candidate.CompositionEnvironmentHash) {
+		t.Fatalf("recorded candidate payload=%v does not bind projected candidate=%+v", payload, candidate)
+	}
+	recordedContributors, ok := payload["contributors"].([]any)
+	if !ok || len(recordedContributors) != len(candidate.Contributors) {
+		t.Fatalf("recorded candidate contributors=%#v, projected=%+v", payload["contributors"], candidate.Contributors)
+	}
+	for index, contributor := range candidate.Contributors {
+		recordedContributor, ok := recordedContributors[index].(map[string]any)
+		if !ok || recordedContributor["movement_id"] != string(contributor.MovementID) || recordedContributor["change_set_id"] != contributor.ChangeSetID {
+			t.Fatalf("recorded contributor %d=%#v, projected=%+v", index, recordedContributors[index], contributor)
+		}
+	}
+	recordedChangeSets, ok := payload["ordered_change_sets"].([]any)
+	if !ok || len(recordedChangeSets) != len(candidate.OrderedChangeSets) {
+		t.Fatalf("recorded candidate change sets=%#v, projected=%+v", payload["ordered_change_sets"], candidate.OrderedChangeSets)
+	}
+	for index, changeSetID := range candidate.OrderedChangeSets {
+		if recordedChangeSets[index] != changeSetID {
+			t.Fatalf("recorded change set %d=%#v, projected=%q", index, recordedChangeSets[index], changeSetID)
+		}
+	}
+}
+
+func assertLiveSchedulerKind(t *testing.T, store *runstore.Store, authority *runstore.Driver, want recovery.ActionKind) {
+	t.Helper()
+	decision, err := selectLiveBetweenUnit(store, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action == nil || decision.Action.Kind != want {
+		t.Fatalf("live scheduler action=%+v, want %q", decision.Action, want)
 	}
 }
 
