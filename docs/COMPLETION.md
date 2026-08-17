@@ -101,8 +101,8 @@ For this row, the derived set is read from Appendix B's normative `*derived*` ma
 `isDerivedEvent` or another Go classification. A Go classification that disagrees with those
 markings cannot make a missing producer pass: a normative non-derived event remains in this row's
 append-site denominator. The converse — a normative derived event that Go misclassifies, or whose
-source projection is absent — is held by the derived-event source-projection prerequisite below;
-completion cannot be declared while that prerequisite is outstanding.
+source projection is absent — is held by section 7, whose first check requires those markings and
+the Go classification to be the same set.
 
 This row has already earned its place. It is what showed that the entire human-decision handshake
 was projected, planned for, and recoverable while nothing in production ever appended it.
@@ -253,6 +253,41 @@ branch protection settings. A suite that runs but is not required can regress wi
 merge, and a lock behind a build tag is invisible to the untagged suite; that has already allowed a
 missing catalogue constant to reach review.
 
+## 7. Derived-event source projection
+
+**Green when** all four hold. **Mechanical.**
+
+| Check |
+|---|
+| The `*derived*` rows of `DESIGN.md` Appendix B are exactly the Go derived classification |
+| The rows carrying a `**Run-terminal source:**` marking are exactly the event types whose projection assigns a terminal `RunLifecycle` |
+| Every derived source transition named by those rows has a non-test append site for its source |
+| **Every named transition is executed**: the source is applied, the derived state effect Appendix B names for that derived event is observed, and replay preserves it |
+
+An empty or unparsable extraction fails all four. A reading that returns no derived rows, no marked
+rows, a duplicated marking, or a condition literal outside the closed set is a failure, not a small
+denominator.
+
+The fourth is the substance, and it is stated as **executed** rather than as a claim that a fixture
+exists. A registry of fixture names is satisfiable by a test that no longer asserts what it was
+written to assert — which has already happened in this repository, where an extraction shrank a
+mutation and the proof disappeared while the test function remained. So the lock runs the fixture
+itself, and the set it runs is compared for equality with the set it parsed: a transition without a
+fixture and a fixture without a transition both fail.
+
+The second is what makes the first and third total rather than merely complete today. The
+run-terminal set was once stated in prose, in three different phrasings, and a reading of it
+returned five of six sources without failing. Deriving the Go side from the projection itself means
+an event that terminalizes the run and omits its marking fails the row instead of shrinking it.
+
+**Adding a new normative derived event is not a cheaper path to completion.** It adds a source
+transition, and that transition needs an append site and an executed fixture before this row is
+green again.
+
+This row proves that each named derived effect is projected and survives replay. It does not prove
+that the effect Appendix B names is the *right* effect — that is a normative question, and the
+obligation for it is not here.
+
 ---
 
 ## Using this contract
@@ -269,18 +304,11 @@ without anyone deciding to move it.
 pinned to a normative enumeration and whose green predicate is decidable today. Surfaces that need
 an artefact before they can be stated that way — an outcome matrix for commands, a single typed
 boundary for unit-owned deferrals, an inventory mapping normative clauses to their evidence, a
-strengthened dispatch lock, a claim manifest for documentation, a derived-event source-projection
-lock — are tracked as outstanding prerequisites, and each becomes a row here when its artefact
-exists.
+strengthened dispatch lock, a claim manifest for documentation — are tracked as outstanding
+prerequisites, and each becomes a row here when its artefact exists.
 
-The derived-event source-projection lock must read Appendix B's `*derived*` markings and the
-authoritative source transitions named by those rows; reject an empty or unparsable extraction;
-and require that set to equal the Go derived classification. For every normative source transition,
-it must require a non-test append site for the source and a fixture with a live target that applies
-the source, observes the named derived state effect, and proves replay preserves it. This is not a
-row yet because no such lock exists. In particular, adding a new normative derived event cannot be
-a cheaper path to completion: it adds a source-and-projection obligation to this prerequisite, and
-completion remains unavailable until the prerequisite becomes a row and is green.
+The derived-event source-projection lock was the sixth of these. Its artefact exists, so it is
+now section 7 rather than a prerequisite.
 
 So the rule is explicit rather than implied:
 
