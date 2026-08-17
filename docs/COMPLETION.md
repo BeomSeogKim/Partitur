@@ -118,7 +118,7 @@ was projected, planned for, and recoverable while nothing in production ever app
 | Every action kind the between-unit planner can return is dispatched by the live driver |
 | The planner is total over its declared axes |
 | The unit-owned deferral boundary is **unpopulated** |
-| **No production file outside that boundary's declaration names its type** |
+| **The boundary's type is named by no production file outside its declaration, and by exactly one registry inside it** |
 
 The first and last are separate on purpose. The disposition lock treats a unit-owned refusal as a
 permitted disposition, so it is satisfied today with several kinds unimplemented. Only the
@@ -134,6 +134,12 @@ second one, so emptiness alone says nothing about whether deferrals are recorded
 is the predicate rather than construction: a composite-literal scan misses `[]T{{}}`, an elided
 element, a zero value, and a constructor's return type, while a value of a named type cannot be
 produced without its name appearing in some production signature.
+
+It carries an inside clause as well as an outside one because the declaration is necessarily exempt
+from its own naming scan. A second registry beside the first would leave the accessor returning the
+empty slice while a populated parallel registry sat next to it, and the outside clause would never
+look. Bounding the declaration to exactly one registry closes the only place the scan cannot reach
+by construction.
 
 What the sixth check cannot reach is stated rather than implied. Code that never names the boundary
 — a bare map, a comment, a magic string — is not recognisable as a deferral by any lock, and

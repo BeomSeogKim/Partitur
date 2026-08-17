@@ -34,6 +34,19 @@ func TestMutationUnitOwnedDeferralBoundaryRejectsSecondRepresentation(t *testing
 	)
 }
 
+// TestMutationUnitOwnedDeferralBoundaryRejectsSameFileRegistry pins the one
+// place the naming scan cannot reach by construction. The declaration file is
+// exempt from that scan, so a second registry beside the first would leave the
+// accessor returning the empty slice while a populated parallel registry
+// exists -- both other checks green.
+func TestMutationUnitOwnedDeferralBoundaryRejectsSameFileRegistry(t *testing.T) {
+	runUnitOwnedDeferralMutation(t,
+		filepath.Join("internal", "recovery", "unit_deferral.go"),
+		"// UnitOwnedDeferrals returns a copy for completeness checks.\n",
+		"var unitOwnedDeferralsExtra = []UnitOwnedDeferral{{}} // mutation\n\n// UnitOwnedDeferrals returns a copy for completeness checks.\n",
+	)
+}
+
 func runUnitOwnedDeferralMutation(t *testing.T, relative, before, after string) {
 	t.Helper()
 

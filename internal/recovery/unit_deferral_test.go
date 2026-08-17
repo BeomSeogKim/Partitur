@@ -94,6 +94,16 @@ func unitOwnedDeferralBoundary(t *testing.T) ([]string, []string) {
 			}
 		}
 		if relative == unitOwnedDeferralDeclaration {
+			// The declaration file is exempt from the naming scan by
+			// construction, so it is the one place a parallel registry could
+			// hide behind an accessor that still returns the empty one. Bound
+			// it instead of skipping it: exactly one package-level var may
+			// name the boundary, and it must be the one the accessor reads.
+			registries := unitOwnedDeferralRegistries(file)
+			if len(registries) != 1 || registries[0] != "unitOwnedDeferrals" {
+				t.Fatalf("%s declares %d boundary registries (%s), want exactly unitOwnedDeferrals",
+					relative, len(registries), strings.Join(registries, ", "))
+			}
 			return nil
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
@@ -111,6 +121,48 @@ func unitOwnedDeferralBoundary(t *testing.T) ([]string, []string) {
 	sort.Strings(declarations)
 	sort.Strings(references)
 	return declarations, unitOwnedDeferralUnique(references)
+}
+
+// unitOwnedDeferralRegistries returns the names of every package-level var in
+// the declaration file whose declaration names the boundary type, in either
+// its type or its value. Function signatures and bodies are not registries and
+// are not counted.
+func unitOwnedDeferralRegistries(file *ast.File) []string {
+	var names []string
+	for _, declaration := range file.Decls {
+		group, ok := declaration.(*ast.GenDecl)
+		if !ok || group.Tok != token.VAR {
+			continue
+		}
+		for _, specification := range group.Specs {
+			valueSpec, ok := specification.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			mentions := false
+			inspect := func(node ast.Node) bool {
+				if unitOwnedDeferralNamed(node) {
+					mentions = true
+					return false
+				}
+				return true
+			}
+			if valueSpec.Type != nil {
+				ast.Inspect(valueSpec.Type, inspect)
+			}
+			for _, value := range valueSpec.Values {
+				ast.Inspect(value, inspect)
+			}
+			if !mentions {
+				continue
+			}
+			for _, name := range valueSpec.Names {
+				names = append(names, name.Name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func unitOwnedDeferralNamed(node ast.Node) bool {

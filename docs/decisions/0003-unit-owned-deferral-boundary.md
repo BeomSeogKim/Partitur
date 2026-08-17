@@ -39,8 +39,16 @@ and vendored trees. It is stated as an exclusion rather than as a list of
 included roots so that a new top-level package is inside the denominator by
 default; an inclusion list would have quietly placed it outside.
 
-Two mutation proofs pin the two halves: one populates the boundary, one
-introduces a second production file naming the type. Each requires the lock
+The declaration file is necessarily exempt from its own naming scan, which
+makes it the one place a parallel registry could hide: a second
+`[]UnitOwnedDeferral` beside the first would leave the accessor returning the
+empty slice while the populated one sat next to it. So the declaration is
+bounded rather than skipped — exactly one package-level var may name the
+boundary, and it must be the one the accessor reads.
+
+Three mutation proofs pin the three halves: one populates the boundary, one
+introduces a second production file naming the type, one adds a second registry
+inside the declaration. Each requires the lock
 test to fail.
 
 The lock deliberately does not add a dispatch branch. With no deferral to
