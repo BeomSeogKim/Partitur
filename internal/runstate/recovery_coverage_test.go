@@ -1,10 +1,14 @@
 package runstate
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -58,14 +62,34 @@ func recoveryDesignLines(t *testing.T) []string {
 func appendixBEventTypes(t *testing.T, lines []string) []string {
 	t.Helper()
 
+	rows := appendixBEventRows(t, lines)
+	events := make([]string, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, row.eventType)
+	}
+	return events
+}
+
+type appendixBEventRow struct {
+	eventType string
+	derived   bool
+	effect    string
+}
+
+// appendixBEventRows is the shared Appendix B event classification. Callers
+// that need the non-derived append denominator and callers that need derived
+// source projections must both read this one table walk.
+func appendixBEventRows(t *testing.T, lines []string) []appendixBEventRow {
+	t.Helper()
+
 	section := recoveryDocumentSection(t, lines,
 		"# Appendix B — Journal event registry",
 		"# Appendix C — Recovery")
 	const header = "| Type | sync | idem key | Legal from | Projection effect |"
 	const separator = "|---|---|---|---|---|"
-	typeCell := regexp.MustCompile("^`([a-z][a-z0-9_.]*)`(?: \\*derived\\*)?$")
+	typeCell := regexp.MustCompile("^`([a-z][a-z0-9_.]*)`( \\*derived\\*)?$")
 
-	var events []string
+	var rows []appendixBEventRow
 	tableCount := 0
 	for index := 0; index < len(section); index++ {
 		if section[index] != header {
@@ -82,7 +106,11 @@ func appendixBEventTypes(t *testing.T, lines []string) []string {
 			if match == nil {
 				t.Fatalf("unparseable Appendix B event row %q", section[index])
 			}
-			events = append(events, match[1])
+			rows = append(rows, appendixBEventRow{
+				eventType: match[1],
+				derived:   match[2] != "",
+				effect:    cells[4],
+			})
 			rowCount++
 		}
 		if rowCount == 0 {
@@ -90,10 +118,223 @@ func appendixBEventTypes(t *testing.T, lines []string) []string {
 		}
 		index--
 	}
-	if tableCount == 0 || len(events) == 0 {
-		t.Fatalf("Appendix B extraction produced %d tables and %d events", tableCount, len(events))
+	if tableCount == 0 || len(rows) == 0 {
+		t.Fatalf("Appendix B extraction produced %d tables and %d events", tableCount, len(rows))
+	}
+	return rows
+}
+
+func appendixBDerivedEventTypes(t *testing.T, lines []string) []string {
+	t.Helper()
+
+	var events []string
+	for _, row := range appendixBEventRows(t, lines) {
+		if row.derived {
+			events = append(events, row.eventType)
+		}
+	}
+	if len(events) == 0 {
+		t.Fatal("Appendix B derived-event extraction produced no rows")
 	}
 	return events
+}
+
+func appendixBNonDerivedEventTypes(t *testing.T, lines []string) []string {
+	t.Helper()
+
+	var events []string
+	for _, row := range appendixBEventRows(t, lines) {
+		if !row.derived {
+			events = append(events, row.eventType)
+		}
+	}
+	if len(events) == 0 {
+		t.Fatal("Appendix B non-derived-event extraction produced no rows")
+	}
+	return events
+}
+
+// goEventTypes reads the EventType constant enumeration rather than a second
+// hand-maintained event list. It is shared by Appendix B reconciliation locks.
+func goEventTypes(t *testing.T) []string {
+	t.Helper()
+
+	declarations := goEventTypeDeclarations(t)
+	events := make([]string, 0, len(declarations))
+	for _, eventType := range declarations {
+		events = append(events, eventType)
+	}
+	if len(events) == 0 {
+		t.Fatal("Go EventType enumeration produced no values")
+	}
+	return events
+}
+
+func goEventTypeDeclarations(t *testing.T) map[string]string {
+	t.Helper()
+
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "types.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declarations := map[string]string{}
+	for _, declaration := range file.Decls {
+		group, ok := declaration.(*ast.GenDecl)
+		if !ok || group.Tok != token.CONST {
+			continue
+		}
+		for _, specification := range group.Specs {
+			value, ok := specification.(*ast.ValueSpec)
+			if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
+				continue
+			}
+			typeName, ok := value.Type.(*ast.Ident)
+			if !ok || typeName.Name != "EventType" {
+				continue
+			}
+			literal, ok := value.Values[0].(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				t.Fatalf("EventType declaration %q has no string literal", value.Names[0].Name)
+			}
+			eventType, err := strconv.Unquote(literal.Value)
+			if err != nil || eventType == "" {
+				t.Fatalf("EventType declaration %q has invalid value %q", value.Names[0].Name, literal.Value)
+			}
+			if _, duplicate := declarations[value.Names[0].Name]; duplicate {
+				t.Fatalf("duplicate EventType declaration %q", value.Names[0].Name)
+			}
+			declarations[value.Names[0].Name] = eventType
+		}
+	}
+	if len(declarations) == 0 {
+		t.Fatal("types.go contains no EventType declarations")
+	}
+	return declarations
+}
+
+// hasNonTestAppendSite reports whether production Go contains an append call
+// carrying this EventType. types.go and apply.go describe event values and
+// projection; neither is an authoritative append site.
+func hasNonTestAppendSite(t *testing.T, eventType string) bool {
+	t.Helper()
+
+	var constant string
+	for name, value := range goEventTypeDeclarations(t) {
+		if value == eventType {
+			constant = name
+			break
+		}
+	}
+	if constant == "" {
+		t.Fatalf("no Go EventType declaration for %q", eventType)
+	}
+
+	found := false
+	err := filepath.WalkDir(filepath.Join("..", ".."), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		base := filepath.Base(path)
+		if !strings.HasSuffix(base, ".go") || strings.HasSuffix(base, "_test.go") ||
+			path == filepath.Join("..", "..", "internal", "runstate", "types.go") ||
+			path == filepath.Join("..", "..", "internal", "runstate", "apply.go") {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		if fileHasAppendSite(file, constant) {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+func fileHasAppendSite(file *ast.File, eventConstant string) bool {
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil {
+			continue
+		}
+		if blockHasAppendSite(function.Body, eventConstant) {
+			return true
+		}
+	}
+	return false
+}
+
+func blockHasAppendSite(block *ast.BlockStmt, eventConstant string) bool {
+	eventVariables := map[string]bool{}
+	ast.Inspect(block, func(node ast.Node) bool {
+		assignment, ok := node.(*ast.AssignStmt)
+		if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 || !eventConstantInExpression(assignment.Rhs[0], eventConstant) {
+			return true
+		}
+		if name, ok := assignment.Lhs[0].(*ast.Ident); ok {
+			eventVariables[name.Name] = true
+		}
+		return true
+	})
+
+	found := false
+	ast.Inspect(block, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || !isAppendCall(call) {
+			return true
+		}
+		for _, argument := range call.Args {
+			if eventConstantInExpression(argument, eventConstant) {
+				found = true
+				return false
+			}
+			if name, ok := argument.(*ast.Ident); ok && eventVariables[name.Name] {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func isAppendCall(call *ast.CallExpr) bool {
+	var name string
+	switch function := call.Fun.(type) {
+	case *ast.Ident:
+		name = function.Name
+	case *ast.SelectorExpr:
+		name = function.Sel.Name
+	default:
+		return false
+	}
+	return strings.Contains(strings.ToLower(name), "append")
+}
+
+func eventConstantInExpression(expression ast.Expr, eventConstant string) bool {
+	found := false
+	ast.Inspect(expression, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if ok && selector.Sel.Name == eventConstant {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func successorDispositionArms(t *testing.T, lines []string) []string {
