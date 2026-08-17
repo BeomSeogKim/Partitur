@@ -118,7 +118,7 @@ was projected, planned for, and recoverable while nothing in production ever app
 | Every action kind the between-unit planner can return is dispatched by the live driver |
 | The planner is total over its declared axes |
 | The unit-owned deferral boundary is **unpopulated** |
-| **The boundary's type is named by no production file outside its declaration, and by exactly one registry inside it** |
+| **The boundary's type is named by no production file outside its declaration, and that declaration holds exactly the type, its registry, and its accessor** |
 
 The first and last are separate on purpose. The disposition lock treats a unit-owned refusal as a
 permitted disposition, so it is satisfied today with several kinds unimplemented. Only the
@@ -136,10 +136,15 @@ element, a zero value, and a constructor's return type, while a value of a named
 produced without its name appearing in some production signature.
 
 It carries an inside clause as well as an outside one because the declaration is necessarily exempt
-from its own naming scan. A second registry beside the first would leave the accessor returning the
-empty slice while a populated parallel registry sat next to it, and the outside clause would never
-look. Bounding the declaration to exactly one registry closes the only place the scan cannot reach
-by construction.
+from its own naming scan, and is therefore the only place a parallel registry can hide. The inside
+clause compares that file's **entire declaration list** for equality rather than scanning it: a
+second registry, an alias, or a helper whose derived registry never names the type all fail because
+they are not on the list. Two review rounds each found a pattern the previous scan missed, which is
+the trajectory recorded for the between-unit dispatch lock in section 3's note; equality against a
+fixed list is what leaves that trajectory.
+
+The fifth check reads the registry directly rather than through its accessor, so a change that
+populates the registry and returns nil cannot pass it.
 
 What the sixth check cannot reach is stated rather than implied. Code that never names the boundary
 — a bare map, a comment, a magic string — is not recognisable as a deferral by any lock, and

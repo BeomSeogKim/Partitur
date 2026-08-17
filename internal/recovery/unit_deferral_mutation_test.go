@@ -47,6 +47,19 @@ func TestMutationUnitOwnedDeferralBoundaryRejectsSameFileRegistry(t *testing.T) 
 	)
 }
 
+// TestMutationUnitOwnedDeferralBoundaryRejectsDerivedRegistry pins the shape
+// change that pattern-scanning could not have caught. The helper's own
+// declaration names the boundary, but the registry derived from it does not,
+// so a scan looking at variable declarations sees nothing. Asserting the file's
+// whole declaration list catches both.
+func TestMutationUnitOwnedDeferralBoundaryRejectsDerivedRegistry(t *testing.T) {
+	runUnitOwnedDeferralMutation(t,
+		filepath.Join("internal", "recovery", "unit_deferral.go"),
+		"// UnitOwnedDeferrals returns a copy for completeness checks.\n",
+		"func makeDeferrals() []UnitOwnedDeferral { return []UnitOwnedDeferral{{}} } // mutation\n\nvar deferred = makeDeferrals() // mutation\n\n// UnitOwnedDeferrals returns a copy for completeness checks.\n",
+	)
+}
+
 func runUnitOwnedDeferralMutation(t *testing.T, relative, before, after string) {
 	t.Helper()
 

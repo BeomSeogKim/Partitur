@@ -40,15 +40,29 @@ included roots so that a new top-level package is inside the denominator by
 default; an inclusion list would have quietly placed it outside.
 
 The declaration file is necessarily exempt from its own naming scan, which
-makes it the one place a parallel registry could hide: a second
-`[]UnitOwnedDeferral` beside the first would leave the accessor returning the
-empty slice while the populated one sat next to it. So the declaration is
-bounded rather than skipped — exactly one package-level var may name the
-boundary, and it must be the one the accessor reads.
+makes it the one place a parallel registry could hide. Two review rounds found
+two ways to hide there — a second `[]UnitOwnedDeferral` beside the first, and a
+helper whose derived registry never names the type in its own declaration — and
+each was a pattern the previous scan did not recognise. Recognising one more
+pattern is the trajectory this repository already recorded for the between-unit
+dispatch lock, where successive revisions were each evaded one level down.
 
-Three mutation proofs pin the three halves: one populates the boundary, one
-introduces a second production file naming the type, one adds a second registry
-inside the declaration. Each requires the lock
+So the declaration file is not scanned. Its **entire top-level declaration list**
+is compared for equality against `type UnitOwnedDeferral`, `var
+unitOwnedDeferrals`, `func UnitOwnedDeferrals`. Anything else fails because it is
+not on the list, not because a scan matched its shape. That is total against
+same-file evasion rather than one more pattern.
+
+The lock reads `unitOwnedDeferrals` directly rather than through
+`UnitOwnedDeferrals`. It runs in the same package, and trusting the accessor
+would let a change that populates the registry and returns nil pass the
+population check. No assertion ties the accessor to the registry, because with
+an empty registry no single mutation distinguishes a correct accessor from a
+broken one, and a guard that cannot be pinned is not added.
+
+Four mutation proofs: one populates the boundary, one introduces a second
+production file naming the type, one adds a second registry inside the
+declaration, one adds a helper-derived registry whose own declaration is silent. Each requires the lock
 test to fail.
 
 The lock deliberately does not add a dispatch branch. With no deferral to
