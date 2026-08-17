@@ -247,6 +247,12 @@ with ordinary production-CLI commands; that condition still holds and this row d
 The fault-probe suite needs no separate context: it runs as a step inside the `test` job, so a
 failure there fails a required check already.
 
+This row is not provable from CI configuration — a workflow shows what runs, not what is required to
+merge — which is why the expected values are written here and verified by reading the repository's
+branch protection settings. A suite that runs but is not required can regress without blocking a
+merge, and a lock behind a build tag is invisible to the untagged suite; that has already allowed a
+missing catalogue constant to reach review.
+
 ## 7. Derived-event source projection
 
 **Green when** all four hold. **Mechanical.**
@@ -281,12 +287,6 @@ green again.
 This row proves that each named derived effect is projected and survives replay. It does not prove
 that the effect Appendix B names is the *right* effect — that is a normative question, and the
 obligation for it is not here.
-
-This row is not provable from CI configuration — a workflow shows what runs, not what is required to
-merge — which is why the expected values are written here and verified by reading the repository's
-branch protection settings. A suite that runs but is not required can regress without blocking a
-merge, and a lock behind a build tag is invisible to the untagged suite; that has already allowed a
-missing catalogue constant to reach review.
 
 ---
 
