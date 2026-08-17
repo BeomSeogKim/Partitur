@@ -6,18 +6,26 @@
 package driver
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
 )
 
 func TestMutationLiveMovementCompositionTerminalSerializesCancellationAfterEvidence(t *testing.T) {
@@ -160,6 +168,177 @@ func TestMutationLiveBetweenUnitEntryRejectsEachLeaseAndAuthorityConjunct(t *tes
 			assertDriverMutationKilled(t, test.behaviouralTest, goEnvironment, "driver.go", test.before, test.after)
 		})
 	}
+}
+
+func TestMutationPlanBetweenUnitRejectsWholeActionReplacement(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledAt(t, "TestPlanBetweenUnitActionKindsHaveLiveDriverDispatch", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),
+		"decision := action(CaseScheduler, ActionAppendMovementReady, true)\n\t\tdecision.Action.MovementID = movement.ID",
+		"decision := action(CaseScheduler, ActionAppendMovementReady, true)\n\t\tdecision.Action = &Action{Kind: ActionAppendMovementReady} // mutation: whole Action replacement\n\t\tdecision.Action.MovementID = movement.ID",
+	)
+}
+
+// TestMutationPlanBetweenUnitLiveDispatchLiveness replaces each source-copy
+// dispatch body individually. The witnesses are intentionally a fixed mapping
+// compared for equality with the source-derived planner set: an added kind has
+// no witness until its behavioural test is named here, and a stale witness is
+// equally a failure.
+func TestMutationPlanBetweenUnitLiveDispatchLiveness(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	selected := planBetweenUnitActionKinds(t)
+	witnesses := map[recovery.ActionKind]string{
+		recovery.ActionAppendBudgetFailure:    "TestLiveRunLoopFailsRunningMovementOnBudgetExhaustion",
+		recovery.ActionAppendMovementReady:    "TestLiveFanInCreatesTargetAtPinnedBaseCommit",
+		recovery.ActionAppendMovementStarted:  "TestLiveFanInCreatesTargetAtPinnedBaseCommit",
+		recovery.ActionAppendRunFailed:        "TestLiveLoopFailsRunDirectlyWhenBudgetExhaustsBetweenMovements",
+		recovery.ActionComposeCandidate:       "TestLiveRunLoopRecordsApplicationCandidateFromCompletedWriters",
+		recovery.ActionMaterializeSuccessor:   "TestLiveRunLoopMaterializesRecordedSuccessor",
+		recovery.ActionSelectInitialPerformer: "TestLiveFanInCreatesTargetAtPinnedBaseCommit",
+	}
+	assertLiveDispatchWitnessesExact(t, selected, witnesses)
+	identifiers := actionKindIdentifiers(t, selected)
+	kinds := make([]recovery.ActionKind, 0, len(selected))
+	for kind := range selected {
+		kinds = append(kinds, kind)
+	}
+	sort.Slice(kinds, func(left, right int) bool { return kinds[left] < kinds[right] })
+	for _, kind := range kinds {
+		kind, testName := kind, witnesses[kind]
+		t.Run(string(kind), func(t *testing.T) {
+			assertDriverSourceMutationKilled(t, testName, goEnvironment, filepath.Join("internal", "driver", "driver.go"), func(source []byte) ([]byte, error) {
+				return refuseLiveSchedulerDispatch(source, identifiers[kind])
+			})
+		})
+	}
+}
+
+// TestMutationPlanBetweenUnitUnknownLiveDispatchWitness exercises the default
+// dispatch refusal with an action that is declared but outside this planner's
+// derived set. It is separate from the per-kind mutations so no known kind can
+// make the unknown path appear covered.
+func TestMutationPlanBetweenUnitUnknownLiveDispatchWitness(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverSourceMutationKilled(t, "TestLiveLoopFailsRunDirectlyWhenBudgetExhaustsBetweenMovements", goEnvironment, filepath.Join("internal", "recovery", "planner.go"), func(source []byte) ([]byte, error) {
+		const before = "decision := action(CaseBudgetExhausted, ActionAppendRunFailed, true)\n\tdecision.Action.FailureReason"
+		const after = "decision := action(CaseBudgetExhausted, ActionProceedScheduler, true) // mutation: unknown live dispatch kind\n\tdecision.Action.FailureReason"
+		if count := bytes.Count(source, []byte(before)); count != 1 {
+			return nil, fmt.Errorf("unknown-kind mutation anchor count = %d, want 1", count)
+		}
+		return bytes.Replace(source, []byte(before), []byte(after), 1), nil
+	})
+}
+
+func assertLiveDispatchWitnessesExact(t *testing.T, selected map[recovery.ActionKind]bool, witnesses map[recovery.ActionKind]string) {
+	t.Helper()
+	missing := make([]string, 0)
+	extra := make([]string, 0)
+	for kind := range selected {
+		if witnesses[kind] == "" {
+			missing = append(missing, string(kind))
+		}
+	}
+	for kind := range witnesses {
+		if !selected[kind] {
+			extra = append(extra, string(kind))
+		}
+	}
+	if len(missing) != 0 || len(extra) != 0 {
+		sort.Strings(missing)
+		sort.Strings(extra)
+		t.Fatalf("live dispatch witness set differs from derived PlanBetweenUnit kinds: missing=%v extra=%v", missing, extra)
+	}
+}
+
+func actionKindIdentifiers(t *testing.T, selected map[recovery.ActionKind]bool) map[recovery.ActionKind]string {
+	t.Helper()
+	identifiers := make(map[recovery.ActionKind]string, len(selected))
+	for identifier, value := range parsedActionKinds(t) {
+		kind := recovery.ActionKind(value)
+		if !selected[kind] {
+			continue
+		}
+		if previous := identifiers[kind]; previous != "" {
+			t.Fatalf("derived ActionKind %q has ambiguous identifiers %q and %q", kind, previous, identifier)
+		}
+		identifiers[kind] = identifier
+	}
+	for kind := range selected {
+		if identifiers[kind] == "" {
+			t.Fatalf("derived ActionKind %q has no declared identifier", kind)
+		}
+	}
+	return identifiers
+}
+
+func refuseLiveSchedulerDispatch(source []byte, target string) ([]byte, error) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "driver.go", source, 0)
+	if err != nil {
+		return nil, err
+	}
+	var dispatch *ast.SwitchStmt
+	ast.Inspect(file, func(node ast.Node) bool {
+		function, ok := node.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		if function.Name.Name != "liveRunLoop" {
+			return false
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			switchStatement, ok := node.(*ast.SwitchStmt)
+			if ok && isDecisionActionKind(switchStatement.Tag) {
+				dispatch = switchStatement
+				return false
+			}
+			return true
+		})
+		return false
+	})
+	if dispatch == nil {
+		return nil, fmt.Errorf("live scheduler dispatch is absent")
+	}
+	for _, statement := range dispatch.Body.List {
+		clause, ok := statement.(*ast.CaseClause)
+		if !ok {
+			return nil, fmt.Errorf("live scheduler dispatch clause is %T", statement)
+		}
+		match := -1
+		for index, expression := range clause.List {
+			selector, ok := expression.(*ast.SelectorExpr)
+			if ok && selector.Sel.Name == target {
+				match = index
+				break
+			}
+		}
+		if match == -1 {
+			continue
+		}
+		if len(clause.Body) == 0 {
+			return nil, fmt.Errorf("live scheduler dispatch for %s has an empty body", target)
+		}
+		start := fileSet.Position(clause.Pos()).Offset
+		end := fileSet.Position(clause.End()).Offset
+		refusal := "return interrupted(result, errors.New(\"driver: injected live dispatch refusal\"))"
+		var replacement string
+		if len(clause.List) == 1 {
+			replacement = "case recovery." + target + ":\n" + refusal
+		} else {
+			remaining := append([]ast.Expr(nil), clause.List[:match]...)
+			remaining = append(remaining, clause.List[match+1:]...)
+			clause.List = remaining
+			var rendered bytes.Buffer
+			if err := format.Node(&rendered, fileSet, clause); err != nil {
+				return nil, err
+			}
+			replacement = rendered.String() + "\ncase recovery." + target + ":\n" + refusal
+		}
+		mutated := append([]byte(nil), source[:start]...)
+		mutated = append(mutated, replacement...)
+		mutated = append(mutated, source[end:]...)
+		return format.Source(mutated)
+	}
+	return nil, fmt.Errorf("live scheduler dispatch for %s is absent", target)
 }
 
 func TestMutationExecutionDependencyHashBindsDeliveredArtifactID(t *testing.T) {
@@ -372,6 +551,52 @@ func assertDriverMutationKilledAt(t *testing.T, testName string, goEnvironment m
 		return
 	case mutationtest.Survived:
 		t.Fatalf("mutation survived: %s still passed after %q became %q\n%s", testName, before, after, result.Diagnostic())
+	default:
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
+	}
+}
+
+func assertDriverSourceMutationKilled(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName string, mutate func([]byte) ([]byte, error)) {
+	t.Helper()
+	lockMutationSource(t)
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve driver test source directory")
+	}
+	copyRoot := filepath.Join(t.TempDir(), "partitur-mutation-copy")
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	if err := copyMutationRepository(copyRoot, repositoryRoot); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(copyRoot, sourceName)
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated, err := mutate(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(source, mutated) {
+		t.Fatalf("mutation left %s unchanged", sourcePath)
+	}
+	if err := os.WriteFile(sourcePath, mutated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         filepath.Join(copyRoot, "internal", "driver"),
+		Package:     ".",
+		TestPattern: testName,
+		TestNames:   []string{testName},
+		Environment: goEnvironment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1"),
+	})
+	cancel()
+	switch result.Outcome {
+	case mutationtest.Killed:
+		return
+	case mutationtest.Survived:
+		t.Fatalf("mutation survived: %s still passed\n%s", testName, result.Diagnostic())
 	default:
 		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
 	}

@@ -27,11 +27,11 @@ import (
 // post-construction Action.Kind write -- each of which fails closed rather than
 // being guessed, naming file, line and expression.
 //
-// It does NOT hold against a selector written to defeat it: replacing the whole
-// field, decision.Action = &Action{Kind: ...}, is not recognized. Closing that
-// led to a parser arms race across six revisions, one of which distorted
-// production code, so the limit is written down instead. See the fuller note on
-// the sibling lock in internal/driver.
+// A whole-field replacement -- decision.Action = &Action{Kind: ...} -- is now
+// rejected from its left-hand side before return shapes are derived. The guard
+// scans every production file in internal/recovery, so it does not need to
+// recognize what the right-hand side means. See the fuller scope note on the
+// sibling lock in internal/driver.
 //
 // It also does not guarantee that a dispatched case does useful work: a case
 // that dispatches to a refusal satisfies this lock.
@@ -394,6 +394,9 @@ func planBetweenUnitActionCoverage(t *testing.T) (map[recovery.ActionKind]bool, 
 func plannerActionCoverage(t *testing.T, planner string) (map[recovery.ActionKind]bool, map[recovery.ActionStep]bool) {
 	t.Helper()
 	parsed := parseRecoveryPackage(t)
+	if planner == "PlanBetweenUnit" {
+		rejectDecisionActionFieldWrites(t, parsed)
+	}
 
 	selected := make(map[recovery.ActionKind]bool)
 	selectedSteps := make(map[recovery.ActionStep]bool)
@@ -460,6 +463,42 @@ func plannerActionCoverage(t *testing.T, planner string) (map[recovery.ActionKin
 	}
 	visit(planner)
 	return selected, selectedSteps
+}
+
+// rejectDecisionActionFieldWrites rejects every production Action-field write
+// in recovery. The predicate is deliberately only the assignment left-hand
+// side: interpreting right-hand sides led to six evadeable parser revisions.
+func rejectDecisionActionFieldWrites(t *testing.T, parsed recoveryPackage) {
+	t.Helper()
+	for _, file := range parsed.files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			assignment, ok := node.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for _, left := range assignment.Lhs {
+				if isDecisionActionFieldWrite(left) {
+					decisionActionFieldWrite(t, parsed, assignment)
+				}
+			}
+			return true
+		})
+	}
+}
+
+func isDecisionActionFieldWrite(expression ast.Expr) bool {
+	field, ok := expression.(*ast.SelectorExpr)
+	return ok && field.Sel.Name == "Action"
+}
+
+func decisionActionFieldWrite(t *testing.T, parsed recoveryPackage, node ast.Node) {
+	t.Helper()
+	var rendered bytes.Buffer
+	if err := format.Node(&rendered, parsed.fileSet, node); err != nil {
+		rendered.WriteString("<unprintable>")
+	}
+	position := parsed.fileSet.Position(node.Pos())
+	t.Fatalf("Decision Action field write is outside PlanBetweenUnit derivation at %s:%d: %s", position.Filename, position.Line, rendered.String())
 }
 
 func isActionStepSlice(literal *ast.CompositeLit) bool {
