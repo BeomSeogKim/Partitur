@@ -117,7 +117,7 @@ was projected, planned for, and recoverable while nothing in production ever app
 
 ## 3. Recovery
 
-**Green when** all seven hold. **Mechanical**; the first four are existing locks.
+**Green when** all seven hold. **Mechanical**; the first three and the fifth are existing locks.
 
 | Check |
 |---|
@@ -129,8 +129,8 @@ was projected, planned for, and recoverable while nothing in production ever app
 | The unit-owned deferral boundary is **unpopulated** |
 | **The boundary's type is named by no production file outside its declaration, and that declaration holds exactly the type, its registry, and its accessor** |
 
-The first and last are separate on purpose. The disposition lock treats a unit-owned refusal as a
-permitted disposition, so it is satisfied today with several kinds unimplemented. Only the
+The first and the sixth are separate on purpose. The disposition lock treats a unit-owned refusal
+as a permitted disposition, so it is satisfied today with several kinds unimplemented. Only the
 unpopulated boundary distinguishes "every kind is accounted for" from "every kind is done".
 
 The fourth check is what the third was missing. The third proves a switch case exists; a case that
@@ -155,15 +155,15 @@ per-kind *executed* harness is for, and what a per-kind claim could never do.
 > limit — the harness proves a branch changes its named behavioural outcome, not that the branch
 > implements the semantically correct effect.
 
-The fifth check reads its population from `recovery.UnitOwnedDeferrals`, the single typed
+The sixth check reads its population from `recovery.UnitOwnedDeferrals`, the single typed
 representation of that fact. It named a `map[ActionKind]string` until 2026-08-17; the map had no
 production caller, so it recorded the fact without expressing it. Decision 0003 records the
 replacement.
 
-The fifth check reads the registry directly rather than through its accessor, so a change that
+The sixth check reads the registry directly rather than through its accessor, so a change that
 populates the registry and returns nil cannot pass it.
 
-The sixth is why the fifth is worth more than a count. An empty registry is satisfiable beside a
+The seventh is why the sixth is worth more than a count. An empty registry is satisfiable beside a
 second one, so emptiness alone says nothing about whether deferrals are recorded elsewhere. Naming
 is the predicate rather than construction: a composite-literal scan misses `[]T{{}}`, an elided
 element, a zero value, and a constructor's return type, while a value of a named type cannot be
@@ -177,7 +177,7 @@ they are not on the list. Two review rounds each found a pattern the previous sc
 the trajectory recorded for the between-unit dispatch lock in section 3's note; equality against a
 fixed list is what leaves that trajectory.
 
-What the sixth check cannot reach is stated rather than implied. Code that never names the boundary
+What the seventh check cannot reach is stated rather than implied. Code that never names the boundary
 — a bare map, a comment, a magic string — is not recognisable as a deferral by any lock, and
 rejecting such parallel representations stays with review. That residue is why this row pairs the
 two checks instead of claiming either one alone settles the question.
@@ -353,14 +353,16 @@ without anyone deciding to move it.
 
 ### What this document is not
 
-**It is a baseline audit, not yet the completion audit.** It carries only rows whose member set is
-pinned to a normative enumeration and whose green predicate is decidable today. Surfaces that need
+**It is a baseline audit, not yet the completion audit.** It carries only rows whose green predicate
+is decidable today over a member set it cannot silently lose: either pinned to a normative
+enumeration, or — where no document owns the set — derived by a closure that fails closed, as the
+member-set section describes. Surfaces that need
 an artefact before they can be stated that way — an outcome matrix for commands, an inventory
 mapping normative clauses to their evidence, a claim manifest for documentation — are tracked as
 outstanding prerequisites, and each becomes a row here when its artefact exists.
 
 Three have since been promoted rather than dropped: the derived-event source-projection lock is
-section 7, the single typed boundary for unit-owned deferrals is section 3's fifth and sixth
+section 7, the single typed boundary for unit-owned deferrals is section 3's sixth and seventh
 checks, and the strengthened dispatch lock is section 3's fourth. Each moved because its artefact
 exists, which is the only route out of this list.
 
