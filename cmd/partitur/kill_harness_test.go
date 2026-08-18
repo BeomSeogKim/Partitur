@@ -37,14 +37,29 @@ type killEdge struct {
 // matrix. Its executed result comes from the real fixture's subtest result,
 // not from this declaration.
 type receiptKillRecord struct {
-	edge     faultpoint.EdgeID
-	endpoint faultpoint.ReceiptAddress
-	test     string
+	edge faultpoint.EdgeID
+	side killEndpointSide
+	test string
 }
 
 type receiptKillKey struct {
 	edge     faultpoint.EdgeID
-	endpoint faultpoint.ReceiptAddress
+	endpoint killEndpoint
+}
+
+type killEndpoint string
+
+type killEndpointSide uint8
+
+const (
+	killEndpointLeft killEndpointSide = iota
+	killEndpointRight
+)
+
+type killHarnessRecord struct {
+	key      receiptKillKey
+	executed bool
+	passed   bool
 }
 
 type killHarnessJSONResult struct {
@@ -70,7 +85,7 @@ type killHarnessWait struct {
 
 var receiptKillHarnessRun struct {
 	once    sync.Once
-	records map[receiptKillKey]bool
+	records []killHarnessRecord
 	err     error
 	output  string
 }
@@ -374,6 +389,7 @@ func retryCoveragePoints() []faultpoint.PointID {
 
 func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 	design, _ := edgeIDsFromAppendixE(t)
+	endpoints, _ := edgeEndpointsFromAppendixE(t)
 	dispositions := gateCutDispositions(t)
 	if len(design) == 0 || len(dispositions) == 0 {
 		t.Fatal("catalog extraction must not be empty")
@@ -382,7 +398,7 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 		t.Fatalf("catalog count mismatch: DESIGN=%d HARNESS=%d", len(design), len(dispositions))
 	}
 
-	assertReceiptKillRegistry(t, design, receiptKillHarnessRecords(t))
+	assertReceiptKillRegistry(t, design, endpoints, receiptKillHarnessRecords(t))
 	reachable := reachableKillHarnessEdges(t)
 	if len(retryCoveragePoints()) != 2 || retryCoveragePoints()[0] == retryCoveragePoints()[1] {
 		t.Fatalf("retry coverage must name two distinct cut sides: %v", retryCoveragePoints())
@@ -416,48 +432,18 @@ func TestKillHarnessCatalogCrossCheck(t *testing.T) {
 	}
 }
 
-func assertReceiptKillRegistry(t *testing.T, design map[string]bool, records map[receiptKillKey]bool) {
+func assertReceiptKillRegistry(t *testing.T, design map[string]bool, endpoints map[faultpoint.EdgeID][2]killEndpoint, records []killHarnessRecord) {
 	t.Helper()
-	if len(records) != 29 {
-		t.Fatalf("receipt registry records=%d, want twenty-nine", len(records))
-	}
-	counts := make(map[faultpoint.EdgeID]int)
-	for key, passed := range records {
-		if !design[string(key.edge)] {
-			t.Fatalf("receipt registry names edge %q absent from DESIGN E.2", key.edge)
+	for _, record := range records {
+		if !design[string(record.key.edge)] {
+			t.Fatalf("receipt registry names edge %q absent from DESIGN E.2", record.key.edge)
 		}
-		if key.endpoint == "" {
-			t.Fatalf("receipt registry has empty endpoint for %q", key.edge)
+		want := endpoints[record.key.edge]
+		if record.key.endpoint != want[0] && record.key.endpoint != want[1] {
+			t.Fatalf("receipt registry endpoint %q is absent from DESIGN E.2 edge %q", record.key.endpoint, record.key.edge)
 		}
-		if !passed {
-			t.Fatalf("receipt registry did not execute %q at %q", key.edge, key.endpoint)
-		}
-		counts[key.edge]++
-	}
-	if len(counts) != 17 {
-		t.Fatalf("receipt registry edges=%d, want seventeen", len(counts))
-	}
-	for edge, want := range map[faultpoint.EdgeID]int{
-		faultpoint.EdgePrepareSnapshotToPlan:                               2,
-		faultpoint.EdgePreparePlanToPrepared:                               2,
-		faultpoint.EdgeQuiesceObservedToSwept:                              1,
-		faultpoint.EdgePreparePreparedToObserved:                           2,
-		faultpoint.EdgeQuiesceSweptToLeaseMoved:                            1,
-		faultpoint.EdgeQuiesceLeaseMovedToCommitLock:                       1,
-		faultpoint.EdgePrepareQuarantinedToAbandoned:                       2,
-		faultpoint.EdgeProposalPublishedToBlockedRoute:                     2,
-		faultpoint.EdgeProposalBlockedRouteToRouted:                        2,
-		faultpoint.EdgeProposalPublishedToRouted:                           2,
-		faultpoint.EdgeProposalRoutedToDecisionRequested:                   2,
-		faultpoint.EdgeSupersedeSweptToApproved:                            1,
-		faultpoint.EdgeSupersedeIntervalStoppedToApproved:                  2,
-		faultpoint.EdgeSupersedeFenceDecidedToApproved:                     1,
-		faultpoint.EdgeSupersedeApprovedToLeaseRemoved:                     2,
-		faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure: 2,
-		faultpoint.EdgeProposalCoreFinalizationPublishedToRouted:           2,
-	} {
-		if counts[edge] != want {
-			t.Fatalf("receipt registry records for %q = %d, want %d", edge, counts[edge], want)
+		if !record.executed || !record.passed {
+			t.Fatalf("receipt registry did not execute and pass %q at %q", record.key.edge, record.key.endpoint)
 		}
 	}
 }
@@ -483,52 +469,133 @@ func TestE2CatalogCountClaims(t *testing.T) {
 
 func reachableKillHarnessEdges(t *testing.T) map[string]bool {
 	t.Helper()
-	coverage := make(map[string]int)
+	endpoints, _ := edgeEndpointsFromAppendixE(t)
+	records := make([]killHarnessRecord, 0)
 	for _, edge := range killHarnessEdges() {
-		id := string(edge.id)
-		if coverage[id] != 0 {
-			t.Fatalf("kill harness declares duplicate reachable edge %q", id)
-		}
-		coverage[id] = 2
+		pair := endpoints[edge.id]
+		records = append(records,
+			killHarnessRecord{key: receiptKillKey{edge: edge.id, endpoint: pair[0]}, executed: true, passed: true},
+			killHarnessRecord{key: receiptKillKey{edge: edge.id, endpoint: pair[1]}, executed: true, passed: true},
+		)
 	}
-	for key, passed := range receiptKillHarnessRecords(t) {
-		if !passed {
-			t.Fatalf("receipt kill harness did not pass %q at %q", key.edge, key.endpoint)
-		}
-		coverage[string(key.edge)]++
+	records = append(records, receiptKillHarnessRecords(t)...)
+	records = append(records, prepareQuiesceProbeKillHarnessRecords(t, endpoints)...)
+	records = append(records, supersessionProbeKillHarnessRecords(t, endpoints)...)
+	pair := endpoints[faultpoint.EdgeAcceptanceSubjectPinnedToStarted]
+	for side, passed := range acceptanceSubjectKillHarnessRecords(t) {
+		records = append(records, killHarnessRecord{
+			key:      receiptKillKey{edge: faultpoint.EdgeAcceptanceSubjectPinnedToStarted, endpoint: pair[side]},
+			executed: passed,
+			passed:   passed,
+		})
 	}
-	for edge, passed := range prepareQuiesceProbeKillHarnessRecords(t) {
-		if !passed {
-			t.Fatalf("probe kill harness did not pass %q", edge)
+	expected := make(map[faultpoint.EdgeID][2]killEndpoint)
+	for edge, disposition := range gateCutDispositions(t) {
+		if disposition.kind == "reachable" {
+			expected[faultpoint.EdgeID(edge)] = endpoints[faultpoint.EdgeID(edge)]
 		}
-		coverage[string(edge)]++
 	}
-	for edge, passed := range supersessionProbeKillHarnessRecords(t) {
-		if !passed {
-			t.Fatalf("supersession probe kill harness did not pass %q", edge)
-		}
-		coverage[string(edge)]++
-	}
-	for endpoint, passed := range acceptanceSubjectKillHarnessRecords(t) {
-		if !passed {
-			t.Fatalf("acceptance subject kill harness did not pass %q", endpoint)
-		}
-		coverage[string(faultpoint.EdgeAcceptanceSubjectPinnedToStarted)]++
-	}
-	reachable := make(map[string]bool)
-	for edge, count := range coverage {
-		if count != 2 {
-			t.Fatalf("kill harness records for %q = %d, want exactly two endpoints", edge, count)
-		}
-		reachable[edge] = true
-	}
-	if len(reachable) == 0 {
-		t.Fatal("kill harness declares no reachable edges")
+	reachable, err := validateKillHarnessCoverage(expected, records)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return reachable
 }
 
-func acceptanceSubjectKillHarnessRecords(t *testing.T) map[string]bool {
+func killHarnessRecordForSide(endpoints map[faultpoint.EdgeID][2]killEndpoint, edge faultpoint.EdgeID, side killEndpointSide, passed bool) killHarnessRecord {
+	return killHarnessRecord{
+		key:      receiptKillKey{edge: edge, endpoint: endpoints[edge][side]},
+		executed: passed,
+		passed:   passed,
+	}
+}
+
+func validateKillHarnessCoverage(expected map[faultpoint.EdgeID][2]killEndpoint, records []killHarnessRecord) (map[string]bool, error) {
+	coverage := make(map[faultpoint.EdgeID]map[killEndpoint]bool)
+	for _, record := range records {
+		if !record.executed {
+			return nil, fmt.Errorf("kill harness record did not execute %q at %q", record.key.edge, record.key.endpoint)
+		}
+		if !record.passed {
+			return nil, fmt.Errorf("kill harness record did not pass %q at %q", record.key.edge, record.key.endpoint)
+		}
+		endpoints, present := expected[record.key.edge]
+		if !present {
+			return nil, fmt.Errorf("kill harness record belongs to unexpected edge %q", record.key.edge)
+		}
+		if record.key.endpoint != endpoints[0] && record.key.endpoint != endpoints[1] {
+			return nil, fmt.Errorf("kill harness endpoint %q is absent from DESIGN E.2 edge %q", record.key.endpoint, record.key.edge)
+		}
+		if coverage[record.key.edge] == nil {
+			coverage[record.key.edge] = make(map[killEndpoint]bool)
+		}
+		coverage[record.key.edge][record.key.endpoint] = true
+	}
+
+	reachable := make(map[string]bool, len(expected))
+	for edge, endpoints := range expected {
+		for _, endpoint := range endpoints {
+			if !coverage[edge][endpoint] {
+				return nil, fmt.Errorf("kill harness edge %q has no executed, passing record for E.2 endpoint %q", edge, endpoint)
+			}
+		}
+		reachable[string(edge)] = true
+	}
+	if len(reachable) == 0 {
+		return nil, errors.New("kill harness declares no reachable edges")
+	}
+	return reachable, nil
+}
+
+func TestKillHarnessCoveragePredicate(t *testing.T) {
+	const (
+		edge      faultpoint.EdgeID = "edge"
+		otherEdge faultpoint.EdgeID = "other.edge"
+		left      killEndpoint      = "left endpoint"
+		right     killEndpoint      = "right endpoint"
+	)
+	expected := map[faultpoint.EdgeID][2]killEndpoint{edge: {left, right}}
+	record := func(recordEdge faultpoint.EdgeID, endpoint killEndpoint, executed, passed bool) killHarnessRecord {
+		return killHarnessRecord{key: receiptKillKey{edge: recordEdge, endpoint: endpoint}, executed: executed, passed: passed}
+	}
+	passing := func(endpoint killEndpoint) killHarnessRecord {
+		return record(edge, endpoint, true, true)
+	}
+
+	t.Run("admits legitimate third record", func(t *testing.T) {
+		if _, err := validateKillHarnessCoverage(expected, []killHarnessRecord{passing(left), passing(right), passing(left)}); err != nil {
+			t.Fatalf("third record rejected: %v", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name    string
+		records []killHarnessRecord
+		want    string
+	}{
+		{name: "reject edge with only one endpoint", records: []killHarnessRecord{passing(left)}, want: `no executed, passing record for E.2 endpoint "right endpoint"`},
+		{name: "reject two records naming same endpoint", records: []killHarnessRecord{passing(left), passing(left)}, want: `no executed, passing record for E.2 endpoint "right endpoint"`},
+		{name: "reject endpoint absent from E.2 edge", records: []killHarnessRecord{passing(left), passing(right), passing("alien endpoint")}, want: `endpoint "alien endpoint" is absent from DESIGN E.2 edge "edge"`},
+		{name: "reject record that did not execute", records: []killHarnessRecord{record(edge, left, false, false), passing(right)}, want: `record did not execute "edge" at "left endpoint"`},
+		{name: "reject record that did not pass", records: []killHarnessRecord{record(edge, left, true, false), passing(right)}, want: `record did not pass "edge" at "left endpoint"`},
+		{name: "reject edge with zero records", want: `no executed, passing record`},
+		{name: "reject record belonging to different edge", records: []killHarnessRecord{record(otherEdge, left, true, true), passing(left), passing(right)}, want: `record belongs to unexpected edge "other.edge"`},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			_, err := validateKillHarnessCoverage(expected, test.records)
+			if err == nil {
+				t.Fatal("injected invalid coverage passed")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("injected invalid coverage failed as %q, want %q", err, test.want)
+			}
+			t.Log(err)
+		})
+	}
+}
+
+func acceptanceSubjectKillHarnessRecords(t *testing.T) map[killEndpointSide]bool {
 	t.Helper()
 	acceptanceSubjectKillHarnessRun.once.Do(func() {
 		root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -545,13 +612,13 @@ func acceptanceSubjectKillHarnessRecords(t *testing.T) map[string]bool {
 	if acceptanceSubjectKillHarnessRun.err != nil {
 		t.Fatalf("acceptance subject kill harness: %v\n%s", acceptanceSubjectKillHarnessRun.err, acceptanceSubjectKillHarnessRun.output)
 	}
-	return map[string]bool{
-		"subject_pinned":     acceptanceSubjectKillHarnessRun.passed["TestAcceptanceSubjectPinnedToStartedKillCuts/subject_pinned"],
-		"acceptance_started": acceptanceSubjectKillHarnessRun.passed["TestAcceptanceSubjectPinnedToStartedKillCuts/acceptance_started"],
+	return map[killEndpointSide]bool{
+		killEndpointLeft:  acceptanceSubjectKillHarnessRun.passed["TestAcceptanceSubjectPinnedToStartedKillCuts/subject_pinned"],
+		killEndpointRight: acceptanceSubjectKillHarnessRun.passed["TestAcceptanceSubjectPinnedToStartedKillCuts/acceptance_started"],
 	}
 }
 
-func receiptKillHarnessRecords(t *testing.T) map[receiptKillKey]bool {
+func receiptKillHarnessRecords(t *testing.T) []killHarnessRecord {
 	t.Helper()
 	receiptKillHarnessRun.once.Do(func() {
 		receiptKillHarnessRun.records, receiptKillHarnessRun.output, receiptKillHarnessRun.err = runReceiptKillHarness(t)
@@ -564,6 +631,7 @@ func receiptKillHarnessRecords(t *testing.T) map[receiptKillKey]bool {
 
 func receiptKillHarnessEdges() []receiptKillRecord {
 	const fixture = "TestPreparePublicationKillCuts/"
+	const humanApprovalFixture = "TestHumanApprovalPreparedToObservedKillCuts/"
 	const supersessionFixture = "TestSupersessionKillMatrix"
 	const cliRoutedProposalFixture = "TestCLIProposalPublishedToRoutedKillCuts/"
 	const cliRoutedRequestFixture = "TestCLIRoutedProposalToDecisionRequestedKillCuts/"
@@ -571,58 +639,61 @@ func receiptKillHarnessEdges() []receiptKillRecord {
 	const draftResultFixture = "TestDraftResultBoundaryKillCuts/"
 	const coreFinalizationFixture = "TestCoreFinalizationPublishedToRoutedKillCuts/"
 	return []receiptKillRecord{
-		{faultpoint.EdgePrepareSnapshotToPlan, "amendment.approval.snapshot", fixture + "prepare.snapshot_to_plan/snapshot"},
-		{faultpoint.EdgePrepareSnapshotToPlan, "amendment.approval.plan", fixture + "prepare.snapshot_to_plan/plan"},
-		{faultpoint.EdgePreparePlanToPrepared, "amendment.approval.plan", fixture + "prepare.plan_to_prepared/plan"},
-		{faultpoint.EdgePreparePlanToPrepared, "amendment.approval_prepared", fixture + "prepare.plan_to_prepared/prepared"},
-		{faultpoint.EdgePreparePreparedToObserved, "amendment.approval_prepared", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/prepared"},
-		{faultpoint.EdgePreparePreparedToObserved, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/observed"},
-		{faultpoint.EdgeQuiesceObservedToSwept, "prepare.quiesce_observed", "TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/observed"},
-		{faultpoint.EdgeQuiesceSweptToLeaseMoved, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/lease_moved"},
-		{faultpoint.EdgeQuiesceLeaseMovedToCommitLock, "prepare.ack.lease", "TestPrepareQuiesceDriverKillCuts/quiesce.lease_moved_to_commit_lock/lease_moved/cancellation_wins"},
-		{faultpoint.EdgePrepareQuarantinedToAbandoned, "cancellation.prepare.snapshot", cancelledPrepareFixture + "prepare.quarantined_to_abandoned/quarantined"},
-		{faultpoint.EdgePrepareQuarantinedToAbandoned, "cancellation.amendment.approval_abandoned", cancelledPrepareFixture + "prepare.quarantined_to_abandoned/abandoned"},
-		{faultpoint.EdgeProposalPublishedToBlockedRoute, "proposal.record.published", "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/published"},
-		{faultpoint.EdgeProposalPublishedToBlockedRoute, "attempt.blocked", "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/blocked_route"},
-		{faultpoint.EdgeProposalBlockedRouteToRouted, "attempt.blocked", "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
-		{faultpoint.EdgeProposalBlockedRouteToRouted, "recovery.amendment.routed_human", "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
-		{faultpoint.EdgeProposalPublishedToRouted, "proposal.record.published", cliRoutedProposalFixture + "proposal.published_to_routed/published"},
-		{faultpoint.EdgeProposalPublishedToRouted, "amendment.routed_human", cliRoutedProposalFixture + "proposal.published_to_routed/routed"},
-		{faultpoint.EdgeProposalRoutedToDecisionRequested, "amendment.routed_human", cliRoutedRequestFixture + "proposal.routed_to_decision_requested/routed"},
-		{faultpoint.EdgeProposalRoutedToDecisionRequested, "amendment.decision.requested", cliRoutedRequestFixture + "proposal.routed_to_decision_requested/requested"},
-		{faultpoint.EdgeSupersedeSweptToApproved, "prepare.commit.approved", supersessionFixture},
-		{faultpoint.EdgeSupersedeIntervalStoppedToApproved, "prepare.commit.execution.stopped", supersessionFixture},
-		{faultpoint.EdgeSupersedeIntervalStoppedToApproved, "prepare.commit.approved", supersessionFixture},
-		{faultpoint.EdgeSupersedeFenceDecidedToApproved, "prepare.commit.approved", supersessionFixture},
-		{faultpoint.EdgeSupersedeApprovedToLeaseRemoved, "prepare.commit.approved", supersessionFixture},
-		{faultpoint.EdgeSupersedeApprovedToLeaseRemoved, "prepare.commit.lease", supersessionFixture},
-		{faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure, "attempt.performer_completed", draftResultFixture + "lifecycle.draft_performer_completed_to_no_blocking_failure/performer_completed"},
-		{faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure, "attempt.failed", draftResultFixture + "lifecycle.draft_performer_completed_to_no_blocking_failure/attempt_failed"},
-		{faultpoint.EdgeProposalCoreFinalizationPublishedToRouted, "proposal.record.published", coreFinalizationFixture + "published_reconstructs_after_quarantine"},
-		{faultpoint.EdgeProposalCoreFinalizationPublishedToRouted, "amendment.routed_human", coreFinalizationFixture + "routed_retains_and_second_resume_is_fixed"},
+		{faultpoint.EdgePrepareSnapshotToPlan, killEndpointLeft, fixture + "prepare.snapshot_to_plan/snapshot"},
+		{faultpoint.EdgePrepareSnapshotToPlan, killEndpointRight, fixture + "prepare.snapshot_to_plan/plan"},
+		{faultpoint.EdgePreparePlanToPrepared, killEndpointLeft, fixture + "prepare.plan_to_prepared/plan"},
+		{faultpoint.EdgePreparePlanToPrepared, killEndpointRight, fixture + "prepare.plan_to_prepared/prepared"},
+		{faultpoint.EdgePreparePreparedToObserved, killEndpointLeft, "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/prepared"},
+		{faultpoint.EdgePreparePreparedToObserved, killEndpointRight, "TestPrepareQuiesceDriverKillCuts/prepare.prepared_to_observed/observed"},
+		{faultpoint.EdgePreparePreparedToObserved, killEndpointLeft, humanApprovalFixture + "prepare.prepared_to_observed/prepared"},
+		{faultpoint.EdgePreparePreparedToObserved, killEndpointRight, humanApprovalFixture + "prepare.prepared_to_observed/observed"},
+		{faultpoint.EdgeQuiesceObservedToSwept, killEndpointLeft, "TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/observed"},
+		{faultpoint.EdgeQuiesceSweptToLeaseMoved, killEndpointRight, "TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/lease_moved"},
+		{faultpoint.EdgeQuiesceLeaseMovedToCommitLock, killEndpointLeft, "TestPrepareQuiesceDriverKillCuts/quiesce.lease_moved_to_commit_lock/lease_moved/cancellation_wins"},
+		{faultpoint.EdgeQuiesceLeaseMovedToCommitLock, killEndpointRight, humanApprovalFixture + "prepare.commit/approved"},
+		{faultpoint.EdgePrepareQuarantinedToAbandoned, killEndpointLeft, cancelledPrepareFixture + "prepare.quarantined_to_abandoned/quarantined"},
+		{faultpoint.EdgePrepareQuarantinedToAbandoned, killEndpointRight, cancelledPrepareFixture + "prepare.quarantined_to_abandoned/abandoned"},
+		{faultpoint.EdgeProposalPublishedToBlockedRoute, killEndpointLeft, "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/published"},
+		{faultpoint.EdgeProposalPublishedToBlockedRoute, killEndpointRight, "TestProposalPublicationKillCuts/proposal.published_to_blocked_route/blocked_route"},
+		{faultpoint.EdgeProposalBlockedRouteToRouted, killEndpointLeft, "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
+		{faultpoint.EdgeProposalBlockedRouteToRouted, killEndpointRight, "TestBlockedProposalRouteKillCuts/proposal.blocked_route_to_routed/blocked_route"},
+		{faultpoint.EdgeProposalPublishedToRouted, killEndpointLeft, cliRoutedProposalFixture + "proposal.published_to_routed/published"},
+		{faultpoint.EdgeProposalPublishedToRouted, killEndpointRight, cliRoutedProposalFixture + "proposal.published_to_routed/routed"},
+		{faultpoint.EdgeProposalRoutedToDecisionRequested, killEndpointLeft, cliRoutedRequestFixture + "proposal.routed_to_decision_requested/routed"},
+		{faultpoint.EdgeProposalRoutedToDecisionRequested, killEndpointRight, cliRoutedRequestFixture + "proposal.routed_to_decision_requested/requested"},
+		{faultpoint.EdgeSupersedeSweptToApproved, killEndpointRight, supersessionFixture},
+		{faultpoint.EdgeSupersedeIntervalStoppedToApproved, killEndpointLeft, supersessionFixture},
+		{faultpoint.EdgeSupersedeIntervalStoppedToApproved, killEndpointRight, supersessionFixture},
+		{faultpoint.EdgeSupersedeFenceDecidedToApproved, killEndpointRight, supersessionFixture},
+		{faultpoint.EdgeSupersedeApprovedToLeaseRemoved, killEndpointLeft, supersessionFixture},
+		{faultpoint.EdgeSupersedeApprovedToLeaseRemoved, killEndpointRight, supersessionFixture},
+		{faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure, killEndpointLeft, draftResultFixture + "lifecycle.draft_performer_completed_to_no_blocking_failure/performer_completed"},
+		{faultpoint.EdgeLifecycleDraftPerformerCompletedToNoBlockingFailure, killEndpointRight, draftResultFixture + "lifecycle.draft_performer_completed_to_no_blocking_failure/attempt_failed"},
+		{faultpoint.EdgeProposalCoreFinalizationPublishedToRouted, killEndpointLeft, coreFinalizationFixture + "published_reconstructs_after_quarantine"},
+		{faultpoint.EdgeProposalCoreFinalizationPublishedToRouted, killEndpointRight, coreFinalizationFixture + "routed_retains_and_second_resume_is_fixed"},
 	}
 }
 
-func prepareQuiesceProbeKillHarnessRecords(t *testing.T) map[faultpoint.EdgeID]bool {
+func prepareQuiesceProbeKillHarnessRecords(t *testing.T, endpoints map[faultpoint.EdgeID][2]killEndpoint) []killHarnessRecord {
 	t.Helper()
 	passed := prepareQuiesceKillHarnessPassed(t)
-	return map[faultpoint.EdgeID]bool{
-		faultpoint.EdgeQuiesceObservedToSwept:        passed["TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/swept"],
-		faultpoint.EdgeQuiesceSweptToLeaseMoved:      passed["TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/swept"],
-		faultpoint.EdgeQuiesceLeaseMovedToCommitLock: passed["TestPrepareQuiesceDriverKillCuts/quiesce.lease_moved_to_commit_lock/commit_lock/hash_mismatch_halts"],
+	return []killHarnessRecord{
+		killHarnessRecordForSide(endpoints, faultpoint.EdgeQuiesceObservedToSwept, killEndpointRight, passed["TestPrepareQuiesceDriverKillCuts/quiesce.observed_to_swept/swept"]),
+		killHarnessRecordForSide(endpoints, faultpoint.EdgeQuiesceSweptToLeaseMoved, killEndpointLeft, passed["TestPrepareQuiesceDriverKillCuts/quiesce.swept_to_lease_moved/swept"]),
+		killHarnessRecordForSide(endpoints, faultpoint.EdgeQuiesceLeaseMovedToCommitLock, killEndpointRight, passed["TestPrepareQuiesceDriverKillCuts/quiesce.lease_moved_to_commit_lock/commit_lock/hash_mismatch_halts"]),
 	}
 }
 
-func supersessionProbeKillHarnessRecords(t *testing.T) map[faultpoint.EdgeID]bool {
+func supersessionProbeKillHarnessRecords(t *testing.T, endpoints map[faultpoint.EdgeID][2]killEndpoint) []killHarnessRecord {
 	t.Helper()
 	passed := supersessionKillHarnessPassed(t)
-	return map[faultpoint.EdgeID]bool{
-		faultpoint.EdgeSupersedeSweptToApproved:        passed["TestSupersessionKillMatrix"],
-		faultpoint.EdgeSupersedeFenceDecidedToApproved: passed["TestSupersessionKillMatrix"],
+	return []killHarnessRecord{
+		killHarnessRecordForSide(endpoints, faultpoint.EdgeSupersedeSweptToApproved, killEndpointLeft, passed["TestSupersessionKillMatrix"]),
+		killHarnessRecordForSide(endpoints, faultpoint.EdgeSupersedeFenceDecidedToApproved, killEndpointLeft, passed["TestSupersessionKillMatrix"]),
 	}
 }
 
-func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error) {
+func runReceiptKillHarness(t *testing.T) ([]killHarnessRecord, string, error) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		return nil, "", err
@@ -748,13 +819,15 @@ func runReceiptKillHarness(t *testing.T) (map[receiptKillKey]bool, string, error
 		passed[test] = result
 	}
 
-	records := make(map[receiptKillKey]bool)
+	endpoints, _ := edgeEndpointsFromAppendixE(t)
+	records := make([]killHarnessRecord, 0, len(receiptKillHarnessEdges()))
 	for _, record := range receiptKillHarnessEdges() {
-		key := receiptKillKey{edge: record.edge, endpoint: record.endpoint}
-		if _, duplicate := records[key]; duplicate {
-			return nil, publication.output + prepare.output + proposal.output, fmt.Errorf("duplicate receipt registry record for %q at %q", key.edge, key.endpoint)
-		}
-		records[key] = passed[record.test]
+		didPass := passed[record.test]
+		records = append(records, killHarnessRecord{
+			key:      receiptKillKey{edge: record.edge, endpoint: endpoints[record.edge][record.side]},
+			executed: didPass,
+			passed:   didPass,
+		})
 	}
 	return records, publication.output + prepare.output + proposal.output + publicationProposal.output + cliRoutedProposal.output + cliRoutedRequest.output + cancelledPrepare.output + supersession.output + draft.output + coreFinalization.output, nil
 }
@@ -775,7 +848,11 @@ func prepareQuiesceKillHarnessResult() (map[string]bool, string, error) {
 			prepareQuiesceKillHarnessRun.err = err
 			return
 		}
-		prepareQuiesceKillHarnessRun.passed, prepareQuiesceKillHarnessRun.output, prepareQuiesceKillHarnessRun.err = runKillHarnessJSON(root, "./cmd/partitur", "^TestPrepareQuiesceDriverKillCuts$")
+		prepareQuiesceKillHarnessRun.passed, prepareQuiesceKillHarnessRun.output, prepareQuiesceKillHarnessRun.err = runKillHarnessJSON(
+			root,
+			"./cmd/partitur",
+			"^(TestPrepareQuiesceDriverKillCuts|TestHumanApprovalPreparedToObservedKillCuts)$",
+		)
 	})
 	return prepareQuiesceKillHarnessRun.passed, prepareQuiesceKillHarnessRun.output, prepareQuiesceKillHarnessRun.err
 }
@@ -866,6 +943,16 @@ type gateCutDisposition struct {
 
 func edgeIDsFromAppendixE(t *testing.T) (map[string]bool, int) {
 	t.Helper()
+	endpoints, boundaryRows := edgeEndpointsFromAppendixE(t)
+	edges := make(map[string]bool, len(endpoints))
+	for edge := range endpoints {
+		edges[string(edge)] = true
+	}
+	return edges, boundaryRows
+}
+
+func edgeEndpointsFromAppendixE(t *testing.T) (map[faultpoint.EdgeID][2]killEndpoint, int) {
+	t.Helper()
 	contents, err := os.ReadFile(filepath.Join("..", "..", "docs", "DESIGN.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -873,7 +960,7 @@ func edgeIDsFromAppendixE(t *testing.T) (map[string]bool, int) {
 	lines := strings.Split(string(contents), "\n")
 	start, end := tableBoundsCounted(t, lines, "## E.2 The catalog", "## E.3 ", 1, 1)
 	pattern := regexp.MustCompile("^`([a-z][a-z0-9_.]*)`$")
-	edges := make(map[string]bool)
+	endpoints := make(map[faultpoint.EdgeID][2]killEndpoint)
 	boundaryRows := 0
 	for _, line := range lines[start:end] {
 		if !strings.HasPrefix(line, "|") || strings.HasPrefix(line, "| Edge |") || strings.HasPrefix(line, "|---") {
@@ -884,18 +971,27 @@ func edgeIDsFromAppendixE(t *testing.T) (map[string]bool, int) {
 			t.Fatalf("unparseable DESIGN E.2 row %q", line)
 		}
 		match := pattern.FindStringSubmatch(strings.TrimSpace(cells[1]))
-		if match == nil || edges[match[1]] {
+		if match == nil {
+			t.Fatalf("unparseable DESIGN E.2 row %q", line)
+		}
+		edge := faultpoint.EdgeID(match[1])
+		if endpoints[edge] != [2]killEndpoint{} {
 			t.Fatalf("unparseable or duplicate DESIGN E.2 row %q", line)
 		}
-		edges[match[1]] = true
+		left := killEndpoint(strings.TrimSpace(cells[2]))
+		right := killEndpoint(strings.TrimSpace(cells[3]))
+		if left == "" || right == "" || left == right {
+			t.Fatalf("empty or duplicate DESIGN E.2 endpoints in row %q", line)
+		}
+		endpoints[edge] = [2]killEndpoint{left, right}
 		if strings.HasSuffix(strings.TrimSpace(cells[2]), "`B`") || strings.HasSuffix(strings.TrimSpace(cells[3]), "`B`") {
 			boundaryRows++
 		}
 	}
-	if len(edges) == 0 {
+	if len(endpoints) == 0 {
 		t.Fatal("DESIGN E.2 extraction produced no rows")
 	}
-	return edges, boundaryRows
+	return endpoints, boundaryRows
 }
 
 func gateCutDispositions(t *testing.T) map[string]gateCutDisposition {
