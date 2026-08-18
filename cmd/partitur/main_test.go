@@ -264,17 +264,49 @@ func TestStatusRendersProjectionAndClassifiesOutcomes(t *testing.T) {
 	}
 }
 
-func TestStatusCorruptProjectionExitsFive(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	code := runWithStatusReader(
-		[]string{"status", "run-1"}, &stdout, &stderr, nil, nil, nil,
-		func(string) (statusprojection.Report, error) {
-			return statusprojection.Report{}, runstore.ErrJournalCorrupt
-		},
-	)
-	if code != 5 || stdout.Len() != 0 ||
-		stderr.String() != "recovery halted: detail=\"journal_corrupt\"\n" {
-		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+func TestStatusUnprojectableJournalExitsFive(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "corrupt journal", err: runstore.ErrJournalCorrupt},
+		{name: "unsupported event", err: runstate.ErrUnsupportedEventType},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runWithStatusReader(
+				[]string{"status", "run-1"}, &stdout, &stderr, nil, nil, nil,
+				func(string) (statusprojection.Report, error) {
+					return statusprojection.Report{}, test.err
+				},
+			)
+			if code != 5 || stdout.Len() != 0 ||
+				stderr.String() != fmt.Sprintf("recovery halted: detail=%q\n", test.err.Error()) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestObservationUnclassifiedReadErrorsAreRefused(t *testing.T) {
+	for _, args := range [][]string{{"status", "run-1"}, {"logs", "run-1"}} {
+		t.Run(args[0], func(t *testing.T) {
+			readErr := errors.New("read failed")
+			var stdout, stderr bytes.Buffer
+			code := runWithReaders(
+				args, &stdout, &stderr, nil, nil, nil,
+				func(string) (statusprojection.Report, error) {
+					return statusprojection.Report{}, readErr
+				},
+				func(string) (logstream.Snapshot, error) {
+					return logstream.Snapshot{}, readErr
+				},
+				logstream.Stream,
+			)
+			if code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"read failed\"\n" {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
 	}
 }
 
@@ -332,6 +364,7 @@ func TestLogsClassifiesObservationOutcomes(t *testing.T) {
 		}, wantCode: 0},
 		{name: "torn tail is reported data", wantCode: 0},
 		{name: "corrupt prefix cannot stream", err: runstore.ErrJournalCorrupt, wantCode: 5},
+		{name: "unsupported event cannot stream", err: runstate.ErrUnsupportedEventType, wantCode: 5},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			snapshot := base
@@ -365,7 +398,7 @@ func TestLogsClassifiesObservationOutcomes(t *testing.T) {
 			if test.wantCode == 0 && !strings.Contains(stdout.String(), `"schema":"partitur/logs+jsonl;v=1"`) {
 				t.Fatalf("logs JSONL missing from %q", stdout.String())
 			}
-			if test.wantCode == 5 && (stdout.Len() != 0 || stderr.String() != "recovery halted: detail=\"journal_corrupt\"\n") {
+			if test.wantCode == 5 && (stdout.Len() != 0 || stderr.String() != fmt.Sprintf("recovery halted: detail=%q\n", test.err.Error())) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
@@ -1249,12 +1282,12 @@ func TestResumeMapsEveryAppendixDHaltAndNoOtherReasonToExitFive(t *testing.T) {
 	}
 }
 
-func TestResumeSelectionSnapshotInvalidIsNotAnAppendixDHalt(t *testing.T) {
+func TestResumeSelectionSnapshotInvalidIsRefused(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
 		return recoveryexec.Result{}, resumeSelectionError{err: statusprojection.ErrSnapshotInvalid}
 	})
-	if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "run score snapshot is invalid") {
+	if code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"run score snapshot is invalid\"\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
