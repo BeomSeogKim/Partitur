@@ -190,7 +190,7 @@ two checks instead of claiming either one alone settles the question.
 |---|
 | The edge catalogue is identical across `DESIGN.md` Appendix E.2, the edge-id constants in `internal/faultpoint`, and the `HARNESS.md` selection manifest |
 | **Every catalogue edge has exactly one disposition row** in the `HARNESS.md` table |
-| **Every catalogue edge has exactly two registry records, keyed by `(edge id, endpoint)` — one for each of its E.2 endpoints, each executed and passing** |
+| **Every E.2 endpoint of every catalogue edge has at least one registry record, keyed by `(edge id, endpoint)`; the set of endpoint values on an edge's records is exactly the two endpoints E.2 names for that edge, and every record executed and passed** |
 
 The first already runs in CI.
 
@@ -205,10 +205,15 @@ fixtures** because a claim is not executable. Listing an edge against a `nil` fi
 fixture the harness skips, or against a test in another package that was deleted, would all satisfy
 "has a two-sided fixture" while nothing ran.
 
-So the registry holds **exactly two records per catalogue edge, keyed by `(edge id, endpoint)`** —
-one for each of the two endpoints Appendix E.2 names for that edge — and each record must be
-executed and passing. An edge with one record, three records, two records naming the same endpoint,
-or an endpoint value E.2 does not name for it, fails the row.
+So the registry holds **at least one record for each E.2 endpoint, keyed by `(edge id, endpoint)`**,
+and the set of endpoint values on an edge's records must equal exactly the two endpoints Appendix
+E.2 names for that edge. Every record must be executed and passing. An edge with no records, an edge
+with only one endpoint represented, two or more records that name only the same endpoint, a record
+for a different edge, or an endpoint value E.2 does not name for that edge fails the row.
+
+The row no longer rejects a third or later executed, passing record for an endpoint already proved.
+Record multiplicity can grow when another production path proves the same side; that does not change
+the normative endpoint member set and does not require this document to enumerate producers.
 
 The key is the pair, not the edge. Keying on the edge alone would let a harness record one endpoint
 and satisfy a per-edge entry condition, which is the whole point of a **two-sided** cut: an edge is
