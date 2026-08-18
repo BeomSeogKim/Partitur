@@ -241,6 +241,16 @@ before the core proceeds (Appendix B, `sync` column). Fsync is required for ever
 that authorizes an irreversible effect or that a recovery rule keys on; ordinary
 `log`/`progress` mirroring is not synced.
 
+If a complete event line is appended but its required fsync fails, the event's durability and the
+resulting transaction state are **unconfirmed**: the line may or may not be on stable storage. The
+command stops further mutation and returns exit 7. It must not classify the transaction by rereading
+`journal.jsonl` through the affected host's page cache or promise a continuation from either the
+event's presence or absence there. The operator must preserve the run and determine whether the
+event is present through a storage-level observation independent of that page cache, such as a
+storage snapshot or replica. If no such external observation is available, v0.2 cannot determine
+the transaction outcome; the operator must treat it as unknown rather than invoke a continuation
+that assumes a durable projection.
+
 **Torn tails.** A crash can leave a partially written final line. On replay:
 
 - A trailing line that fails to parse is truncated **only if it is the last line** in the
@@ -3439,6 +3449,7 @@ The command's exit codes are exhaustive over its specified outcomes:
 | 4 | The durable run reached terminal `FAILED` or `CANCELLED`; the id was already written |
 | 5 | Recovery halted for an Appendix D reason; the id was already written and the run remains at its last durable state |
 | 6 | This invocation was operationally interrupted after `run.started`; the run remains nonterminal and resumable. The id was already written except when that single stdout write was itself the interruption |
+| 7 | A required run-journal append has unconfirmed durability, so the event and the run's resulting durable projection are unknown. The id was already written unless the unconfirmed event is `run.started`; follow §1's external storage-observation instruction |
 
 v0.2 defines no `run --json` or `run --jsonl`, live progress rendering, TTY-specific mode, spinner,
 colour, or human-oriented status stream. Adapter `log` and `progress` notifications remain the
@@ -3478,6 +3489,7 @@ to the creating command:
 | 4 | The selected run reached or was already at terminal `FAILED` or `CANCELLED` |
 | 5 | Recovery halted for the Appendix D reason reported on stderr; the run remains at its last durable projection |
 | 6 | The operational-interruption outcome already defined for `resume` above |
+| 7 | A required recovery append has unconfirmed durability, so the selected run's resulting projection is unknown; follow §1's external storage-observation instruction |
 
 An already-terminal run is therefore not a wrong-projection-state refusal. Treating its durable
 outcome idempotently closes the normal race in which a caller repeats `resume` after exit 6 but
@@ -3517,6 +3529,7 @@ The following table is exhaustive for `cancel`:
 | 4 | The run reached, or was already at, terminal `FAILED` or `CANCELLED`; where this invocation made the request, the `run.cancelled` it waited for is also its acknowledgement |
 | 5 | Recovery halted for the Appendix D reason reported on stderr; the run remains at its last durable projection |
 | 6 | This `cancel` invocation was operationally interrupted while the run remains nonterminal |
+| 7 | The `cancel.requested` append or a later cancellation append has unconfirmed durability, so the selected run's resulting durable projection is unknown; follow §1's external storage-observation instruction |
 
 `validate` acquires inputs before interpreting their contents. A missing or unreadable required
 `partitur.yaml`, or a discovered cast file that cannot be read, is a refused precondition and exits
@@ -3537,6 +3550,7 @@ cast produce `binding_missing`, which is a validation result about content that 
 | 4 | a command's durable transaction completed unsuccessfully: a run reached terminal `FAILED` or `CANCELLED`, or Application reached `FAILED_CLEAN` after a verified rollback |
 | 5 | recovery halt — a command's durable transaction cannot proceed and needs an operator: a run halt names an Appendix D reason; Application or Promotion remains `RECOVERY_REQUIRED` when its `--recover` cannot determine a safe result |
 | 6 | operational interruption after a command started its durable transaction; that transaction remains nonterminal and recoverable by the command's specified continuation: a run by `resume`, Application `APPLYING` by `apply --recover`, or Promotion `PROMOTING` by `promote-score --recover` |
+| 7 | durability unconfirmed after a required journal fsync failed: the event line may or may not be durable, so the transaction outcome is unknown; stop further mutation and follow §1's external storage-observation instruction rather than a continuation that reads the affected page cache |
 
 For `answer` and gate `approve`, exit 2 does not by itself distinguish no active run from a
 missing, obsoleted, already-resolved, or wrong-type decision. The stderr diagnostic names the
@@ -3546,7 +3560,9 @@ refused precondition; when an active run exists, `status` separately shows its p
 
 Verification produces **marks**; shipping applies one **application candidate**. Both are
 projections of the journal (§6), computed on demand by `status` and `apply`, so they can
-never drift from the evidence.
+never drift from the evidence. Every transaction-state transition in this section is established
+only by a journal append whose required fsync is confirmed under §1; an unconfirmed append makes no
+Application or Promotion state claim.
 
 **Three grades, a set and never a ladder.** No ordering, no substitution: REVIEWED never
 counts toward anything that asks for VERIFIED or APPROVED.
@@ -3797,6 +3813,7 @@ authoritative surface for `application.state` and its cause.
 | 4 | Application reached `FAILED_CLEAN`: `apply.failed`, or a `--recover` that verified the restored base tree, recorded that outcome; stderr names the verified clean rollback |
 | 5 | `apply --recover` inspected a tree matching neither `base_tree` nor `result_tree` and left Application `RECOVERY_REQUIRED`; stderr names that application recovery state and cause; the run remains `SUCCEEDED` |
 | 6 | This `apply` invocation was operationally interrupted after its transaction started; Application remains `APPLYING` and recoverable with `partitur apply <run-id> --recover`; the run remains `SUCCEEDED` |
+| 7 | A required application append has unconfirmed durability, so the resulting Application state is unknown; the run remains `SUCCEEDED`, and the operator follows §1's external storage-observation instruction |
 
 **`partitur promote-score` exit mapping.** The following table is exhaustive for
 `promote-score`; the run remains terminal `SUCCEEDED` on every shipping outcome, and
@@ -3811,6 +3828,7 @@ authoritative surface for `application.state` and its cause.
 | 4 | Not used: promotion has no verified-clean failure outcome |
 | 5 | A started promotion found a missing, unreadable, or hash-mismatched pinned target snapshot, or its rename-boundary check / `promote-score --recover` found the root file hash matching neither the expected nor target hash; it appended or retained Promotion `RECOVERY_REQUIRED`, and stderr names that cause; the run remains `SUCCEEDED` |
 | 6 | This `promote-score` invocation was operationally interrupted after its transaction started; Promotion remains `PROMOTING` and recoverable with `partitur promote-score <run-id> --recover`; the run remains `SUCCEEDED` |
+| 7 | A required promotion append has unconfirmed durability, so the resulting Promotion state is unknown; the run remains `SUCCEEDED`, and the operator follows §1's external storage-observation instruction |
 
 `apply` evaluates the selected run's candidate against the expectation of **the same run
 revision** — never against the root score.
