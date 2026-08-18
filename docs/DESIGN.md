@@ -8,10 +8,10 @@
 **Normative status.** This document is the **sole normative specification**. It
 supersedes Design v0.1 and incorporates the full normative content of decisions
 [0001](decisions/0001-amendment-envelope.md) and
-[0002](decisions/0002-verification-semantics.md), which are retained **unchanged as
-historical rationale only**. Their "this document governs" clauses are discharged: where
-this document and a decision record differ, this document governs. Consult the decisions
-for *why* a rule exists, never for what the rule is.
+[0002](decisions/0002-verification-semantics.md), which are retained as **frozen historical
+decision records only**. Their former "this document governs" clauses are discharged: where
+this document and a decision record differ, this document governs. Consult the decisions for
+*why* a rule exists, never for what the rule is.
 
 **Version relationships.** Independently versioned surfaces:
 
