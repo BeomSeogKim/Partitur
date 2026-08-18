@@ -41,6 +41,38 @@ func TestMutationPlanBetweenUnitRecoveryExecutorRejectsWholeActionReplacement(t 
 	)
 }
 
+func TestMutationPlannerSteplessRoutesRejectMismatchedCatalogKind(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestPlannerSteplessRoutesAreExecutable", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),
+		"decision := action(CaseCompositionTerminal, ActionAppendCompositionTerminal, true)",
+		"decision := action(CaseCompositionTerminal, ActionAppendBlockedProposalRoute, true)",
+	)
+}
+
+func TestMutationPlannerConstructorCompletenessRejectsUnattributedAdjacency(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestPlannerSteplessRoutesAreExecutable", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),
+		"decision := action(CaseCompositionTerminal, ActionAppendCompositionTerminal, true)",
+		"println(CaseCompositionTerminal, ActionAppendCompositionTerminal) // mutation: unattributed literal adjacency\n\t\tdecision := action(CaseCompositionTerminal, ActionAppendCompositionTerminal, true)",
+	)
+}
+
+func TestMutationPlannerConstructorCompletenessRejectsAdjacencyOutsideCall(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestPlannerSteplessRoutesAreExecutable", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),
+		"func halt(caseID CaseID, reason HaltReason) Decision {",
+		"var probeCase, probeKind = CaseCompositionTerminal, ActionAppendCompositionTerminal // mutation: adjacency outside a call\n\nfunc halt(caseID CaseID, reason HaltReason) Decision {",
+	)
+}
+
+func TestMutationPlannerConstructorCompletenessRejectsActionCompositeBypass(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestPlannerSteplessRoutesAreExecutable", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),
+		"func halt(caseID CaseID, reason HaltReason) Decision {",
+		"var _ = Decision{CaseID: CaseCompositionTerminal, Action: &Action{Kind: ActionAppendCompositionTerminal}} // mutation: Action composite bypass\n\nfunc halt(caseID CaseID, reason HaltReason) Decision {",
+	)
+}
+
 func TestMutationRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	assertRecoveryMutationKilled(t, "TestRecoveryPreprocessingQuarantinesUnreferencedPrepareSnapshot", goEnvironment,

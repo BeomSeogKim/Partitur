@@ -8,17 +8,29 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryconsequence"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/runstore"
 )
 
 type plannerStepRoute struct {
 	caseID recovery.CaseID
 	kind   recovery.ActionKind
 	step   recovery.ActionStep
+}
+
+type plannerKindRoute struct {
+	caseID recovery.CaseID
+	kind   recovery.ActionKind
+}
+
+func (route plannerKindRoute) String() string {
+	return fmt.Sprintf("%s %s", route.caseID, route.kind)
 }
 
 func (route plannerStepRoute) String() string {
@@ -55,6 +67,382 @@ func TestPlannerStepRoutesAreExecutable(t *testing.T) {
 	if len(missing) != 0 {
 		t.Fatalf("planner step routes are not executable:\n  %s", joinLines(missing))
 	}
+}
+
+// TestPlannerSteplessRoutesAreExecutable derives stepless routes separately
+// from the step-route lock and exercises the executor's real kind dispatch.
+// This syntax lock cannot see an Action value constructed outside planner.go
+// and returned into it as a prebuilt value.
+func TestPlannerSteplessRoutesAreExecutable(t *testing.T) {
+	routes := plannerSteplessRoutes(t)
+	if len(routes) == 0 {
+		t.Fatal("derived planner stepless route set is empty")
+	}
+	t.Logf("derived %d planner stepless routes", len(routes))
+	executor := &Executor{CoreFinalizer: func(context.Context, *runstore.Store, runstate.RunID) error { return nil }}
+	missing := make([]string, 0)
+	for _, route := range routes {
+		handler, ok := executor.kindHandler(route.caseID, route.kind)
+		if !ok || handler == nil {
+			missing = append(missing, route.String()+" (no handler)")
+			continue
+		}
+		err := handler(context.Background(), HandlerContext{}, recovery.Action{Kind: route.kind})
+		if errors.Is(err, recoveryconsequence.ErrUnrecognizedCase) || errors.Is(err, recoveryconsequence.ErrInvalidAction) {
+			missing = append(missing, route.String()+" ("+err.Error()+")")
+		}
+	}
+	if len(missing) != 0 {
+		t.Fatalf("planner stepless routes are not executable:\n  %s", joinLines(missing))
+	}
+}
+
+func plannerSteplessRoutes(t *testing.T) []plannerKindRoute {
+	t.Helper()
+	fileSet, file := parsePlanner(t)
+	caseValues := typedStringConstants(t, file, "CaseID")
+	kindValues := typedStringConstants(t, file, "ActionKind")
+	constructorSites := plannerConstructorSites(t, fileSet, file, caseValues, kindValues)
+	assertPlannerConstructorCompleteness(t, fileSet, file, constructorSites)
+	assertPlannerActionCompositeLiteralsOwned(t, fileSet, file)
+
+	set := map[plannerKindRoute]bool{}
+	for _, site := range constructorSites {
+		if !site.stepful && site.kindDispatched {
+			set[site.route] = true
+		}
+	}
+	routes := make([]plannerKindRoute, 0, len(set))
+	for route := range set {
+		routes = append(routes, route)
+	}
+	sort.Slice(routes, func(i, j int) bool { return routes[i].String() < routes[j].String() })
+	return routes
+}
+
+func assertPlannerActionCompositeLiteralsOwned(t *testing.T, fileSet *token.FileSet, file *ast.File) {
+	t.Helper()
+	constructors := map[string]bool{
+		"action":                  true,
+		"recoveryFailureAction":   true,
+		"proceedScheduler":        true,
+		"verifyAcceptanceSubject": true,
+	}
+	owned := map[token.Pos]string{}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || !constructors[function.Name.Name] {
+			continue
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			if literal, ok := node.(*ast.CompositeLit); ok && isActionCompositeLiteral(literal) {
+				owned[literal.Pos()] = function.Name.Name
+			}
+			return true
+		})
+	}
+
+	total := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		literal, ok := node.(*ast.CompositeLit)
+		if !ok || !isActionCompositeLiteral(literal) {
+			return true
+		}
+		total++
+		if owner := owned[literal.Pos()]; owner == "" {
+			t.Fatalf("planner Action composite literal at %s is outside the four action constructors", fileSet.Position(literal.Pos()))
+		}
+		return true
+	})
+	t.Logf("all %d planner Action composite literals are owned by the four action constructors", total)
+}
+
+type plannerConstructorSite struct {
+	position       token.Pos
+	route          plannerKindRoute
+	stepful        bool
+	kindDispatched bool
+}
+
+var executorInterceptedPlannerKinds = map[recovery.ActionKind]bool{
+	recovery.ActionReclaimAuthority: true,
+}
+
+func plannerConstructorSites(t *testing.T, fileSet *token.FileSet, file *ast.File, cases, kinds map[string]string) []plannerConstructorSite {
+	t.Helper()
+	nonExecutable := nonExecutablePlannerCalls(file)
+	functions := map[string]*ast.FuncDecl{}
+	for _, declaration := range file.Decls {
+		if function, ok := declaration.(*ast.FuncDecl); ok {
+			functions[function.Name.Name] = function
+		}
+	}
+	sites := []plannerConstructorSite{}
+	for _, function := range functions {
+		locals := localCaseValues(function, cases)
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, name := callFunctionNode(node)
+			if call == nil {
+				return true
+			}
+			var caseExpr, kindExpr ast.Expr
+			stepful := false
+			kindDispatched := true
+			switch name {
+			case "action":
+				if len(call.Args) < 2 {
+					t.Fatalf("action call at %s has %d arguments", fileSet.Position(call.Pos()), len(call.Args))
+				}
+				caseExpr, kindExpr = call.Args[0], call.Args[1]
+				stepful = actionCallHasField(function, call, "Steps")
+				kindDispatched = !actionCallHasField(function, call, "Continuation")
+			case "recoveryFailureAction":
+				if len(call.Args) < 6 {
+					t.Fatalf("recoveryFailureAction call at %s has %d arguments", fileSet.Position(call.Pos()), len(call.Args))
+				}
+				caseExpr, kindExpr = call.Args[0], call.Args[1]
+				stepful = !isNilIdentifier(call.Args[5])
+			case "verifyAcceptanceSubject":
+				if len(call.Args) < 2 {
+					t.Fatalf("verifyAcceptanceSubject call at %s has %d arguments", fileSet.Position(call.Pos()), len(call.Args))
+				}
+				caseExpr, kindExpr, stepful = call.Args[0], call.Args[1], true
+			case "proceedScheduler":
+				caseExpr = ast.NewIdent("CaseContinue")
+				kindExpr = ast.NewIdent("ActionProceedScheduler")
+				kindDispatched = false
+			default:
+				return true
+			}
+			if !resolvableCases(caseExpr, cases, locals) || !resolvableKind(kindExpr, kinds) {
+				// Calls inside the parameterized helpers are attributed at their
+				// concrete call sites instead of as unresolved duplicate routes.
+				return true
+			}
+			for _, caseID := range resolveCases(t, caseExpr, cases, locals) {
+				kind := resolveKind(t, kindExpr, kinds)
+				sites = append(sites, plannerConstructorSite{
+					position:       call.Pos(),
+					route:          plannerKindRoute{caseID: caseID, kind: kind},
+					stepful:        stepful,
+					kindDispatched: kindDispatched && !executorInterceptedPlannerKinds[kind] && !nonExecutable[call.Pos()],
+				})
+			}
+			return true
+		})
+	}
+	assertExecutorInterceptsPlannerKinds(t, sites)
+	return sites
+}
+
+func assertExecutorInterceptsPlannerKinds(t *testing.T, sites []plannerConstructorSite) {
+	t.Helper()
+	routes := map[plannerKindRoute]bool{}
+	for _, site := range sites {
+		if executorInterceptedPlannerKinds[site.route.kind] {
+			routes[site.route] = true
+		}
+	}
+	for route := range routes {
+		t.Run("executor intercepts "+route.String(), func(t *testing.T) {
+			intercepted := errors.New("planner route reached post-interception reload")
+			store := acquirableRecoveryStore(t)
+			driver, err := store.AcquireRecoveryDriver("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = driver.Release() })
+			executor := &Executor{
+				Driver: driver,
+				Store:  store,
+				RunID:  "run-1",
+				Load: func(context.Context) (recovery.Input, error) {
+					return recovery.Input{}, intercepted
+				},
+			}
+			_, err = executor.execute(context.Background(), recovery.Input{}, recovery.Decision{
+				CaseID: route.caseID,
+				Action: &recovery.Action{Kind: route.kind},
+			})
+			if !errors.Is(err, intercepted) {
+				t.Fatalf("planner route exempted from kind dispatch was not intercepted before kindHandler: %v", err)
+			}
+		})
+	}
+}
+
+// nonExecutablePlannerCalls identifies the deliberately invalid synthetic
+// fallback used when PlanBetweenUnit cannot select a compiled scheduler action.
+func nonExecutablePlannerCalls(file *ast.File) map[token.Pos]bool {
+	result := map[token.Pos]bool{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		statement, ok := node.(*ast.IfStmt)
+		if !ok || !isNegatedValidCall(statement.Cond) {
+			return true
+		}
+		ast.Inspect(statement.Body, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				result[call.Pos()] = true
+			}
+			return true
+		})
+		return true
+	})
+	return result
+}
+
+func isNegatedValidCall(expression ast.Expr) bool {
+	unary, ok := expression.(*ast.UnaryExpr)
+	if !ok || unary.Op != token.NOT {
+		return false
+	}
+	call, ok := unary.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && selector.Sel.Name == "Valid" && len(call.Args) == 0
+}
+
+func resolvableCases(expression ast.Expr, constants map[string]string, locals map[string][]recovery.CaseID) bool {
+	name, ok := expression.(*ast.Ident)
+	return ok && (constants[name.Name] != "" || len(locals[name.Name]) != 0)
+}
+
+func resolvableKind(expression ast.Expr, constants map[string]string) bool {
+	name, ok := expression.(*ast.Ident)
+	return ok && constants[name.Name] != ""
+}
+
+func callFunctionNode(node ast.Node) (*ast.CallExpr, string) {
+	call, ok := node.(*ast.CallExpr)
+	if !ok {
+		return nil, ""
+	}
+	_, name := callFunction(call)
+	return call, name
+}
+
+func actionCallHasField(function *ast.FuncDecl, target *ast.CallExpr, field string) bool {
+	root := ""
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		assignment, ok := node.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for index, right := range assignment.Rhs {
+			if right == target && index < len(assignment.Lhs) {
+				if name, ok := assignment.Lhs[index].(*ast.Ident); ok {
+					root = name.Name
+				}
+			}
+		}
+		return true
+	})
+	if root == "" {
+		return false
+	}
+	stepful := false
+	nextRootAssignment := token.NoPos
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		assignment, ok := node.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		if assignment.Pos() <= target.Pos() {
+			return true
+		}
+		for _, left := range assignment.Lhs {
+			if name, ok := left.(*ast.Ident); ok && name.Name == root && (nextRootAssignment == token.NoPos || assignment.Pos() < nextRootAssignment) {
+				nextRootAssignment = assignment.Pos()
+			}
+		}
+		for _, left := range assignment.Lhs {
+			name, matches := actionFieldAssignmentRoot(left, field)
+			if matches && name == root && (nextRootAssignment == token.NoPos || assignment.Pos() < nextRootAssignment) {
+				stepful = true
+			}
+		}
+		return true
+	})
+	return stepful
+}
+
+func actionFieldAssignmentRoot(expression ast.Expr, field string) (string, bool) {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != field {
+		return "", false
+	}
+	action, ok := selector.X.(*ast.SelectorExpr)
+	if !ok || action.Sel.Name != "Action" {
+		return "", false
+	}
+	root, ok := action.X.(*ast.Ident)
+	return root.Name, ok
+}
+
+func isNilIdentifier(expression ast.Expr) bool {
+	name, ok := expression.(*ast.Ident)
+	return ok && name.Name == "nil"
+}
+
+var plannerCaseName = regexp.MustCompile(`^Case\w+$`)
+var plannerActionName = regexp.MustCompile(`^Action\w+$`)
+
+func assertPlannerConstructorCompleteness(t *testing.T, fileSet *token.FileSet, file *ast.File, sites []plannerConstructorSite) {
+	t.Helper()
+	attributedCalls := map[token.Pos]bool{}
+	for _, site := range sites {
+		attributedCalls[site.position] = true
+	}
+	attributedPairs := map[token.Pos]bool{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || !attributedCalls[call.Pos()] {
+			return true
+		}
+		for index := 0; index+1 < len(call.Args); index++ {
+			caseName, caseOK := call.Args[index].(*ast.Ident)
+			kindName, kindOK := call.Args[index+1].(*ast.Ident)
+			if caseOK && kindOK && plannerCaseName.MatchString(caseName.Name) && plannerActionName.MatchString(kindName.Name) {
+				attributedPairs[caseName.Pos()] = true
+			}
+		}
+		return true
+	})
+
+	identifiers := []*ast.Ident{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		if identifier, ok := node.(*ast.Ident); ok {
+			identifiers = append(identifiers, identifier)
+		}
+		return true
+	})
+	sort.Slice(identifiers, func(i, j int) bool { return identifiers[i].Pos() < identifiers[j].Pos() })
+	total := 0
+	for index := 0; index+1 < len(identifiers); index++ {
+		caseName, kindName := identifiers[index], identifiers[index+1]
+		if !plannerCaseName.MatchString(caseName.Name) || !plannerActionName.MatchString(kindName.Name) {
+			continue
+		}
+		total++
+		if !attributedPairs[caseName.Pos()] {
+			position := fileSet.Position(caseName.Pos())
+			t.Fatalf("planner literal adjacency %s, %s at %s is not attributed to an action constructor", caseName.Name, kindName.Name, position)
+		}
+	}
+	t.Logf("source-ordered identifier denominator: attributed all %d planner literal (case, kind) adjacencies; derived %d concrete constructor sites", total, len(sites))
+}
+
+func parsePlanner(t *testing.T) (*token.FileSet, *ast.File) {
+	t.Helper()
+	path := filepath.Join("..", "recovery", "planner.go")
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, path, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fileSet, file
 }
 
 func joinLines(lines []string) string {
