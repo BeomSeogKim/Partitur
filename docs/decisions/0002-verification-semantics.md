@@ -2,8 +2,8 @@
 
 - Status: accepted (dual-model consensus, 2026-07-25 — 9 review rounds)
 - Refines: DESIGN §1–§2, §5, §7, consensus V-001
-- Where this decision adds fields, events, or identities beyond DESIGN v0.1, the delta
-  is listed in §10 and this document governs.
+- Scope: historical decision record; not governing system behaviour. [`DESIGN.md`](../DESIGN.md)
+  is the sole normative specification.
 
 ## Context
 
@@ -445,6 +445,8 @@ across vendors is unproven).
 
 ### 10. Deltas to DESIGN v0.1 introduced by this decision
 
+These deltas were absorbed into DESIGN v0.2 and are retained here for provenance:
+
 - `verification.expectation` restructured into `intent` + `apply_gate`
   (require/predicates XOR waived); new `verification.final_movement`.
 - Explicit `id` on every acceptance criterion; `criterion_spec_hash` /
@@ -480,6 +482,11 @@ across vendors is unproven).
   and `movement.failed {reason: human_gate_rejected}`.
 - Gate-mode changes (`require ↔ waived`) barred after candidate recording
   (`verification_mode_changed` in the incompatibility enum).
+
+**Retroactive provenance note (2026-08-18).** An earlier version of this decision also
+listed `succeeded_dependency_changed` as a candidate-compatibility condition. It was removed
+after it was found unreachable; the remaining conditions were renumbered. [`DESIGN.md`](../DESIGN.md)
+governs the current candidate-compatibility rule and closed enum.
 
 ## Consequences
 

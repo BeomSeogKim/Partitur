@@ -2,8 +2,8 @@
 
 - Status: accepted (dual-model consensus, 2026-07-25 — 9 review rounds)
 - Refines: DESIGN §1–§4, consensus A-001, I-001
-- Where this decision adds fields, events, or formulas beyond DESIGN v0.1, the delta is
-  listed in §9 and this document governs.
+- Scope: historical decision record; not governing system behaviour. [`DESIGN.md`](../DESIGN.md)
+  is the sole normative specification.
 
 ## Context
 
@@ -311,6 +311,8 @@ already-produced results satisfy the new score.
   is the authority and this state is corruption, not something to silently repair.
 
 ### 9. Deltas to DESIGN v0.1 introduced by this decision
+
+These deltas were absorbed into DESIGN v0.2 and are retained here for provenance:
 
 - `claimed_impact` schema replaced by §5's typed shape.
 - Journal events `amendment.rejected` / `amendment.routed_human` (non-terminal) /
