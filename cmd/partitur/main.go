@@ -1079,10 +1079,11 @@ func statusErrorCode(err error) int {
 		errors.Is(err, statusprojection.ErrRequiredInput),
 		errors.Is(err, errOutputStream):
 		return 2
-	case errors.Is(err, runstore.ErrJournalCorrupt):
+	case errors.Is(err, runstore.ErrJournalCorrupt),
+		errors.Is(err, runstate.ErrUnsupportedEventType):
 		return 5
 	default:
-		return 6
+		return 2
 	}
 }
 
