@@ -280,7 +280,7 @@ func (transaction *Txn) Append(event runstate.Event) (DurabilityReceipt, error) 
 			return DurabilityReceipt{}, ErrJournalIdempotencyConflict
 		}
 		if err := transaction.store.fs.SyncFile(path); err != nil {
-			return DurabilityReceipt{}, fmt.Errorf("sync idempotent journal append: %w", err)
+			return DurabilityReceipt{}, fmt.Errorf("%w: sync idempotent journal append: %v", ErrJournalDurabilityUnconfirmed, err)
 		}
 		return transaction.journalReceipt(existing.event, path), nil
 	}
@@ -302,7 +302,7 @@ func (transaction *Txn) Append(event runstate.Event) (DurabilityReceipt, error) 
 		return DurabilityReceipt{}, fmt.Errorf("append journal: %w", err)
 	}
 	if err := transaction.store.fs.SyncFile(path); err != nil {
-		return DurabilityReceipt{}, fmt.Errorf("sync journal: %w", err)
+		return DurabilityReceipt{}, fmt.Errorf("%w: sync journal: %v", ErrJournalDurabilityUnconfirmed, err)
 	}
 	return transaction.journalReceipt(event, path), nil
 }

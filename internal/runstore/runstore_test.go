@@ -40,6 +40,27 @@ func TestAppendSyncsBeforeReturningReceipt(t *testing.T) {
 	}
 }
 
+func TestAppendClassifiesFailedRequiredSyncAfterWritingEvent(t *testing.T) {
+	store := newTestStore(t)
+	recorder := &recordingFS{delegate: realFS{}, failSyncFile: true}
+	store.fs = recorder
+
+	err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		_, err := transaction.At("run.started/journal_append").Append(runStartedEvent())
+		return err
+	})
+	if !errors.Is(err, ErrJournalDurabilityUnconfirmed) {
+		t.Fatalf("append error=%v, want ErrJournalDurabilityUnconfirmed", err)
+	}
+	if got, want := recorder.journalMutationOperations(), []string{"append", "sync-file"}; !slices.Equal(got, want) {
+		t.Fatalf("journal operations=%v, want new append state before failed sync %v", got, want)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(store.root, ".partitur", "runs", "run-1", "journal.jsonl"))
+	if readErr != nil || !strings.Contains(string(contents), `"type":"run.started"`) {
+		t.Fatalf("new journal state absent after injected sync failure: contents=%q error=%v", contents, readErr)
+	}
+}
+
 func TestAppendAllocatesEnvelopeForMultipleEventsInOneMutation(t *testing.T) {
 	store := newTestStore(t)
 	var receipts []DurabilityReceipt

@@ -173,9 +173,7 @@ func TestStartRejectsIncompletePreparation(t *testing.T) {
 		{},
 	} {
 		_, err := start(preparation, startDependencies{
-			git:   newRecordingGit(t),
-			probe: faultpoint.Nop{},
-			newID: idSequence(testRunID),
+			git: newRecordingGit(t), probe: faultpoint.Nop{}, newID: idSequence(testRunID), storeFactory: runstore.New,
 		})
 		if !errors.Is(err, ErrIncompletePreparation) {
 			t.Fatalf("error = %v, want ErrIncompletePreparation", err)
@@ -1171,9 +1169,7 @@ func startWithID(
 	id string,
 ) (StartResult, error) {
 	return start(preparation, startDependencies{
-		git:   git,
-		probe: faultpoint.Nop{},
-		newID: idSequence(id),
+		git: git, probe: faultpoint.Nop{}, newID: idSequence(id), storeFactory: runstore.New,
 	})
 }
 

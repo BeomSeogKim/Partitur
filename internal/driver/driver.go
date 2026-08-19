@@ -49,6 +49,7 @@ type dependencies struct {
 	resolveTrampoline   func() (string, error)
 	now                 func() time.Time
 	newID               func() (string, error)
+	storeFactory        runstore.StoreFactory
 	proposalDisposition ProposalDispositioner
 	workspaceStart      func(*validate.Preparation, faultpoint.Probe) (workspace.StartResult, error)
 	acquireDriver       func(*runstore.Store, runstate.RunID, []runstate.MovementSeed) (*runstore.Driver, error)
@@ -91,6 +92,7 @@ func executionDependenciesFrom(dependencies dependencies) ExecutionDependencies 
 		ResolveTrampoline:        dependencies.resolveTrampoline,
 		Now:                      dependencies.now,
 		NewID:                    dependencies.newID,
+		StoreFactory:             dependencies.storeFactory,
 		ProposalDisposition:      dependencies.proposalDisposition,
 		afterMovementFailed:      dependencies.afterMovementFailed,
 		AfterPrepareAcknowledged: dependencies.afterPrepareAcknowledged,
@@ -122,7 +124,14 @@ func RunWithExecutionDependencies(
 	execution ExecutionDependencies,
 ) Result {
 	dependencies := dependenciesFromExecution(execution)
-	dependencies.workspaceStart = workspace.Start
+	if execution.StoreFactory == nil {
+		dependencies.storeFactory = runstore.New
+		dependencies.workspaceStart = workspace.Start
+	} else {
+		dependencies.workspaceStart = func(preparation *validate.Preparation, probe faultpoint.Probe) (workspace.StartResult, error) {
+			return workspace.StartWithStoreFactory(preparation, probe, execution.StoreFactory)
+		}
+	}
 	return run(ctx, preparation, started, dependencies)
 }
 
@@ -137,7 +146,7 @@ func run(
 		dependencies.probe == nil || dependencies.client == nil ||
 		dependencies.resolveTrampoline == nil ||
 		dependencies.now == nil || dependencies.newID == nil ||
-		dependencies.workspaceStart == nil {
+		dependencies.storeFactory == nil || dependencies.workspaceStart == nil {
 		return Result{Err: errors.New("driver: incomplete run")}
 	}
 	startResult, err := dependencies.workspaceStart(preparation, dependencies.probe)
@@ -152,7 +161,7 @@ func run(
 		return interrupted(result, err)
 	}
 	seeds := movementSeeds(preparation.Score)
-	store, err := runstore.New(preparation.RepositoryRoot, dependencies.probe, dependencies.receiptObserver)
+	store, err := dependencies.storeFactory(preparation.RepositoryRoot, dependencies.probe, dependencies.receiptObserver)
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -437,7 +446,7 @@ func executeAutoApprovalCancellation(ctx context.Context, result Result, control
 func dependenciesFromExecution(execution ExecutionDependencies) dependencies {
 	return dependencies{
 		probe: execution.Probe, receiptObserver: execution.ReceiptObserver, client: execution.Client, resolveTrampoline: execution.ResolveTrampoline,
-		now: execution.Now, newID: execution.NewID, proposalDisposition: execution.ProposalDisposition,
+		now: execution.Now, newID: execution.NewID, storeFactory: execution.StoreFactory, proposalDisposition: execution.ProposalDisposition,
 		afterMovementFailed: execution.afterMovementFailed, afterPrepareAcknowledged: execution.AfterPrepareAcknowledged,
 		acquireDriver: execution.AcquireDriver,
 	}
@@ -528,7 +537,11 @@ func ExecuteAttempt(
 		afterMovementFailed: executionDependencies.afterMovementFailed,
 	}
 	result = Result{RunID: execution.RunID}
-	store, err := runstore.New(execution.RepositoryRoot, executionDependencies.Probe, executionDependencies.ReceiptObserver)
+	storeFactory := executionDependencies.StoreFactory
+	if storeFactory == nil {
+		storeFactory = runstore.New
+	}
+	store, err := storeFactory(execution.RepositoryRoot, executionDependencies.Probe, executionDependencies.ReceiptObserver)
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -1247,6 +1260,7 @@ func ExecuteAttempt(
 			Authority:      authority,
 			Control:        control,
 			Probe:          dependencies.probe,
+			StoreFactory:   dependencies.storeFactory,
 			Close: func() error {
 				acceptanceDuration := dependencies.now().Sub(acceptanceOpened).Milliseconds()
 				if acceptanceDuration < 0 {
