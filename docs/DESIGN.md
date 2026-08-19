@@ -3151,6 +3151,30 @@ partitur promote-score --recover   # only from PROMOTING | RECOVERY_REQUIRED
 partitur version         # prints the core version; no run state is read or written
 ```
 
+### Command precondition-matrix grammar
+
+Each command precondition matrix is headed `` `partitur <command>` precondition matrix ``. The
+matrix applies after the command's operand
+grammar above has accepted the invocation; an invocation that does not select a command is owned by
+the global usage rule and is not a matrix row. A semantic operand check performed by the selected
+command remains a precondition and does belong in its matrix.
+
+A catalog ID is the command token uppercased, with any command hyphen preserved, followed by a
+hyphen and three decimal digits; for example, `INIT-001` and `PROMOTE-SCORE-001`. An ID occurs in
+exactly one row and is never shared between commands. Every row contains one catalog ID, one value
+for every precondition column, and one `Result` cell. The precondition columns contain every
+specified condition that can change the command's selected effect or exit code. Rows are mutually
+exclusive and collectively exhaust the physically satisfiable combinations of those columns; the
+matrix preamble names any logically impossible combinations rather than adding fictitious rows.
+Where another normative rule owns a selection or state partition, a cell references that rule and
+does not reproduce its cases.
+
+`Result` names the command effect, including the journal delta when there is one, and contains
+exactly one literal `exit N`, where `N` is one code from the global exit-code table below. A result
+may reference the sole normative owner of its detailed effect instead of restating that rule. Exit 7
+is not a precondition-matrix result: it is a runtime durability outcome whose command applicability
+is owned only by the registry below.
+
 ### `partitur init` precondition matrix
 
 The required `.partitur/.gitignore` content is exactly the UTF-8 bytes
@@ -3174,6 +3198,15 @@ not specify that score's template prose.
 | `INIT-006` | exists | correct bytes | exists | Preserve ignore bytes and score bytes; exit 0 |
 | `INIT-007` | exists | different bytes | absent | Refuse the differing-ignore precondition: modify neither directory nor ignore file, create no score, and exit 2 |
 | `INIT-008` | exists | different bytes | exists | Refuse the differing-ignore precondition: modify neither directory, ignore file, nor score, and exit 2 |
+
+### `partitur version` precondition matrix
+
+`version` evaluates no repository, run, input, or durable-state precondition. All physically
+satisfiable repository states therefore collapse to the one accepted command state below.
+
+| Catalog ID | Project or run state | Result |
+|---|---|---|
+| `VERSION-001` | not read | Write the core version line and mutate no state; exit 0 |
 
 **Command repository anchoring.** For every command, the invocation working directory is `<repo>` —
 exactly the root whose project inputs, authoritative `.partitur/runs/` state, writable
@@ -3382,6 +3415,43 @@ readable input, or unwritable output stream; and 5 when the stream cannot be pro
 corrupt journal prefix or an event the core cannot project. `logs` never returns 3, 4, 6, or 7:
 it neither validates nor drives a run, and appends to no journal.
 
+### `partitur status` precondition matrix
+
+The status-specific exit mapping above is the sole owner of its error classification. The read-only
+selection and projection either produce one report or select exactly one of that mapping's usage,
+refusal, or unavailable-projection classes. A produced report then either completes output, meets
+the closed-or-broken-pipe rule below, or meets the remaining output-failure rule. Those alternatives
+exhaust the physically satisfiable status preconditions. The selected run's lifecycle, Application
+state, Promotion state, and tail-integrity combinations are not repeated here: they remain data under
+the observation and run-selection rules above.
+
+| Catalog ID | Read-only selection and projection | Output | Result |
+|---|---|---|---|
+| `STATUS-001` | produces the selected report | completes, or the consumer pipe closes or breaks | Produce the projection under the observable-surface rule above and append nothing; exit 0 |
+| `STATUS-002` | selects the status mapping's usage class | not reached | Report the usage error and append nothing; exit 1 |
+| `STATUS-003` | selects the status mapping's refusal class | not reached | Refuse the observation precondition and append nothing; exit 2 |
+| `STATUS-004` | selects the status mapping's unavailable-projection class | not reached | Report that no current projection can be built and append nothing; exit 5 |
+| `STATUS-005` | produces the selected report | fails for a reason other than a closed or broken consumer pipe | Refuse the unwritable output stream and append nothing; exit 2 |
+
+### `partitur logs` precondition matrix
+
+The logs-specific exit mapping above is the sole owner of its error classification, and `logs`
+inherits the read-only selection and projection partition instead of enumerating selected-run states
+again. A stream read either produces a snapshot or selects exactly one of that mapping's usage,
+refusal, or unavailable-stream classes. A produced stream then either reaches one of the completion
+conditions above, meets the closed-or-broken-pipe rule below, or meets the remaining output-failure
+rule. These alternatives exhaust the physically satisfiable terminating preconditions. A `--follow`
+invocation that has not yet observed a terminal run or SIGINT has no command result yet and therefore
+is not an additional result row.
+
+| Catalog ID | Read-only selection and stream | Output | Result |
+|---|---|---|---|
+| `LOGS-001` | produces the selected stream and reaches its specified completion condition | completes, or the consumer pipe closes or breaks | Produce the observation stream under the observable-surface rule above and append nothing; exit 0 |
+| `LOGS-002` | selects the logs mapping's usage class | not reached | Report the usage error and append nothing; exit 1 |
+| `LOGS-003` | selects the logs mapping's refusal class | not reached | Refuse the observation precondition and append nothing; exit 2 |
+| `LOGS-004` | selects the logs mapping's unavailable-stream class | not reached | Report that no current stream can be produced and append nothing; exit 5 |
+| `LOGS-005` | produces the selected stream | fails for a reason other than a closed or broken consumer pipe | Refuse the unwritable output stream and append nothing; exit 2 |
+
 For both `status` and `logs`, a closed or broken consumer pipe ends output successfully and emits
 no stderr diagnostic. Any other stdout write failure is an unwritable output stream and is a
 precondition refusal, not a recovery halt.
@@ -3531,13 +3601,46 @@ The following table is exhaustive for `cancel`:
 | 6 | This `cancel` invocation was operationally interrupted while the run remains nonterminal |
 | 7 | The `cancel.requested` append or a later cancellation append has unconfirmed durability, so the selected run's resulting durable projection is unknown; follow §1's external storage-observation instruction |
 
-`validate` acquires inputs before interpreting their contents. A missing or unreadable required
-`partitur.yaml`, or a discovered cast file that cannot be read, is a refused precondition and exits
-2. A missing optional project or user-global cast layer is simply absent and produces no
-diagnostic. Once an input has been read successfully, malformed or defective score or cast content
-is a validation diagnostic and exits 3. The asymmetry is deliberate: cast layers are optional and
-no layers resolve to a valid empty cast; only when an existing score declares parts does that empty
-cast produce `binding_missing`, which is a validation result about content that exists.
+### `partitur validate` precondition matrix
+
+`validate` acquires inputs before interpreting their contents. Acquisition either refuses before
+validation output exists or succeeds and produces the complete ordered output specified in §§2–4;
+the two states cannot coexist. Complete output either contains at least one diagnostic or contains
+none, with enforcement advisories remaining non-diagnostic under §4. Those alternatives exhaust the
+physically satisfiable validation preconditions. A missing optional project or user-global cast
+layer is part of successful acquisition, not another state. This asymmetry is deliberate: no layers
+resolve to a valid empty cast, and only a score that declares parts can make that empty cast produce
+the specified `binding_missing` diagnostic.
+
+| Catalog ID | Input acquisition | Complete validation output | Result |
+|---|---|---|---|
+| `VALIDATE-001` | refused by the input-acquisition rule | not produced | Report the refused precondition, create no run or journal, and mutate no repository state; exit 2 |
+| `VALIDATE-002` | succeeds | contains one or more diagnostics | Render the complete deterministic validation output, create no run or journal, and mutate no repository state; exit 3 |
+| `VALIDATE-003` | succeeds | contains no diagnostic; enforcement advisories may be present | Render any advisory output, create no run or journal, and mutate no repository state; exit 0 |
+
+### Exit-7 command applicability registry
+
+This registry answers applicability only. `Applicable` means that the command can reach a required
+`Txn.Append`; `Not applicable` means that no accepted command path calls one. The
+meaning of exit 7 and its operator instruction are owned exclusively by the global exit-code table
+below and are not repeated here. `Owner` identifies the normative transaction or non-journaling
+command rule that determines the row.
+
+| Command | Reaches a required `Txn.Append`? | Exit 7 disposition | Owner |
+|---|---|---|---|
+| `init` | no | Not applicable | `init` filesystem contract and matrix |
+| `validate` | no | Not applicable | §§2–4 validation contract and matrix |
+| `run` | yes | Applicable | §§5–7 run transaction |
+| `status` | no | Not applicable | §7 status observation contract and matrix |
+| `logs` | no | Not applicable | §7 logs observation contract and matrix |
+| `answer` | yes | Applicable | §7 decision-resolution transaction |
+| `approve` | yes | Applicable | §7 decision-resolution and §9 amendment transactions |
+| `amend` | yes | Applicable | §9 amendment transaction |
+| `cancel` | yes | Applicable | §6 cancellation transaction |
+| `resume` | yes | Applicable | Appendix C recovery and §6 run transaction |
+| `apply` | yes | Applicable | §8 Application transaction |
+| `promote-score` | yes | Applicable | §8 Promotion transaction |
+| `version` | no | Not applicable | `version` matrix |
 
 **Exit codes** — stable categories, so a script can branch without parsing prose:
 
