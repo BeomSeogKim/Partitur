@@ -45,7 +45,7 @@ func TestRegionUniverseCompleteness(t *testing.T) {
 }
 
 func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
-	document := []byte("alpha\nbeta\ngamma\n")
+	document := []byte("alpha beta\n")
 	regions, err := GenerateRegions(document, "blob-a")
 	if err != nil {
 		t.Fatal(err)
@@ -53,12 +53,19 @@ func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 	valid := Registry{Receipts: []RegionReceipt{{
 		Key: regions[0].Key,
 		Review: &ReviewReceipt{SourceSHA256: SourceDigest(regions[0].Lines), Decisions: []Classification{
-			{StartLine: 1, EndLine: 1, Kind: ClassificationAnchor, MarkerID: "proposed/alpha"},
-			{StartLine: 2, EndLine: 3, Kind: ClassificationNonNormative},
+			{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "proposed/alpha"},
+			{StartByte: 6, EndByte: 10, Kind: ClassificationNonNormative},
 		}},
 	}}}
 	if err := ValidateRegistry(document, "blob-a", regions, valid); err != nil {
 		t.Fatalf("valid registry rejected: %v", err)
+	}
+	encodedDecision, err := json.Marshal(valid.Receipts[0].Review.Decisions[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(encodedDecision); !strings.Contains(got, `"start_source_byte":0`) || !strings.Contains(got, `"end_source_byte":5`) || strings.Contains(got, "source_line") {
+		t.Fatalf("classification receipt coordinates = %s, want byte offsets only", got)
 	}
 	if pending := Pending(regions, valid); len(pending) != 0 {
 		t.Fatalf("valid registry pending = %v", pending)
@@ -71,8 +78,8 @@ func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 	}{
 		{"duplicate receipt", func(got *Registry) { got.Receipts = append(got.Receipts, got.Receipts[0]) }, "duplicate region receipt"},
 		{"registry mismatch", func(got *Registry) { got.Receipts[0].Key.EndLine++ }, "does not match immutable universe"},
-		{"decision gap", func(got *Registry) { got.Receipts[0].Review.Decisions[1].StartLine++ }, "gap or overlap"},
-		{"decision overlap", func(got *Registry) { got.Receipts[0].Review.Decisions[1].StartLine-- }, "gap or overlap"},
+		{"uncovered_payload_byte_after_mid_line_end", func(got *Registry) { got.Receipts[0].Review.Decisions[1].EndByte-- }, "uncovered"},
+		{"within_line_overlap", func(got *Registry) { got.Receipts[0].Review.Decisions[1].StartByte = 4 }, "overlap"},
 		{"invalid marker", func(got *Registry) { got.Receipts[0].Review.Decisions[0].MarkerID = "not valid" }, "invalid marker ID"},
 	}
 	for _, test := range tests {
@@ -94,7 +101,7 @@ func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 }
 
 func TestPendingDigestAndMaterialization(t *testing.T) {
-	document := []byte("alpha\nbeta\ngamma\n")
+	document := []byte("alpha beta\n")
 	regions, err := GenerateRegions(document, "blob-a")
 	if err != nil {
 		t.Fatal(err)
@@ -108,8 +115,8 @@ func TestPendingDigestAndMaterialization(t *testing.T) {
 	registry := Registry{Receipts: []RegionReceipt{{
 		Key: regions[0].Key,
 		Review: &ReviewReceipt{SourceSHA256: SourceDigest(regions[0].Lines), Decisions: []Classification{
-			{StartLine: 1, EndLine: 2, Kind: ClassificationAnchor, MarkerID: "example.alpha"},
-			{StartLine: 3, EndLine: 3, Kind: ClassificationNonNormative},
+			{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "example.alpha"},
+			{StartByte: 6, EndByte: 10, Kind: ClassificationNonNormative},
 		}},
 	}}}
 	digest, err := ClassificationDigest(document, "blob-a", regions, registry)
@@ -123,7 +130,7 @@ func TestPendingDigestAndMaterialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "<!-- partitur:mark begin anchor=example.alpha -->\nalpha\nbeta\n<!-- partitur:mark end anchor=example.alpha -->\n<!-- partitur:mark begin non-normative -->\ngamma\n<!-- partitur:mark end non-normative -->\n"
+	want := "<!-- partitur:mark begin anchor=example.alpha -->alpha<!-- partitur:mark end anchor=example.alpha --> <!-- partitur:mark begin non-normative -->beta<!-- partitur:mark end non-normative -->\n"
 	if string(materialized) != want {
 		t.Fatalf("materialized =\n%s\nwant:\n%s", materialized, want)
 	}
@@ -138,9 +145,8 @@ func TestPendingDigestAndMaterialization(t *testing.T) {
 
 	duplicate := cloneRegistry(registry)
 	duplicate.Receipts[0].Review.Decisions = []Classification{
-		{StartLine: 1, EndLine: 1, Kind: ClassificationAnchor, MarkerID: "duplicate"},
-		{StartLine: 2, EndLine: 2, Kind: ClassificationNonNormative},
-		{StartLine: 3, EndLine: 3, Kind: ClassificationAnchor, MarkerID: "duplicate"},
+		{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "duplicate"},
+		{StartByte: 6, EndByte: 10, Kind: ClassificationAnchor, MarkerID: "duplicate"},
 	}
 	if _, err := ClassificationDigest(document, "blob-a", regions, duplicate); err == nil || !strings.Contains(err.Error(), "duplicate anchor") {
 		t.Fatalf("duplicate anchor error = %v", err)

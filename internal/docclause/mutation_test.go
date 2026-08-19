@@ -43,10 +43,22 @@ func TestMutationRegionStructuralChecks(t *testing.T) {
 			target: "TestRegistryStructuralChecksAndReceiptInvalidation/registry_mismatch",
 		},
 		{
-			name: "classification gap and overlap", source: "internal/docclause/registry.go",
-			before: "\t\tif decision.StartLine != want {\n",
-			after:  "\t\tif false && decision.StartLine != want { // mutation\n",
-			target: "TestRegistryStructuralChecksAndReceiptInvalidation/decision_gap",
+			name: "uncovered payload byte", source: "internal/docclause/registry.go",
+			before: "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
+			after:  "\t\tif false && !asciiWhitespace(value) && coverage[offset] == 0 { // mutation\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation/uncovered_payload_byte_after_mid_line_end",
+		},
+		{
+			name: "within-line overlap", source: "internal/docclause/registry.go",
+			before: "\t\t\tif coverage[offset] != 0 {\n",
+			after:  "\t\t\tif false && coverage[offset] != 0 { // mutation\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation/within_line_overlap",
+		},
+		{
+			name: "line-boundary-only coverage", source: "internal/docclause/registry.go",
+			before: "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
+			after:  "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 && (offset == 0 || contents[offset-1] == '\\n') { // mutation\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation/uncovered_payload_byte_after_mid_line_end",
 		},
 	}
 	for _, mutation := range mutations {

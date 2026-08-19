@@ -1,12 +1,14 @@
 package docclause
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 var markerIDPattern = regexp.MustCompile(`^[A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)*$`)
@@ -19,8 +21,9 @@ const (
 )
 
 type Classification struct {
-	StartLine int                `json:"start_source_line"`
-	EndLine   int                `json:"end_source_line"`
+	// Source byte offsets are zero-based and half-open: [StartByte, EndByte).
+	StartByte int                `json:"start_source_byte"`
+	EndByte   int                `json:"end_source_byte"`
 	Kind      ClassificationKind `json:"kind"`
 	MarkerID  string             `json:"marker_id,omitempty"`
 }
@@ -48,8 +51,13 @@ func ValidateRegistry(document []byte, inputBlob string, regions []Region, regis
 		return err
 	}
 	want := make(map[string]Region, len(regions))
+	starts := make(map[string]int, len(regions))
+	startByte := 0
 	for _, region := range regions {
-		want[regionKey(region.Key)] = region
+		key := regionKey(region.Key)
+		want[key] = region
+		starts[key] = startByte
+		startByte += len(regionBytes(region))
 	}
 	seen := make(map[string]bool)
 	for _, receipt := range registry.Receipts {
@@ -68,7 +76,7 @@ func ValidateRegistry(document []byte, inputBlob string, regions []Region, regis
 		if receipt.Review.SourceSHA256 != SourceDigest(region.Lines) {
 			continue
 		}
-		if err := validateRegionDecisions(region, receipt.Review.Decisions); err != nil {
+		if err := validateRegionDecisions(region, starts[key], receipt.Review.Decisions); err != nil {
 			return fmt.Errorf("region %d review: %w", region.Key.Ordinal, err)
 		}
 	}
@@ -81,11 +89,13 @@ func Pending(regions []Region, registry Registry) []RegionKey {
 		receipts[regionKey(receipt.Key)] = receipt
 	}
 	var pending []RegionKey
+	startByte := 0
 	for _, region := range regions {
 		receipt, ok := receipts[regionKey(region.Key)]
-		if !ok || receipt.Review == nil || receipt.Review.SourceSHA256 != SourceDigest(region.Lines) || validateRegionDecisions(region, receipt.Review.Decisions) != nil {
+		if !ok || receipt.Review == nil || receipt.Review.SourceSHA256 != SourceDigest(region.Lines) || validateRegionDecisions(region, startByte, receipt.Review.Decisions) != nil {
 			pending = append(pending, region.Key)
 		}
+		startByte += len(regionBytes(region))
 	}
 	return pending
 }
@@ -123,17 +133,17 @@ func orderedClassifications(regions []Region, registry Registry) ([]Classificati
 		all = append(all, receipts[regionKey(region.Key)].Review.Decisions...)
 	}
 	sort.Slice(all, func(left, right int) bool {
-		if all[left].StartLine == all[right].StartLine {
-			return all[left].EndLine < all[right].EndLine
+		if all[left].StartByte == all[right].StartByte {
+			return all[left].EndByte < all[right].EndByte
 		}
-		return all[left].StartLine < all[right].StartLine
+		return all[left].StartByte < all[right].StartByte
 	})
 	merged := make([]Classification, 0, len(all))
 	for _, classification := range all {
 		if len(merged) != 0 {
 			last := &merged[len(merged)-1]
-			if last.EndLine+1 == classification.StartLine && last.Kind == classification.Kind && last.MarkerID == classification.MarkerID {
-				last.EndLine = classification.EndLine
+			if last.EndByte == classification.StartByte && last.Kind == classification.Kind && last.MarkerID == classification.MarkerID {
+				last.EndByte = classification.EndByte
 				continue
 			}
 		}
@@ -151,19 +161,23 @@ func orderedClassifications(regions []Region, registry Registry) ([]Classificati
 	return merged, nil
 }
 
-func validateRegionDecisions(region Region, decisions []Classification) error {
+func validateRegionDecisions(region Region, regionStart int, decisions []Classification) error {
 	if len(decisions) == 0 {
 		return fmt.Errorf("confirmed decisions are empty")
 	}
 	ordered := append([]Classification(nil), decisions...)
-	sort.Slice(ordered, func(left, right int) bool { return ordered[left].StartLine < ordered[right].StartLine })
-	want := region.Key.StartLine
-	for _, decision := range ordered {
-		if decision.StartLine != want {
-			return fmt.Errorf("classification starts at %d, want %d (gap or overlap)", decision.StartLine, want)
+	sort.Slice(ordered, func(left, right int) bool {
+		if ordered[left].StartByte == ordered[right].StartByte {
+			return ordered[left].EndByte < ordered[right].EndByte
 		}
-		if decision.EndLine < decision.StartLine || decision.EndLine > region.Key.EndLine {
-			return fmt.Errorf("classification has invalid range %d-%d", decision.StartLine, decision.EndLine)
+		return ordered[left].StartByte < ordered[right].StartByte
+	})
+	contents := regionBytes(region)
+	regionEnd := regionStart + len(contents)
+	coverage := make([]uint8, len(contents))
+	for _, decision := range ordered {
+		if decision.StartByte < regionStart || decision.EndByte <= decision.StartByte || decision.EndByte > regionEnd {
+			return fmt.Errorf("classification has invalid byte range [%d,%d)", decision.StartByte, decision.EndByte)
 		}
 		switch decision.Kind {
 		case ClassificationAnchor:
@@ -177,12 +191,32 @@ func validateRegionDecisions(region Region, decisions []Classification) error {
 		default:
 			return fmt.Errorf("unknown classification kind %q", decision.Kind)
 		}
-		want = decision.EndLine + 1
+		selected := contents[decision.StartByte-regionStart : decision.EndByte-regionStart]
+		if len(bytes.Trim(selected, " \t\r\n")) == 0 {
+			return fmt.Errorf("classification byte range [%d,%d) has no payload", decision.StartByte, decision.EndByte)
+		}
+		for sourceByte := decision.StartByte; sourceByte < decision.EndByte; sourceByte++ {
+			offset := sourceByte - regionStart
+			if coverage[offset] != 0 {
+				return fmt.Errorf("classification overlap at source byte %d", sourceByte)
+			}
+			coverage[offset]++
+		}
 	}
-	if want != region.Key.EndLine+1 {
-		return fmt.Errorf("classification ends at %d, want %d", want-1, region.Key.EndLine)
+	for offset, value := range contents {
+		if !asciiWhitespace(value) && coverage[offset] == 0 {
+			return fmt.Errorf("classification leaves payload source byte %d uncovered", regionStart+offset)
+		}
 	}
 	return nil
+}
+
+func regionBytes(region Region) []byte {
+	return []byte(strings.Join(region.Lines, "\n") + "\n")
+}
+
+func asciiWhitespace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
 func regionKey(key RegionKey) string {
