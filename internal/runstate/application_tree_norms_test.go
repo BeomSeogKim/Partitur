@@ -198,36 +198,15 @@ func assertApplicationTreeProtectedDiffExit(t *testing.T, global, apply map[int]
 func assertApplicationTreeRecoveryObservationPayload(t *testing.T, lines []string) {
 	t.Helper()
 
-	start := uniqueLineIndex(t, lines, "apply.recovery_required {")
-	end := -1
-	for index := start + 1; index < len(lines); index++ {
-		if lines[index] == "}" {
-			end = index
-			break
+	section := recoveryDocumentSection(t, lines, "## B.6 Shipping", "## B.7 Control and diagnostics")
+	contents := strings.Join(strings.Fields(strings.Join(section, "\n")), " ")
+	for _, clause := range []string{
+		"apply.recovery_required { txn_id, candidate_id, identity_versions, observed_tree?, failure_detail }",
+		"- `apply.recovery_required.observed_tree` is the application tree observed under the lock when it could be computed.",
+	} {
+		if !strings.Contains(contents, clause) {
+			t.Fatalf("apply.recovery_required observed_tree is missing clause %q", clause)
 		}
-	}
-	if end == -1 {
-		t.Fatal("apply.recovery_required payload has no closing delimiter")
-	}
-	observedTreeComment := ""
-	for index := start + 1; index < end; index++ {
-		line := strings.TrimSpace(lines[index])
-		if !strings.HasPrefix(line, "observed_tree?") {
-			continue
-		}
-		_, comment, found := strings.Cut(line, "#")
-		if !found {
-			t.Fatal("apply.recovery_required observed_tree has no comment")
-		}
-		observedTreeComment = strings.TrimSpace(comment)
-		for index++; index < end && strings.HasPrefix(strings.TrimSpace(lines[index]), "#"); index++ {
-			observedTreeComment += " " + strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[index]), "#"))
-		}
-		break
-	}
-	const observedTree = "observed_tree?, # application tree observed under the lock, when it could be computed"
-	if "observed_tree?, # "+observedTreeComment != observedTree {
-		t.Fatalf("apply.recovery_required observed_tree lacks application-tree meaning %q", observedTree)
 	}
 }
 

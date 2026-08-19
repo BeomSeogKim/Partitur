@@ -5096,74 +5096,127 @@ reason is chosen once and carried.
 
 **Payloads.**
 
+**B.1 field clauses.** Each clause below constrains the named field or payload in the adjacent
+coherent specimen.
+
+- `run.started.base_commit` is Git-native and object-format qualified (A.4).
+- `run.started.base_tree` is Git-native and is the candidate's `base_tree` (§8).
+- `run.started.score_hash` is the semantic `partitur/score` snapshot identity.
+- `run.started.score_file_hash` is the sha256 of the root score's raw bytes at run start.
+- `run.started.score_file_hash` supplies promotion's pre-rename hash check (§1, §8).
+- `run.started.resolved_cast_hash` is a `partitur/resolved-cast` identity.
+- `run.succeeded` is appended only on the waived path.
+- On the non-waived path, the final movement's `movement.succeeded` carries the run's `SUCCEEDED`
+  transition, and no `run.succeeded` is appended (§8).
+- The waived and non-waived paths are mutually exclusive because a waived score has no final
+  movement (§2 rule 12).
+- `run.succeeded.candidate` is the full candidate payload folded in atomically (§8).
+- `run.succeeded.candidate.candidate_composition_dependency_hash` uses
+  `partitur/candidate-composition`.
+- `run.succeeded.candidate.candidate_composition_dependency_hash` is A.4's tagged identity-or-merge
+  projection, including the zero-writer candidate.
+- `run.succeeded.candidate.composition_environment_hash` uses
+  `partitur/composition-environment`.
+- `run.succeeded.candidate.composition_environment_hash` is required if and only if contributors
+  are non-empty, and is forbidden for the identity branch.
+- `run.succeeded.waiver.reason` records the `apply_gate` waiver (§2).
+- The binding revision for `run.succeeded.candidate` is the envelope's `score_revision` and is not
+  repeated in the payload because B.0 forbids duplicating envelope fields.
+- `run.failed.reason` is a closed Appendix D enum.
+- `run.cancelled.cancelled_movement_ids` is sorted and contains every nonterminal movement.
+- `run.cancelled.cancelled_attempt_ids` is sorted and contains every nonterminal attempt.
+- `run.cancelled.obsoleted_decision_ids` is sorted and is the source for derived
+  `decision.obsoleted` events.
+- `run.cancelled.fenced_epoch` is present when the transition also fences a wedged driver (§6).
+- When present, `run.cancelled.fenced_epoch` is the epoch to which authority moved.
+- Recording `run.cancelled.fenced_epoch` lets recovery project the fence instead of inferring it.
+- Fencing and terminalization are one transition and therefore one `run.cancelled` event.
+- `movement.ready` derives its entire meaning from its type and envelope.
+- `movement.started` derives its entire meaning from its type and envelope.
+- `movement.succeeded.approved_artifact_instance_ids` is sorted.
+- `movement.succeeded.approved_change_set_id` is present if and only if the movement holds
+  `repo_write` (§5).
+- `movement.succeeded.identity_versions` records that `change_set_id` is a canonical-AST identity
+  (A.4).
+- `movement.succeeded.run_succeeded` is true only for the final movement, where this event is the
+  run's `SUCCEEDED` transition (§8).
+- `movement.failed.reason` is a closed Appendix D enum.
+- `movement.failed.decision_id` is required if and only if `reason = human_gate_rejected`.
+- `movement.failed.subject_tree` is required if and only if `reason = human_gate_rejected`.
+- `movement.failed.run_failed` is true if and only if this event carries the run's `FAILED`
+  transition.
+- `movement.failed.run_failed` is true in exactly one case: a final-movement
+  `human_gate_rejected`, which §8 makes one atomic transition.
+- In every other case, Appendix C.2 requires a separate `run.failed` append, so there is never a
+  choice between two plausible sequences.
+- `movement.cancelled` derives from `run.cancelled`.
+
 ```text
 run.started {
-  base_commit,                    # git-native, object-format qualified (A.4)
-  base_tree,                      # git-native; the candidate's base_tree (§8)
-  score_hash,                     # partitur/score — semantic snapshot identity
-  score_file_hash,                # sha256: raw bytes of the root score AT RUN START, for the
-                                  #   promotion pre-rename hash check (§1, §8)
-  resolved_cast_hash,             # partitur/resolved-cast
+  base_commit,
+  base_tree,
+  score_hash,
+  score_file_hash,
+  resolved_cast_hash,
   identity_versions
 }
+```
 
-run.succeeded {                   # WAIVED PATH ONLY. On the non-waived path the final
-                                  #   movement's movement.succeeded carries the run's
-                                  #   SUCCEEDED transition and no run.succeeded is appended
-                                  #   (§8) — the two paths are mutually exclusive because a
-                                  #   waived score has no final movement (§2 rule 12)
-  candidate: {                    # the full candidate payload, folded in atomically (§8)
+```text
+run.succeeded {
+  candidate: {
     candidate_id, base_tree, result_tree,
     ordered_change_sets: [change_set_id],
     contributors: [{movement_id, change_set_id}],
-    candidate_composition_dependency_hash
-                                  # partitur/candidate-composition; A.4's tagged identity | merge
-                                  # projection, including the zero-writer candidate
-    composition_environment_hash? # partitur/composition-environment; required iff contributors
-                                  # are non-empty, forbidden for the identity branch
+    candidate_composition_dependency_hash,
+    composition_environment_hash?
   },
-  waiver: {reason},               # the recorded apply_gate waiver (§2). The candidate's binding
-                                  #   revision is the envelope's score_revision — not repeated
-                                  #   here, since B.0 forbids duplicating envelope fields
+  waiver: {reason},
   identity_versions
 }
+```
 
-run.failed    { reason }          # closed enum, Appendix D
+```text
+run.failed { reason }
+```
+
+```text
 run.cancelled {
-  cancelled_movement_ids: [movement_id],   # sorted; every nonterminal movement
-  cancelled_attempt_ids:  [attempt_id],    # sorted; every nonterminal attempt
-  obsoleted_decision_ids: [decision_id],   # sorted; source for derived decision.obsoleted
-  fenced_epoch?                            # present when this transition also fenced a wedged
-                                           #   driver (§6): the epoch authority moved to, so
-                                           #   recovery projects the fence instead of inferring
-                                           #   it. Fencing and terminalization are one
-                                           #   transition, so they are one event
+  cancelled_movement_ids: [movement_id],
+  cancelled_attempt_ids: [attempt_id],
+  obsoleted_decision_ids: [decision_id],
+  fenced_epoch?
 }
+```
 
-movement.ready   {}               # meaning is entirely type + envelope
-movement.started {}               # likewise
+```text
+movement.ready {}
+```
 
+```text
+movement.started {}
+```
+
+```text
 movement.succeeded {
-  approved_artifact_instance_ids: [artifact_instance_id],   # sorted
-  approved_change_set_id?,        # present iff the movement holds repo_write (§5)
-  identity_versions,              # `change_set_id` is a canonical-AST identity (A.4)
-  run_succeeded: bool             # true only for the final movement, where this event IS the
-                                  #   run's SUCCEEDED transition (§8)
+  approved_artifact_instance_ids: [artifact_instance_id],
+  approved_change_set_id?,
+  identity_versions,
+  run_succeeded: bool
 }
+```
 
+```text
 movement.failed {
-  reason,                         # closed enum, Appendix D
-  decision_id?,                   # required iff reason = human_gate_rejected
-  subject_tree?,                  # required iff reason = human_gate_rejected
-  run_failed: bool                # true iff THIS event carries the run's FAILED transition, which
-                                  #   happens in exactly one case: a final-movement
-                                  #   `human_gate_rejected`, where §8 makes it one atomic
-                                  #   transition. In every other case the run failure is a
-                                  #   separate `run.failed` append (Appendix C.2), so there is
-                                  #   never a choice between two plausible sequences
+  reason,
+  decision_id?,
+  subject_tree?,
+  run_failed: bool
 }
+```
 
-movement.cancelled {}             # derived from run.cancelled
+```text
+movement.cancelled {}
 ```
 
 ## B.2 Attempt lifecycle and performer selection
@@ -5184,44 +5237,66 @@ movement.cancelled {}             # derived from run.cancelled
 
 **Payloads.**
 
+**`performer.selected` and `adapter.probed` field clauses.** Each clause below constrains the named
+field or payload in the adjacent coherent specimen.
+
+- `performer.selected.reason` is one of the closed values `initial`, `quality_retry`, `fallback`,
+  `revision_restart`, and `decision_resume`.
+- `performer.selected` has no budget field.
+- Charging belongs to the failure event that authorized the attempt, never to
+  `performer.selected`.
+- `adapter.probed.adapter_version` is reported by this attempt's gated peer and is never copied
+  from `validate` or an earlier attempt.
+- Every field in `adapter.probed.capabilities` is Boolean.
+- Models are deliberately absent from `adapter.probed.capabilities` because §4 does not evaluate
+  them.
+- `adapter.probed.enforcement` is reported by this same peer (§4).
+- Every field in `adapter.probed.enforcement` is Boolean.
+- `adapter.probed.negotiated_features` is sorted.
+- `adapter.probed.negotiated_features` is empty in v0.2 because no tokens are defined.
+- Retaining `adapter.probed.negotiated_features` makes future negotiated sets authoritative and
+  historical requests reconstructible without a payload change.
+- `adapter.probed.truncated_resolutions` is sorted and contains resolutions dropped for the frame
+  budget (§4).
+- `adapter.probed.delivered_resolutions` is in delivered order and is always present, including as
+  `[]`.
+- `adapter.probed.delivered_resolutions` makes the exact request reconstructible without inferring
+  delivery from eligibility and truncation.
+- `adapter.probed.delivered_feedback` is sorted by `(previous_attempt_id, artifact_instance_id)` and
+  is always present, including as `[]`.
+- `adapter.probed.delivered_feedback` makes the exact request reconstructible without leaving
+  “none delivered” ambiguous.
+- `adapter.probed.advisory_dimensions` is sorted and records the exact constraints proceeding
+  without enforcement.
+- `adapter.probed.execution_dependency_hash` is the A.5 identity of the now-fixed exact request
+  shape.
+
 ```text
 performer.selected {
-  reason,                         # closed enum: initial | quality_retry | fallback |
-                                  #   revision_restart | decision_resume
+  reason,
   performer_id, adapter_id, model
 }
-                                  # NB: no budget field. Charging belongs to the failure event
-                                  #   that authorized this attempt, never to selection
+```
 
+```text
 adapter.probed {
-  adapter_version,                # reported by this attempt's gated peer, never copied from
-                                  #   validate or an earlier attempt
+  adapter_version,
   capabilities: {
-    repo_read, repo_write, shell, network, resumable_sessions       # all bool; models are
-                                  #   intentionally absent because §4 does not evaluate them
+    repo_read, repo_write, shell, network, resumable_sessions
   },
-  enforcement: {                  # reported by this same peer (§4)
-    path_grants, read_only, network_grants, shell_grants, read_grants   # all bool
+  enforcement: {
+    path_grants, read_only, network_grants, shell_grants, read_grants
   },
-  negotiated_features: [string],  # sorted; empty in v0.2 because no tokens are defined.
-                                  #   Retained so future negotiated sets are authoritative and
-                                  #   historical requests remain reconstructible without a
-                                  #   payload change.
+  negotiated_features: [string],
   truncated_resolutions: [decision_id],
-                                  # sorted; resolutions dropped for the frame budget (§4)
   delivered_resolutions: [
     {decision_id, kind, digest}
-  ],                              # in delivered order; always present, including [], so the
-                                  # exact request remains reconstructible rather than inferring
-                                  # delivery from eligibility and truncation
+  ],
   delivered_feedback: [
     {previous_attempt_id, kind, artifact_instance_id, content_hash}
-  ],                              # sorted by (previous_attempt_id, artifact_instance_id); always
-                                  #   present, including [], so the exact request remains
-                                  #   reconstructible rather than leaving "none delivered" ambiguous
+  ],
   advisory_dimensions: [dimension],
-                                  # sorted; exact constraints proceeding without enforcement
-  execution_dependency_hash,      # A.5; the exact request shape is now fixed
+  execution_dependency_hash,
   identity_versions
 }
 ```
@@ -5270,85 +5345,132 @@ attempt.started {
 }
 ```
 
+**Remaining B.2 field clauses.** Each clause below constrains the named field or payload in the
+adjacent coherent specimen.
+
+- `performer.completed` is appended only for adapter outcome `completed`.
+- `performer.completed.session_hint_stored` records whether a hint was retained (§4).
+- The session hint itself is never journaled in `performer.completed`.
+- The adapter-outcome mapping is applied only after §4's execute-completion cleanup and interval
+  close.
+- Each reported adapter outcome has exactly one authoritative event, so no outcome lacks a terminal
+  transition.
+- Adapter outcome `completed` maps to `performer.completed`, taking the attempt from `RUNNING` to
+  `VERIFYING`.
+- Adapter outcome `waiting_human` maps to terminal `attempt.blocked`, taking the attempt from
+  `RUNNING` to `BLOCKED`.
+- Adapter outcome `failed` maps to `attempt.failed {kind}` using the reported failure kind.
+- Adapter outcome `cancelled` maps to derived `attempt.cancelled` when a run cancellation authorizes
+  it, with `run.cancelled` as its source.
+- Adapter outcome `cancelled` maps to derived `attempt.superseded` when an approved revision
+  authorizes it, with `amendment.approved` as its source.
+- `attempt.cancelled` and `attempt.superseded` have different sources and must not be conflated.
+- Adapter outcome `cancelled` maps to
+  `attempt.failed {kind: task_failed, reason: unsolicited_cancel}` when nothing requested it.
+- An adapter cancelling itself unprompted is a task failure and cannot avoid charging by reporting
+  the wrong outcome.
+- `attempt.completed` means acceptance and any gate have already recorded the evidence.
+- `attempt.blocked` is the source event for question requests.
+- For one blocking proposal, `attempt.blocked` is the durable source-to-route cut (§4).
+- A proposal request still derives only from `amendment.routed_human`.
+- `attempt.blocked.raised` preserves wire-arrival order.
+- Every `decision_id` in `attempt.blocked.raised` is unique.
+- `attempt.blocked.raised` is the complete set and includes content.
+- `attempt.blocked.raised[].route` is required exactly when a blocking proposal passed §9 steps
+  1–9.
+- `attempt.blocked.raised[].route` duplicates the later `amendment.routed_human` payload except for
+  fields already on the raised entry, so `RC-RESUME-049` can append that event without re-evaluation.
+- `attempt.blocked.raised[].route` is absent for a step-1–9 rejection.
+- `attempt.blocked.raised[].route` is absent for a non-blocking proposal, which has its own
+  notification-time disposition.
+- `attempt.blocked.raised[].route` never authorizes `decision.requested`; only
+  `amendment.routed_human` does.
+- `attempt.blocked` has no event-level `identity_versions`.
+- The route descriptor's `identity_versions` is the frozen `amendment.routed_human` evaluation
+  tuple, distinct from `adapter.probed`'s attempt-execution tuple.
+- `attempt.blocked.pending_decision_ids` is sorted.
+- `attempt.blocked.pending_decision_ids` must equal exactly the ids in `raised` whose `blocking` is
+  true.
+- The adapter's reported pending set is validated against the events it emitted (§4), never trusted.
+- `attempt.failed.kind` is an adapter failure kind or the core-determined `budget_exhausted` kind
+  from Appendix D.
+- `attempt.failed.reason` is an optional sub-reason within the kind, such as
+  `draft_no_blocking_output`, `grant_denied`, or `protocol_error`.
+- `attempt.failed.detail` is sanitized free text.
+- `attempt.failed.disposition` is the B.0 disposition replayed verbatim by recovery.
+- `attempt.cancelled` derives from `run.cancelled`.
+- `attempt.superseded` derives from `amendment.approved`.
+- `execution.started.interval_id` is unique because one attempt legitimately opens several
+  intervals.
+- `execution.started.phase` is `adapter`, `acceptance`, or `composition`.
+- `execution.started.wall_start` is RFC 3339 with millisecond precision in UTC.
+- `execution.started.remaining_at_start` is integer milliseconds and is the clamp's second operand
+  (§6).
+- `execution.stopped.reason` is `normal`, `cancelled`, `superseded`, `budget_exhausted`, or
+  `recovered`.
+- `execution.stopped.charging` is `measured` or `clamped`, orthogonally to `reason`.
+- `execution.stopped.charged_duration` is integer milliseconds computed by the opening process from
+  its own monotonic clock, or by the clamp during recovery.
+- `execution.stopped.observed_at` is required if and only if `charging = clamped`.
+- `execution.stopped.observed_at` is the recovery-time wall sample journaled so replay never
+  re-samples (§6).
+
 ```text
-performer.completed {             # appended ONLY for outcome `completed` — see the mapping below
-  session_hint_stored: bool       # whether a hint was retained (§4). The hint itself is
-                                  #   NEVER journaled
+performer.completed {
+  session_hint_stored: bool
 }
+```
 
-  # Adapter outcome → journal transition. This mapping is applied only after §4's
-  # execute-completion cleanup and interval close. Each reported outcome has exactly one
-  # authoritative event, so no outcome is left without a terminal transition:
-  #
-  #   completed      → performer.completed        (attempt RUNNING → VERIFYING)
-  #   waiting_human  → attempt.blocked            (attempt RUNNING → BLOCKED, terminal)
-  #   failed         → attempt.failed {kind}      (from the reported failure kind)
-  #   cancelled      → attempt.cancelled   if a RUN cancellation authorizes it (derives from
-  #                                          run.cancelled), or
-  #                    attempt.superseded    if an approved revision authorizes it (derives from
-  #                                          amendment.approved) — the two have different sources
-  #                                          and must not be conflated, or
-  #                    attempt.failed {kind: task_failed, reason: unsolicited_cancel} when
-  #                                          nothing asked. An adapter cancelling itself
-  #                                          unprompted is a task failure, and must not escape
-  #                                          charging by reporting the wrong outcome
+```text
+attempt.completed {}
+```
 
-attempt.completed {}              # acceptance and any gate already recorded the evidence
-
-attempt.blocked {                 # the SOURCE event for question requests and, for one blocking
-                                  #   proposal, the durable source-to-route cut (§4). A proposal
-                                  #   request still derives only from routed_human.
-  raised: [                       # wire-arrival order; decision_id values unique; complete set, content included
+```text
+attempt.blocked {
+  raised: [
       {decision_id, emitted_id, kind: "question",  question, blocking: true}
     | {decision_id, emitted_id, kind: "proposal", proposal_id, blocking,
        route?: { proposal_record_hash, reason, decision_type, base_revision, base_hash,
                  classifier_version, typed_delta, actual_impact, identity_versions,
                  envelope_evaluation? }}
-                                  #   `route` is REQUIRED exactly when a BLOCKING proposal passed
-                                  #   §9 steps 1–9. It duplicates the later routed_human payload
-                                  #   except fields already on this entry, so RC-RESUME-049 can
-                                  #   append that event without re-evaluation. It is absent for a
-                                  #   step-1–9 rejection and for a non-blocking proposal, which
-                                  #   has its own notification-time disposition. The route descriptor
-                                  #   never authorizes decision.requested: routed_human alone does.
-                                  #   `attempt.blocked` has no event-level identity_versions: the
-                                  #   descriptor's copy is the frozen routed_human evaluation tuple,
-                                  #   distinct from adapter.probed's attempt execution tuple.
   ],
-  pending_decision_ids: [decision_id]    # sorted; MUST equal exactly the ids in `raised` whose
-                                  #   `blocking` is true — the adapter's reported set is validated
-                                  #   against the events it actually emitted (§4), never trusted
+  pending_decision_ids: [decision_id]
 }
+```
 
+```text
 attempt.failed {
-  kind,                           # adapter failure kind, or a core-determined kind
-                                  #   (budget_exhausted) — Appendix D
-  reason?,                        # sub-reason within the kind, e.g. draft_no_blocking_output
-                                  #   for task_failed, or a grant_denied/protocol_error
-                                  #   sub-reason
-  detail?,                        # sanitized free text
-  disposition                     # B.0 — replayed verbatim by recovery
+  kind,
+  reason?,
+  detail?,
+  disposition
 }
+```
 
-attempt.cancelled  {}             # derived from run.cancelled
-attempt.superseded {}             # derived from amendment.approved
+```text
+attempt.cancelled {}
+```
 
+```text
+attempt.superseded {}
+```
+
+```text
 execution.started {
-  interval_id,                    # unique; one attempt legitimately opens several intervals
-  phase,                          # adapter | acceptance | composition
-  wall_start,                     # RFC 3339 with millisecond precision, UTC
-  remaining_at_start              # integer MILLISECONDS, the clamp's second operand (§6)
+  interval_id,
+  phase,
+  wall_start,
+  remaining_at_start
 }
+```
 
+```text
 execution.stopped {
   interval_id,
-  reason,                         # normal | cancelled | superseded | budget_exhausted |
-                                  #   recovered
-  charging,                       # measured | clamped — orthogonal to reason
-  charged_duration,               # integer MILLISECONDS, computed by the OPENING process from its
-                                  #   own monotonic clock, or by the clamp when recovering
-  observed_at?                    # required iff charging = clamped; the recovery-time wall
-                                  #   sample, journaled so replay never re-samples (§6)
+  reason,
+  charging,
+  charged_duration,
+  observed_at?
 }
 ```
 
@@ -5370,139 +5492,235 @@ execution.stopped {
 
 **Payloads.**
 
+**B.3 field clauses.** Each clause below constrains the named field or payload in the adjacent
+coherent specimen.
+
+- `artifact.recorded.content_hash` is the sha256 of the immutable instance's raw bytes (§1).
+- `artifact.recorded.source_path` is the announced `output_dir`-relative path and is provenance
+  only.
+- For `artifact.recorded`, the immutable copy is what counts (§1).
+- `change_set.recorded.change_set_id` is a `partitur/change-set` identity.
+- `change_set.recorded.base_tree` and `change_set.recorded.result_tree` are Git-native and may be
+  equal for a no-op write (§5).
+- `change_set.recorded.commit` is the Git-native checkpoint commit.
+- `change_set.recorded.commit` is a storage handle, not the change-set identity (§5).
+- `change_set.recorded.ref` is
+  `refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset`.
+- `verification.passed` attests the full §5 invariant.
+- The expected worktree for `verification.passed` is determined by the run, composition,
+  change-set, and candidate facts for this attempt.
+- A tree hash cannot restate non-ignored untracked files or the other non-tree checks attested by
+  `verification.passed`.
+- `composition.conflicted` is evidence only and projects no state (§5).
+- `composition.conflicted.scope` is `movement` or `candidate`.
+- `composition.conflicted.target_id` is `movement_id` when `scope = movement`.
+- `composition.conflicted.target_id` is `run_id` when `scope = candidate`; no `candidate_id` exists
+  because composition is what failed (§5).
+- `composition.conflicted.composition_subject_hash` uses `partitur/composition-subject` and is the
+  idempotency key's third component.
+- `composition.conflicted.composition_subject_hash` deliberately is neither the movement-level nor
+  candidate-level composition dependency hash.
+- Composition dependency hashes identify a successful composition's inputs, whereas
+  `composition_subject_hash` identifies which composition conflicted.
+- `composition.conflicted.contributors` preserves composition order.
+- `composition.conflicted.conflicted_paths` is sorted.
+- `composition.failed` is evidence only and projects no state (§5).
+- `composition.failed.scope` is `movement` or `candidate`, using the same values as
+  `composition.conflicted.scope`.
+- `composition.failed.target_id` has the same scope-dependent meaning as
+  `composition.conflicted.target_id`.
+- `composition.failed.composition_subject_hash` uses `partitur/composition-subject` and identifies
+  which composition could not be determined.
+- `composition.failed.composition_subject_hash` is the idempotency key's same third component as
+  the conflict event, for the same reason.
+- `composition.failed.cause` is a closed Appendix D enum.
+- `composition.failed.git_exit_code` is required if and only if `cause` is `git_exit` or
+  `output_unusable`, the two cases in which the merge ran and exited.
+- `composition.failed.git_exit_code` is absent for `git_signalled`, which has no exit status.
+- `composition.failed.git_exit_code` is absent for phase 1 and phase 2 causes, which never reached
+  the merge.
+- `composition.failed.diagnostic` is sanitized and truncated to 4 KiB on a valid UTF-8 boundary,
+  like `log` (B.7).
+- Composition runs a subprocess against a core-created temporary repository, so its diagnostic can
+  name paths; the diagnostic is evidence, not a channel.
+- `composition.failed.contributors` preserves composition order, as the conflict event does.
+- `application_candidate.recorded.candidate_id` is a `partitur/candidate` identity.
+- `application_candidate.recorded.ordered_change_sets` is the content-deduplicated applied
+  sequence.
+- `application_candidate.recorded.contributors` is the full pre-deduplication ordered sequence.
+- `application_candidate.recorded.candidate_composition_dependency_hash` uses
+  `partitur/candidate-composition`.
+- `application_candidate.recorded.candidate_composition_dependency_hash` is A.4's tagged
+  identity-or-merge projection, including the zero-writer candidate.
+- `application_candidate.recorded.composition_environment_hash` uses
+  `partitur/composition-environment`.
+- `application_candidate.recorded.composition_environment_hash` is required if and only if
+  contributors are non-empty, and is forbidden for the identity branch.
+- The initial candidate binding is `{candidate_id, score_revision}`, with `score_revision` from the
+  envelope.
+- Recording `application_candidate.recorded` is the initial binding; no separate binding event is
+  ever appended (§8).
+- `acceptance.started.subject_tree` is core-observed and bound before any criterion runs (§7).
+- `acceptance.started.acceptance_spec_hash` is the A.4.2 identity of the effective compiled plan.
+- `acceptance.started.planned_criterion_ids` is in execution order, declared then generated (§7).
+- Recovery reads `acceptance.started.planned_criterion_ids` to determine what remains.
+- `criterion.started.subject_tree` repeats the binding on every criterion event (§7).
+- `criterion.started.criterion_process` is present if and only if an external-command criterion
+  spawned successfully.
+- When `criterion.started.criterion_process` is present, the external command spawned successfully.
+- `artifact` and `review` criteria evaluate in process and have no PID.
+- An external command that failed to spawn never had a PID.
+- Requiring `criterion.started.criterion_process` unconditionally would make in-process and spawn
+  failure cases unrepresentable.
+- In-process and spawn-failed criteria remain representable without
+  `criterion.started.criterion_process`.
+- `criterion.started.criterion_process` uses the same trampoline handoff as an attempt (§4).
+- `criterion.started.criterion_process` is recorded before the gate is released.
+- Without the pre-release record, recovery could synthesize `ERROR` while an orphan still mutates
+  the worktree and then verify that worktree as if it were quiet.
+- `criterion.started.spawn_failed` is present and true if and only if an external command could not
+  be spawned.
+- A spawn failure's `criterion.completed` is `ERROR` with no process identity.
+- Recovery has nothing to sweep for a spawn failure.
+- `criterion.completed.subject_tree` repeats the binding because a mark must be readable from the
+  event that constitutes it, without joining.
+- `criterion.completed.outcome` is `PASS`, `FAIL`, or `ERROR`.
+- `criterion.completed.exit_code` is present for a spawned command that ran to completion.
+- `criterion.completed.duration_ms` is present for an observed completion.
+- `criterion.completed.duration_ms` is absent only when recovery synthesized completion without
+  observing process exit (Appendix C.3).
+- Fabricating `criterion.completed.duration_ms` would fabricate evidence.
+- `criterion.completed.output_ref` names the attempt-directory criterion capture directory holding
+  separately bounded stdout and stderr (§7); output is never inlined.
+- `criterion.completed.truncated_streams` is a sorted, non-empty subset of `[stdout, stderr]`.
+- `criterion.completed.truncated_streams` is present if and only if the named stream exceeded §7's
+  per-stream 4 MiB bound.
+- `criterion.completed.error_detail` is required if and only if `outcome = ERROR` and states what
+  produced no verdict.
+- `acceptance.failed.reason` is a closed Appendix D enum.
+- `acceptance.failed.failed_criterion_id` is absent for reasons that are not criterion-scoped, such
+  as `recovery_subject_mismatch`.
+- `acceptance.failed.disposition` is the B.0 disposition.
+- `acceptance.failed` terminalizes the attempt itself, so no separate `attempt.failed` is appended
+  (B.2).
+- `acceptance.evaluation_completed.criterion_outcomes` is in planned order and every outcome is
+  `PASS` by definition.
+- `acceptance.evaluation_completed.criterion_outcomes` is present so grade derivation reads one
+  event (§8).
+
 ```text
 artifact.recorded {
   logical_output_id, kind,
-  content_hash,                   # sha256: raw bytes of the immutable instance (§1)
+  content_hash,
   size_bytes,
-  source_path                     # output_dir-relative, as announced — provenance only; the
-                                  #   immutable copy is what counts (§1)
+  source_path
 }
+```
 
+```text
 change_set.recorded {
-  change_set_id,                  # partitur/change-set
-  base_tree, result_tree,         # git-native; equal for a no-op write (§5)
-  commit,                         # git-native; the checkpoint commit — a STORAGE HANDLE, not
-                                  #   the identity (§5)
-  ref,                            # refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset
-  identity_versions
-}
-
-verification.passed {}            # attests the full §5 invariant. The expected worktree is
-                                  #   determined by the run/composition/change-set/candidate facts
-                                  #   for this attempt, and a tree hash could not restate
-                                  #   non-ignored untracked files or the other non-tree checks
-
-composition.conflicted {          # EVIDENCE ONLY — projects no state (§5)
-  scope,                          # movement | candidate
-  target_id,                      # movement_id when scope=movement; run_id when
-                                  #   scope=candidate — no candidate_id exists, composition
-                                  #   is what failed (§5)
-  composition_subject_hash,       # partitur/composition-subject — the idempotency key's
-                                  #   third component. Deliberately NOT the movement-level or
-                                  #   candidate-level composition dependency hash: those
-                                  #   identify a successful composition's inputs, whereas this
-                                  #   identifies WHICH composition conflicted
-  contributors: [{movement_id, change_set_id}],   # composition order
-  conflicted_paths: [path],       # sorted
-  composition_algorithm_version,
-  identity_versions
-}
-
-composition.failed {              # EVIDENCE ONLY — projects no state (§5)
-  scope,                          # movement | candidate — same values as composition.conflicted
-  target_id,                      # as composition.conflicted
-  composition_subject_hash,       # partitur/composition-subject — identifies WHICH composition
-                                  #   could not be determined. Same third key component as the
-                                  #   conflict event, for the same reason
-  cause,                          # closed enum, Appendix D
-  git_exit_code?,                 # required iff cause is `git_exit` or `output_unusable` — the two
-                                  #   in which the merge ran AND exited. Absent for `git_signalled`,
-                                  #   which has no exit status, and for the phase 1 and phase 2
-                                  #   causes, which never reached the merge
-  diagnostic,                     # sanitized and truncated to 4 KiB on a valid UTF-8 boundary,
-                                  #   like log (B.7). Composition runs a subprocess against a
-                                  #   core-created temporary repository, so its stderr can name
-                                  #   paths; it is evidence, not a channel
-  contributors: [{movement_id, change_set_id}],   # composition order, as the conflict event
-  composition_algorithm_version,
-  identity_versions
-}
-
-application_candidate.recorded {
-  candidate_id,                   # partitur/candidate
+  change_set_id,
   base_tree, result_tree,
-  ordered_change_sets: [change_set_id],           # content-deduplicated applied sequence
-  contributors: [{movement_id, change_set_id}],   # full pre-dedup ordered sequence
+  commit,
+  ref,
+  identity_versions
+}
+```
+
+```text
+verification.passed {}
+```
+
+```text
+composition.conflicted {
+  scope,
+  target_id,
+  composition_subject_hash,
+  contributors: [{movement_id, change_set_id}],
+  conflicted_paths: [path],
+  composition_algorithm_version,
+  identity_versions
+}
+```
+
+```text
+composition.failed {
+  scope,
+  target_id,
+  composition_subject_hash,
+  cause,
+  git_exit_code?,
+  diagnostic,
+  contributors: [{movement_id, change_set_id}],
+  composition_algorithm_version,
+  identity_versions
+}
+```
+
+```text
+application_candidate.recorded {
+  candidate_id,
+  base_tree, result_tree,
+  ordered_change_sets: [change_set_id],
+  contributors: [{movement_id, change_set_id}],
   candidate_composition_dependency_hash,
-                                  # partitur/candidate-composition; A.4's tagged identity | merge
-                                  # projection, including the zero-writer candidate
-  composition_environment_hash?  # partitur/composition-environment; required iff contributors
-                                  # are non-empty, forbidden for the identity branch
-                                  # The initial binding is {candidate_id, score_revision} where
-                                  #   score_revision comes from the ENVELOPE; recording this
-                                  #   event IS the binding, and no separate binding event is ever
-                                  #   appended (§8)
+  composition_environment_hash?,
   identity_versions
 }
+```
 
+```text
 acceptance.started {
-  subject_tree,                   # core-observed; bound before any criterion runs (§7)
-  acceptance_spec_hash,           # A.4.2 — the effective compiled plan
-  planned_criterion_ids: [criterion_id],   # execution order, declared then generated (§7).
-                                  #   Recovery reads this to know what remains
+  subject_tree,
+  acceptance_spec_hash,
+  planned_criterion_ids: [criterion_id],
   identity_versions
 }
+```
 
+```text
 criterion.started {
   criterion_id, criterion_spec_hash,
-  subject_tree,                   # repeated: every criterion event repeats the binding (§7)
-  criterion_process?: {           # present IFF this criterion is an external command that spawned
-    pid, session_id,              #   successfully. `artifact` and `review` criteria evaluate
-    start_identity: (             #   in-process and have no PID at all, and a command that failed
-        {platform: "linux",  boot_id, start_ticks}      # to spawn never had one — so requiring it
-      | {platform: "darwin", start_tvsec, start_tvusec} # unconditionally would make those cases
-    )                             #   unrepresentable. Same trampoline handoff as an attempt (§4),
-  },                              #   recorded before the gate is released: without it recovery
-                                  #   could synthesize ERROR while an orphan still mutates the
-                                  #   worktree, then verify that worktree as if it were quiet
-  spawn_failed?: bool,            # present and true iff an external command could not be spawned.
-                                  #   Its `criterion.completed` is ERROR with no process identity,
-                                  #   and recovery has nothing to sweep
+  subject_tree,
+  criterion_process?: {
+    pid, session_id,
+    start_identity: (
+        {platform: "linux",  boot_id, start_ticks}
+      | {platform: "darwin", start_tvsec, start_tvusec}
+    )
+  },
+  spawn_failed?: bool,
   identity_versions
 }
+```
 
+```text
 criterion.completed {
   criterion_id, criterion_spec_hash,
-  subject_tree,                   # repeated for the same reason — a mark must be readable
-                                  #   from the event that constitutes it, without joining
-  outcome,                        # PASS | FAIL | ERROR
-  exit_code?,                     # present for a spawned command that ran to completion
-  duration_ms?,                   # present for an OBSERVED completion; absent only when recovery
-                                  #   synthesized the completion without observing process exit
-                                  #   (Appendix C.3) — a fabricated duration would be evidence
-  output_ref?,                    # attempt-directory criterion capture directory containing
-                                  #   separately bounded stdout and stderr (§7); never inlined
-  truncated_streams?,             # sorted non-empty subset of [stdout, stderr], present IFF
-                                  #   that stream exceeded §7's per-stream 4 MiB bound
-  error_detail?,                  # required iff outcome = ERROR — what produced no verdict
+  subject_tree,
+  outcome,
+  exit_code?,
+  duration_ms?,
+  output_ref?,
+  truncated_streams?,
+  error_detail?,
   identity_versions
 }
+```
 
+```text
 acceptance.failed {
-  reason,                         # closed enum, Appendix D
-  failed_criterion_id?,           # absent for reasons that are not criterion-scoped, e.g.
-                                  #   recovery_subject_mismatch
+  reason,
+  failed_criterion_id?,
   subject_tree,
-  disposition                     # B.0 — this event terminalizes the attempt itself, so no
-                                  #   separate attempt.failed is appended (B.2)
+  disposition
 }
+```
 
+```text
 acceptance.evaluation_completed {
   subject_tree, acceptance_spec_hash,
   criterion_outcomes: [{criterion_id, criterion_spec_hash, outcome}],
-                                  # planned order; every outcome PASS by definition. Present
-                                  #   so grade derivation reads ONE event (§8)
   identity_versions
 }
 ```
@@ -5517,68 +5735,85 @@ acceptance.evaluation_completed {
 
 **Payloads.**
 
+**B.4 field clauses.** Each clause below constrains the named field or payload in the adjacent
+coherent specimen.
+
+- `decision.requested` is a tagged union on `decision_type`.
+- A flat bag of optional `decision.requested` fields would let a human-gate request omit its gate
+  id.
+- `decision.requested.decision_id` is derived from `(attempt_id, emitted_id)` for adapter-raised
+  decisions (§4), never copied from the raw emitted id.
+- `decision.requested.emitted_id` retains the adapter's id as provenance.
+- `decision.requested.emitted_id` is present if and only if the decision came from an adapter.
+- `decision.requested.emitted_id` is only attempt-unique, so nothing may key on it.
+- A question's `decision.requested.question` is sanitized text (§4).
+- A human gate's `decision.requested.review_outcome` is present if and only if review evidence
+  exists.
+- A human gate's `decision.requested.blocking_findings` is sorted and duplicate-free.
+- A human gate's `decision.requested.blocking_findings` is empty when an `always` gate has no
+  blockers raised.
+- An amendment's `decision.requested.blocking` preserves the proposal's `requires_decision` (§4).
+- A blocking proposal stops its attempt; a non-blocking proposal does not.
+- `WAITING_HUMAN` projects only from unresolved blocking decisions (§6).
+- A finalization `decision.requested` is always `draft_phase` (§2) and always blocking.
+- `decision.resolved` is a tagged union.
+- `decision.resolved` is never appended on an amendment or finalization path; those paths resolve
+  through their own terminal event (§9).
+- `decision.resolved.decision_type` is `question` or `human_gate`.
+- `decision.resolved.decision_type` is repeated because §8 derives `APPROVED` from
+  `decision.resolved {decision_type: human_gate}` without joining back to the request.
+- An answered question's wire `resolved_decisions` entry is
+  `{decision_id, kind: "answer", answer}` (§4).
+- A human gate's `decision.resolved.scope.subject_tree` is the exact tree approved.
+- Movement and attempt are not repeated in `decision.resolved.scope`; they are envelope fields and
+  B.0 forbids duplicating them.
+- A human-gate approval never carries over to another attempt, revision, or tree (§8).
+- `decision.resolved.scope.subject_tree` is the single subject-tree source, with no sibling field to
+  drift out of agreement.
+- `decision.resolved.overridden_findings` is sorted and duplicate-free.
+- On approval, every `decision.resolved.overridden_findings` entry belongs to the pending gate
+  request's `blocking_findings`.
+- `decision.resolved.overridden_findings` is empty on rejection or when nothing was overridden.
+- `decision.resolved.override_reason` is present and non-empty if and only if
+  `overridden_findings` is non-empty (§8).
+- Overriding a reviewer's blocking judgment is the decision that `override_reason` keeps auditable.
+- `decision.resolved.reason` is an optional non-empty operator reason and is permitted only when
+  `disposition = rejected`.
+- `decision.obsoleted.decision_id` names the target because the envelope has no `decision_id` (§6).
+- The `decision.obsoleted` envelope's `causation_id` identifies what obsoleted the target.
+
 ```text
-decision.requested {              # a TAGGED UNION on decision_type — a flat bag of optional
-                                  #   fields would let a human-gate request omit its gate id
-  decision_id,                    # derived from (attempt_id, emitted_id) for adapter-raised
-                                  #   decisions (§4) — never the raw emitted id
-  emitted_id?,                    # the adapter's own id, retained as provenance. Present iff
-                                  #   the decision came from an adapter; only attempt-unique,
-                                  #   so nothing may key on it
-  decision_type,
-  ... per-type fields below
-}
-
-  decision_type: "question"    ⇒ { question }              # sanitized text (§4)
-  decision_type: "human_gate"  ⇒ { gate_id, gate_mode, subject_tree,
-                                   review_outcome?,        # present iff review evidence exists
-                                   blocking_findings: [{artifact_instance_id, finding_id}] }
-                                                           # sorted, duplicate-free; empty when the gate is
-                                                           #   `always` with no blockers raised
-  decision_type: "amendment"   ⇒ { proposal_id, routed_reason, blocking }
-                                                           # `blocking` preserves the proposal's
-                                                           #   requires_decision (§4): a blocking
-                                                           #   proposal stops its attempt, a
-                                                           #   non-blocking one does not, and
-                                                           #   WAITING_HUMAN projects only from
-                                                           #   unresolved BLOCKING decisions (§6)
-  decision_type: "finalization"⇒ { proposal_id, routed_reason }   # always draft_phase (§2) and
-                                                           #   always blocking
-
-decision.resolved {               # also a TAGGED UNION. NEVER appended on an amendment or
-                                  #   finalization path — those resolve through their own
-                                  #   terminal event (§9)
+decision.requested {
   decision_id,
-  decision_type,                  # question | human_gate. Repeated because §8 derives APPROVED
-                                  #   from `decision.resolved {decision_type: human_gate}` and
-                                  #   must not have to join back to the request to know
-  disposition,
-  ... per-type fields below
+  emitted_id?,
+  decision_type:
+      "question"     => { question }
+    | "human_gate"   => { gate_id, gate_mode, subject_tree, review_outcome?,
+                           blocking_findings: [{artifact_instance_id, finding_id}] }
+    | "amendment"    => { proposal_id, routed_reason, blocking }
+    | "finalization" => { proposal_id, routed_reason }
 }
+```
 
-  decision_type: "question", disposition: "answered"
-    ⇒ { answer }                  # the wire resolved_decisions entry is
-                                  #   {decision_id, kind: "answer", answer} (§4)
+```text
+decision.resolved {
+  decision_id,
+  disposition,
+  decision_type:
+      "question", disposition: "answered"
+        => { answer }
+    | "human_gate", disposition: "approved" | "rejected"
+        => { gate_id,
+             scope: {subject_tree},
+             overridden_findings: [{artifact_instance_id, finding_id}],
+             override_reason?,
+             reason? }
+}
+```
 
-  decision_type: "human_gate", disposition: "approved" | "rejected"
-    ⇒ { gate_id,
-        scope: {subject_tree},    # the EXACT tree approved; movement and attempt are NOT repeated
-                                  #   here — they are envelope fields and B.0 forbids duplicating
-                                  #   them. An approval
-                                  #   never carries over to another attempt, revision, or tree
-                                  #   (§8). `scope.subject_tree` is the single source — there is
-                                  #   no sibling subject_tree to fall out of agreement with
-        overridden_findings: [{artifact_instance_id, finding_id}],   # sorted, duplicate-free; on approval, each
-                                  #   is a member of the pending gate request's
-                                  #   blocking_findings; empty when rejected or none
-        override_reason?,          # MUST be present and non-empty iff overridden_findings is
-                                  #   non-empty (§8) — overriding a reviewer's blocking judgment
-                                  #   is precisely the decision that must stay auditable
-        reason? }                  # optional non-empty operator reason iff disposition = rejected
-
+```text
 decision.obsoleted {
-  decision_id                     # the envelope has no decision_id (§6), so the target must be
-                                  #   named here. `causation_id` says what obsoleted it
+  decision_id
 }
 ```
 
@@ -5596,164 +5831,257 @@ decision.obsoleted {
 
 **Payloads.** Every amendment event carries `base_hash` and `classifier_version` (§9).
 
+**B.5 field clauses.** Each clause below constrains the named field or payload in the adjacent
+coherent specimen.
+
+- `amendment.rejected.emitted_id` records provenance when the proposal came from an adapter.
+- `amendment.rejected.emitted_id` is also present for a rejected or auto-approved proposal, which
+  never opens `decision.requested`, because this is the only place its origin would be recorded.
+- `amendment.rejected.reason` is a closed Appendix D enum.
+- `amendment.rejected.condition` is required if and only if `reason = candidate_incompatible`.
+- `amendment.rejected.condition` is one of `composition_changed`,
+  `verification_episode_finished`, and `verification_mode_changed`.
+- A validated patched AST exists only after step 6 has passed.
+- `amendment.rejected.typed_delta` and `actual_impact` are present for failures at step 7 and later,
+  not “from step 6 on,” because `invalid_score` is step 6 failing.
+- `amendment.rejected.actual_impact` has the §9 shape.
+- Failures at steps 1–6 have no validated AST, so `amendment.rejected` records a coarser form.
+- `amendment.rejected.patch_operations_hash` uses `partitur/patch-operations`.
+- `amendment.rejected.patch_operations_hash_form` is required if and only if
+  `patch_operations_hash` is present.
+- `amendment.rejected.patch_operations_hash_form` is `partitur/patch-operations` for the canonical
+  identity or `raw-byte-sha256` for the submitted operations' raw-byte sha256.
+- `amendment.rejected.error_location` identifies where in the patch or score the failure occurred.
+- `amendment.rejected.decision_id` is present if and only if a decision exists or could exist for
+  the proposal: the proposal was blocking (§4) or had been routed.
+- Routing always opens a decision regardless of `blocking`.
+- A routed non-blocking proposal rejected at decision-time revalidation carries `decision_id` so it
+  can close its pending decision instead of leaving it pending forever.
+- `amendment.rejected.decision_id` terminally resolves the decision in projection (§9).
+- `amendment.rejected.decision_id` is derived per A.4.3 and matches the id opened by the attempt or
+  routing.
+- `amendment.routed_human` is a non-terminal routing marker.
+- `amendment.routed_human.reason` is a closed routing-reason enum.
+- `amendment.routed_human.emitted_id` records provenance when the proposal came from an adapter.
+- `amendment.routed_human.decision_type` is `amendment` or `finalization`.
+- `amendment.routed_human.decision_type` is required because recovery recreates
+  `decision.requested` from this event alone and must distinguish the two types.
+- A CLI draft amendment and reserved finalization amendment can both be `draft_phase`, blocking,
+  and carry no emitted id.
+- `amendment.routed_human.blocking` preserves the proposal's `requires_decision` (§4).
+- `amendment.routed_human.blocking` is required because recovery recreates `decision.requested`
+  from this event alone.
+- The amendment variant needs `amendment.routed_human.blocking` to decide whether the run enters
+  `WAITING_HUMAN`; recovery never guesses it.
+- `amendment.routed_human.proposal_record_hash` is the sha256 of the raw bytes of
+  `proposals/<proposal-id>.json` (§1).
+- Decision-time revalidation needs the original operations because §9 re-runs steps 1–9.
+- Neither `typed_delta` nor `actual_impact` can reconstruct the original operations; both are lossy
+  projections of the patched AST.
+- `amendment.routed_human.decision_id` names the `decision.requested` this event opens.
+- `amendment.routed_human.envelope_evaluation` is recomputed for the audit record only.
+- `amendment.routed_human.envelope_evaluation` never re-routes or blocks a human approval, which
+  would loop (§9).
+- `amendment.approved` is the single authoritative transition (§9).
+- `amendment.approved.emitted_id` records provenance when the proposal came from an adapter.
+- `amendment.approved.mode` is `auto` or `human`.
+- `amendment.approved.decision_id` is required if and only if `mode = human`, and this event resolves
+  it directly.
+- `amendment.approved.envelope_class` is required if and only if `mode = auto`.
+- `amendment.approved.envelope_class` is `NARROW_PATHS`, `NARROW_GRANTS`, or `BUDGET_DECREASE` and
+  records which class justified approval.
+- An auto-approval without `amendment.approved.envelope_class` is unauditable.
+- `amendment.approved.new_revision` equals `base_revision + 1`.
+- The envelope's `score_revision` on `amendment.approved` is `new_revision`, not `base_revision`.
+- `amendment.approved` constitutes the new head, and candidate rebinding takes the revision from
+  the envelope (§8), so the envelope carries the revision being bound to.
+- `amendment.approved.new_snapshot_file_hash` is the sha256 of the raw bytes written, for byte-exact
+  promotion (§8).
+- `amendment.approved.head_movements` is the score-derived lifecycle projection in declaration
+  order (§9).
+- `amendment.approved.head_movements` is an exact projection of the new snapshot, not a score
+  duplicate.
+- `amendment.approved.head_movements` is the minimum replay needs to reconcile `Movements`,
+  `RepoWriteMovements`, `DependencyMovements`, and `FinalMovements`.
+- `amendment.approved.superseded_attempt_ids` is sorted and contains every nonterminal `STARTING`,
+  `RUNNING`, or `VERIFYING` attempt (§9).
+- `amendment.approved.superseded_attempt_ids` is the source for derived `attempt.superseded` rows.
+- `amendment.approved.obsoleted_decision_ids` is sorted and excludes this amendment's own decision,
+  which the event resolves directly.
+- `amendment.approved.candidate_id` is present if and only if a candidate exists and names the
+  rebound candidate.
+- The candidate binding projects from `amendment.approved.candidate_id` (§8).
+- `amendment.approved.envelope_evaluation` is present if and only if `mode = human` and records the
+  guards recomputed at decision time (§9).
+- The human-mode presence rule binds `amendment.approved.envelope_evaluation` to decision time, not
+  routing time.
+- The routed event's evaluation is already fsynced and cannot be mutated or re-appended.
+- The later evaluation cannot be reconstructed by reusing the routed event's evaluation.
+- `amendment.approved.envelope_evaluation` carries the later evaluation so it is not lost.
+- `amendment.approved.fenced_epoch` is present if and only if the transition advances the authority
+  epoch (§6).
+- `amendment.approved.fenced_epoch` covers both a wedged driver and a driver that died mid-drain,
+  because both require the advance.
+- Keying `amendment.approved.fenced_epoch` only on “wedged” would contradict the commit table, which
+  assigns the fenced branch to a verifiably dead owner too.
+- `amendment.approved.fenced_epoch` always equals `observed_authority_epoch + 1`.
+- `amendment.approved.finalization` is true if and only if this is the reserved
+  `/status: draft → finalized` amendment (§2).
+- When `amendment.approved.finalization` is true, this event also closes the draft phase and projects
+  the interview movement to `SUCCEEDED`.
+- Finalization manufactures no `attempt.completed` and no `VERIFIED` or `APPROVED` evidence.
+- `amendment.approval_abandoned` lifts the barrier and changes no score or lifecycle projection.
+- `amendment.approval_abandoned.reason` is `base_head_changed`, `plan_invalidated`, or `cancelled`.
+- `amendment.approval_abandoned.base_revision` and `base_hash` are present because every amendment
+  event carries them (§9).
+- `amendment.approval_prepared` changes nothing and reserves and records an approval operation.
+- `amendment.approval_prepared.prepare_id` names the quiesced sidecar path
+  `driver.quiesced.<prepare_id>`.
+- The sidecar name binds a driver's lease move to this prepare.
+- `amendment.approval_prepared.mode` is `auto` or `human` and records the approval intent so recovery
+  knows which policy path produced it.
+- `amendment.approval_prepared.decision_id` is required if and only if `mode = human` and names the
+  already-approved decision.
+- `amendment.approval_prepared.envelope_class` is required if and only if `mode = auto` and records
+  the class that justified it.
+- `amendment.approval_prepared.base_revision` and `base_hash` identify the bound head; a head change
+  invalidates the prepare.
+- `amendment.approval_prepared.new_snapshot_hash` is the semantic `partitur/score` identity.
+- `amendment.approval_prepared.new_snapshot_file_hash` is the sha256 of the raw bytes of the snapshot
+  already written (§6 step 1).
+- `amendment.approval_prepared.plan_record_hash` is the sha256 of the raw bytes of
+  `prepares/<prepare-id>.json` (§9).
+- The prepare record contains every `amendment.approved` field invariant at prepare time, including
+  typed delta, actual impact, obsoleted decision ids, candidate binding, and finalization state.
+- A semantic hash alone is unrecoverable because an auto proposal has no durable proposal record
+  from which to rebuild those fields.
+- `amendment.approval_prepared.target_attempt_ids` is sorted and contains the nonterminal attempts
+  to be quiesced.
+- `amendment.approval_prepared.observed_authority_epoch` is the epoch observed at prepare time, which
+  the ACK must still match.
+- `amendment.approval_prepared.quiesce_silence_limit_ms` is exactly `60000`.
+- The commit table measures silence from the latest core-timestamped
+  `amendment.quiesce_observed` receipt (§6).
+- `amendment.approval_prepared.classifier_version` is present because every amendment event carries
+  it (§9).
+- `amendment.approval_prepared.identity_versions` is present because the event carries canonical
+  hashes (B.0).
+- `amendment.quiesce_observed` is a durable receipt whose envelope timestamp is core-assigned.
+- `amendment.quiesce_observed.sweep_round` starts at 1 and advances by exactly 1.
+- `amendment.quiesce_observed` permits no timestamp or producer clock in its payload (§6).
+- `amendment.human_rejected.human_reason` is non-empty.
+
 ```text
 amendment.rejected {
   proposal_id,
-  emitted_id?,                    # provenance when the proposal came from an adapter. Present
-                                  #   here too, because a rejected or auto-approved proposal
-                                  #   never opens a decision.requested, so this is the only
-                                  #   place its origin would be recorded
-  reason,                         # closed enum, Appendix D
-  condition?,                     # required iff reason = candidate_incompatible: one of
-                                  #   composition_changed | verification_episode_finished |
-                                  #   verification_mode_changed
+  emitted_id?,
+  reason,
+  condition?,
   base_revision, base_hash, classifier_version,
-  # A validated patched AST exists only once step 6 has PASSED, so these are present for
-  # failures at step 7 and later — not "from step 6 on", since `invalid_score` IS step 6 failing:
   typed_delta?: [{selector, operation, before_hash?, after_hash?}],
-  actual_impact?,                 # §9 shape
-  # for failures at steps 1-6 there is no validated AST, so the record is coarser:
-  patch_operations_hash?,         # partitur/patch-operations
-  patch_operations_hash_form?,    # required iff patch_operations_hash: `partitur/patch-operations`
-                                  #   for the canonical identity, or `raw-byte-sha256` for the
-                                  #   submitted operations' raw-byte sha256
-  error_location?,                # where in the patch or the score the failure was found
-  decision_id?,                   # present iff a decision exists or could exist for this
-                                  #   proposal — that is, iff it was blocking (§4) OR it had been
-                                  #   routed. Routing always opens a decision regardless of
-                                  #   `blocking`, so a routed NON-blocking proposal rejected at
-                                  #   decision-time revalidation must be able to close its pending
-                                  #   decision too; omitting the id there would leave it pending
-                                  #   forever. Terminally resolves the decision in projection (§9).
-                                  #   Derived per A.4.3, so it matches the id the attempt or the
-                                  #   routing opened
+  actual_impact?,
+  patch_operations_hash?,
+  patch_operations_hash_form?,
+  error_location?,
+  decision_id?,
   identity_versions
 }
+```
 
-amendment.routed_human {          # NON-TERMINAL routing marker
-  proposal_id, reason,            # routing reason, closed enum
-  emitted_id?,                    # provenance when the proposal came from an adapter
-  decision_type,                  # amendment | finalization. REQUIRED because recovery recreates
-                                  #   decision.requested from this event alone and cannot otherwise
-                                  #   tell them apart: a CLI draft amendment and the reserved
-                                  #   finalization amendment can both be `draft_phase`, blocking,
-                                  #   and carry no emitted id
-  blocking,                       # the proposal's requires_decision (§4). REQUIRED here because
-                                  #   recovery recreates decision.requested from this event alone,
-                                  #   and the amendment variant needs `blocking` to know whether
-                                  #   the run enters WAITING_HUMAN — recovery must never guess that
-  proposal_record_hash,           # sha256: raw bytes of proposals/<proposal-id>.json (§1).
-                                  #   Decision-time re-validation needs the ORIGINAL operations
-                                  #   (§9 re-runs steps 1–9), and neither the typed delta nor
-                                  #   actual_impact can reconstruct them — both are lossy
-                                  #   projections of the patched AST, not the patch
+```text
+amendment.routed_human {
+  proposal_id, reason,
+  emitted_id?,
+  decision_type,
+  blocking,
+  proposal_record_hash,
   base_revision, base_hash, classifier_version,
-  decision_id,                    # the decision.requested this opens
+  decision_id,
   typed_delta: [{selector, operation, before_hash?, after_hash?}],
   actual_impact,
-  envelope_evaluation?: {          # recomputed for the AUDIT RECORD ONLY — it never re-routes
-    class?,                        #   or blocks a human approval, which would loop (§9)
+  envelope_evaluation?: {
+    class?,
     guard_passed: bool,
     guard_failure_reason?
   },
   identity_versions
 }
+```
 
-amendment.approved {              # the SINGLE authoritative transition (§9)
+```text
+amendment.approved {
   proposal_id,
-  emitted_id?,                    # provenance when the proposal came from an adapter
-  mode,                           # auto | human
-  decision_id?,                   # required iff mode = human; this event resolves it directly
-  envelope_class?,                # required iff mode = auto: NARROW_PATHS | NARROW_GRANTS |
-                                  #   BUDGET_DECREASE — WHICH class justified the approval.
-                                  #   Without it an auto-approval is unauditable
+  emitted_id?,
+  mode,
+  decision_id?,
+  envelope_class?,
   base_revision, base_hash, classifier_version,
-  new_revision,                   # = base_revision + 1. The ENVELOPE's score_revision on this
-                                  #   event is `new_revision`, not `base_revision`: the event
-                                  #   constitutes the new head, and candidate re-binding takes
-                                  #   the revision from the envelope (§8), so it must be the
-                                  #   revision being bound to
+  new_revision,
   new_snapshot_hash,
-  new_snapshot_file_hash,         # sha256: raw bytes written, for byte-exact promotion (§8)
+  new_snapshot_file_hash,
   typed_delta: [{selector, operation, before_hash?, after_hash?}],
   actual_impact,
-  head_movements: [{              # score-derived lifecycle projection (§9), in declaration order
+  head_movements: [{
     id,
     initial: PENDING | INAPPLICABLE,
     repo_write: bool,
     has_dependencies: bool,
     final: bool
-  }],                             # exact projection of the new snapshot, not a score duplicate:
-                                  # it is the minimum replay needs to reconcile Movements,
-                                  # RepoWriteMovements, DependencyMovements, and FinalMovements
-  superseded_attempt_ids: [attempt_id],    # sorted; EVERY nonterminal attempt — STARTING,
-                                  #   RUNNING, or VERIFYING (§9). Source for the derived
-                                  #   attempt.superseded rows
-  obsoleted_decision_ids: [decision_id],   # sorted; excludes this amendment's own decision,
-                                  #   which this event resolves directly
-  candidate_id?,                  # present iff a candidate exists: the re-bound candidate.
-                                  #   The binding fact projects from here (§8)
-  envelope_evaluation?: {         # present iff mode = human: the guards recomputed AT DECISION
-    class?,                       #   TIME (§9), for the audit record. The routed event's own
-    guard_passed: bool,           #   evaluation is already fsynced and cannot be mutated or
-    guard_failure_reason?         #   re-appended, so the later evaluation needs its own carrier
-  },                              #   here or it is simply lost
-  fenced_epoch?,                  # present **iff this transition advances the authority epoch**
-                                  #   (§6) — which covers a wedged driver AND a driver that died
-                                  #   mid-drain, both of which need the advance. Keying it on
-                                  #   "wedged" alone contradicted the commit table, which gives the
-                                  #   fenced branch to a verifiably dead owner too. Value is always
-                                  #   `observed_authority_epoch + 1`
-  finalization: bool,             # true iff this is the reserved /status draft→finalized
-                                  #   amendment (§2). When true this event ALSO closes the
-                                  #   draft phase and projects the interview movement to
-                                  #   SUCCEEDED — manufacturing no attempt.completed and no
-                                  #   VERIFIED/APPROVED evidence
+  }],
+  superseded_attempt_ids: [attempt_id],
+  obsoleted_decision_ids: [decision_id],
+  candidate_id?,
+  envelope_evaluation?: {
+    class?,
+    guard_passed: bool,
+    guard_failure_reason?
+  },
+  fenced_epoch?,
+  finalization: bool,
   identity_versions
 }
+```
 
-amendment.approval_abandoned {    # lifts the barrier; changes no score or lifecycle projection
+```text
+amendment.approval_abandoned {
   prepare_id, proposal_id,
-  reason,                         # base_head_changed | plan_invalidated | cancelled
-  base_revision, base_hash,       # every amendment event carries these (§9)
+  reason,
+  base_revision, base_hash,
   classifier_version
 }
+```
 
-amendment.approval_prepared {     # changes nothing; it RESERVES and RECORDS an approval operation
-  prepare_id,                     # names the quiesced sidecar path `driver.quiesced.<prepare_id>`,
-                                  #   so a driver's lease move is bound to THIS prepare
-  proposal_id,
-  mode,                           # auto | human — the approval intent, so recovery knows which
-                                  #   policy path produced it
-  decision_id?,                   # required iff mode = human: the decision already approved
-  envelope_class?,                # required iff mode = auto: the class that justified it
-  base_revision, base_hash,       # the head this prepare is bound to; a head change invalidates it
-  new_revision,
-  new_snapshot_hash,              # semantic (partitur/score)
-  new_snapshot_file_hash,         # sha256: raw bytes of the snapshot ALREADY WRITTEN (§6 step 1)
-  plan_record_hash,               # sha256: raw bytes of prepares/<prepare-id>.json (§9), which
-                                  #   carries every amendment.approved field that is INVARIANT at
-                                  #   prepare time — typed delta, actual_impact, obsoleted decision
-                                  #   ids, candidate binding, finalization state. A semantic hash
-                                  #   alone would be unrecoverable, since an AUTO proposal has no
-                                  #   durable proposal record to rebuild those from
-  target_attempt_ids: [attempt_id],   # sorted; the nonterminal attempts to be quiesced
-  observed_authority_epoch,       # the epoch seen when preparing — the ACK must still match it
-  quiesce_silence_limit_ms,       # exactly 60000; the commit table measures silence from the
-                                  # latest core-timestamped quiesce_observed receipt (§6)
-  classifier_version,             # every amendment event carries it (§9)
-  identity_versions               # it carries canonical hashes (B.0)
-}
-
-amendment.quiesce_observed {      # durable receipt; its ENVELOPE timestamp is core-assigned
+```text
+amendment.approval_prepared {
   prepare_id,
-  sweep_round                     # starts at 1; exact +1 only. No timestamp or producer clock
-                                  # is permitted in this payload (§6)
+  proposal_id,
+  mode,
+  decision_id?,
+  envelope_class?,
+  base_revision, base_hash,
+  new_revision,
+  new_snapshot_hash,
+  new_snapshot_file_hash,
+  plan_record_hash,
+  target_attempt_ids: [attempt_id],
+  observed_authority_epoch,
+  quiesce_silence_limit_ms,
+  classifier_version,
+  identity_versions
 }
+```
 
+```text
+amendment.quiesce_observed {
+  prepare_id,
+  sweep_round
+}
+```
+
+```text
 amendment.human_rejected {
   proposal_id, decision_id,
-  human_reason,                   # non-empty
+  human_reason,
   base_revision, base_hash, classifier_version,
   identity_versions
 }
@@ -5775,53 +6103,89 @@ amendment.human_rejected {
 **Payloads.** `txn_id` is the transaction identity a `--recover` invocation resumes under; a
 repeated `*_started` with the same `txn_id` is an idempotent resume, never a second transaction.
 
+**B.6 field clauses.** Each clause below constrains the named field or payload in the adjacent
+coherent specimen.
+
+- `apply.started.before_tree` is the computed working tree and must equal the candidate's
+  `base_tree` (§8 preconditions).
+- `apply.started.result_tree` is the tree a successful apply must produce.
+- `apply.started.touched_paths` is sorted and is exactly what a rollback restores.
+- `apply.started.recovery` records before the write what `--recover` needs to decide.
+- `apply.started.identity_versions` records that `candidate_id` is a canonical-AST identity (A.4).
+- Every B.6 event carries `identity_versions` for the same reason.
+- `apply.failed.rollback_verified` is always true on this path.
+- `FAILED_CLEAN` means the base was re-verified after restoration.
+- An unverified rollback uses `apply.recovery_required` instead of `apply.failed` (§8).
+- `apply.recovery_required.observed_tree` is the application tree observed under the lock when it
+  could be computed.
+- `apply.recovery_resolved.outcome = rolled_back` projects `FAILED_CLEAN`.
+- An `APPLIED` resolution appends `apply.completed`, not `apply.recovery_resolved` (§8).
+- `score.promotion_started.expected_root_file_hash` is the sha256 of raw bytes and is checked before
+  rename.
+- `score.promotion_started.target_snapshot_file_hash` is the sha256 of the raw bytes to be written.
+- `score.promotion_recovery_required.observed_root_file_hash` is present when the root was readable
+  and matched neither the expected nor target hash.
+- When `score.promotion_recovery_required.observed_root_file_hash` is present, the recorded hashes
+  can no longer decide because something else changed the root (§8).
+
 ```text
 apply.started {
   txn_id, candidate_id,
-  before_tree,                    # the computed working tree, which must equal the
-                                  #   candidate's base_tree (§8 preconditions)
-  result_tree,                    # what a successful apply must produce
-  touched_paths: [path],          # sorted — exactly what a rollback restores
-  recovery: {                     # what --recover needs to decide, recorded BEFORE the write
+  before_tree,
+  result_tree,
+  touched_paths: [path],
+  recovery: {
     base_tree, result_tree
   },
-  identity_versions               # `candidate_id` is a canonical-AST identity (A.4), and every
-                                  #   B.6 event below carries it for the same reason
+  identity_versions
 }
+```
 
+```text
 apply.completed { txn_id, candidate_id, result_tree, identity_versions }
+```
+
+```text
 apply.failed    {
   txn_id, candidate_id, identity_versions,
   failure_detail,
-  rollback_verified: true         # always true on this path: FAILED_CLEAN means the base was
-                                  #   re-verified after restoring. Unverified rollback is
-                                  #   apply.recovery_required instead (§8)
+  rollback_verified: true
 }
+```
+
+```text
 apply.recovery_required {
   txn_id, candidate_id, identity_versions,
-  observed_tree?,                 # application tree observed under the lock, when it could be
-                                  #   computed
+  observed_tree?,
   failure_detail
 }
+```
+
+```text
 apply.recovery_resolved {
   txn_id, candidate_id, identity_versions,
-  outcome                         # rolled_back → FAILED_CLEAN. The APPLIED resolution appends
-                                  #   apply.completed instead, not this event (§8)
+  outcome
 }
+```
 
+```text
 score.promotion_started {
   txn_id, candidate_id, identity_versions,
-  expected_root_file_hash,        # sha256: raw bytes — checked before rename
-  target_snapshot_file_hash,      # sha256: raw bytes to be written
+  expected_root_file_hash,
+  target_snapshot_file_hash,
   target_revision
 }
+```
+
+```text
 score.promoted { txn_id, candidate_id, identity_versions, target_revision,
                  target_snapshot_file_hash }
+```
+
+```text
 score.promotion_recovery_required {
   txn_id, candidate_id, identity_versions,
-  observed_root_file_hash?,       # present when the root was readable: it matched neither the
-                                  #   expected nor the target hash, so the recorded hashes can no longer
-                                  #   decide and something else changed the root (§8)
+  observed_root_file_hash?,
   failure_detail
 }
 ```
@@ -5838,37 +6202,65 @@ score.promotion_recovery_required {
 
 **Payloads.**
 
+**B.7 field clauses.** Each clause below constrains the named field or payload in the adjacent
+coherent specimen.
+
+- `authority.granted.authority_epoch` is the new monotonic epoch.
+- `authority.granted.authority_epoch` makes the current epoch a journal projection that survives
+  lease removal (§6).
+- `authority.granted.owner_start_identity` is a tagged union, not an opaque string.
+- Another implementation must be able to replay the `authority.granted.owner_start_identity`
+  comparison.
+- The Linux `authority.granted.owner_start_identity` uses
+  `/proc/sys/kernel/random/boot_id` and `/proc/<pid>/stat` field 22 (§6).
+- The Darwin `authority.granted.owner_start_identity` uses `PROC_PIDTBSDINFO` (§6).
+- `authority.granted.reclaimed_from_epoch` is present when this grant reclaimed a stale lease.
+- `authority.granted` deliberately omits the incarnation token.
+- Journaling the incarnation token would let any journal reader forge authority (§6).
+- `cancel.requested.requested_by` is `cli`, recorded for provenance.
+- No other cancellation origin exists in v0.2.
+- `cancel.requested.requested_by` exists so a future origin is additive.
+- `journal.tail_truncated.truncated_seq` is the sequence number the discarded line would have
+  occupied.
+- `journal.tail_truncated.discarded_bytes` records only the discarded length.
+- `journal.tail_truncated` does not retain the discarded bytes because they are unparseable and may
+  be a torn fragment of anything, including a session hint (§4 privacy).
+- `log` mirrors the §4 wire notification and is sanitized and truncated to 4 KiB on a valid UTF-8
+  boundary.
+- `progress` mirrors the §4 wire notification and is sanitized and truncated to 4 KiB on a valid
+  UTF-8 boundary.
+
 ```text
 authority.granted {
-  authority_epoch,                # the new monotonic epoch — makes the current epoch a journal
-                                  #   projection that survives lease removal (§6)
+  authority_epoch,
   owner_pid,
-  owner_start_identity: (         # a TAGGED UNION, not an opaque string: another implementation
-                                  #   must be able to replay the comparison
-      {platform: "linux",  boot_id, start_ticks}       # /proc/sys/kernel/random/boot_id and
-                                                       #   /proc/<pid>/stat field 22 (§6)
-    | {platform: "darwin", start_tvsec, start_tvusec}  # PROC_PIDTBSDINFO (§6)
+  owner_start_identity: (
+      {platform: "linux",  boot_id, start_ticks}
+    | {platform: "darwin", start_tvsec, start_tvusec}
   ),
-  reclaimed_from_epoch?           # present when this reclaimed a stale lease
+  reclaimed_from_epoch?
 }
-                                  # The incarnation TOKEN is deliberately absent: journaling it
-                                  #   would let any journal reader forge authority (§6)
+```
 
+```text
 cancel.requested {
-  requested_by                    # cli — recorded for provenance; no other origin exists in
-                                  #   v0.2, and the field exists so a future one is additive
+  requested_by
 }
+```
 
+```text
 journal.tail_truncated {
-  truncated_seq,                  # the seq the discarded line would have occupied
-  discarded_bytes                 # length only. The bytes themselves are NOT retained: they
-                                  #   are unparseable and may be a torn fragment of anything,
-                                  #   including a session hint (§4 privacy)
+  truncated_seq,
+  discarded_bytes
 }
+```
 
-log      { level, message }       # mirrors the wire notification (§4), sanitized and truncated
-                                  #   to 4 KiB on a valid UTF-8 boundary
-progress { message }              # likewise
+```text
+log { level, message }
+```
+
+```text
+progress { message }
 ```
 
 `log` and `progress` are the two observational rows: journaled for a later client, read by no
