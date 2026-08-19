@@ -36,6 +36,13 @@ func TestProseOccurrenceNormalizesWhitespaceOnly(t *testing.T) {
 	if got := proseOccurrenceCount(rewrapped, canonical); got != 1 {
 		t.Fatalf("rewrapped prose occurrences = %d, want 1", got)
 	}
+	paragraphBreak := strings.Replace(rewrapped, "coverage,\nand", "coverage,\n\nand", 1)
+	if !strings.Contains(paragraphBreak, "coverage,\n\nand") {
+		t.Fatal("paragraph-break fixture does not contain the injected blank line")
+	}
+	if restored := strings.Replace(paragraphBreak, "coverage,\n\nand", "coverage,\nand", 1); restored != rewrapped {
+		t.Fatal("paragraph-break fixture differs from the passing rewrap by more than one newline")
+	}
 
 	mutations := []struct {
 		name  string
@@ -44,6 +51,7 @@ func TestProseOccurrenceNormalizesWhitespaceOnly(t *testing.T) {
 		{name: "changed word", value: "The fence checks syntax, range coverage, and registry-key equality. It does not detect normativity or re-run the baseline judgement."},
 		{name: "dropped clause", value: "The fence checks syntax, range coverage, and registry-key equality."},
 		{name: "reordered sentences", value: "It does not infer normativity or re-run the baseline judgement. The fence checks syntax, range coverage, and registry-key equality."},
+		{name: "paragraph break", value: paragraphBreak},
 	}
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {
@@ -190,10 +198,21 @@ func requireProseOccurrence(t *testing.T, document, value string, want int) {
 }
 
 func proseOccurrenceCount(document, value string) int {
-	// Canonicalizing whitespace admits a different line width and nothing else:
-	// non-whitespace bytes retain their case, punctuation, content, and order.
-	normalizeWhitespace := func(text string) string {
-		return strings.Join(strings.Fields(text), " ")
+	// Each single ASCII space in the expected prose admits exactly one of two
+	// source boundaries: one or more ASCII spaces/tabs, or one LF/CRLF with
+	// optional ASCII spaces/tabs on either side. Blank lines, bare CR, other
+	// Unicode whitespace, and every non-boundary byte remain significant.
+	parts := strings.Split(value, " ")
+	if value == "" {
+		return 0
 	}
-	return strings.Count(normalizeWhitespace(document), normalizeWhitespace(value))
+	quoted := make([]string, len(parts))
+	for index, part := range parts {
+		if part == "" || strings.ContainsAny(part, "\t\r\n") {
+			return 0
+		}
+		quoted[index] = regexp.QuoteMeta(part)
+	}
+	pattern := regexp.MustCompile(strings.Join(quoted, `(?:[ \t]+|[ \t]*\r?\n[ \t]*)`))
+	return len(pattern.FindAllStringIndex(document, -1))
 }
