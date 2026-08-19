@@ -7,7 +7,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +20,132 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
+
+func TestReplayRepairsTornTailDuringPendingPrepare(t *testing.T) {
+	store, _, _ := preparedAcknowledgementDriver(t)
+	before, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectPendingPrepareTornTail(t, store)
+
+	result, repairErr := store.Replay("run-1", movementSeed(before.Score), "test.pending_prepare_tail_repair")
+	if repairErr != nil {
+		after, readErr := store.ReadJournal("run-1")
+		_, replayErr := store.Replay("run-1", movementSeed(before.Score), "test.pending_prepare_tail_repair_again")
+		t.Fatalf("repair error=%v; damaged journal read error=%v tail=%t repair_events=%d; replay after repair=%v",
+			repairErr, readErr, after.TailUnparseable, pendingPrepareTailRepairCount(after.Events), replayErr)
+	}
+	if result.RepairReceipt == nil {
+		t.Fatal("repair completed without a durability receipt")
+	}
+	if result.State.PendingPrepare == nil || result.State.PendingPrepare.ID != before.Projection.State.PendingPrepare.ID {
+		t.Fatalf("pending prepare after repair=%+v, want %+v", result.State.PendingPrepare, before.Projection.State.PendingPrepare)
+	}
+}
+
+func TestTailRepairPreservesPendingPrepareProjection(t *testing.T) {
+	store, _, _ := preparedAcknowledgementDriver(t)
+	before, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectPendingPrepareTornTail(t, store)
+	result, err := store.Replay("run-1", movementSeed(before.Score), "test.pending_prepare_neutral_repair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterPrepare := *result.State.PendingPrepare
+	beforePrepare := *before.Projection.State.PendingPrepare
+	if !slices.Equal(afterPrepare.TargetAttemptIDs, beforePrepare.TargetAttemptIDs) {
+		t.Fatalf("pending prepare target attempts changed: after=%v before=%v", afterPrepare.TargetAttemptIDs, beforePrepare.TargetAttemptIDs)
+	}
+	// Replay cloning normalizes an empty slice to nil; compare that field by
+	// membership and every other field exactly.
+	afterPrepare.TargetAttemptIDs = nil
+	beforePrepare.TargetAttemptIDs = nil
+	if !reflect.DeepEqual(afterPrepare, beforePrepare) {
+		t.Fatalf("pending prepare changed by neutral repair:\nafter=%+v\nbefore=%+v", afterPrepare, beforePrepare)
+	}
+}
+
+func TestPendingPrepareTailRepairAppendsExactlyOnceAcrossReplayPaths(t *testing.T) {
+	for _, first := range []string{"Store.Replay", "Driver.State"} {
+		t.Run(first+" first", func(t *testing.T) {
+			store, driver, _ := preparedAcknowledgementDriver(t)
+			input, err := store.LoadRunInput("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			injectPendingPrepareTornTail(t, store)
+			direct := func() error {
+				_, err := store.Replay("run-1", movementSeed(input.Score), "test.pending_prepare_direct_repair")
+				return err
+			}
+			throughDriver := func() error {
+				_, err := driver.State()
+				return err
+			}
+			paths := []func() error{direct, throughDriver}
+			if first == "Driver.State" {
+				paths[0], paths[1] = paths[1], paths[0]
+			}
+			for index, replay := range paths {
+				if err := replay(); err != nil {
+					t.Fatalf("replay path %d: %v", index+1, err)
+				}
+			}
+			journal, err := store.ReadJournal("run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if journal.TailUnparseable || pendingPrepareTailRepairCount(journal.Events) != 1 {
+				t.Fatalf("tail=%t repair events=%d", journal.TailUnparseable, pendingPrepareTailRepairCount(journal.Events))
+			}
+		})
+	}
+}
+
+func injectPendingPrepareTornTail(t *testing.T, store *Store) {
+	t.Helper()
+	journalPath := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "journal.jsonl")
+	file, err := os.OpenFile(journalPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const torn = `{"event_id":"torn"`
+	if _, err := file.WriteString(torn); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(raw, []byte(torn)) {
+		t.Fatalf("torn tail was not injected: journal=%q", raw)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journal.TailUnparseable || journal.TruncatedSeq != uint64(len(journal.Events)+1) {
+		t.Fatalf("injected tail=%t truncated_seq=%d events=%d", journal.TailUnparseable, journal.TruncatedSeq, len(journal.Events))
+	}
+}
+
+func pendingPrepareTailRepairCount(events []runstate.Event) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == runstate.EventJournalTailTruncated {
+			count++
+		}
+	}
+	return count
+}
 
 func TestCompleteOrAbandonPrepareCommitsUnfencedPlan(t *testing.T) {
 	store, prepare := preparedCommitStore(t, nil)

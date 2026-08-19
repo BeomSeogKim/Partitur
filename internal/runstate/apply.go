@@ -978,9 +978,12 @@ func Apply(input State, event Event) (State, error) {
 }
 
 func preparePendingMutation(eventType EventType) bool {
+	// This barrier prevents ordinary lifecycle work from invalidating the
+	// inputs frozen by a pending prepare.
 	switch eventType {
 	case EventExecutionStopped, EventCancelRequested,
-		EventAmendmentQuiesceObserved, EventAmendmentApprovalAbandoned, EventAmendmentApproved:
+		EventAmendmentQuiesceObserved, EventAmendmentApprovalAbandoned, EventAmendmentApproved,
+		EventJournalTailTruncated:
 		return true
 	default:
 		return false
