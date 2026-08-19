@@ -44,10 +44,13 @@ meaning.
 |---|---|
 | `whole-block` | If a whole fenced block is one clause, its markers may surround the block. |
 | `internal` | Markers may occur inside a block only when the host syntax remains valid and literal marker visibility is accepted. |
+| `decomposition` | A fence containing several independently normative payloads may be split into one fence per payload, with each resulting specimen kept coherent or explicitly non-normative. |
 | `incompatible-host` | Otherwise the clause must be lifted into adjacent anchored prose or the marker representation must be revised; it must never be merged with another clause or classified as non-normative merely to avoid the placement problem. |
 
-This is an authoring constraint, not a normative invariant row: violating it can corrupt the host
-specimen, but it does not change the meaning conferred by an otherwise well-formed marker range.
+These placement choices are authoring guidance: a bad choice can corrupt the host specimen, but it
+does not change the meaning conferred by an otherwise well-formed marker range. Decomposition also
+has the preservation precondition below. That precondition is an invariant because violating it can
+silently delete or merge normative content while leaving every resulting marker range well formed.
 
 The marker-ID production admits the existing catalog-ID families (`RC-RESUME-001`, `RA-001`,
 `RS-001`, `INIT-001`, and command IDs such as `ANSWER-001`) as well as qualified event, enum, and
@@ -56,7 +59,7 @@ domain identifiers such as `run.started`, `git_exit`, and `partitur/criterion-sp
 
 ## Normative invariants
 
-These five rows are the canonical semantic rules of the grammar. They are conferred as table syntax
+These six rows are the canonical semantic rules of the grammar. They are conferred as table syntax
 for the same reason document marking is conferred as token syntax: deciding whether reworded prose
 means the same thing would recreate the inference problem this grammar removes.
 
@@ -67,6 +70,7 @@ means the same thing would recreate the inference problem this grammar removes.
 | `unmarked-requirement` | An unmarked normative requirement is void. |
 | `forward-range-coverage` | Every non-whitespace payload byte on an added source line, including the current side of a modified line, must be inside exactly one well-formed current range. |
 | `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |
+| `decomposition-preservation` | Before a fenced block is decomposed, every independently normative statement removed from a resulting specimen must have an adjacent anchored prose carrier; each retained payload must remain byte-identical, independently copyable, and either a coherent whole-block clause or explicitly non-normative. |
 
 ## Conferred meaning and activation
 
