@@ -1,6 +1,8 @@
 package runstate
 
 import (
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -60,6 +62,110 @@ func TestShippingExitMappingsAreSpecified(t *testing.T) {
 	assertShippingOutcomeCode(t, promotionCodes, "before `score.promotion_started`", 2)
 	assertShippingOutcomeCode(t, promotionCodes, "A started promotion found a missing", 5)
 	assertShippingOutcomeCode(t, promotionCodes, "matching neither the expected nor target hash", 5)
+}
+
+func TestObservationExitMappingsPartitionGlobalExitCodes(t *testing.T) {
+	// Given
+	lines := recoveryDesignLines(t)
+	globalCodes := globalExitCodeSet(t, lines)
+
+	// When
+	statusEnumerated, statusNegated := observationExitCodeSets(t, lines, "status")
+	logsEnumerated, logsNegated := observationExitCodeSets(t, lines, "logs")
+
+	// Then
+	assertExitCodePartition(t, "status", statusEnumerated, statusNegated, globalCodes)
+	assertExitCodePartition(t, "logs", logsEnumerated, logsNegated, globalCodes)
+}
+
+func observationExitCodeSets(t *testing.T, lines []string, command string) (map[int]struct{}, map[int]struct{}) {
+	t.Helper()
+
+	prefix := "The " + command + "-specific exit mapping is "
+	start := uniqueLinePrefixIndex(t, lines, prefix)
+	end := start
+	for end < len(lines) && lines[end] != "" {
+		end++
+	}
+	paragraph := strings.Join(lines[start:end], " ")
+
+	integerLiteral := regexp.MustCompile(`[0-9]+`)
+	enumeratedClause := regexp.MustCompile(`(?:^|[:;])\s*(?:and )?([0-9]+)\s+(?:for|only when|when)\b`)
+	negatedClause, err := regexp.Compile("`" + regexp.QuoteMeta(command) + "` never returns ((?:[0-9]+, )*[0-9]+(?:,? or [0-9]+)?):")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	attributions := make(map[int]string)
+	for _, match := range enumeratedClause.FindAllStringSubmatchIndex(paragraph, -1) {
+		attributions[match[2]] = "enumerated"
+	}
+	if match := negatedClause.FindStringSubmatchIndex(paragraph); match != nil {
+		listStart := match[2]
+		for _, literal := range integerLiteral.FindAllStringIndex(paragraph[match[2]:match[3]], -1) {
+			attributions[listStart+literal[0]] = "negated"
+		}
+	}
+
+	enumerated := make(map[int]struct{})
+	negated := make(map[int]struct{})
+	for _, literal := range integerLiteral.FindAllStringIndex(paragraph, -1) {
+		category, attributed := attributions[literal[0]]
+		if !attributed {
+			t.Fatalf("%s exit mapping has unattributed integer literal %s in %q", command, paragraph[literal[0]:literal[1]], paragraph)
+		}
+		code, err := strconv.Atoi(paragraph[literal[0]:literal[1]])
+		if err != nil {
+			t.Fatalf("%s exit mapping has unparseable %s code %q: %v", command, category, paragraph[literal[0]:literal[1]], err)
+		}
+		if category == "enumerated" {
+			enumerated[code] = struct{}{}
+		} else {
+			negated[code] = struct{}{}
+		}
+	}
+	return enumerated, negated
+}
+
+func assertExitCodePartition(t *testing.T, command string, enumerated, negated, global map[int]struct{}) {
+	t.Helper()
+
+	for code := range enumerated {
+		if _, overlap := negated[code]; overlap {
+			t.Fatalf("%s exit mapping code %d is both enumerated and negated", command, code)
+		}
+	}
+	union := make(map[int]struct{}, len(enumerated)+len(negated))
+	for code := range enumerated {
+		union[code] = struct{}{}
+	}
+	for code := range negated {
+		union[code] = struct{}{}
+	}
+	if !sameIntSet(union, global) {
+		t.Fatalf("%s exit mapping union = %v, want global exit-code set %v", command, sortedIntSet(union), sortedIntSet(global))
+	}
+}
+
+func sameIntSet(left, right map[int]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for value := range left {
+		if _, found := right[value]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedIntSet(set map[int]struct{}) []int {
+	values := make([]int, 0, len(set))
+	for value := range set {
+		values = append(values, value)
+	}
+	sort.Ints(values)
+	return values
 }
 
 func TestShippingExitMappingsStayInsideGlobalCategories(t *testing.T) {
