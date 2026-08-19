@@ -348,7 +348,7 @@ func TestDeadlineCoversResponseAndCleanExit(t *testing.T) {
 
 func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pids")
-	client, _ := newFakeClientWithFixtureDirectory(
+	client, directory := newFakeClientWithFixtureDirectory(
 		t,
 		"session_tree_hang",
 		marker,
@@ -390,10 +390,52 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-			t.Fatalf("session member %d still observable: %v", pid, err)
+		record := readFakeFixtureRecord(t, directory, pid)
+		if err := assertSessionMemberNotLive(record.process, processByPID); err != nil {
+			t.Fatal(err)
 		}
 	}
+}
+
+func TestSessionMemberLivenessAssertionAcceptsZombie(t *testing.T) {
+	wanted := processRecord{PID: 42, Start: "recorded"}
+	err := assertSessionMemberNotLive(wanted, func(pid int) (processRecord, error) {
+		if pid != wanted.PID {
+			t.Fatalf("inspected pid = %d, want %d", pid, wanted.PID)
+		}
+		return processRecord{PID: pid, Start: wanted.Start, IsZombie: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionMemberLivenessAssertionRejectsMatchingLiveIdentity(t *testing.T) {
+	wanted, err := processByPID(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = assertSessionMemberNotLive(wanted, processByPID)
+	if err == nil {
+		t.Fatal("matching live process identity was accepted as swept")
+	}
+	if !strings.Contains(err.Error(), "remained live") {
+		t.Fatalf("error = %q, want matching live identity diagnostic", err)
+	}
+}
+
+func assertSessionMemberNotLive(wanted processRecord, lookup func(int) (processRecord, error)) error {
+	observed, err := lookup(wanted.PID)
+	if isProcessGone(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect session member %d: %w", wanted.PID, err)
+	}
+	if observed.IsZombie || observed.Start != wanted.Start {
+		return nil
+	}
+	return fmt.Errorf("session member %d with start identity %q remained live", wanted.PID, wanted.Start)
 }
 
 func TestFixtureChildInheritsTestOwnerIdentity(t *testing.T) {
@@ -1215,9 +1257,9 @@ func assertDeadlineWithOnlyCleanupUnverifiable(t *testing.T, report Report) {
 // as wall clock and lose Go's monotonic reading, so a clock adjustment
 // mid-probe can skew them either way.
 //
-// Known limitation, predating this instrumentation: the assertion checks the
-// swept pids with Kill(pid, 0) and has no start-identity check, so a pid reused
-// between the sweep and the check reads as a surviving session member.
+// The post-sweep assertion reads each fixture's durable start identity and
+// rejects only that same identity while it remains live. A zombie cannot
+// mutate, and a reused pid is not the recorded session member.
 //
 // A step is reported as absent only when the file does not exist; any other
 // read error is reported as such, so a filesystem fault is not read as "never
