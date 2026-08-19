@@ -1,11 +1,15 @@
 package docclause
 
 import (
+	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/BeomSeogKim/Partitur/internal/docmarker"
 )
+
+var materializedMarkerPattern = regexp.MustCompile(docmarker.Production)
 
 func Materialize(document []byte, inputBlob string, regions []Region, registry Registry) ([]byte, error) {
 	if strings.Contains(string(document), "<!-- partitur:mark") {
@@ -21,24 +25,21 @@ func Materialize(document []byte, inputBlob string, regions []Region, registry R
 	if err != nil {
 		return nil, err
 	}
-	lines, err := physicalLines(document)
-	if err != nil {
-		return nil, err
-	}
-	var output strings.Builder
+	var output bytes.Buffer
+	cursor := 0
 	for _, classification := range classifications {
 		label := string(classification.Kind)
 		if classification.Kind == ClassificationAnchor {
 			label = "anchor=" + classification.MarkerID
 		}
-		fmt.Fprintf(&output, "<!-- partitur:mark begin %s -->\n", label)
-		for _, line := range lines[classification.StartLine-1 : classification.EndLine] {
-			output.WriteString(line)
-			output.WriteByte('\n')
-		}
-		fmt.Fprintf(&output, "<!-- partitur:mark end %s -->\n", label)
+		output.Write(document[cursor:classification.StartByte])
+		fmt.Fprintf(&output, "<!-- partitur:mark begin %s -->", label)
+		output.Write(document[classification.StartByte:classification.EndByte])
+		fmt.Fprintf(&output, "<!-- partitur:mark end %s -->", label)
+		cursor = classification.EndByte
 	}
-	materialized := []byte(output.String())
+	output.Write(document[cursor:])
+	materialized := output.Bytes()
 	if err := ValidateMaterialized(materialized, document, inputBlob, regions, registry); err != nil {
 		return nil, err
 	}
@@ -60,10 +61,6 @@ func ValidateMaterialized(materialized, source []byte, inputBlob string, regions
 	if len(ranges) != len(classifications) {
 		return fmt.Errorf("materialized ranges = %d, registry classifications = %d", len(ranges), len(classifications))
 	}
-	lines, err := physicalLines(source)
-	if err != nil {
-		return err
-	}
 	for index, classification := range classifications {
 		label := string(classification.Kind)
 		if classification.Kind == ClassificationAnchor {
@@ -72,10 +69,13 @@ func ValidateMaterialized(materialized, source []byte, inputBlob string, regions
 		if ranges[index].Classification != label {
 			return fmt.Errorf("materialized range %d classification %q does not match registry %q", index+1, ranges[index].Classification, label)
 		}
-		wantContents := strings.Join(lines[classification.StartLine-1:classification.EndLine], "\n")
-		if ranges[index].Contents != "\n"+wantContents+"\n" {
+		wantContents := string(source[classification.StartByte:classification.EndByte])
+		if ranges[index].Contents != wantContents {
 			return fmt.Errorf("materialized range %d source bytes do not match registry", index+1)
 		}
+	}
+	if unmarked := materializedMarkerPattern.ReplaceAll(materialized, nil); !bytes.Equal(unmarked, source) {
+		return fmt.Errorf("materialized payload bytes do not match source")
 	}
 	return nil
 }
