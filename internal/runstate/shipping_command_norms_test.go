@@ -45,6 +45,9 @@ func TestShippingExitMappingsAreSpecified(t *testing.T) {
 	shipping := recoveryDocumentSection(t, lines,
 		"## 8. Verification and shipping",
 		"## 9. Amendments")
+	runCodes := documentExitCodeTable(t, lines, "run", "| Code | `partitur run` outcome |")
+	resumeCodes := documentExitCodeTable(t, lines, "resume", "| Code | `partitur resume` outcome |")
+	cancelCodes := documentExitCodeTable(t, lines, "cancel", "| Code | `partitur cancel` outcome |")
 	applyCodes := shippingExitCodeTable(t, shipping,
 		"**`partitur apply` exit mapping.**",
 		"| Code | `partitur apply` outcome |")
@@ -53,8 +56,20 @@ func TestShippingExitMappingsAreSpecified(t *testing.T) {
 		"| Code | `partitur promote-score` outcome |")
 
 	// When
-	assertSameExitCodeSet(t, "apply", applyCodes, globalCodes)
-	assertSameExitCodeSet(t, "promote-score", promotionCodes, globalCodes)
+	for _, command := range []struct {
+		name  string
+		codes map[int]string
+	}{
+		{"run", runCodes},
+		{"resume", resumeCodes},
+		{"cancel", cancelCodes},
+		{"apply", applyCodes},
+		{"promote-score", promotionCodes},
+	} {
+		t.Run(command.name, func(t *testing.T) {
+			assertSameExitCodeSet(t, command.name, command.codes, globalCodes)
+		})
+	}
 
 	// Then
 	assertShippingOutcomeCode(t, applyCodes, "FAILED_CLEAN", 4)
