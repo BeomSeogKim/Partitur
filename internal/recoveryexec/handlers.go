@@ -309,11 +309,23 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 		if err != nil {
 			return err
 		}
+		readerHasContributors := false
+		if !slices.Contains(movement.Grants, "repo_write") && movement.ID != input.Score.Execution().FinalMovementID {
+			readerHasContributors, err = driver.MovementHasCompositionContributors(
+				input.Score,
+				input.Projection.State,
+				attempt.MovementID,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		subject, err := workspace.CaptureRecoveredAcceptanceSubject(
 			execution.Store,
 			execution.Driver,
 			input,
 			action.AttemptID,
+			readerHasContributors,
 		)
 		if err != nil {
 			return err

@@ -343,6 +343,7 @@ func CaptureRecoveredAcceptanceSubject(
 	driver *runstore.Driver,
 	input runstore.RunInput,
 	attemptID runstate.AttemptID,
+	readerHasContributors bool,
 ) (AcceptanceSubject, error) {
 	if store == nil || driver == nil || input.Score == nil || input.BaseCommit == "" || attemptID == "" {
 		return AcceptanceSubject{}, errors.New("workspace: incomplete recovery acceptance subject input")
@@ -380,7 +381,11 @@ func CaptureRecoveredAcceptanceSubject(
 				return AcceptanceSubject{Tree: state.ApplicationCandidate.ResultTree}, nil
 			}
 		}
-		tree, err := qualifiedTree(git, worktree, "HEAD^{tree}")
+		ref := baseRef(driver.RunID())
+		if readerHasContributors {
+			ref = movementBaseRef(driver.RunID(), attemptState.MovementID)
+		}
+		tree, err := qualifiedTree(git, store.RepositoryRoot(), ref+"^{tree}")
 		if err != nil {
 			return AcceptanceSubject{}, err
 		}
