@@ -206,6 +206,71 @@ func TestRecoveryFinalMovementAcceptanceStartsAtCandidateResultTree(t *testing.T
 	}
 }
 
+func TestRecoveryNonFinalReaderAcceptanceStartsAtPinnedMovementBase(t *testing.T) {
+	fixture := recoveryChangeSetFixture(t)
+	defer fixture.driver.Release()
+	completeRecoveryWriter(t, fixture)
+
+	input, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeSet, ok := state.ChangeSets[fixture.attemptID]
+	if !ok || changeSet.ResultTree == input.BaseTree {
+		t.Fatalf("writer change set = %+v, run base = %q", changeSet, input.BaseTree)
+	}
+	baseCommit, err := workspace.PinMovementBase(fixture.store, fixture.driver, input, "target", changeSet.ResultTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseCommit == "" {
+		t.Fatal("target movement base commit is absent")
+	}
+
+	const attemptID = runstate.AttemptID("attempt-reader")
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	for _, event := range []runstate.Event{
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", Type: runstate.EventMovementReady, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", Type: runstate.EventMovementStarted, Payload: handlerPayload(t, map[string]any{})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", AttemptID: attemptID, Type: runstate.EventPerformerSelected, Payload: handlerPayload(t, map[string]any{"reason": "initial", "performer_id": "worker", "adapter_id": "codex", "model": "fixture"})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", AttemptID: attemptID, Type: runstate.EventAttemptStarted, Payload: handlerPayload(t, map[string]any{"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}}, "granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "base_composition_hash": "sha256:" + strings.Repeat("a", 64), "identity_versions": versions})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", AttemptID: attemptID, Type: runstate.EventAdapterProbed, Payload: handlerPayload(t, map[string]any{"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": true, "shell": false, "network": false, "resumable_sessions": false}, "enforcement": map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true}, "negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", AttemptID: attemptID, Type: runstate.EventPerformerCompleted, Payload: handlerPayload(t, map[string]any{"session_hint_stored": false})},
+		{RunID: fixture.runID, ScoreRevision: 1, MovementID: "target", AttemptID: attemptID, Type: runstate.EventVerificationPassed, Payload: handlerPayload(t, map[string]any{})},
+	} {
+		if _, err := fixture.driver.Append(event, faultpoint.ReceiptAddress("test.recovery_reader_acceptance."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	worktree := filepath.Join(fixture.store.RepositoryRoot(), ".partitur", "work", string(fixture.runID), string(attemptID), "worktree")
+	if _, err := os.Stat(worktree); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reader worktree exists before recovery: %v", err)
+	}
+	input, err = fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := recovery.PlanAttempt(recovery.Input{Projection: input.Projection, Observations: recovery.Observations{Worktree: recovery.WorktreeMissing}})
+	if decision.Action == nil || decision.Action.Kind != recovery.ActionAppendAcceptanceStarted {
+		t.Fatalf("reader recovery decision = %+v, want %s", decision, recovery.ActionAppendAcceptanceStarted)
+	}
+	if err := appendAcceptanceStarted(context.Background(), HandlerContext{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID}, *decision.Action); err != nil {
+		t.Fatal(err)
+	}
+	state, err = fixture.driver.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Acceptances[attemptID].SubjectTree; got != changeSet.ResultTree {
+		t.Fatalf("non-final reader acceptance subject = %q, want pinned movement base %q", got, changeSet.ResultTree)
+	}
+}
+
 func TestCaptureChangeSetRecoveryHandlerRecordsOnce(t *testing.T) {
 	fixture := recoveryChangeSetFixture(t)
 	defer fixture.driver.Release()
@@ -293,7 +358,7 @@ func TestRecoveryWriterAcceptanceCreatesDurableSubjectRefForIgnoredProtectedFile
 	if err != nil {
 		t.Fatal(err)
 	}
-	verified, err := workspace.CaptureRecoveredAcceptanceSubject(fixture.store, fixture.driver, input, fixture.attemptID)
+	verified, err := workspace.CaptureRecoveredAcceptanceSubject(fixture.store, fixture.driver, input, fixture.attemptID, false)
 	if err != nil || verified.Tree != subjectTree || verified.Ref != ref {
 		t.Fatalf("recovery subject ref verification = (%#v, %v), want tree %q and ref %q", verified, err, subjectTree, ref)
 	}

@@ -143,6 +143,13 @@ func movementCompositionContributors(compiled *score.Score, state runstate.State
 	return contributors, nil
 }
 
+// MovementHasCompositionContributors reports whether the movement base is
+// composed from at least one approved change set.
+func MovementHasCompositionContributors(compiled *score.Score, state runstate.State, target runstate.MovementID) (bool, error) {
+	contributors, err := movementCompositionContributors(compiled, state, target)
+	return len(contributors) != 0, err
+}
+
 func PrepareMovementBase(store *runstore.Store, authority *runstore.Driver, input runstore.RunInput, movementID runstate.MovementID, remainingMS int64, now func() time.Time, newID func() (string, error)) (MovementBase, error) {
 	contributors, err := movementCompositionContributors(input.Score, input.Projection.State, movementID)
 	if err != nil {
