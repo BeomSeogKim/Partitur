@@ -26,9 +26,10 @@ const (
 )
 
 type startDependencies struct {
-	git   gitCommand
-	probe faultpoint.Probe
-	newID func() (string, error)
+	git          gitCommand
+	probe        faultpoint.Probe
+	newID        func() (string, error)
+	storeFactory runstore.StoreFactory
 }
 
 type refExistingValuePolicy uint8
@@ -50,14 +51,30 @@ func Start(
 	preparation *validate.Preparation,
 	probe faultpoint.Probe,
 ) (StartResult, error) {
+	return startWithStoreFactory(preparation, probe, runstore.New)
+}
+
+// StartWithStoreFactory is the injected-store form used by command witnesses.
+// Production calls Start, which supplies runstore.New.
+func StartWithStoreFactory(
+	preparation *validate.Preparation,
+	probe faultpoint.Probe,
+	storeFactory runstore.StoreFactory,
+) (StartResult, error) {
+	return startWithStoreFactory(preparation, probe, storeFactory)
+}
+
+func startWithStoreFactory(
+	preparation *validate.Preparation,
+	probe faultpoint.Probe,
+	storeFactory runstore.StoreFactory,
+) (StartResult, error) {
 	git, err := newSystemGit()
 	if err != nil {
 		return StartResult{}, err
 	}
 	return start(preparation, startDependencies{
-		git:   git,
-		probe: probe,
-		newID: newUUIDv7,
+		git: git, probe: probe, newID: newUUIDv7, storeFactory: storeFactory,
 	})
 }
 
@@ -71,7 +88,7 @@ func start(
 		return StartResult{}, ErrIncompletePreparation
 	}
 	if dependencies.git == nil || dependencies.probe == nil ||
-		dependencies.newID == nil {
+		dependencies.newID == nil || dependencies.storeFactory == nil {
 		return StartResult{}, errors.New("workspace: incomplete dependencies")
 	}
 	facts, err := inspectRepository(
@@ -118,7 +135,7 @@ func start(
 		return StartResult{}, err
 	}
 
-	store, err := runstore.New(preparation.RepositoryRoot, dependencies.probe)
+	store, err := dependencies.storeFactory(preparation.RepositoryRoot, dependencies.probe)
 	if err != nil {
 		return StartResult{}, err
 	}

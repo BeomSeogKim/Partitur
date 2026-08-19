@@ -198,6 +198,9 @@ func TestProductionExecutionDependenciesWireAmendmentDispositioner(t *testing.T)
 	if _, ok := execution.ProposalDisposition.(amendmentexec.ProposalDispositioner); !ok {
 		t.Fatalf("production proposal dispositioner = %T, want amendmentexec.ProposalDispositioner", execution.ProposalDisposition)
 	}
+	if execution.StoreFactory != nil {
+		t.Fatal("production execution dependencies replace the default workspace.Start and runstore.New construction route")
+	}
 }
 
 func TestStatusRendersProjectionAndClassifiesOutcomes(t *testing.T) {

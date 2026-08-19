@@ -75,6 +75,7 @@ type AcceptanceBudgetTerminalization struct {
 	Authority      *runstore.Driver
 	Control        *cancellation.Watcher
 	Probe          faultpoint.Probe
+	StoreFactory   runstore.StoreFactory
 	Close          func() error
 }
 
@@ -88,6 +89,9 @@ type ExecutionDependencies struct {
 	ResolveTrampoline func() (string, error)
 	Now               func() time.Time
 	NewID             func() (string, error)
+	// StoreFactory is a test-only construction seam. Nil preserves the
+	// production workspace.Start and runstore.New route.
+	StoreFactory runstore.StoreFactory
 	// ProposalDisposition is the sole bridge from an adapter proposal to the
 	// §9 transaction. It runs before this package appends attempt.blocked, so a
 	// blocking route descriptor can be frozen in that one terminal event. A nil

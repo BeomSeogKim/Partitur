@@ -20,7 +20,11 @@ func TerminalizeAcceptanceBudget(ctx context.Context, terminalization Acceptance
 		terminalization.Authority == nil || terminalization.Probe == nil || terminalization.Close == nil {
 		return interrupted(result, errors.New("driver: incomplete acceptance budget terminalization"))
 	}
-	store, err := runstore.New(terminalization.RepositoryRoot, terminalization.Probe)
+	storeFactory := terminalization.StoreFactory
+	if storeFactory == nil {
+		storeFactory = runstore.New
+	}
+	store, err := storeFactory(terminalization.RepositoryRoot, terminalization.Probe)
 	if err != nil {
 		return stopped(result, err)
 	}

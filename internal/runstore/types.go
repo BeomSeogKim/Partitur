@@ -23,6 +23,8 @@ type Path string
 type Hash = runstate.Hash
 type DurabilityReceipt = faultpoint.DurabilityReceipt
 
+type StoreFactory func(string, faultpoint.Probe, ...ReceiptObserver) (*Store, error)
+
 // ReceiptObserver observes a completed durable mutation receipt. It is
 // separate from faultpoint.Probe: receipts attest durable operations while
 // probes mark ephemeral boundaries.

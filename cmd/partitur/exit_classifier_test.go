@@ -20,9 +20,11 @@ import (
 var errInjectedJournalSync = errors.New("injected journal fsync failure")
 
 type journalFailureFS struct {
-	failSync   bool
-	failAppend bool
-	reached    bool
+	failSync     bool
+	failSyncAt   int
+	journalSyncs int
+	failAppend   bool
+	reached      bool
 }
 
 func (filesystem *journalFailureFS) MkdirAll(path string, mode fs.FileMode) error {
@@ -73,9 +75,12 @@ func (filesystem *journalFailureFS) Append(path string, contents []byte, mode fs
 }
 
 func (filesystem *journalFailureFS) SyncFile(path string) error {
-	if filesystem.failSync && filepath.Base(path) == "journal.jsonl" {
-		filesystem.reached = true
-		return errInjectedJournalSync
+	if filepath.Base(path) == "journal.jsonl" {
+		filesystem.journalSyncs++
+		if filesystem.failSync && (filesystem.failSyncAt == 0 || filesystem.journalSyncs == filesystem.failSyncAt) {
+			filesystem.reached = true
+			return errInjectedJournalSync
+		}
 	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -178,23 +183,56 @@ func appendPendingCLIDecision(t *testing.T, store *runstore.Store, decisionType 
 
 func TestApplicableCommandsMapUnconfirmedJournalDurabilityToExitSeven(t *testing.T) {
 	t.Run("run", func(t *testing.T) {
-		injectedState := ""
+		repository := t.TempDir()
+		writeValidateInputs(t, repository, runScore(), runCast())
+		runGit(t, repository, "init")
+		runGit(t, repository, "config", "user.name", "Partitur Test")
+		runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+		runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+		runGit(t, repository, "commit", "-m", "fixture")
+		t.Chdir(repository)
+		preparation, preparationResult := validation.Prepare()
+		if preparationResult.Refusal != nil || preparationResult.HasDiagnostics() {
+			t.Fatalf("run preparation refusal=%v entries=%v", preparationResult.Refusal, preparationResult.Entries)
+		}
+		filesystem := &journalFailureFS{failSync: true, failSyncAt: 2}
+		storeFactory := func(root string, probe faultpoint.Probe, observers ...runstore.ReceiptObserver) (*runstore.Store, error) {
+			return runstore.NewWithFileSystem(root, probe, filesystem, observers...)
+		}
 		var stdout, stderr bytes.Buffer
 		code := runWithRunners([]string{"run"}, &stdout, &stderr,
 			func() validation.Result { return validation.Result{} },
 			func() (*validation.Preparation, validation.Result) {
-				return &validation.Preparation{}, validation.Result{}
+				return preparation, validation.Result{}
 			},
 			func(_ context.Context, _ *validation.Preparation, started driver.StartedObserver) driver.Result {
-				injectedState = "journal fsync failed after append"
-				_ = started("run-1")
-				return driver.Result{RunID: "run-1", Outcome: driver.OutcomeInterrupted, Err: errInjectedDurability()}
+				execution := productionExecutionDependencies(faultpoint.Nop{})
+				execution.StoreFactory = storeFactory
+				return driver.RunWithExecutionDependencies(context.Background(), preparation, started, execution)
 			},
 		)
-		if injectedState != "journal fsync failed after append" {
-			t.Fatalf("injected_state=%q, want new fsync-failure state present", injectedState)
-		}
 		assertExitSevenRejectsPriorCode(t, code, 6, stderr.String())
+		if !filesystem.reached {
+			t.Fatal("real run journal fsync injection was not reached")
+		}
+		store, err := runstore.New(repository, faultpoint.Nop{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runIDs, err := store.RunIDs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runIDs) != 1 {
+			t.Fatalf("new run state ids=%v, want one run created by the injected append", runIDs)
+		}
+		journal, err := store.ReadJournal(runIDs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(journal.Events) != 2 || journal.Events[0].Type != runstate.EventRunStarted || journal.Events[1].Type != runstate.EventAuthorityGranted {
+			t.Fatalf("new run journal state=%v, want run.started plus appended authority.granted", journal.Events)
+		}
 	})
 
 	t.Run("answer", func(t *testing.T) {
@@ -285,10 +323,6 @@ func TestApplicableCommandsMapUnconfirmedJournalDurabilityToExitSeven(t *testing
 		assertExitSevenRejectsPriorCode(t, code, 6, stderr.String())
 		assertJournalGrew(t, store, before, filesystem)
 	})
-}
-
-func errInjectedDurability() error {
-	return errors.Join(runstore.ErrJournalDurabilityUnconfirmed, errInjectedJournalSync)
 }
 
 func TestDecisionCommandsMapPostTransactionInterruptionToExitSix(t *testing.T) {

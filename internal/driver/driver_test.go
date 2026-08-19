@@ -2070,6 +2070,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 		resolveTrampoline: func() (string, error) { return trampoline, nil },
 		now:               time.Now,
 		newID:             workspace.NewID,
+		storeFactory:      runstore.New,
 		workspaceStart:    workspace.Start,
 	}
 }
@@ -2098,7 +2099,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}}
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build trampoline: %v\n%s", err, output)
 	}
-	return dependencies{probe: faultpoint.Nop{}, client: adapter.NewClient(), resolveTrampoline: func() (string, error) { return trampoline, nil }, now: time.Now, newID: workspace.NewID, workspaceStart: workspace.Start}
+	return dependencies{probe: faultpoint.Nop{}, client: adapter.NewClient(), resolveTrampoline: func() (string, error) { return trampoline, nil }, now: time.Now, newID: workspace.NewID, storeFactory: runstore.New, workspaceStart: workspace.Start}
 }
 
 func reviewSuccessDependencies(t *testing.T, subjectTree string) dependencies {
@@ -2132,7 +2133,7 @@ printf '%%s\n' '{"jsonrpc":"2.0","id":"execute","result":{"outcome":"completed"}
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build trampoline: %v\n%s", err, output)
 	}
-	return dependencies{probe: faultpoint.Nop{}, client: adapter.NewClient(), resolveTrampoline: func() (string, error) { return trampoline, nil }, now: time.Now, newID: workspace.NewID, workspaceStart: workspace.Start}
+	return dependencies{probe: faultpoint.Nop{}, client: adapter.NewClient(), resolveTrampoline: func() (string, error) { return trampoline, nil }, now: time.Now, newID: workspace.NewID, storeFactory: runstore.New, workspaceStart: workspace.Start}
 }
 
 // completedAdapterFixture reaches the durable post-adapter boundary without
@@ -3226,6 +3227,7 @@ func testDependencies() dependencies {
 		resolveTrampoline: func() (string, error) { return "/unused/trampoline", nil },
 		now:               time.Now,
 		newID:             workspace.NewID,
+		storeFactory:      runstore.New,
 		workspaceStart:    workspace.Start,
 	}
 }
