@@ -1,0 +1,125 @@
+//go:build mutation
+
+package docclause
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
+)
+
+func TestMutationRegionStructuralChecks(t *testing.T) {
+	mutations := []struct {
+		name, source, before, after, target string
+	}{
+		{
+			name: "same blob", source: "internal/docclause/regions.go",
+			before: "\t\tif region.Key.InputBlob != inputBlob {\n",
+			after:  "\t\tif false && region.Key.InputBlob != inputBlob { // mutation\n",
+			target: "TestRegionUniverseCompleteness/different_blob",
+		},
+		{
+			name: "gap and overlap", source: "internal/docclause/regions.go",
+			before: "\t\tif region.Key.StartLine != expectedStart {\n",
+			after:  "\t\tif false && region.Key.StartLine != expectedStart { // mutation\n",
+			target: "TestRegionUniverseCompleteness/gap",
+		},
+		{
+			name: "source bytes", source: "internal/docclause/regions.go",
+			before: "\t\tif strings.Join(region.Lines, \"\\n\") != strings.Join(wantLines, \"\\n\") {\n",
+			after:  "\t\tif false && strings.Join(region.Lines, \"\\n\") != strings.Join(wantLines, \"\\n\") { // mutation\n",
+			target: "TestRegionUniverseCompleteness/changed_source_bytes",
+		},
+		{
+			name: "receipt universe key", source: "internal/docclause/registry.go",
+			before: "\t\tif !ok {\n\t\t\treturn fmt.Errorf(\"region receipt %s does not match immutable universe\", key)\n\t\t}\n",
+			after:  "\t\tif false && !ok { // mutation\n\t\t\treturn fmt.Errorf(\"region receipt %s does not match immutable universe\", key)\n\t\t}\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation/registry_mismatch",
+		},
+		{
+			name: "classification gap and overlap", source: "internal/docclause/registry.go",
+			before: "\t\tif decision.StartLine != want {\n",
+			after:  "\t\tif false && decision.StartLine != want { // mutation\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation/decision_gap",
+		},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			runStructuralMutation(t, mutation.source, mutation.before, mutation.after, mutation.target)
+		})
+	}
+}
+
+func runStructuralMutation(t *testing.T, source, before, after, target string) {
+	t.Helper()
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, current, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve mutation source directory")
+	}
+	repository := filepath.Clean(filepath.Join(filepath.Dir(current), "..", ".."))
+	copyRoot := filepath.Join(t.TempDir(), "partitur")
+	if err := copyMutationInputs(copyRoot, repository); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(copyRoot, source)
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(contents), before); count != 1 {
+		t.Fatalf("mutation anchor count = %d in %s, want 1", count, source)
+	}
+	mutated := strings.Replace(string(contents), before, after, 1)
+	if err := os.WriteFile(path, []byte(mutated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(mutated, after); count != 1 {
+		t.Fatalf("mutation injection count = %d in %s, want 1", count, source)
+	}
+	t.Logf("confirmed injected mutation in %s; target=%s", source, target)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	result := mutationtest.Run(ctx, mutationtest.Child{
+		Dir:         copyRoot,
+		Package:     "./internal/docclause",
+		TestPattern: target,
+		TestNames:   []string{target},
+		Environment: environment.ChildEnvironment(os.Environ()),
+	})
+	if result.Outcome != mutationtest.Killed {
+		t.Fatalf("mutation non-result: %s\n%s", result.Reason, result.Diagnostic())
+	}
+	t.Logf("target ran and mutation was killed: %s", target)
+}
+
+func copyMutationInputs(destination, source string) error {
+	for _, directory := range []string{"internal/docclause", "internal/docmarker"} {
+		if err := os.MkdirAll(filepath.Join(destination, directory), 0o700); err != nil {
+			return err
+		}
+		if err := os.CopyFS(filepath.Join(destination, directory), os.DirFS(filepath.Join(source, directory))); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"go.mod", "go.sum"} {
+		contents, err := os.ReadFile(filepath.Join(source, name))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(destination, name), contents, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -3,14 +3,9 @@ package docmarker
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
-
-const markerProduction = `<!-- partitur:mark (begin|end) (anchor=([A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)*)|non-normative) -->`
-
-var markerPattern = regexp.MustCompile(markerProduction)
 
 func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "..", "docs", "MARKERS.md"))
@@ -20,7 +15,7 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	document := string(contents)
 
 	requireOccurrence(t, document, "# Document marker grammar", 1)
-	requireOccurrence(t, document, markerProduction, 1)
+	requireOccurrence(t, document, Production, 1)
 	requireOccurrence(t, document, "| `clause-evidence` |", 1)
 	requireOccurrence(t, document, "| `documentation-claim` |", 1)
 	requireOccurrence(t, document, "## Normative invariants", 1)
@@ -60,7 +55,7 @@ func TestDocumentMarkerGrammarAcceptsBothRegistriesAndExistingIDs(t *testing.T) 
 	document.WriteString("<!-- partitur:mark begin non-normative -->context")
 	document.WriteString("<!-- partitur:mark end non-normative -->")
 
-	spans, err := parseMarkerRanges(document.String())
+	spans, err := Parse(document.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,67 +92,12 @@ func TestDocumentMarkerGrammarRejectsMalformedOrAmbiguousRanges(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := parseMarkerRanges(test.document); err == nil {
+			if _, err := Parse(test.document); err == nil {
 				t.Fatal("invalid marker document was accepted")
 			}
 		})
 	}
 }
-
-type markerRange struct {
-	classification string
-	contents       string
-}
-
-func parseMarkerRanges(document string) ([]markerRange, error) {
-	matches := markerPattern.FindAllStringSubmatchIndex(document, -1)
-	remainder := markerPattern.ReplaceAllString(document, "")
-	if strings.Contains(remainder, "<!-- partitur:mark") {
-		return nil, markerError("malformed marker token")
-	}
-
-	seenAnchors := make(map[string]bool)
-	var ranges []markerRange
-	var openClassification string
-	contentStart := 0
-	for _, match := range matches {
-		boundary := document[match[2]:match[3]]
-		classification := document[match[4]:match[5]]
-		switch boundary {
-		case "begin":
-			if openClassification != "" {
-				return nil, markerError("nested marker range")
-			}
-			if strings.HasPrefix(classification, "anchor=") {
-				id := strings.TrimPrefix(classification, "anchor=")
-				if seenAnchors[id] {
-					return nil, markerError("duplicate marker ID")
-				}
-				seenAnchors[id] = true
-			}
-			openClassification = classification
-			contentStart = match[1]
-		case "end":
-			if openClassification == "" || classification != openClassification {
-				return nil, markerError("marker end does not match open range")
-			}
-			contents := document[contentStart:match[0]]
-			if strings.Trim(contents, " \t\r\n") == "" {
-				return nil, markerError("empty marker range")
-			}
-			ranges = append(ranges, markerRange{classification: classification, contents: contents})
-			openClassification = ""
-		}
-	}
-	if openClassification != "" {
-		return nil, markerError("unclosed marker range")
-	}
-	return ranges, nil
-}
-
-type markerError string
-
-func (err markerError) Error() string { return string(err) }
 
 func requireOccurrence(t *testing.T, document, value string, want int) {
 	t.Helper()
