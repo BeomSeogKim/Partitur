@@ -769,18 +769,127 @@ func TestParseAnswerArgs(t *testing.T) {
 	for _, test := range []struct {
 		args             []string
 		wantID, wantText string
+		wantPath         string
 		want             bool
 	}{
 		{args: []string{"answer", "question-1", "--answer", "yes"}, wantID: "question-1", wantText: "yes", want: true},
 		{args: []string{"answer", "question-1", "--answer", ""}, wantID: "question-1", want: true},
+		{args: []string{"answer", "question-1", "--answer-file", "answer.txt"}, wantID: "question-1", wantPath: "answer.txt", want: true},
 		{args: []string{"answer", "question-1", "yes"}},
 		{args: []string{"answer", "--answer", "yes"}},
 		{args: []string{"answer", "question-1", "--answer"}},
+		{args: []string{"answer", "question-1", "--answer-file", ""}},
+		{args: []string{"answer", "question-1", "--answer", "yes", "--answer-file", "answer.txt"}},
 	} {
-		id, text, ok := parseAnswerArgs(test.args)
-		if id != test.wantID || text != test.wantText || ok != test.want {
-			t.Fatalf("parseAnswerArgs(%v) = (%q, %q, %t), want (%q, %q, %t)", test.args, id, text, ok, test.wantID, test.wantText, test.want)
+		id, text, path, ok := parseAnswerArgs(test.args)
+		if id != test.wantID || text != test.wantText || path != test.wantPath || ok != test.want {
+			t.Fatalf("parseAnswerArgs(%v) = (%q, %q, %q, %t), want (%q, %q, %q, %t)", test.args, id, text, path, ok, test.wantID, test.wantText, test.wantPath, test.want)
 		}
+	}
+}
+
+func TestAnswerFileAcquisition(t *testing.T) {
+	t.Run("relative path", func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		decisionID := appendPendingCLIDecision(t, store, "question")
+		inputDirectory := filepath.Join(root, "operator-input")
+		if err := os.Mkdir(inputDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(inputDirectory, "answer.txt"), []byte("continue\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"answer", decisionID, "--answer-file", filepath.Join("operator-input", "answer.txt")}, &stdout, &stderr)
+
+		if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(journal.Events) != before+1 {
+			t.Fatalf("answer appended %d events, want exactly one", len(journal.Events)-before)
+		}
+		resolved := journal.Events[len(journal.Events)-1]
+		var payload struct {
+			DecisionType string `json:"decision_type"`
+			Disposition  string `json:"disposition"`
+			Answer       string `json:"answer"`
+		}
+		if err := json.Unmarshal(resolved.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if resolved.Type != runstate.EventDecisionResolved || payload.DecisionType != "question" || payload.Disposition != "answered" || payload.Answer != "continue\n" {
+			t.Fatalf("resolution = type=%s payload=%+v", resolved.Type, payload)
+		}
+	})
+
+	t.Run("dash is a relative path", func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		decisionID := appendPendingCLIDecision(t, store, "question")
+		if err := os.WriteFile(filepath.Join(root, "-"), []byte("from-file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"answer", decisionID, "--answer-file", "-"}, &stdout, &stderr)
+
+		if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		journal, err := store.ReadJournal("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(journal.Events[len(journal.Events)-1].Payload), `"answer":"from-file"`) {
+			t.Fatalf("resolution payload = %s, want dash file contents", journal.Events[len(journal.Events)-1].Payload)
+		}
+	})
+
+	t.Run("unreadable path", func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		decisionID := appendPendingCLIDecision(t, store, "question")
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"answer", decisionID, "--answer-file", "missing-answer.txt"}, &stdout, &stderr)
+
+		if code != 2 || stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "precondition refused: detail=") || !strings.Contains(stderr.String(), "missing-answer.txt") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		if after := journalLength(t, store); after != before {
+			t.Fatalf("unreadable answer file appended %d events", after-before)
+		}
+	})
+}
+
+func TestAnswerSourceUsage(t *testing.T) {
+	root, store := resumeAttemptFixture(t)
+	decisionID := appendPendingCLIDecision(t, store, "question")
+	t.Chdir(root)
+	before := journalLength(t, store)
+	for _, args := range [][]string{
+		{"answer", decisionID},
+		{"answer", decisionID, "--answer"},
+		{"answer", decisionID, "--answer-file"},
+		{"answer", decisionID, "--answer-file", ""},
+		{"answer", decisionID, "--answer", "yes", "--answer-file", "answer.txt"},
+		{"answer", decisionID, "--answer-file", "answer.txt", "--answer", "yes"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: partitur") {
+			t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+		}
+	}
+	if after := journalLength(t, store); after != before {
+		t.Fatalf("usage errors appended %d events", after-before)
 	}
 }
 
