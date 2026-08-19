@@ -19,6 +19,7 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	requireOccurrence(t, document, "| `clause-evidence` |", 1)
 	requireOccurrence(t, document, "| `documentation-claim` |", 1)
 	requireOccurrence(t, document, "## Normative invariants", 1)
+	requireOccurrence(t, document, "These six rows are the canonical semantic rules of the grammar.", 1)
 	coverageRows := []string{
 		"| `payload-byte` | Any document byte outside a recognized marker token. ASCII-whitespace payload bytes need no classification. |",
 		"| `byte-granularity` | Coverage assigns each non-whitespace payload byte independently; one physical line may be partitioned across multiple ranges. |",
@@ -28,6 +29,7 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	placementRows := []string{
 		"| `whole-block` | If a whole fenced block is one clause, its markers may surround the block. |",
 		"| `internal` | Markers may occur inside a block only when the host syntax remains valid and literal marker visibility is accepted. |",
+		"| `decomposition` | A fence containing several independently normative payloads may be split into one fence per payload, with each resulting specimen kept coherent or explicitly non-normative. |",
 		"| `incompatible-host` | Otherwise the clause must be lifted into adjacent anchored prose or the marker representation must be revised; it must never be merged with another clause or classified as non-normative merely to avoid the placement problem. |",
 	}
 	placementTable := "| Placement | Rule |\n|---|---|\n" + strings.Join(placementRows, "\n")
@@ -38,6 +40,7 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 		"| `unmarked-requirement` | An unmarked normative requirement is void. |",
 		"| `forward-range-coverage` | Every non-whitespace payload byte on an added source line, including the current side of a modified line, must be inside exactly one well-formed current range. |",
 		"| `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |",
+		"| `decomposition-preservation` | Before a fenced block is decomposed, every independently normative statement removed from a resulting specimen must have an adjacent anchored prose carrier; each retained payload must remain byte-identical, independently copyable, and either a coherent whole-block clause or explicitly non-normative. |",
 	}
 	for _, row := range invariantRows {
 		requireOccurrence(t, document, row, 1)
