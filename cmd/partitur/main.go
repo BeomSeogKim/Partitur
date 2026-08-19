@@ -559,6 +559,10 @@ func runAmend(requestedID, patchPath, reason, claimedImpactPath string, stdout, 
 	// admission lock. SubmitCLI rechecks it and never substitutes a newer head.
 	input, err := store.LoadRunInput(runID)
 	if err != nil {
+		if unavailableProjection(err) {
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
+		}
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 		return 2
 	}
@@ -584,6 +588,10 @@ func runAmend(requestedID, patchPath, reason, claimedImpactPath string, stdout, 
 		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
 			renderDurabilityUnconfirmed(stderr, err)
 			return 7
+		}
+		if unavailableProjection(err) {
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
 		}
 		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", runID, "nonterminal", "partitur resume "+string(runID), err.Error())
 		return 6
@@ -698,6 +706,10 @@ func runApprove(decisionID string, approved bool, overridden []runstate.FindingR
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
 		}
+		if unavailableProjection(err) {
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
+		}
 		var selectionErr answerSelectionError
 		if errors.As(err, &selectionErr) {
 			renderStatusError(stderr, err)
@@ -809,6 +821,10 @@ func runAnswer(decisionID, answer string, stderr io.Writer) int {
 		if errors.Is(err, runstate.ErrInvalidEvent) || errors.Is(err, runstate.ErrIllegalTransition) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
+		}
+		if unavailableProjection(err) {
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
 		}
 		var selectionErr answerSelectionError
 		if errors.As(err, &selectionErr) {
@@ -936,6 +952,10 @@ func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner
 		if errors.Is(err, runstore.ErrCancellationNotAllowed) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
+		}
+		if unavailableProjection(err) {
+			renderStatusError(stderr, err)
+			return statusErrorCode(err)
 		}
 		var selectionErr cancelSelectionError
 		if errors.As(err, &selectionErr) {
@@ -1183,6 +1203,10 @@ func statusErrorCode(err error) int {
 	default:
 		return 2
 	}
+}
+
+func unavailableProjection(err error) bool {
+	return errors.Is(err, runstore.ErrJournalCorrupt) || errors.Is(err, runstate.ErrUnsupportedEventType)
 }
 
 func renderDurabilityUnconfirmed(w io.Writer, err error) {

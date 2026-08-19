@@ -148,8 +148,10 @@ func (store *Store) LoadRunInput(runID runstate.RunID) (RunInput, error) {
 		return RunInput{}, err
 	}
 
+	projection := recoveryProjection(replay.State, journal.Events, currentScore, resolvedCast)
+	projection.TailRepairRequired = replay.TailTruncated
 	return RunInput{
-		Projection: recoveryProjection(replay.State, journal.Events, currentScore, resolvedCast),
+		Projection: projection,
 		Score:      currentScore,
 		Cast:       resolvedCast,
 		BaseCommit: stringValue(startPayload, "base_commit"),

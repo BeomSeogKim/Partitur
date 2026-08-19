@@ -13,6 +13,7 @@ type CaseID string
 
 const (
 	CaseOpenExecution          CaseID = "RC-RESUME-001"
+	CaseTailRepair             CaseID = "RC-RESUME-034"
 	CaseTerminal               CaseID = "RC-RESUME-002"
 	CaseStaleLease             CaseID = "RC-RESUME-003"
 	CaseOrphanLease            CaseID = "RC-RESUME-004"
@@ -364,6 +365,7 @@ type AcceptanceRecovery struct {
 // the journal itself.
 type Projection struct {
 	State                 runstate.State
+	TailRepairRequired    bool
 	BlockedProposalRoutes []BlockedProposalRoute
 	RevisionRestarts      []RevisionRestart
 	CompositionTerminals  []CompositionTerminal
@@ -400,6 +402,7 @@ type ActionKind string
 
 const (
 	ActionCloseOpenExecutionInterval   ActionKind = "close_open_execution_interval"
+	ActionRepairJournalTail            ActionKind = "repair_journal_tail"
 	ActionTerminalCleanup              ActionKind = "terminal_cleanup"
 	ActionRemoveStaleLease             ActionKind = "remove_stale_lease"
 	ActionQuarantineOrphanLease        ActionKind = "quarantine_orphan_lease"
@@ -527,6 +530,9 @@ func Plan(input Input) Decision {
 	state := input.Projection.State
 	lease := input.Observations.Lease
 
+	if input.Projection.TailRepairRequired {
+		return action(CaseTailRepair, ActionRepairJournalTail, true)
+	}
 	if state.Run.Terminal() {
 		return action(CaseTerminal, ActionTerminalCleanup, false)
 	}

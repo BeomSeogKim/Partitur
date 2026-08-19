@@ -74,6 +74,7 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 func defaultKinds() map[recovery.ActionKind]StepHandler {
 	return map[recovery.ActionKind]StepHandler{
 		recovery.ActionCloseOpenExecutionInterval:   closeOpenExecutionInterval,
+		recovery.ActionRepairJournalTail:            repairJournalTail,
 		recovery.ActionTerminalCleanup:              terminalCleanup,
 		recovery.ActionRemoveStaleLease:             removeStaleLease,
 		recovery.ActionQuarantineOrphanLease:        quarantineOrphanLease,
@@ -109,6 +110,14 @@ func defaultKinds() map[recovery.ActionKind]StepHandler {
 		recovery.ActionAppendCompositionTerminal:    appendCompositionTerminal,
 		recovery.ActionRerunComposition:             rerunMovementComposition,
 	}
+}
+
+func repairJournalTail(_ context.Context, execution HandlerContext, _ recovery.Action) error {
+	if execution.Store == nil || execution.RunID == "" {
+		return errors.New("recovery executor requires store and run id for journal tail repair")
+	}
+	_, err := execution.Store.RepairJournalTail(execution.RunID)
+	return err
 }
 
 func completeOrAbandonPrepare(ctx context.Context, execution HandlerContext, _ recovery.Action) error {

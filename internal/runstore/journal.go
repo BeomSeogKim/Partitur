@@ -23,6 +23,8 @@ type journalEntry struct {
 	idempotencyKey   string
 }
 
+const recoveryJournalTailRepairAddress faultpoint.ReceiptAddress = "recovery/journal_tail_truncated"
+
 func (transaction *Txn) project(seed []runstate.MovementSeed) (runstate.State, error) {
 	state := runstate.NewState(seed)
 	path := filepath.Join(transaction.runRoot(), "journal.jsonl")
@@ -143,6 +145,17 @@ func (store *Store) Replay(
 		return nil
 	})
 	return result, err
+}
+
+// RepairJournalTail runs the existing replay repair with the immutable seed
+// bound by run.started. Recovery calls it only after read-only planning has
+// identified a syntactically unparseable final line.
+func (store *Store) RepairJournalTail(runID runstate.RunID) (ReplayResult, error) {
+	initialScore, err := store.LoadInitialScore(runID)
+	if err != nil {
+		return ReplayResult{}, err
+	}
+	return store.Replay(runID, movementSeed(initialScore), recoveryJournalTailRepairAddress)
 }
 
 // ReadReplay projects a run journal without taking the state lock, creating a

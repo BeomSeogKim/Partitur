@@ -309,7 +309,7 @@ func appendixC41ActionRows(t *testing.T) []appendixActionRow {
 
 func preprocessingCase(caseID CaseID) bool {
 	switch caseID {
-	case "RC-RESUME-001", "RC-RESUME-034", "RC-RESUME-035", "RC-RESUME-036",
+	case "RC-RESUME-001", "RC-RESUME-035", "RC-RESUME-036",
 		CaseFinalGateRejected:
 		// RC-RESUME-021 needs the journal-projected rejected human gate; its
 		// recoveryexec fixture drives that state through resolution and replan.
@@ -318,7 +318,7 @@ func preprocessingCase(caseID CaseID) bool {
 		// effects to nothing. RC-RESUME-035's §9 half and RC-RESUME-036 are locked
 		// by the artifact-level tests in internal/recoveryexec (TestRecoveryPre-
 		// processing*), which is where they were found missing entirely.
-		// Whether 034 and 038 are locked anywhere has not been established.
+		// Whether 038 is locked anywhere has not been established.
 		return true
 	default:
 		return false
@@ -354,6 +354,10 @@ func appendixC41Cut(t *testing.T, row appendixActionRow) (Input, func(Input) Dec
 		return input, PlanAcceptance
 	}
 	switch row.caseID {
+	case CaseTailRepair:
+		input := baseInput()
+		input.Projection.TailRepairRequired = true
+		return input, Plan
 	case CaseTerminal:
 		return withTerminal(baseInput()), Plan
 	case CaseStaleLease:
@@ -465,6 +469,9 @@ func assertAppendixC41CutMatches(t *testing.T, row appendixActionRow) {
 		"decision": "none", "budget": "available", "observation": "safe",
 	}
 	switch row.caseID {
+	case CaseTailRepair:
+		actual["run"], actual["integrity"], actual["owner"], actual["control"] = "irrelevant", "repair", "*", "*"
+		actual["consequence"], actual["unit"], actual["phase"], actual["decision"], actual["budget"], actual["observation"] = "*", "*", "tail_repair", "*", "*", "safe"
 	case CaseTerminal:
 		actual["run"] = "terminal"
 	case CaseStaleLease:
