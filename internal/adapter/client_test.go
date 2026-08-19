@@ -36,6 +36,7 @@ const (
 	fakeReaperRegistrationEnv   = "PARTITUR_ADAPTER_TEST_REAPER_REGISTRATION"
 	fakeNestedOwnerPIDEnv       = "PARTITUR_ADAPTER_TEST_NESTED_OWNER_PID"
 	fakeNestedOwnerStartEnv     = "PARTITUR_ADAPTER_TEST_NESTED_OWNER_START"
+	fakeSessionTreeReleaseEnv   = "PARTITUR_ADAPTER_TEST_SESSION_TREE_RELEASE"
 	vendorModeEnv               = "PARTITUR_EXECUTE_VENDOR_MODE"
 	vendorOutEnv                = "PARTITUR_EXECUTE_VENDOR_OUTPUT"
 	incidentalTestDeadline      = 10 * time.Second
@@ -85,6 +86,9 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	if mode := os.Getenv(fakeModeEnv); mode != "" {
+		if mode == "session_tree_hang" {
+			waitForSessionTreeRelease()
+		}
 		runFakeAdapter(mode)
 		os.Exit(0)
 	}
@@ -344,13 +348,20 @@ func TestDeadlineCoversResponseAndCleanExit(t *testing.T) {
 
 func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pids")
-	client := deadlineSubjectFakeClient(
+	client, directory := newFakeClientWithFixtureDirectory(
 		t,
 		"session_tree_hang",
 		marker,
 		50*time.Millisecond,
 		40*time.Millisecond,
 	)
+	release := marker + ".release"
+	client.environment = append(client.environment, fakeSessionTreeReleaseEnv+"="+release)
+	client.sessions = sessionTreeReadyController{
+		delegate: client.sessions,
+		marker:   marker,
+		release:  release,
+	}
 	armed := time.Now()
 	report := client.ProbeAll([]string{"fake"})
 	elapsed := time.Since(armed)
@@ -379,10 +390,52 @@ func TestTimeoutSweepsEveryProcessGroupInSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-			t.Fatalf("session member %d still observable: %v", pid, err)
+		record := readFakeFixtureRecord(t, directory, pid)
+		if err := assertSessionMemberNotLive(record.process, processByPID); err != nil {
+			t.Fatal(err)
 		}
 	}
+}
+
+func TestSessionMemberLivenessAssertionAcceptsZombie(t *testing.T) {
+	wanted := processRecord{PID: 42, Start: "recorded"}
+	err := assertSessionMemberNotLive(wanted, func(pid int) (processRecord, error) {
+		if pid != wanted.PID {
+			t.Fatalf("inspected pid = %d, want %d", pid, wanted.PID)
+		}
+		return processRecord{PID: pid, Start: wanted.Start, IsZombie: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionMemberLivenessAssertionRejectsMatchingLiveIdentity(t *testing.T) {
+	wanted, err := processByPID(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = assertSessionMemberNotLive(wanted, processByPID)
+	if err == nil {
+		t.Fatal("matching live process identity was accepted as swept")
+	}
+	if !strings.Contains(err.Error(), "remained live") {
+		t.Fatalf("error = %q, want matching live identity diagnostic", err)
+	}
+}
+
+func assertSessionMemberNotLive(wanted processRecord, lookup func(int) (processRecord, error)) error {
+	observed, err := lookup(wanted.PID)
+	if isProcessGone(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect session member %d: %w", wanted.PID, err)
+	}
+	if observed.IsZombie || observed.Start != wanted.Start {
+		return nil
+	}
+	return fmt.Errorf("session member %d with start identity %q remained live", wanted.PID, wanted.Start)
 }
 
 func TestFixtureChildInheritsTestOwnerIdentity(t *testing.T) {
@@ -508,11 +561,16 @@ func TestFixtureReaperReportsSurvivingSessionTree(t *testing.T) {
 			"PATH=" + directory,
 			fakeModeEnv + "=session_tree_hang",
 			fakeMarkerEnv + "=" + marker,
+			fakeSessionTreeReleaseEnv + "=" + marker + ".release",
 			fakeFixtureDirectoryEnv + "=" + directory,
 			fakeFixtureOwnerPIDEnv + "=" + strconv.Itoa(owner.pid),
 			fakeFixtureOwnerStartEnv + "=" + owner.start,
 		}, 50*time.Millisecond, 40*time.Millisecond)
-		client.sessions = parentOnlySessionController{}
+		client.sessions = sessionTreeReadyController{
+			delegate: parentOnlySessionController{},
+			marker:   marker,
+			release:  marker + ".release",
+		}
 		report := client.ProbeAll([]string{"fake"})
 		assertDiagnosticKinds(t, report, DiagnosticDeadline)
 		data, err := os.ReadFile(marker)
@@ -959,6 +1017,12 @@ type failingSessionController struct{}
 
 type parentOnlySessionController struct{}
 
+type sessionTreeReadyController struct {
+	delegate sessionController
+	marker   string
+	release  string
+}
+
 func (failingSessionController) verifyEmpty(int, string) (bool, error) {
 	return false, errors.New("injected enumeration failure")
 }
@@ -973,6 +1037,53 @@ func (parentOnlySessionController) verifyEmpty(int, string) (bool, error) {
 
 func (parentOnlySessionController) terminate(sid int, _ string, _ time.Duration) error {
 	return syscall.Kill(sid, syscall.SIGKILL)
+}
+
+func (controller sessionTreeReadyController) verifyEmpty(sid int, leaderStart string) (bool, error) {
+	return controller.delegate.verifyEmpty(sid, leaderStart)
+}
+
+func (controller sessionTreeReadyController) terminate(sid int, leaderStart string, grace time.Duration) error {
+	if err := os.WriteFile(controller.release, []byte("release"), 0o600); err != nil {
+		return fmt.Errorf("release session-tree fixture: %w", err)
+	}
+	if err := waitForSessionTreeMarker(controller.marker); err != nil {
+		return err
+	}
+	return controller.delegate.terminate(sid, leaderStart, grace)
+}
+
+func waitForSessionTreeMarker(marker string) error {
+	deadline := time.Now().Add(incidentalTestDeadline)
+	for {
+		data, err := os.ReadFile(marker)
+		if err == nil && len(strings.Fields(string(data))) == 2 {
+			return nil
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("read session-tree marker: %w", err)
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("session-tree marker %q was not written with two pids", marker)
+		}
+		time.Sleep(fakeFixtureOwnerWatchPoll)
+	}
+}
+
+func waitForSessionTreeRelease() {
+	release := os.Getenv(fakeSessionTreeReleaseEnv)
+	if release == "" {
+		return
+	}
+	for {
+		if _, err := os.Stat(release); err == nil {
+			return
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			_, _ = fmt.Fprintf(os.Stderr, "read session-tree release: %v\n", err)
+			os.Exit(8)
+		}
+		time.Sleep(fakeFixtureOwnerWatchPoll)
+	}
 }
 
 func fakeClient(t *testing.T, mode string, grace time.Duration) *Client {
@@ -1146,9 +1257,9 @@ func assertDeadlineWithOnlyCleanupUnverifiable(t *testing.T, report Report) {
 // as wall clock and lose Go's monotonic reading, so a clock adjustment
 // mid-probe can skew them either way.
 //
-// Known limitation, predating this instrumentation: the assertion checks the
-// swept pids with Kill(pid, 0) and has no start-identity check, so a pid reused
-// between the sweep and the check reads as a surviving session member.
+// The post-sweep assertion reads each fixture's durable start identity and
+// rejects only that same identity while it remains live. A zombie cannot
+// mutate, and a reused pid is not the recorded session member.
 //
 // A step is reported as absent only when the file does not exist; any other
 // read error is reported as such, so a filesystem fault is not read as "never
@@ -1649,8 +1760,10 @@ func runFakeAdapter(mode string) {
 		}
 		stamp(sweepStageSpawning)
 		child := exec.Command(os.Args[0])
+		childReady := marker + ".child-ready"
 		child.Env = replaceEnvironment(os.Environ(), map[string]string{
 			fakeModeEnv:              "child_hang",
+			fakeMarkerEnv:            childReady,
 			fakeFixtureDirectoryEnv:  fixture.directory,
 			fakeFixtureOwnerPIDEnv:   strconv.Itoa(fixture.owner.pid),
 			fakeFixtureOwnerStartEnv: fixture.owner.start,
@@ -1661,14 +1774,35 @@ func runFakeAdapter(mode string) {
 			os.Exit(8)
 		}
 		stamp(sweepStageSpawned)
+		for {
+			if _, err := os.Stat(childReady); err == nil {
+				break
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				_, _ = fmt.Fprintf(os.Stderr, "read child readiness: %v\n", err)
+				os.Exit(8)
+			}
+			time.Sleep(fakeFixtureOwnerWatchPoll)
+		}
+		signalIgnore(syscall.SIGTERM)
 		if err := os.WriteFile(marker, []byte(fmt.Sprintf("%d %d", os.Getpid(), child.Process.Pid)), 0o600); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "marker write failed: %v\n", err)
 		} else {
 			stamp(sweepStageWritten)
 		}
-		ignoreTermAndHang()
+		for {
+			time.Sleep(time.Hour)
+		}
 	case "child_hang":
-		ignoreTermAndHang()
+		signalIgnore(syscall.SIGTERM)
+		if marker != "" {
+			if err := os.WriteFile(marker, []byte("ready"), 0o600); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "child readiness write failed: %v\n", err)
+				os.Exit(8)
+			}
+		}
+		for {
+			time.Sleep(time.Hour)
+		}
 	case "stderr_failure":
 		_, _ = os.Stderr.WriteString("harmless token=supersecret\n")
 		_, _ = os.Stderr.WriteString(strings.Repeat("x", MaxProbeStderrBytes))
