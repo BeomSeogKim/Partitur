@@ -19,11 +19,24 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	requireOccurrence(t, document, "| `clause-evidence` |", 1)
 	requireOccurrence(t, document, "| `documentation-claim` |", 1)
 	requireOccurrence(t, document, "## Normative invariants", 1)
+	coverageRows := []string{
+		"| `payload-byte` | Any document byte outside a recognized marker token. ASCII-whitespace payload bytes need no classification. |",
+		"| `byte-granularity` | Coverage assigns each non-whitespace payload byte independently; one physical line may be partitioned across multiple ranges. |",
+	}
+	coverageTable := "| Term | Definition |\n|---|---|\n" + strings.Join(coverageRows, "\n")
+	requireOccurrence(t, document, coverageTable+"\n\n### Marker placement in fenced blocks", 1)
+	placementRows := []string{
+		"| `whole-block` | If a whole fenced block is one clause, its markers may surround the block. |",
+		"| `internal` | Markers may occur inside a block only when the host syntax remains valid and literal marker visibility is accepted. |",
+		"| `incompatible-host` | Otherwise the clause must be lifted into adjacent anchored prose or the marker representation must be revised; it must never be merged with another clause or classified as non-normative merely to avoid the placement problem. |",
+	}
+	placementTable := "| Placement | Rule |\n|---|---|\n" + strings.Join(placementRows, "\n")
+	requireOccurrence(t, document, placementTable, 1)
 	invariantRows := []string{
 		"| `unwrapped-names` | Their existing unwrapped appearances are names, not markers. |",
 		"| `baseline-activation` | A document enters this regime only when a reviewed baseline registry names the document and its exact blob. |",
 		"| `unmarked-requirement` | An unmarked normative requirement is void. |",
-		"| `forward-range-coverage` | Every added non-whitespace source line must be inside exactly one well-formed current range. |",
+		"| `forward-range-coverage` | Every non-whitespace payload byte on an added source line, including the current side of a modified line, must be inside exactly one well-formed current range. |",
 		"| `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |",
 	}
 	for _, row := range invariantRows {
@@ -31,6 +44,22 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	}
 	invariantTable := "| Invariant | Rule |\n|---|---|\n" + strings.Join(invariantRows, "\n")
 	requireOccurrence(t, document, invariantTable+"\n\n## Conferred meaning and activation", 1)
+}
+
+func TestDocumentMarkerGrammarAcceptsMultipleRangesWithinOneLine(t *testing.T) {
+	document := "<!-- partitur:mark begin anchor=protocol.version -->version 2; <!-- partitur:mark end anchor=protocol.version -->" +
+		"<!-- partitur:mark begin anchor=protocol.tokens -->no tokens<!-- partitur:mark end anchor=protocol.tokens -->"
+
+	ranges, err := Parse(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranges) != 2 {
+		t.Fatalf("marker ranges = %d, want 2", len(ranges))
+	}
+	if ranges[0].Contents != "version 2; " || ranges[1].Contents != "no tokens" {
+		t.Fatalf("marker range contents = %q, %q", ranges[0].Contents, ranges[1].Contents)
+	}
 }
 
 func TestDocumentMarkerGrammarAcceptsBothRegistriesAndExistingIDs(t *testing.T) {

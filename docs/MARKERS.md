@@ -27,6 +27,28 @@ The rules are closed:
 - Text beginning with `<!-- partitur:mark` that does not match the production is an error, not text
   that the parser ignores.
 
+Coverage uses these terms:
+
+| Term | Definition |
+|---|---|
+| `payload-byte` | Any document byte outside a recognized marker token. ASCII-whitespace payload bytes need no classification. |
+| `byte-granularity` | Coverage assigns each non-whitespace payload byte independently; one physical line may be partitioned across multiple ranges. |
+
+### Marker placement in fenced blocks
+
+The parser applies the grammar to raw document bytes, so a fenced block does not exclude normative
+text from classification. Placement must nevertheless preserve the host specimen's validity and
+meaning.
+
+| Placement | Rule |
+|---|---|
+| `whole-block` | If a whole fenced block is one clause, its markers may surround the block. |
+| `internal` | Markers may occur inside a block only when the host syntax remains valid and literal marker visibility is accepted. |
+| `incompatible-host` | Otherwise the clause must be lifted into adjacent anchored prose or the marker representation must be revised; it must never be merged with another clause or classified as non-normative merely to avoid the placement problem. |
+
+This is an authoring constraint, not a normative invariant row: violating it can corrupt the host
+specimen, but it does not change the meaning conferred by an otherwise well-formed marker range.
+
 The marker-ID production admits the existing catalog-ID families (`RC-RESUME-001`, `RA-001`,
 `RS-001`, `INIT-001`, and command IDs such as `ANSWER-001`) as well as qualified event, enum, and
 domain identifiers such as `run.started`, `git_exit`, and `partitur/criterion-spec`. The
@@ -43,7 +65,7 @@ means the same thing would recreate the inference problem this grammar removes.
 | `unwrapped-names` | Their existing unwrapped appearances are names, not markers. |
 | `baseline-activation` | A document enters this regime only when a reviewed baseline registry names the document and its exact blob. |
 | `unmarked-requirement` | An unmarked normative requirement is void. |
-| `forward-range-coverage` | Every added non-whitespace source line must be inside exactly one well-formed current range. |
+| `forward-range-coverage` | Every non-whitespace payload byte on an added source line, including the current side of a modified line, must be inside exactly one well-formed current range. |
 | `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |
 
 ## Conferred meaning and activation
@@ -54,10 +76,10 @@ evidence proves it.
 
 The `baseline-activation` invariant supplies the transition into this regime. Before enrollment,
 this grammar does not change the authority of existing text. Enrollment is the one-time human pass:
-every source line in the enrolled blob is classified exactly once as anchored text or explicitly
-non-normative text. A normative registry row is anchored text, not a third inferred form. The
-baseline records the review; no parser may claim to reconstruct it from modal verbs, prose,
-inline-code density, or identifier-shaped names.
+classification is byte-range based, and every non-whitespace payload byte in the enrolled blob is
+classified exactly once as anchored text or explicitly non-normative text. A normative registry row
+is anchored text, not a third inferred form. The baseline records the review; no parser may claim to
+reconstruct it from modal verbs, prose, inline-code density, or identifier-shaped names.
 
 After enrollment, normative force is conferred only by an `anchor=<marker-id>` range. The
 `unmarked-requirement` invariant supplies the consequence of omitting one. A `non-normative` range
@@ -84,9 +106,11 @@ this key and may not weaken its exact-match rule.
 
 The baseline lock fixes the reviewed blob and its complete ordered classification. For every later
 edit it compares that blob with the current document and treats a modified line as one deletion plus
-one addition. The `forward-range-coverage` invariant owns the added-line requirement. A changed
-marker ID or boundary must still reconcile exactly with the applicable registry; deleting text
-cannot create an unmarked obligation.
+one addition. "Added" therefore covers every payload byte on the current side of an added or modified
+line, not only the byte subsequence newly inserted within a line. The `forward-range-coverage`
+invariant owns the requirement for each non-whitespace payload byte; the line may span multiple
+ranges as long as each such byte is in exactly one. A changed marker ID or boundary must still
+reconcile exactly with the applicable registry; deleting text cannot create an unmarked obligation.
 
 The `no-normativity-inference` invariant bounds what the fence claims. Text added inside a
 `non-normative` range is mechanically classified as non-normative; if it is written as a requirement
