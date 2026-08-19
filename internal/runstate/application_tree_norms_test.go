@@ -28,12 +28,7 @@ func TestApplicationTreeProjectionIsSpecified(t *testing.T) {
 	rules := applicationTreeRules(t, section)
 	sites := applicationTreeComparisonSites(t, section)
 	global := globalExitCodeDescriptions(t, lines)
-	shipping := recoveryDocumentSection(t, lines,
-		"## 8. Verification and shipping",
-		"## 9. Amendments")
-	apply := shippingExitCodeTable(t, shipping,
-		"**`partitur apply` exit mapping.**",
-		"| Code | `partitur apply` outcome |")
+	apply := commandMatrixExitCodeDescriptions(t, lines, "apply", globalExitCodeSet(t, lines))
 
 	// When
 	wantRules := []applicationTreeRule{

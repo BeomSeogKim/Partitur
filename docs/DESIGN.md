@@ -3551,19 +3551,6 @@ epoch. `run` does not implement a parallel in-process recovery sequence, reuse a
 returns the same exit 6 and may be invoked again; it does not allocate or print another run id,
 because its explicit or uniquely selected id already names the existing run.
 
-The command's exit codes are exhaustive over its specified outcomes:
-
-| Code | `partitur run` outcome |
-|---|---|
-| 0 | The run reached `SUCCEEDED`, or quiesced in `WAITING_HUMAN` with no adapter or criterion process left running |
-| 1 | Usage error; no run exists and stdout is empty |
-| 2 | Precondition refused before `run.started`; no run exists and stdout is empty |
-| 3 | Pre-run validation failed before `run.started`; no run exists and stdout is empty |
-| 4 | The durable run reached terminal `FAILED` or `CANCELLED`; the id was already written |
-| 5 | Recovery halted for an Appendix D reason; the id was already written and the run remains at its last durable state |
-| 6 | This invocation was operationally interrupted after `run.started`; the run remains nonterminal and resumable. The id was already written except when that single stdout write was itself the interruption |
-| 7 | A required run-journal append has unconfirmed durability, so the event and the run's resulting durable projection are unknown. The id was already written unless the unconfirmed event is `run.started`; follow §1's external storage-observation instruction |
-
 ### `partitur run` precondition matrix
 
 `run` owns preparation and the live run transaction. It has no selected Appendix C case axis:
@@ -3574,7 +3561,8 @@ write either fails before authority is acquired or succeeds before any live exec
 terminal, quiescent, halted, or interrupted live outcome therefore cannot coexist with a pre-start
 result or a failed id write. These constraints exhaust the physically satisfiable combinations
 without importing an Appendix C partition. A durability-unconfirmed append is owned by the exit-7
-registry.
+registry. A grammar-level usage failure selects no command under the matrix grammar, so it creates no
+run and writes no stdout; it is not a matrix row.
 
 | Catalog ID | Preparation | Live run transaction | Run-id output | Result |
 |---|---|---|---|---|
@@ -3613,20 +3601,6 @@ naming the selected run id and the exact Appendix D halt reason. Because B.7 mak
 condition, not a journal event, `status --json` does not gain a persistent halt result from the
 invocation; where the run remains readable, it continues to describe the last durable projection
 rather than reconstructing that stderr diagnostic.
-
-The following table is exhaustive for `resume`; the `partitur run` table above remains scoped only
-to the creating command:
-
-| Code | `partitur resume` outcome |
-|---|---|
-| 0 | The selected run reached or was already at `SUCCEEDED`, or reached or was already quiescent in `WAITING_HUMAN` with no adapter or criterion process left running |
-| 1 | Usage error |
-| 2 | Run selection or another command precondition was refused under the global exit-code table below |
-| 3 | Not used: `resume` performs neither pre-run validation nor amendment rejection |
-| 4 | The selected run reached or was already at terminal `FAILED` or `CANCELLED` |
-| 5 | Recovery halted for the Appendix D reason reported on stderr; the run remains at its last durable projection |
-| 6 | The operational-interruption outcome already defined for `resume` above |
-| 7 | A required recovery append has unconfirmed durability, so the selected run's resulting projection is unknown; follow §1's external storage-observation instruction |
 
 ### `partitur resume` precondition matrix
 
@@ -3679,19 +3653,6 @@ waits on a live driver and can be interrupted while waiting. The mapping is ther
 `SUCCEEDED` returns 0, `FAILED` or `CANCELLED` returns 4. A `SUCCEEDED` run reports 0 even though
 nothing was cancelled — the code reports the run's durable outcome, not whether this invocation
 caused it, and `status --json` remains the surface that says which outcome it was.
-
-The following table is exhaustive for `cancel`:
-
-| Code | `partitur cancel` outcome |
-|---|---|
-| 0 | The selected run was already at `SUCCEEDED` |
-| 1 | Usage error |
-| 2 | Run selection or another command precondition was refused under the global exit-code table below |
-| 3 | Not used: `cancel` performs neither validation nor amendment rejection |
-| 4 | The run reached, or was already at, terminal `FAILED` or `CANCELLED`; where this invocation made the request, the `run.cancelled` it waited for is also its acknowledgement |
-| 5 | Recovery halted for the Appendix D reason reported on stderr; the run remains at its last durable projection |
-| 6 | This `cancel` invocation was operationally interrupted while the run remains nonterminal |
-| 7 | The `cancel.requested` append or a later cancellation append has unconfirmed durability, so the selected run's resulting durable projection is unknown; follow §1's external storage-observation instruction |
 
 ### `partitur cancel` precondition matrix
 
@@ -4019,35 +3980,63 @@ final hash read and before `rename`; its bytes can be replaced without a conflic
 lock narrows that window to writers outside Partitur's lock, but cannot close it, and recovery can
 only classify the bytes that survived.
 
-**`partitur apply` exit mapping.** The following table is exhaustive for `apply`; the run
-remains terminal `SUCCEEDED` on every shipping outcome, and `status --json` remains the
-authoritative surface for `application.state` and its cause.
+### `partitur apply` precondition matrix
 
-| Code | `partitur apply` outcome |
-|---|---|
-| 0 | Application reached `APPLIED`, including the idempotent already-applied result |
-| 1 | Usage error |
-| 2 | Run selection or another command precondition was refused under the global exit-code table, including an application projection outside the legal normal or `--recover` entry states or a candidate raw diff naming a protected worktree path |
-| 3 | Not used: `apply` performs neither validation nor amendment rejection |
-| 4 | Application reached `FAILED_CLEAN`: `apply.failed`, or a `--recover` that verified the restored base tree, recorded that outcome; stderr names the verified clean rollback |
-| 5 | `apply --recover` inspected a tree matching neither `base_tree` nor `result_tree` and left Application `RECOVERY_REQUIRED`; stderr names that application recovery state and cause; the run remains `SUCCEEDED` |
-| 6 | This `apply` invocation was operationally interrupted after its transaction started; Application remains `APPLYING` and recoverable with `partitur apply <run-id> --recover`; the run remains `SUCCEEDED` |
-| 7 | A required application append has unconfirmed durability, so the resulting Application state is unknown; the run remains `SUCCEEDED`, and the operator follows §1's external storage-observation instruction |
+Application recovery is owned by §8's Application state machine, not Appendix C. This matrix
+therefore references the §8 transaction and recovery outcomes instead of adding a C.1 case axis.
+The normal and `--recover` forms use the mutually exclusive entry states required by the command
+form rule above: normal `apply` is refused from `APPLYING` and `RECOVERY_REQUIRED`, while
+`apply --recover` is refused outside those states. An accepted normal transaction reaches
+`APPLIED`, reaches `FAILED_CLEAN`, or is operationally interrupted while still `APPLYING`; an
+accepted recovery resolves to `APPLIED` or `FAILED_CLEAN`, retains `RECOVERY_REQUIRED`, or is
+operationally interrupted while still `APPLYING`. These alternatives exhaust the physically
+satisfiable command results. The run remains terminal `SUCCEEDED` on every row, and `status --json`
+remains the authoritative surface for `application.state` and its cause. A durability-unconfirmed
+append is owned by the exit-7 registry.
 
-**`partitur promote-score` exit mapping.** The following table is exhaustive for
-`promote-score`; the run remains terminal `SUCCEEDED` on every shipping outcome, and
-`status --json` remains the authoritative surface for `promotion.state` and its cause.
+| Catalog ID | Run selection and command preconditions | Command form and Application state | §8 Application outcome | Result |
+|---|---|---|---|---|
+| `APPLY-001` | explicit run-id is semantically malformed | not reached | not reached | Report the operand usage error and append nothing; exit 1 |
+| `APPLY-002` | selection or another required command precondition is refused, including a candidate raw diff naming a protected worktree path | not reached | not reached | Refuse the command precondition and append no application event; exit 2 |
+| `APPLY-003` | selects the existing run | normal form from `APPLYING` or `RECOVERY_REQUIRED` | refused by the command-form rule above | Refuse the normal-form precondition and append nothing; exit 2 |
+| `APPLY-004` | selects the existing run | `--recover` outside `APPLYING` or `RECOVERY_REQUIRED` | `RC-APPLY-002` | Refuse the recovery-form precondition and append nothing; exit 2 |
+| `APPLY-005` | selects the existing run | normal form from `APPLIED` | idempotent already-applied result | Preserve `APPLIED` and append nothing; exit 0 |
+| `APPLY-006` | selects the existing run | normal form from `NOT_APPLIED` or `FAILED_CLEAN` | transaction reaches `APPLIED` | Append the exact §8 Application journal delta from `apply.started` through `apply.completed`; exit 0 |
+| `APPLY-007` | selects the existing run | normal form from `NOT_APPLIED` or `FAILED_CLEAN` | transaction reaches `FAILED_CLEAN` after verified rollback | Append the exact §8 Application journal delta from `apply.started` through `apply.failed`, and report the verified clean rollback; exit 4 |
+| `APPLY-008` | selects the existing run | normal form from `NOT_APPLIED` or `FAILED_CLEAN` | transaction is operationally interrupted after `apply.started` and remains `APPLYING` | Preserve the confirmed §8 Application journal prefix and leave the transaction to `partitur apply <run-id> --recover`; exit 6 |
+| `APPLY-009` | selects the existing run | `--recover` from `APPLYING` or `RECOVERY_REQUIRED` | `RC-APPLY-001` verifies the candidate `result_tree` and reaches `APPLIED` | Append exactly the §8 recovery journal delta required to reach `apply.completed`; exit 0 |
+| `APPLY-010` | selects the existing run | `--recover` from `APPLYING` or `RECOVERY_REQUIRED` | `RC-APPLY-001` verifies the restored `base_tree` and reaches `FAILED_CLEAN` | Append exactly the §8 recovery journal delta required to record the cause and `apply.recovery_resolved`; exit 4 |
+| `APPLY-011` | selects the existing run | `--recover` from `APPLYING` or `RECOVERY_REQUIRED` | `RC-APPLY-001` observes a tree matching neither `base_tree` nor `result_tree` and retains `RECOVERY_REQUIRED` | Append exactly the §8 recovery-cause journal delta not already durable, retain Application `RECOVERY_REQUIRED`, and report its cause; exit 5 |
+| `APPLY-012` | selects the existing run | `--recover` from `APPLYING` | `RC-APPLY-001` is operationally interrupted while Application remains `APPLYING` | Preserve the confirmed §8 Application journal prefix and leave the transaction to a later `apply --recover`; exit 6 |
 
-| Code | `partitur promote-score` outcome |
-|---|---|
-| 0 | Promotion reached `PROMOTED` |
-| 1 | Usage error |
-| 2 | Run selection or another command precondition was refused under the global exit-code table, including a missing, unreadable, or hash-mismatched pinned target snapshot found before `score.promotion_started`, or a root-hash conflict before that event |
-| 3 | Not used: `promote-score` performs neither validation nor amendment rejection |
-| 4 | Not used: promotion has no verified-clean failure outcome |
-| 5 | A started promotion found a missing, unreadable, or hash-mismatched pinned target snapshot, or its rename-boundary check / `promote-score --recover` found the root file hash matching neither the expected nor target hash; it appended or retained Promotion `RECOVERY_REQUIRED`, and stderr names that cause; the run remains `SUCCEEDED` |
-| 6 | This `promote-score` invocation was operationally interrupted after its transaction started; Promotion remains `PROMOTING` and recoverable with `partitur promote-score <run-id> --recover`; the run remains `SUCCEEDED` |
-| 7 | A required promotion append has unconfirmed durability, so the resulting Promotion state is unknown; the run remains `SUCCEEDED`, and the operator follows §1's external storage-observation instruction |
+### `partitur promote-score` precondition matrix
+
+Promotion recovery is owned by §8's Promotion state machine, not Appendix C. This matrix therefore
+references the §8 transaction and recovery outcomes instead of adding a C.1 case axis. The normal
+and `--recover` forms use the mutually exclusive entry states required by the command-form rule
+above: normal `promote-score` is refused from `PROMOTING` and `RECOVERY_REQUIRED`, while
+`promote-score --recover` is refused outside those states. An accepted normal transaction reaches
+`PROMOTED`, records Promotion `RECOVERY_REQUIRED`, or is operationally interrupted while still
+`PROMOTING`; an accepted recovery reaches `PROMOTED`, retains `RECOVERY_REQUIRED`, or is
+operationally interrupted while still `PROMOTING`. These alternatives exhaust the physically
+satisfiable command results. The run remains terminal `SUCCEEDED` on every row, and `status --json`
+remains the authoritative surface for `promotion.state` and its cause. A durability-unconfirmed
+append is owned by the exit-7 registry.
+
+| Catalog ID | Run selection and command preconditions | Command form and Promotion state | §8 Promotion outcome | Result |
+|---|---|---|---|---|
+| `PROMOTE-SCORE-001` | explicit run-id is semantically malformed | not reached | not reached | Report the operand usage error and append nothing; exit 1 |
+| `PROMOTE-SCORE-002` | selection or another required command precondition is refused, including a missing, unreadable, or hash-mismatched pinned target snapshot before `score.promotion_started`, or a pre-start root-hash conflict | not reached | not reached | Refuse the command precondition and append no promotion event; exit 2 |
+| `PROMOTE-SCORE-003` | selects the existing run | normal form from `PROMOTING` or `RECOVERY_REQUIRED` | refused by the command-form rule above | Refuse the normal-form precondition and append nothing; exit 2 |
+| `PROMOTE-SCORE-004` | selects the existing run | `--recover` outside `PROMOTING` or `RECOVERY_REQUIRED` | `RC-PROMOTE-002` | Refuse the recovery-form precondition and append nothing; exit 2 |
+| `PROMOTE-SCORE-005` | selects the existing run | normal form from `PROMOTED` | idempotent already-promoted result | Preserve `PROMOTED` and append nothing; exit 0 |
+| `PROMOTE-SCORE-006` | selects the existing run | normal form from `NOT_PROMOTED` | transaction reaches `PROMOTED` | Append the exact §8 Promotion journal delta from `score.promotion_started` through `score.promoted`; exit 0 |
+| `PROMOTE-SCORE-007` | selects the existing run | normal form from `NOT_PROMOTED` after `score.promotion_started` | the rename-boundary check records Promotion `RECOVERY_REQUIRED` | Append the exact §8 Promotion journal delta through `score.promotion_recovery_required`, retain `RECOVERY_REQUIRED`, and report its cause; exit 5 |
+| `PROMOTE-SCORE-008` | selects the existing run | normal form from `NOT_PROMOTED` | transaction is operationally interrupted after `score.promotion_started` and remains `PROMOTING` | Preserve the confirmed §8 Promotion journal prefix and leave the transaction to `partitur promote-score <run-id> --recover`; exit 6 |
+| `PROMOTE-SCORE-009` | selects the existing run | `--recover` from `PROMOTING` or `RECOVERY_REQUIRED` | `RC-PROMOTE-001` observes the target hash and reaches `PROMOTED` | Append exactly the §8 recovery journal delta required to reach `score.promoted`; exit 0 |
+| `PROMOTE-SCORE-010` | selects the existing run | `--recover` from `PROMOTING` or `RECOVERY_REQUIRED` | `RC-PROMOTE-001` observes the expected hash, resumes the same transaction, and reaches `PROMOTED` | Append exactly the §8 same-transaction recovery journal delta through `score.promoted`; exit 0 |
+| `PROMOTE-SCORE-011` | selects the existing run | `--recover` from `PROMOTING` or `RECOVERY_REQUIRED` | `RC-PROMOTE-001` finds the target snapshot unavailable or observes a hash matching neither expected nor target and retains `RECOVERY_REQUIRED` | Append exactly the §8 recovery-cause journal delta not already durable, retain Promotion `RECOVERY_REQUIRED`, and report its cause; exit 5 |
+| `PROMOTE-SCORE-012` | selects the existing run | `--recover` from `PROMOTING` | `RC-PROMOTE-001` is operationally interrupted while Promotion remains `PROMOTING` | Preserve the confirmed §8 Promotion journal prefix and leave the transaction to a later `promote-score --recover`; exit 6 |
 
 `apply` evaluates the selected run's candidate against the expectation of **the same run
 revision** — never against the root score.

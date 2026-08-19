@@ -42,41 +42,84 @@ func TestShippingExitMappingsAreSpecified(t *testing.T) {
 	// Given
 	lines := recoveryDesignLines(t)
 	globalCodes := globalExitCodeSet(t, lines)
-	shipping := recoveryDocumentSection(t, lines,
-		"## 8. Verification and shipping",
-		"## 9. Amendments")
-	runCodes := documentExitCodeTable(t, lines, "run", "| Code | `partitur run` outcome |")
-	resumeCodes := documentExitCodeTable(t, lines, "resume", "| Code | `partitur resume` outcome |")
-	cancelCodes := documentExitCodeTable(t, lines, "cancel", "| Code | `partitur cancel` outcome |")
-	applyCodes := shippingExitCodeTable(t, shipping,
-		"**`partitur apply` exit mapping.**",
-		"| Code | `partitur apply` outcome |")
-	promotionCodes := shippingExitCodeTable(t, shipping,
-		"**`partitur promote-score` exit mapping.**",
-		"| Code | `partitur promote-score` outcome |")
+	applicability := exit7ApplicabilityByCommand(t, lines)
 
 	// When
 	for _, command := range []struct {
-		name  string
-		codes map[int]string
+		name         string
+		grammarOwned []int
+		unused       []int
 	}{
-		{"run", runCodes},
-		{"resume", resumeCodes},
-		{"cancel", cancelCodes},
-		{"apply", applyCodes},
-		{"promote-score", promotionCodes},
+		{name: "run", grammarOwned: []int{1}},
+		{name: "resume", unused: []int{3}},
+		{name: "cancel", unused: []int{3}},
+		{name: "apply", unused: []int{3}},
+		{name: "promote-score", unused: []int{3, 4}},
 	} {
 		t.Run(command.name, func(t *testing.T) {
-			assertSameExitCodeSet(t, command.name, command.codes, globalCodes)
+			codes := commandMatrixExitCodeDescriptions(t, lines, command.name, globalCodes)
+			assertShippingMatrixExitCodePartition(t, command.name, codes, command.grammarOwned, command.unused, applicability[command.name], globalCodes)
 		})
 	}
+}
 
-	// Then
-	assertShippingOutcomeCode(t, applyCodes, "FAILED_CLEAN", 4)
-	assertShippingOutcomeCode(t, applyCodes, "matching neither `base_tree` nor `result_tree`", 5)
-	assertShippingOutcomeCode(t, promotionCodes, "before `score.promotion_started`", 2)
-	assertShippingOutcomeCode(t, promotionCodes, "A started promotion found a missing", 5)
-	assertShippingOutcomeCode(t, promotionCodes, "matching neither the expected nor target hash", 5)
+func exit7ApplicabilityByCommand(t *testing.T, lines []string) map[string]bool {
+	t.Helper()
+
+	result := make(map[string]bool)
+	for _, row := range exit7ApplicabilityRows(t, lines) {
+		if _, duplicate := result[row.command]; duplicate {
+			t.Fatalf("exit-7 applicability registry has duplicate command %s", row.command)
+		}
+		result[row.command] = row.applicable
+	}
+	return result
+}
+
+func commandMatrixExitCodeDescriptions(t *testing.T, lines []string, command string, globalCodes map[int]struct{}) map[int]string {
+	t.Helper()
+
+	descriptions := make(map[int]string)
+	for _, row := range commandMatrixRows(t, lines, command, globalCodes) {
+		if descriptions[row.exit] != "" {
+			descriptions[row.exit] += "\n"
+		}
+		descriptions[row.exit] += row.catalogID + ": " + row.description
+	}
+	return descriptions
+}
+
+func assertShippingMatrixExitCodePartition(t *testing.T, command string, matrix map[int]string, grammarOwned, unused []int, exit7Applicable bool, global map[int]struct{}) {
+	t.Helper()
+
+	accounted := make(map[int]string)
+	add := func(code int, owner string) {
+		if existing := accounted[code]; existing != "" {
+			t.Fatalf("%s exit code %d is owned by both %s and %s", command, code, existing, owner)
+		}
+		accounted[code] = owner
+	}
+	for code := range matrix {
+		add(code, "precondition matrix")
+	}
+	for _, code := range grammarOwned {
+		add(code, "command-matrix grammar")
+	}
+	for _, code := range unused {
+		add(code, "exhaustive matrix absence")
+	}
+	if !exit7Applicable {
+		t.Fatalf("%s must be applicable in the exit-7 registry", command)
+	}
+	add(7, "exit-7 applicability registry")
+
+	got := make(map[int]struct{}, len(accounted))
+	for code := range accounted {
+		got[code] = struct{}{}
+	}
+	if !sameIntSet(got, global) {
+		t.Fatalf("%s matrix/grammar/absence/registry partition = %v, want global exit-code set %v", command, sortedIntSet(got), sortedIntSet(global))
+	}
 }
 
 func TestObservationExitMappingsPartitionGlobalExitCodes(t *testing.T) {
@@ -183,32 +226,26 @@ func sortedIntSet(set map[int]struct{}) []int {
 	return values
 }
 
-func TestShippingExitMappingsStayInsideGlobalCategories(t *testing.T) {
+func TestShippingMatrixOutcomesStayInsideGlobalCategories(t *testing.T) {
 	// Given
 	lines := recoveryDesignLines(t)
 	global := globalExitCodeDescriptions(t, lines)
-	shipping := recoveryDocumentSection(t, lines,
-		"## 8. Verification and shipping",
-		"## 9. Amendments")
-	apply := shippingExitCodeTable(t, shipping,
-		"**`partitur apply` exit mapping.**",
-		"| Code | `partitur apply` outcome |")
-	promotion := shippingExitCodeTable(t, shipping,
-		"**`partitur promote-score` exit mapping.**",
-		"| Code | `partitur promote-score` outcome |")
+	globalCodes := globalExitCodeSet(t, lines)
+	apply := commandMatrixExitCodeDescriptions(t, lines, "apply", globalCodes)
+	promotion := commandMatrixExitCodeDescriptions(t, lines, "promote-score", globalCodes)
 
 	// When
-	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 4, "FAILED_CLEAN", "FAILED_CLEAN")
+	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 4, "verified clean rollback", "FAILED_CLEAN")
 	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 5,
-		"Application `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
+		"retain Application `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
 	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 2,
-		"before `score.promotion_started`", "promotion pre-start root-hash conflict")
+		"pre-start root-hash conflict", "promotion pre-start root-hash conflict")
 	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 5,
-		"Promotion `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
+		"retain Promotion `RECOVERY_REQUIRED`", "Application or Promotion remains `RECOVERY_REQUIRED`")
 	assertShippingOutcomeAdmittedByGlobal(t, global, apply, 6,
-		"Application remains `APPLYING`", "Application `APPLYING`")
+		"`partitur apply <run-id> --recover`", "Application `APPLYING`")
 	assertShippingOutcomeAdmittedByGlobal(t, global, promotion, 6,
-		"Promotion remains `PROMOTING`", "Promotion `PROMOTING`")
+		"`partitur promote-score <run-id> --recover`", "Promotion `PROMOTING`")
 
 	// Then
 	assertExistingRunCommandNarrowings(t, lines, global)
@@ -230,7 +267,6 @@ func assertExistingRunCommandNarrowings(t *testing.T, lines []string, global map
 
 	for _, command := range []struct {
 		name            string
-		header          string
 		failure         string
 		recovery        string
 		interruption    string
@@ -238,11 +274,11 @@ func assertExistingRunCommandNarrowings(t *testing.T, lines []string, global map
 		globalRecovery  string
 		globalInterrupt string
 	}{
-		{"run", "| Code | `partitur run` outcome |", "terminal `FAILED` or `CANCELLED`", "Appendix D", "run remains nonterminal", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
-		{"resume", "| Code | `partitur resume` outcome |", "terminal `FAILED` or `CANCELLED`", "Appendix D", "operational-interruption outcome", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
-		{"cancel", "| Code | `partitur cancel` outcome |", "terminal `FAILED` or `CANCELLED`", "Appendix D", "run remains nonterminal", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
+		{"run", "authoritative terminal event", "selected halt reason", "`partitur resume <run-id>`", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
+		{"resume", "required residual cleanup", "selected halt reason", "later `resume`", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
+		{"cancel", "authoritative terminal event", "selected halt reason", "`partitur resume <run-id>`", "a run reached terminal `FAILED` or `CANCELLED`", "a run halt names an Appendix D reason", "a run by `resume`"},
 	} {
-		mapping := documentExitCodeTable(t, lines, command.name, command.header)
+		mapping := commandMatrixExitCodeDescriptions(t, lines, command.name, globalExitCodeSet(t, lines))
 		for code, outcomes := range map[int]struct{ command, global string }{
 			4: {command.failure, command.globalFailure},
 			5: {command.recovery, command.globalRecovery},
@@ -282,24 +318,6 @@ func globalExitCodeDescriptions(t *testing.T, lines []string) map[int]string {
 	return exitCodeTable(t, "global exit-code table", section[table:], "| Code | Meaning |")
 }
 
-func documentExitCodeTable(t *testing.T, lines []string, name, header string) map[int]string {
-	t.Helper()
-
-	table := uniqueLineIndex(t, lines, header)
-	return exitCodeTable(t, name+" exit mapping", lines[table:], header)
-}
-
-func shippingExitCodeTable(t *testing.T, section []string, title, header string) map[int]string {
-	t.Helper()
-
-	start := uniqueLinePrefixIndex(t, section, title)
-	table := uniqueLineIndex(t, section, header)
-	if table <= start {
-		t.Fatalf("%s exit-code table must follow its mapping", title)
-	}
-	return exitCodeTable(t, title, section[table:], header)
-}
-
 func exitCodeTable(t *testing.T, name string, lines []string, header string) map[int]string {
 	t.Helper()
 
@@ -326,40 +344,6 @@ func exitCodeTable(t *testing.T, name string, lines []string, header string) map
 		t.Fatalf("%s extracted no exit-code rows", name)
 	}
 	return codes
-}
-
-func assertSameExitCodeSet(t *testing.T, command string, got map[int]string, want map[int]struct{}) {
-	t.Helper()
-
-	for code := range got {
-		if _, declared := want[code]; !declared {
-			t.Fatalf("%s exit mapping uses undeclared global code %d", command, code)
-		}
-	}
-	for code := range want {
-		if _, found := got[code]; !found {
-			t.Fatalf("%s exit mapping omits declared global code %d", command, code)
-		}
-	}
-}
-
-func assertShippingOutcomeCode(t *testing.T, codes map[int]string, outcome string, want int) {
-	t.Helper()
-
-	found := -1
-	count := 0
-	for code, description := range codes {
-		if strings.Contains(description, outcome) {
-			found = code
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("shipping outcome %q appears in %d exit-code rows, want 1", outcome, count)
-	}
-	if found != want {
-		t.Fatalf("shipping outcome %q maps to %d, want %d", outcome, found, want)
-	}
 }
 
 func shippingCLIForms(t *testing.T, lines []string) map[string]map[string]bool {

@@ -76,7 +76,8 @@ func TestPresentCommandMatricesFollowGrammar(t *testing.T) {
 }
 
 type exit7ApplicabilityRow struct {
-	command string
+	command    string
+	applicable bool
 }
 
 func exit7ApplicabilityRows(t *testing.T, lines []string) []exit7ApplicabilityRow {
@@ -114,7 +115,7 @@ func exit7ApplicabilityRows(t *testing.T, lines []string) []exit7ApplicabilityRo
 		if cells[3] == "" {
 			t.Fatalf("exit-7 applicability for %s has no owner", command)
 		}
-		rows = append(rows, exit7ApplicabilityRow{command: command})
+		rows = append(rows, exit7ApplicabilityRow{command: command, applicable: cells[1] == "yes"})
 	}
 	if len(rows) == 0 {
 		t.Fatal("exit-7 applicability registry extracted no rows")
@@ -152,6 +153,27 @@ func completionCommandIDs(t *testing.T) []string {
 	return commands
 }
 
+type commandMatrixRow struct {
+	catalogID   string
+	description string
+	exit        int
+}
+
+func commandMatrixRows(t *testing.T, lines []string, command string, globalCodes map[int]struct{}) []commandMatrixRow {
+	t.Helper()
+
+	heading := "### `partitur " + command + "` precondition matrix"
+	start := uniqueLineIndex(t, lines, heading)
+	end := len(lines)
+	for index := start + 1; index < len(lines); index++ {
+		if strings.HasPrefix(lines[index], "### ") || strings.HasPrefix(lines[index], "## ") {
+			end = index
+			break
+		}
+	}
+	return checkPresentCommandMatrix(t, command, lines[start+1:end], globalCodes, regexp.MustCompile(`\bexit ([0-9]+)\b`), make(map[string]string))
+}
+
 func checkPresentCommandMatrix(
 	t *testing.T,
 	command string,
@@ -159,7 +181,7 @@ func checkPresentCommandMatrix(
 	globalCodes map[int]struct{},
 	exitPattern *regexp.Regexp,
 	seenCatalogIDs map[string]string,
-) {
+) []commandMatrixRow {
 	t.Helper()
 
 	headerIndex := -1
@@ -195,7 +217,7 @@ func checkPresentCommandMatrix(
 	catalogIndex := stringIndex(header, "Catalog ID")
 	resultIndex := stringIndex(header, "Result")
 	idPattern := regexp.MustCompile("^" + regexp.QuoteMeta(strings.ToUpper(command)) + `-[0-9]{3}$`)
-	rowCount := 0
+	var rows []commandMatrixRow
 	for index := headerIndex + 2; index < len(section) && strings.HasPrefix(section[index], "|"); index++ {
 		cells := markdownTableCells(t, command+" precondition matrix", section[index], len(header))
 		for cellIndex, cell := range cells {
@@ -226,11 +248,16 @@ func checkPresentCommandMatrix(
 		if code == 7 {
 			t.Fatalf("%s row %s places exit 7 in a precondition matrix", command, catalogID)
 		}
-		rowCount++
+		rows = append(rows, commandMatrixRow{
+			catalogID:   catalogID,
+			description: strings.Join(cells, " | "),
+			exit:        code,
+		})
 	}
-	if rowCount == 0 {
+	if len(rows) == 0 {
 		t.Fatalf("%s precondition matrix extracted no rows", command)
 	}
+	return rows
 }
 
 func closedMarkdownCells(line string) ([]string, bool) {
