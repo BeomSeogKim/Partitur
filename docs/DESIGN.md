@@ -3278,6 +3278,49 @@ is invalid with `--reject`. For an `amendment` or `finalization` decision, rejec
 `--reason <text>`, which becomes B.5's `human_reason`; `--override` is invalid. Repeating the same
 `--override` pair is a usage error (exit 1): the command appends nothing.
 
+### `partitur answer` precondition matrix
+
+The answer source is either the literal `--answer` operand or the bytes read from
+`--answer-file`; acquiring the literal cannot fail. After that acquisition, the decision-resolution
+target rule above exclusively owns active-run selection and the pending-question check. Its
+selection refusal, unavailable projection, accepted transaction, and post-start interruption are
+disjoint. They exhaust the physically satisfiable preconditions without repeating the run lifecycle
+or pending-decision partitions. A durability-unconfirmed append is owned by the exit-7 registry, not
+by an interruption row below.
+
+| Catalog ID | Answer source | Decision-resolution target | Transaction result | Result |
+|---|---|---|---|---|
+| `ANSWER-001` | required file input cannot be read | not reached | not started | Refuse the required input and append nothing; exit 2 |
+| `ANSWER-002` | acquired | selection or the §7 pending-question precondition is refused | not started | Refuse the decision-resolution precondition and append nothing; exit 2 |
+| `ANSWER-003` | acquired | no current projection can be built | not started | Report the unavailable projection and append nothing; exit 5 |
+| `ANSWER-004` | acquired | selects the expected pending question on the unique active run | commits | Append exactly one `decision.resolved {decision_type: question, disposition: answered}` under the §7 transaction and perform no execution mutation; exit 0 |
+| `ANSWER-005` | acquired | selects the expected pending question on the unique active run | operationally interrupted after the transaction starts | Preserve the transaction's confirmed journal prefix, perform no further mutation, and leave the nonterminal run to `partitur resume <run-id>`; exit 6 |
+
+### `partitur approve` precondition matrix
+
+`human_gate` is separate from `amendment` and `finalization`: the former owns the single-event §7
+decision-resolution transaction, while the latter two own §9 terminal amendment events and can
+produce a rejected-amendment exit. `amendment` and `finalization` remain combined because their
+operand forms and transaction outcomes are identical here. Under §9, a deciding human is never
+routed again, so a routed outcome from an amendment/finalization approval is logically impossible
+and has no row. A durability-unconfirmed append is owned by the exit-7 registry.
+
+| Catalog ID | Selected pending decision | Operand applicability | Owning transaction result | Result |
+|---|---|---|---|---|
+| `APPROVE-001` | active-run selection or the addressed pending-decision precondition is refused | not reached | not started | Refuse the decision-resolution precondition and append nothing; exit 2 |
+| `APPROVE-002` | no current projection can be built | not reached | not started | Report the unavailable projection and append nothing; exit 5 |
+| `APPROVE-003` | `amendment` or `finalization` | form is invalid for that decision type under the operand rule above | not started | Report the type-specific usage error and append nothing; exit 1 |
+| `APPROVE-004` | `human_gate` | applicable | §7 or §8 refuses before its first journal mutation, including an override outside the pending gate's blocker set | Refuse the gate-resolution precondition and append nothing; exit 2 |
+| `APPROVE-005` | `human_gate` | applicable | commits | Append exactly one `decision.resolved {decision_type: human_gate}` with the §8-owned disposition and payload; exit 0 |
+| `APPROVE-006` | `human_gate` | applicable | operationally interrupted after the transaction starts | Preserve the transaction's confirmed journal prefix, perform no further mutation, and leave the nonterminal run to `partitur resume <run-id>`; exit 6 |
+| `APPROVE-007` | `amendment` or `finalization` | bare `--approve` | §9 refuses before its first journal mutation | Refuse the amendment-resolution precondition and append nothing; exit 2 |
+| `APPROVE-008` | `amendment` or `finalization` | bare `--approve` | the §9 decision-time re-evaluation rejects | Append the §9-owned `amendment.rejected` terminal event, directly resolve its amendment decision in projection, and exit 3 |
+| `APPROVE-009` | `amendment` or `finalization` | bare `--approve` | the §6 and §9 approval transaction completes | Append the §6/§9-owned transaction journal delta ending in `amendment.approved`, directly resolve its amendment decision in projection, and exit 0 |
+| `APPROVE-010` | `amendment` or `finalization` | bare `--approve` | operationally interrupted after the transaction starts | Preserve the §6/§9 transaction's confirmed journal prefix, perform no further mutation, and leave the nonterminal run to `partitur resume <run-id>`; exit 6 |
+| `APPROVE-011` | `amendment` or `finalization` | `--reject --reason <text>` | §9 refuses before its first journal mutation | Refuse the amendment-resolution precondition and append nothing; exit 2 |
+| `APPROVE-012` | `amendment` or `finalization` | `--reject --reason <text>` | commits | Append exactly one `amendment.human_rejected`, directly resolve its amendment decision in projection, and exit 0 |
+| `APPROVE-013` | `amendment` or `finalization` | `--reject --reason <text>` | operationally interrupted after the transaction starts | Preserve the transaction's confirmed journal prefix, perform no further mutation, and leave the nonterminal run to `partitur resume <run-id>`; exit 6 |
+
 **`partitur status` observable surface.** `status` is an observation of the selected run's
 authoritative journal and its immutable pinned score snapshots. It takes neither a driver lease nor
 the repository state lock; it never creates a directory, repairs a tail, rebuilds a checkpoint, or
@@ -4011,6 +4054,24 @@ proposal. After a successful commit it returns success for that durable command 
 not acquire execution authority or wait for the restarted attempt. If no live continuation episode
 exists, `resume` later performs the `revision_restart` continuation defined in §6. This is a command
 authority boundary, not an origin-specific §9 policy outcome.
+
+### `partitur amend` precondition matrix
+
+Input acquisition includes active-run selection, the captured head, the patch source, and the
+optional claimed-impact source. Once those inputs are acquired, §9 exclusively owns the
+admissibility, barrier, routing, preparation, and approval partitions; the matrix names only its
+three outcomes. Those outcomes are mutually exclusive by the §9 evaluator. An operational
+interruption may retain any confirmed prefix already established by that transaction, while a
+durability-unconfirmed append remains owned by the exit-7 registry.
+
+| Catalog ID | Input acquisition and projection | §9 transaction result | Result |
+|---|---|---|---|
+| `AMEND-001` | refused before the §9 transaction, including an unreadable patch or claimed-impact source | not started | Refuse the required input or run-selection precondition and append nothing; exit 2 |
+| `AMEND-002` | no current projection can be built | not started | Report the unavailable projection and append nothing; exit 5 |
+| `AMEND-003` | succeeds | `Rejected` | Append exactly one §9-owned `amendment.rejected` terminal event and exit 3 |
+| `AMEND-004` | succeeds | `Routed` | Append the §9-owned `amendment.routed_human` followed by its `decision.requested`, and exit 0 |
+| `AMEND-005` | succeeds | `Approved` and the §6/§9 transaction completes | Append the §6/§9-owned transaction journal delta ending in `amendment.approved` and exit 0 |
+| `AMEND-006` | succeeds | operationally interrupted after the transaction starts | Preserve the §6/§9 transaction's confirmed journal prefix, perform no further mutation, and leave the nonterminal run to `partitur resume <run-id>`; exit 6 |
 
 Passing this pipeline and the approval policy establishes intent; it does not by itself authorize
 `amendment.approval_prepared`. §6's durable-consequence closure barrier runs before preparation and
