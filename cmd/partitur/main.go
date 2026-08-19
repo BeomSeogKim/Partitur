@@ -36,7 +36,10 @@ import (
 
 var version = "dev"
 
-var errOutputStream = errors.New("output stream is unwritable")
+var (
+	errOutputStream    = errors.New("output stream is unwritable")
+	errApproveOperands = errors.New("approve operands are invalid")
+)
 
 const initIgnoreContents = "runs/\nwork/\n"
 
@@ -674,6 +677,10 @@ func findingReferencePresent(references []runstate.FindingReference, candidate r
 
 func runApprove(decisionID string, approved bool, overridden []runstate.FindingReference, reason string, stderr io.Writer) int {
 	if err := resolveApproval(decisionID, approved, overridden, reason); err != nil {
+		if errors.Is(err, errApproveOperands) {
+			fmt.Fprintf(stderr, "usage error: %v\n", err)
+			return 1
+		}
 		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
 			renderDurabilityUnconfirmed(stderr, err)
 			return 7
@@ -711,10 +718,6 @@ func resolveApproval(decisionID string, approved bool, overridden []runstate.Fin
 	if err != nil {
 		return answerSelectionError{err: err}
 	}
-	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
-	if err != nil {
-		return err
-	}
 	runID := runstate.RunID(report.Run.ID)
 	decisionType := ""
 	for _, decision := range report.Run.PendingDecisions {
@@ -722,6 +725,13 @@ func resolveApproval(decisionID string, approved bool, overridden []runstate.Fin
 			decisionType = decision.Type
 			break
 		}
+	}
+	if err := validateApproveOperands(decisionType, approved, overridden, reason); err != nil {
+		return err
+	}
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	if err != nil {
+		return err
 	}
 	switch decisionType {
 	case "human_gate":
@@ -738,6 +748,19 @@ func resolveApproval(decisionID string, approved bool, overridden []runstate.Fin
 		return err
 	}
 	store.WakeLeaseOwner(runID)
+	return nil
+}
+
+func validateApproveOperands(decisionType string, approved bool, overridden []runstate.FindingReference, reason string) error {
+	if decisionType != "amendment" && decisionType != "finalization" {
+		return nil
+	}
+	if len(overridden) != 0 {
+		return fmt.Errorf("%w for %s decision: --override is invalid", errApproveOperands, decisionType)
+	}
+	if !approved && reason == "" {
+		return fmt.Errorf("%w for %s decision: --reject requires --reason", errApproveOperands, decisionType)
+	}
 	return nil
 }
 

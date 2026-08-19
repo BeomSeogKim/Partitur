@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
@@ -77,7 +78,7 @@ func assertAmendmentRejectionRequiresReason(t *testing.T, binary, repository str
 		t.Fatal(err)
 	}
 	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "approve", decisionID, "--reject")
-	if code != 2 || stdout != "" || stderr == "" {
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "usage error:") || !strings.Contains(stderr, "amendment decision") {
 		t.Fatalf("reasonless amendment rejection exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	after, err := store.ReadJournal(runID)

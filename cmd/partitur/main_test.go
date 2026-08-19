@@ -923,6 +923,115 @@ func TestParseApproveArgs(t *testing.T) {
 	}
 }
 
+func TestApproveOperandsBySelectedDecisionType(t *testing.T) {
+	const override = "findings@attempt-1:F-1"
+	for _, test := range []struct {
+		name, decisionType string
+		args               []string
+	}{
+		{name: "amendment rejection requires reason", decisionType: "amendment", args: []string{"--reject"}},
+		{name: "finalization rejection requires reason", decisionType: "finalization", args: []string{"--reject"}},
+		{name: "amendment approval rejects override", decisionType: "amendment", args: []string{"--approve", "--override", override, "--reason", "human judgment"}},
+		{name: "finalization approval rejects override", decisionType: "finalization", args: []string{"--approve", "--override", override, "--reason", "human judgment"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, store := resumeAttemptFixture(t)
+			decisionID := appendPendingCLIDecision(t, store, test.decisionType)
+			t.Chdir(root)
+			before := journalLength(t, store)
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"approve", decisionID}, test.args...)
+			code := run(args, &stdout, &stderr)
+			if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage error:") || !strings.Contains(stderr.String(), test.decisionType+" decision") {
+				t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+			}
+			if after := journalLength(t, store); after != before {
+				t.Fatalf("invalid %s operands appended %d events", test.decisionType, after-before)
+			}
+		})
+	}
+}
+
+func TestApproveTypeValidationFollowsSelection(t *testing.T) {
+	t.Run("missing decision remains a refused precondition", func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		appendPendingCLIDecision(t, store, "amendment")
+		t.Chdir(root)
+		before := journalLength(t, store)
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"approve", "missing-decision", "--reject"}, &stdout, &stderr)
+		if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "precondition refused:") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		if after := journalLength(t, store); after != before {
+			t.Fatalf("missing decision appended %d events", after-before)
+		}
+	})
+
+	t.Run("unavailable projection precedes operand applicability", func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		decisionID := appendPendingCLIDecision(t, store, "amendment")
+		journalPath := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+		before, err := os.ReadFile(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(before) == 0 {
+			t.Fatal("fixture journal is empty")
+		}
+		before[0] = '!'
+		if err := os.WriteFile(journalPath, before, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before, err = os.ReadFile(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"approve", decisionID, "--reject"}, &stdout, &stderr)
+		if code != 5 || stdout.Len() != 0 {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		after, err := os.ReadFile(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(after, before) {
+			t.Fatal("unavailable projection changed the journal")
+		}
+	})
+}
+
+func TestApproveHumanGateFormsRemainAccepted(t *testing.T) {
+	const override = "findings@attempt-1:F-1"
+	for _, test := range []struct {
+		name     string
+		args     []string
+		blockers []runstate.FindingReference
+	}{
+		{name: "approve", args: []string{"--approve"}},
+		{name: "approve with override", args: []string{"--approve", "--override", override, "--reason", "human judgment"}, blockers: []runstate.FindingReference{{ArtifactInstanceID: "findings@attempt-1", FindingID: "F-1"}}},
+		{name: "reject without reason", args: []string{"--reject"}},
+		{name: "reject with reason", args: []string{"--reject", "--reason", "not ready"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, store := resumeAttemptFixture(t)
+			decisionID := appendPendingCLIDecision(t, store, "human_gate", test.blockers...)
+			t.Chdir(root)
+			before := journalLength(t, store)
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"approve", decisionID}, test.args...)
+			if code := run(args, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+				t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+			}
+			if after := journalLength(t, store); after != before+1 {
+				t.Fatalf("accepted human_gate form appended %d events, want 1", after-before)
+			}
+		})
+	}
+}
+
 func TestRunPrintsDurableIDOnceBeforeTerminalOutcome(t *testing.T) {
 	tests := []struct {
 		name    string
