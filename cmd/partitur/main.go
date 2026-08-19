@@ -259,8 +259,8 @@ func runWithReaders(
 	if requestedID, ok := parseCancelArgs(args); ok {
 		return runCancel(requestedID, stdout, stderr, cancel)
 	}
-	if decisionID, answerText, ok := parseAnswerArgs(args); ok {
-		return runAnswer(decisionID, answerText, stderr)
+	if decisionID, answerText, answerPath, ok := parseAnswerArgs(args); ok {
+		return runAnswerSource(decisionID, answerText, answerPath, stderr)
 	}
 	if decisionID, approved, overridden, reason, ok := parseApproveArgs(args); ok {
 		return runApprove(decisionID, approved, overridden, reason, stderr)
@@ -741,11 +741,36 @@ func resolveApproval(decisionID string, approved bool, overridden []runstate.Fin
 	return nil
 }
 
-func parseAnswerArgs(args []string) (decisionID, answer string, ok bool) {
-	if len(args) != 4 || args[0] != "answer" || args[1] == "" || strings.HasPrefix(args[1], "-") || args[2] != "--answer" {
-		return "", "", false
+func parseAnswerArgs(args []string) (decisionID, answer, answerPath string, ok bool) {
+	if len(args) != 4 || args[0] != "answer" || args[1] == "" || strings.HasPrefix(args[1], "-") {
+		return "", "", "", false
 	}
-	return args[1], args[3], true
+	switch args[2] {
+	case "--answer":
+		return args[1], args[3], "", true
+	case "--answer-file":
+		if args[3] != "" {
+			return args[1], "", args[3], true
+		}
+	}
+	return "", "", "", false
+}
+
+func runAnswerSource(decisionID, answer, answerPath string, stderr io.Writer) int {
+	if answerPath != "" {
+		root, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+		contents, err := readAmendmentPath(root, answerPath, false)
+		if err != nil {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+		answer = string(contents)
+	}
+	return runAnswer(decisionID, answer, stderr)
 }
 
 func runAnswer(decisionID, answer string, stderr io.Writer) int {
