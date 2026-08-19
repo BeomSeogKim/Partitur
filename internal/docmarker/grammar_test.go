@@ -23,11 +23,35 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	requireOccurrence(t, document, markerProduction, 1)
 	requireOccurrence(t, document, "| `clause-evidence` |", 1)
 	requireOccurrence(t, document, "| `documentation-claim` |", 1)
-	requireOccurrence(t, document, "Their existing\nunwrapped appearances are names, not markers.", 1)
-	requireOccurrence(t, document, "A document enters this regime only when a reviewed baseline registry names the document and its\nexact blob.", 1)
-	requireOccurrence(t, document, "An unmarked\nnormative requirement is void.", 1)
-	requireOccurrence(t, document, "Every added non-whitespace source line must be inside exactly one well-formed current\nrange.", 1)
-	requireOccurrence(t, document, "The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or\nre-run the baseline judgement.", 1)
+	requireProseOccurrence(t, document, "Their existing unwrapped appearances are names, not markers.", 1)
+	requireProseOccurrence(t, document, "A document enters this regime only when a reviewed baseline registry names the document and its exact blob.", 1)
+	requireProseOccurrence(t, document, "An unmarked normative requirement is void.", 1)
+	requireProseOccurrence(t, document, "Every added non-whitespace source line must be inside exactly one well-formed current range.", 1)
+	requireProseOccurrence(t, document, "The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement.", 1)
+}
+
+func TestProseOccurrenceNormalizesWhitespaceOnly(t *testing.T) {
+	canonical := "The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement."
+	rewrapped := "The fence checks syntax, range coverage,\nand registry-key equality. It does not infer\tnormativity or re-run the baseline judgement."
+	if got := proseOccurrenceCount(rewrapped, canonical); got != 1 {
+		t.Fatalf("rewrapped prose occurrences = %d, want 1", got)
+	}
+
+	mutations := []struct {
+		name  string
+		value string
+	}{
+		{name: "changed word", value: "The fence checks syntax, range coverage, and registry-key equality. It does not detect normativity or re-run the baseline judgement."},
+		{name: "dropped clause", value: "The fence checks syntax, range coverage, and registry-key equality."},
+		{name: "reordered sentences", value: "It does not infer normativity or re-run the baseline judgement. The fence checks syntax, range coverage, and registry-key equality."},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if got := proseOccurrenceCount(mutation.value, canonical); got != 0 {
+				t.Fatalf("mutated prose occurrences = %d, want 0", got)
+			}
+		})
+	}
 }
 
 func TestDocumentMarkerGrammarAcceptsBothRegistriesAndExistingIDs(t *testing.T) {
@@ -156,4 +180,20 @@ func requireOccurrence(t *testing.T, document, value string, want int) {
 	if got := strings.Count(document, value); got != want {
 		t.Fatalf("MARKERS occurrence of %q = %d, want %d", value, got, want)
 	}
+}
+
+func requireProseOccurrence(t *testing.T, document, value string, want int) {
+	t.Helper()
+	if got := proseOccurrenceCount(document, value); got != want {
+		t.Fatalf("MARKERS prose occurrence of %q = %d, want %d", value, got, want)
+	}
+}
+
+func proseOccurrenceCount(document, value string) int {
+	// Canonicalizing whitespace admits a different line width and nothing else:
+	// non-whitespace bytes retain their case, punctuation, content, and order.
+	normalizeWhitespace := func(text string) string {
+		return strings.Join(strings.Fields(text), " ")
+	}
+	return strings.Count(normalizeWhitespace(document), normalizeWhitespace(value))
 }
