@@ -89,9 +89,9 @@ denominator cannot change without changing this document.
 
 Currently green: thirteen of the thirteen are dispatched.
 
-> This row proves dispatch, not behaviour — a command could be dispatched and do nothing. The
-> obligation that each command's outcomes are exercised is an outstanding prerequisite, not a row
-> here, because its scenario domain is not yet defined.
+> This row proves dispatch, not behaviour — a command could be dispatched and do nothing. Section 8
+> holds the now-defined command-outcome scenario domain. Executed behavioural evidence for those
+> scenarios remains an outstanding prerequisite.
 
 ## 2. Events
 
@@ -346,6 +346,35 @@ This row proves that each named derived effect is projected and survives replay.
 that the effect Appendix B names is the *right* effect — that is a normative question, and the
 obligation for it is not here.
 
+## 8. Command outcome specification
+
+**Green when** all four hold. **Mechanical.**
+
+| Check |
+|---|
+| Every command in section 1 has exactly one precondition matrix in `DESIGN.md`, and no matrix names a command outside that table |
+| Every command matrix satisfies the precondition-matrix grammar |
+| For every command, matrix results, grammar-owned usage, exhaustive absences, and the exit-7 applicability registry partition the global exit-code enumeration exactly once |
+| The exit-7 applicability registry answers every command in section 1 |
+
+The section 1 command table is the member set. Matrix headings are reconciled for exact equality
+with that table, so adding a command without a matrix and adding a matrix for an unlisted command
+both fail by command name. `DESIGN.md`'s global exit-code table is the partition denominator; the
+accounting does not infer a newly added code to be unused, so such an addition makes every command
+incomplete until its owner is stated.
+
+`status` and `logs` retain their command-specific prose mappings as the sole normative owners of
+their exit classifications. The lock requires each observation matrix's result-code set to equal
+the codes enumerated by its prose mapping, takes exhaustive absences from that mapping's explicit
+negation, and leaves exit 7 to the applicability registry. They participate in this one partition
+lock rather than being counted again by a separate observation partition.
+
+This row proves that the command-outcome specification artefact is complete and mechanically
+reconciled. **It does not prove that production honours a matrix or that any catalog scenario has
+executed.** The disclosed divergences #265, #266, #267, and #271, and exit 7's absence from the
+implementation, remain outside this row. Executed behavioural evidence for the matrices remains an
+outstanding prerequisite below.
+
 ---
 
 ## Using this contract
@@ -361,15 +390,20 @@ without anyone deciding to move it.
 **It is a baseline audit, not yet the completion audit.** It carries only rows whose green predicate
 is decidable today over a member set it cannot silently lose: either pinned to a normative
 enumeration, or — where no document owns the set — derived by a closure that fails closed, as the
-member-set section describes. Surfaces that need
-an artefact before they can be stated that way — an outcome matrix for commands, an inventory
-mapping normative clauses to their evidence, a claim manifest for documentation — are tracked as
-outstanding prerequisites, and each becomes a row here when its artefact exists.
+member-set section describes. Surfaces that still need an evidence artefact before they can be
+stated that way — **executed behavioural evidence for every command-matrix scenario** (currently 96
+catalog IDs across thirteen matrices, each requiring a fixture that runs the scenario and asserts
+its observable result), an inventory mapping normative clauses to their evidence, a claim manifest
+for documentation — are tracked as outstanding prerequisites, and each becomes a row here when its
+artefact exists.
 
-Three have since been promoted rather than dropped: the derived-event source-projection lock is
+Four have since been promoted rather than dropped: the derived-event source-projection lock is
 section 7, the single typed boundary for unit-owned deferrals is section 3's sixth and seventh
-checks, and the strengthened dispatch lock is section 3's fourth. Each moved because its artefact
-exists, which is the only route out of this list.
+checks, the strengthened dispatch lock is section 3's fourth, and the command-outcome specification
+artefact is section 8. The last promotion is deliberately narrower than behavioural conformance:
+the matrices now exist and are mechanically bounded, while their executed scenario evidence remains
+in the prerequisite list above. Each moved because its stated artefact exists, which is the only
+route out of this list.
 
 So the rule is explicit rather than implied:
 
