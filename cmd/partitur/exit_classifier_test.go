@@ -155,20 +155,65 @@ func assertExitSevenRejectsPriorCode(t *testing.T, code, priorCode int, stderr s
 	}
 }
 
-func appendPendingCLIDecision(t *testing.T, store *runstore.Store, decisionType string) string {
+func appendPendingCLIDecision(t *testing.T, store *runstore.Store, decisionType string, blockers ...runstate.FindingReference) string {
 	t.Helper()
 	decisionID := decisionType + "-1"
 	payload := map[string]any{"decision_id": decisionID, "decision_type": decisionType}
-	if decisionType == "question" {
+	var routePayload map[string]any
+	switch decisionType {
+	case "question":
 		payload["question"] = "Continue?"
 		payload["emitted_id"] = "emitted-1"
-	} else {
+	case "human_gate":
 		payload["gate_id"] = "gate-attempt-1"
 		payload["gate_mode"] = "always"
 		payload["subject_tree"] = "git-sha1:tree"
-		payload["blocking_findings"] = []any{}
+		blockingFindings := make([]any, len(blockers))
+		for index, blocker := range blockers {
+			blockingFindings[index] = map[string]any{"artifact_instance_id": blocker.ArtifactInstanceID, "finding_id": blocker.FindingID}
+		}
+		payload["blocking_findings"] = blockingFindings
+	case "amendment":
+		payload["proposal_id"] = "proposal-1"
+		payload["routed_reason"] = "requires_decision"
+		payload["blocking"] = true
+	case "finalization":
+		payload["proposal_id"] = "proposal-1"
+		payload["routed_reason"] = "draft_phase"
+	}
+	if decisionType == "amendment" || decisionType == "finalization" {
+		input, err := store.LoadRunInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		reason := "requires_decision"
+		if decisionType == "finalization" {
+			reason = "draft_phase"
+		}
+		routePayload = map[string]any{
+			"proposal_id": "proposal-1", "reason": reason, "decision_type": decisionType, "blocking": true,
+			"proposal_record_hash": "sha256:proposal", "base_revision": 1, "base_hash": string(input.Projection.State.ScoreHead.SemanticHash),
+			"classifier_version": 1, "decision_id": decisionID, "typed_delta": []any{},
+			"actual_impact": map[string]any{
+				"score_changes": []any{},
+				"authority": map[string]any{
+					"allowed_paths": map[string]any{"added": []any{}, "removed": []any{}},
+					"grants":        []any{}, "side_effects": map[string]any{"added": []any{}, "removed": []any{}},
+				},
+				"budget": map[string]any{},
+			},
+			"identity_versions": resumeIdentityVersions(),
+		}
 	}
 	err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		if routePayload != nil {
+			if _, err := transaction.At("fixture.amendment.routed_human").Append(runstate.Event{
+				RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1",
+				Type: runstate.EventAmendmentRoutedHuman, Payload: resumePayload(t, routePayload),
+			}); err != nil {
+				return err
+			}
+		}
 		_, err := transaction.At("fixture.decision.requested").Append(runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1",
 			Type: runstate.EventDecisionRequested, Payload: resumePayload(t, payload),
