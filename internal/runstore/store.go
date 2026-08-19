@@ -32,8 +32,16 @@ type Store struct {
 
 // New constructs a store rooted at repositoryRoot.
 func New(repositoryRoot string, probe faultpoint.Probe, observers ...ReceiptObserver) (*Store, error) {
+	return NewWithFileSystem(repositoryRoot, probe, realFS{}, observers...)
+}
+
+// NewWithFileSystem constructs a store with an injected filesystem.
+func NewWithFileSystem(repositoryRoot string, probe faultpoint.Probe, fileSystem FileSystem, observers ...ReceiptObserver) (*Store, error) {
 	if probe == nil {
 		return nil, errors.New("runstore: nil probe")
+	}
+	if fileSystem == nil {
+		return nil, errors.New("runstore: nil filesystem")
 	}
 	if len(observers) > 1 {
 		return nil, errors.New("runstore: multiple receipt observers")
@@ -54,7 +62,7 @@ func New(repositoryRoot string, probe faultpoint.Probe, observers ...ReceiptObse
 		return nil, errors.New("repository root is not a directory")
 	}
 	return &Store{
-		root: root, probe: probe, receiptObserver: receiptObserver, fs: realFS{},
+		root: root, probe: probe, receiptObserver: receiptObserver, fs: fileSystem,
 		sweepSessions: sweepRecordedSessions, quiesceReceiptCadence: quiesceReceiptCadence,
 	}, nil
 }

@@ -58,6 +58,9 @@ func (store *Store) PromoteScore(ctx context.Context, runID runstate.RunID, reco
 			(state.Promotion.State == runstate.PromotionNotPromoted || state.Promotion.State == runstate.PromotionPromoted)) {
 			return err
 		}
+		if errors.Is(err, ErrJournalDurabilityUnconfirmed) {
+			return err
+		}
 		result, err = store.promotionFailureOutcome(transaction, movementSeed(initial), err)
 		return err
 	})

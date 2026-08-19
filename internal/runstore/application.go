@@ -70,6 +70,9 @@ func (store *Store) Apply(ctx context.Context, runID runstate.RunID, recoverOnly
 		if err == nil || errors.Is(err, ErrApplicationNotAllowed) {
 			return err
 		}
+		if errors.Is(err, ErrJournalDurabilityUnconfirmed) {
+			return err
+		}
 		// What the caller is told must describe the projection that survived, not
 		// the code path that failed. A durable append can fail with its line
 		// already on disk, and no amount of reasoning about *where* the failure

@@ -57,7 +57,7 @@ func TestCommandStoreConstructionInstallsReceiptObserver(t *testing.T) {
 	var unwired []string
 	ast.Inspect(file, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
-		if !ok || !isRunstoreCall(call, "New") {
+		if !ok || (!isRunstoreCall(call, "New") && !isIdentifierCall(call, "newRunStore")) {
 			return true
 		}
 		stores++
@@ -75,6 +75,11 @@ func TestCommandStoreConstructionInstallsReceiptObserver(t *testing.T) {
 	if len(unwired) != 0 {
 		t.Fatalf("command store construction lacks ReceiptObserverFromEnvironment at %s", strings.Join(unwired, ", "))
 	}
+}
+
+func isIdentifierCall(call *ast.CallExpr, name string) bool {
+	identifier, ok := call.Fun.(*ast.Ident)
+	return ok && identifier.Name == name
 }
 
 func isRunstoreCall(expression ast.Expr, name string) bool {

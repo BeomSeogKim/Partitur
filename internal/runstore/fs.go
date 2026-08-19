@@ -5,7 +5,10 @@ import (
 	"os"
 )
 
-type fsOperations interface {
+// FileSystem is the filesystem dependency used by Store. It is exported only
+// so command-package tests can inject failures at the CLI boundary; runstore
+// remains an internal package.
+type FileSystem interface {
 	MkdirAll(string, fs.FileMode) error
 	ReadFile(string) ([]byte, error)
 	WriteTemp(string, string, []byte, fs.FileMode) (string, error)
@@ -17,6 +20,8 @@ type fsOperations interface {
 	Truncate(string, int64) error
 	Stat(string) (fs.FileInfo, error)
 }
+
+type fsOperations = FileSystem
 
 type realFS struct{}
 

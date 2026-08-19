@@ -76,6 +76,8 @@ type runDriver func(
 type statusReader func(string) (statusprojection.Report, error)
 type resumeRunner func(context.Context, string) (recoveryexec.Result, error)
 
+var newRunStore = runstore.New
+
 type resumeSelectionError struct {
 	err error
 }
@@ -292,6 +294,10 @@ func runWithReaders(
 				return err
 			},
 		)
+		if errors.Is(result.Err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, result.Err)
+			return 7
+		}
 		if result.RunID == "" {
 			switch {
 			case errors.Is(result.Err, workspace.ErrDirtySource),
@@ -442,13 +448,17 @@ func runApply(requestedID string, recoverOnly bool, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 		return 2
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 		return 2
 	}
 	result, err := store.Apply(context.Background(), runstate.RunID(requestedID), recoverOnly)
 	if err != nil {
+		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, err)
+			return 7
+		}
 		// Only a failure after apply.started may advertise --recover: before it
 		// the projection is still NOT_APPLIED, which recovery rightly refuses, so
 		// exit 6 would name a continuation the caller cannot use.
@@ -495,13 +505,17 @@ func runPromoteScore(requestedID string, recoverOnly bool, stderr io.Writer) int
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 		return 2
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 		return 2
 	}
 	result, err := store.PromoteScore(context.Background(), runstate.RunID(requestedID), recoverOnly)
 	if err != nil {
+		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, err)
+			return 7
+		}
 		if errors.Is(err, runstore.ErrPromotionInterrupted) {
 			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "promotion", "partitur promote-score "+requestedID+" --recover", err.Error())
 			return 6
@@ -532,7 +546,7 @@ func runAmend(requestedID, patchPath, reason, claimedImpactPath string, stdout, 
 		renderStatusError(stderr, err)
 		return statusErrorCode(err)
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 		return 2
@@ -564,6 +578,10 @@ func runAmend(requestedID, patchPath, reason, claimedImpactPath string, stdout, 
 		Operations: patch, Reason: reason, ClaimedImpact: claimedImpact,
 	})
 	if err != nil {
+		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, err)
+			return 7
+		}
 		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", runID, "nonterminal", "partitur resume "+string(runID), err.Error())
 		return 6
 	}
@@ -656,6 +674,10 @@ func findingReferencePresent(references []runstate.FindingReference, candidate r
 
 func runApprove(decisionID string, approved bool, overridden []runstate.FindingReference, reason string, stderr io.Writer) int {
 	if err := resolveApproval(decisionID, approved, overridden, reason); err != nil {
+		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, err)
+			return 7
+		}
 		var rejected *amendmentexec.DecisionRejectedError
 		if errors.As(err, &rejected) {
 			fmt.Fprintf(stderr, "amendment rejected: proposal_id=%q reason=%q\n", rejected.ProposalID, rejected.Reason)
@@ -665,13 +687,17 @@ func runApprove(decisionID string, approved bool, overridden []runstate.FindingR
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
 		}
+		if errors.Is(err, runstate.ErrInvalidEvent) || errors.Is(err, runstate.ErrIllegalTransition) {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
 		var selectionErr answerSelectionError
 		if errors.As(err, &selectionErr) {
 			renderStatusError(stderr, err)
 			return statusErrorCode(err)
 		}
-		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
-		return 2
+		fmt.Fprintf(stderr, "run interrupted: state=%q resume=%q detail=%q\n", "nonterminal", "partitur resume", err.Error())
+		return 6
 	}
 	return 0
 }
@@ -685,7 +711,7 @@ func resolveApproval(decisionID string, approved bool, overridden []runstate.Fin
 	if err != nil {
 		return answerSelectionError{err: err}
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return err
 	}
@@ -724,7 +750,15 @@ func parseAnswerArgs(args []string) (decisionID, answer string, ok bool) {
 
 func runAnswer(decisionID, answer string, stderr io.Writer) int {
 	if err := answerQuestion(decisionID, answer); err != nil {
+		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, err)
+			return 7
+		}
 		if errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
+			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
+			return 2
+		}
+		if errors.Is(err, runstate.ErrInvalidEvent) || errors.Is(err, runstate.ErrIllegalTransition) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
 		}
@@ -733,8 +767,8 @@ func runAnswer(decisionID, answer string, stderr io.Writer) int {
 			renderStatusError(stderr, err)
 			return statusErrorCode(err)
 		}
-		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
-		return 2
+		fmt.Fprintf(stderr, "run interrupted: state=%q resume=%q detail=%q\n", "nonterminal", "partitur resume", err.Error())
+		return 6
 	}
 	return 0
 }
@@ -753,7 +787,7 @@ func answerQuestion(decisionID, answer string) error {
 	if err != nil {
 		return answerSelectionError{err: err}
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return err
 	}
@@ -804,6 +838,10 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 	}
 	result, err := resume(context.Background(), requestedID)
 	if err != nil {
+		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, err)
+			return 7
+		}
 		var selectionErr resumeSelectionError
 		if errors.As(err, &selectionErr) {
 			code := statusErrorCode(err)
@@ -843,6 +881,10 @@ func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner
 	defer stop()
 	result, err := cancel(ctx, requestedID)
 	if err != nil {
+		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
+			renderDurabilityUnconfirmed(stderr, err)
+			return 7
+		}
 		if errors.Is(err, runstore.ErrCancellationNotAllowed) {
 			fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
 			return 2
@@ -882,7 +924,7 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 	if err != nil {
 		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return recoveryexec.Result{}, err
 	}
@@ -893,6 +935,14 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 			return recoveryexec.Result{}, resumeSelectionError{err: err}
 		}
 		runID = runstate.RunID(report.Run.ID)
+	} else {
+		report, selectionErr := statusprojection.Read(root, requestedID)
+		switch {
+		case selectionErr == nil:
+			runID = runstate.RunID(report.Run.ID)
+		case errors.Is(selectionErr, statusprojection.ErrInvalidRunID), errors.Is(selectionErr, statusprojection.ErrRunNotFound):
+			return recoveryexec.Result{}, resumeSelectionError{err: selectionErr}
+		}
 	}
 	return executeRecovery(ctx, store, runID)
 }
@@ -910,7 +960,7 @@ func cancel(ctx context.Context, requestedID string) (recoveryexec.Result, error
 	if err != nil {
 		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
-	store, err := runstore.New(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
+	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
 		return recoveryexec.Result{}, err
 	}
@@ -1085,6 +1135,10 @@ func statusErrorCode(err error) int {
 	default:
 		return 2
 	}
+}
+
+func renderDurabilityUnconfirmed(w io.Writer, err error) {
+	fmt.Fprintf(w, "durability unconfirmed: detail=%q\n", err.Error())
 }
 
 func observationOutputCode(stderr io.Writer, err error) int {

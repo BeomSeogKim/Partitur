@@ -39,6 +39,7 @@ func (observer receiptObserverFunc) Observed(receipt DurabilityReceipt) {
 var (
 	ErrInvalidPath                  = errors.New("invalid runstore path")
 	ErrJournalCorrupt               = errors.New("journal_corrupt")
+	ErrJournalDurabilityUnconfirmed = errors.New("journal durability unconfirmed")
 	ErrJournalIdempotencyConflict   = errors.New("journal_idempotency_conflict")
 	ErrImmutablePublicationConflict = errors.New("immutable_publication_conflict")
 	ErrHashMismatch                 = errors.New("hash_mismatch")
