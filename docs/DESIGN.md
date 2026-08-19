@@ -3372,15 +3372,15 @@ different corruption: no projection can be built.
 The status-specific exit mapping is exhaustive: 0 for a reported projection; 1 for usage; 2 for a
 refused selection or required readable input, including no active run, a non-unique active-run set,
 or an unreadable pinned snapshot; and 5 only when the projection cannot be built, including a
-corrupt journal prefix or an event the core cannot project. `status` never returns 3, 4, or 6: it
-neither validates nor drives a run.
+corrupt journal prefix or an event the core cannot project. `status` never returns 3, 4, 6, or 7:
+it neither validates nor drives a run, and appends to no journal.
 
 The logs-specific exit mapping is likewise exhaustive: 0 for a produced observation stream,
 including an empty history, a RUNNING or terminal run, a SIGINT-ended follow, and a journal whose
 only defect is an unparseable final line; 1 for usage; 2 for a refused selection, required
 readable input, or unwritable output stream; and 5 when the stream cannot be produced because of a
-corrupt journal prefix or an event the core cannot project. `logs` never returns 3, 4, or 6: it
-neither validates nor drives a run.
+corrupt journal prefix or an event the core cannot project. `logs` never returns 3, 4, 6, or 7:
+it neither validates nor drives a run, and appends to no journal.
 
 For both `status` and `logs`, a closed or broken consumer pipe ends output successfully and emits
 no stderr diagnostic. Any other stdout write failure is an unwritable output stream and is a
