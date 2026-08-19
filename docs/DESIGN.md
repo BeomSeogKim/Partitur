@@ -3564,6 +3564,30 @@ The command's exit codes are exhaustive over its specified outcomes:
 | 6 | This invocation was operationally interrupted after `run.started`; the run remains nonterminal and resumable. The id was already written except when that single stdout write was itself the interruption |
 | 7 | A required run-journal append has unconfirmed durability, so the event and the run's resulting durable projection are unknown. The id was already written unless the unconfirmed event is `run.started`; follow §1's external storage-observation instruction |
 
+### `partitur run` precondition matrix
+
+`run` owns preparation and the live run transaction. It has no selected Appendix C case axis:
+Appendix C owns later recovery by `resume`, not creation or live execution by this invocation. Score
+and cast acquisition, compilation, and §5 run-start checks occur before `run.started`; their refusal,
+diagnostic, and accepted states are mutually exclusive. Once `run.started` is durable, the one run-id
+write either fails before authority is acquired or succeeds before any live execution outcome. A
+terminal, quiescent, halted, or interrupted live outcome therefore cannot coexist with a pre-start
+result or a failed id write. These constraints exhaust the physically satisfiable combinations
+without importing an Appendix C partition. A durability-unconfirmed append is owned by the exit-7
+registry.
+
+| Catalog ID | Preparation | Live run transaction | Run-id output | Result |
+|---|---|---|---|---|
+| `RUN-001` | input acquisition or another preparation precondition is refused | not started | not attempted | Refuse preparation, create no run, append nothing, and write no run id; exit 2 |
+| `RUN-002` | complete preparation output contains a score or cast diagnostic | not started | not attempted | Report the complete ordered diagnostics, create no run, append nothing, and write no run id; exit 3 |
+| `RUN-003` | succeeds without diagnostics | a §5 run-start precondition is refused before `run.started` | not attempted | Refuse run creation, append no event, and write no run id; exit 2 |
+| `RUN-004` | succeeds without diagnostics | a §5 run-start validation diagnostic is produced before `run.started` | not attempted | Report the run-start validation diagnostic, append no event, and write no run id; exit 3 |
+| `RUN-005` | succeeds without diagnostics | `run.started` commits; no driver authority or later live mutation starts | fails | Preserve exactly the preparation publications and `run.started` journal delta, report the allocated id on stderr when possible, and leave the nonterminal run to `resume`; exit 6 |
+| `RUN-006` | succeeds without diagnostics | the §§5–7 live transaction reaches `SUCCEEDED` or quiescent `WAITING_HUMAN` | writes `<run-id>\n` once | Preserve the complete live-transaction journal delta and its projected success or quiescence; exit 0 |
+| `RUN-007` | succeeds without diagnostics | the §§5–7 live transaction reaches terminal `FAILED` or `CANCELLED` | writes `<run-id>\n` once | Preserve the live-transaction journal delta ending in the authoritative terminal event and report that durable unsuccessful outcome; exit 4 |
+| `RUN-008` | succeeds without diagnostics | the §§5–7 live transaction selects an Appendix D halt after `run.started` | writes `<run-id>\n` once | Preserve the live transaction's confirmed journal prefix, append no halt event, and report the selected halt reason; exit 5 |
+| `RUN-009` | succeeds without diagnostics | operationally interrupted after `run.started` while the run remains nonterminal | writes `<run-id>\n` once | Preserve the live transaction's confirmed journal prefix, perform no further mutation, and leave the run to `partitur resume <run-id>`; exit 6 |
+
 v0.2 defines no `run --json` or `run --jsonl`, live progress rendering, TTY-specific mode, spinner,
 colour, or human-oriented status stream. Adapter `log` and `progress` notifications remain the
 journal observations §4/B.7 define; `partitur logs <run-id> --jsonl [--follow]` is their stream, and
@@ -3604,6 +3628,31 @@ to the creating command:
 | 6 | The operational-interruption outcome already defined for `resume` above |
 | 7 | A required recovery append has unconfirmed durability, so the selected run's resulting projection is unknown; follow §1's external storage-observation instruction |
 
+### `partitur resume` precondition matrix
+
+`resume` is bounded by reference to the Appendix C case selected from the durable projection and
+required external observations. C.1's preamble owns that quantification and maps the state to an
+action rather than to a command result; this matrix neither restates a durable-state predicate nor
+copies an action. The selected action and any prescribed re-evaluation either reach one of the
+command-visible outcomes below or are operationally interrupted. `RC-RESUME-046` is the one selected
+case whose action directly leaves `resume` with nothing to do and is therefore a refused command
+precondition. An Appendix D halt may be selected before any append or after a confirmed Appendix C
+journal prefix; both are the same command result because the halt itself is not an event. These
+alternatives are mutually exclusive and exhaustive. A durability-unconfirmed append is owned by the
+exit-7 registry.
+
+| Catalog ID | Run selection | Selected Appendix C case and consequence | Result |
+|---|---|---|---|
+| `RESUME-001` | explicit run-id is semantically malformed | not reached | Report the operand usage error and append nothing; exit 1 |
+| `RESUME-002` | selection or another required command precondition is refused | not reached | Refuse the command precondition and append nothing; exit 2 |
+| `RESUME-003` | selection cannot build the projection needed to enter Appendix C and selects a named Appendix D halt | not reached | Append nothing and report the selected halt reason; exit 5 |
+| `RESUME-004` | selects the existing run | `RC-RESUME-046` yields to its verified live owner | Append nothing, leave the owner's authority unchanged, and refuse this competing continuation; exit 2 |
+| `RESUME-005` | selects the existing run | the selected case and its prescribed re-evaluations reach `RC-RESUME-002` with `SUCCEEDED` | Preserve exactly the Appendix C-owned journal delta and complete its required residual cleanup; exit 0 |
+| `RESUME-006` | selects the existing run | the selected case and its prescribed re-evaluations reach `RC-RESUME-048` | Preserve exactly the Appendix C-owned journal delta and return quiescent `WAITING_HUMAN` with no adapter or criterion process left running; exit 0 |
+| `RESUME-007` | selects the existing run | the selected case and its prescribed re-evaluations reach `RC-RESUME-002` with `FAILED` or `CANCELLED` | Preserve exactly the Appendix C-owned journal delta and complete its required residual cleanup; exit 4 |
+| `RESUME-008` | selects the existing run | the selected Appendix C case yields its named Appendix D halt | Preserve any confirmed Appendix C-owned journal prefix, append no halt event, and report the selected halt reason; exit 5 |
+| `RESUME-009` | selects the existing run | the selected Appendix C action is operationally interrupted while the run remains nonterminal | Preserve the confirmed Appendix C-owned journal prefix, perform no further mutation, and leave the run to a later `resume`; exit 6 |
+
 An already-terminal run is therefore not a wrong-projection-state refusal. Treating its durable
 outcome idempotently closes the normal race in which a caller repeats `resume` after exit 6 but
 another invocation completed the run first; `SUCCEEDED` returns 0, while `FAILED` or `CANCELLED`
@@ -3643,6 +3692,30 @@ The following table is exhaustive for `cancel`:
 | 5 | Recovery halted for the Appendix D reason reported on stderr; the run remains at its last durable projection |
 | 6 | This `cancel` invocation was operationally interrupted while the run remains nonterminal |
 | 7 | The `cancel.requested` append or a later cancellation append has unconfirmed durability, so the selected run's resulting durable projection is unknown; follow §1's external storage-observation instruction |
+
+### `partitur cancel` precondition matrix
+
+`cancel` first owns the §6 request transaction and then is bounded by reference to the Appendix C
+case selected from the resulting durable projection and required external observations. C.1's
+preamble owns the durable-state quantification and the selected action; each row below names only
+the case-level consequence for this command. `RC-RESUME-046` is an intermediate wait state after a
+durable request, not a command result: the bounded acknowledgement wait re-enters Appendix C until
+the run is terminal, a named halt is selected, or this invocation is interrupted. An already-terminal
+run selects `RC-RESUME-002` without appending `cancel.requested`. A nonterminal accepted request makes
+that event the first journal delta of every subsequent row. Those alternatives cannot coexist and
+exhaust the physically satisfiable command results. A durability-unconfirmed append is owned by the
+exit-7 registry.
+
+| Catalog ID | Run selection and request | Selected Appendix C case and consequence | Result |
+|---|---|---|---|
+| `CANCEL-001` | explicit run-id is semantically malformed | not reached | Report the operand usage error and append nothing; exit 1 |
+| `CANCEL-002` | selection or another required pre-request command precondition is refused | not reached | Refuse the command precondition and append nothing; exit 2 |
+| `CANCEL-003` | selection cannot build the projection needed to decide the request and selects a named Appendix D halt | not reached | Append nothing and report the selected halt reason; exit 5 |
+| `CANCEL-004` | no request is appended because the selected run is already terminal `SUCCEEDED` | `RC-RESUME-002` completes required residual cleanup | Preserve exactly any Appendix C-owned cleanup journal delta and report the existing durable success; exit 0 |
+| `CANCEL-005` | no request is appended because the selected run is already terminal `FAILED` or `CANCELLED` | `RC-RESUME-002` completes required residual cleanup | Preserve exactly any Appendix C-owned cleanup journal delta and report the existing durable unsuccessful outcome; exit 4 |
+| `CANCEL-006` | append `cancel.requested` under §6 for the selected nonterminal run | `RC-RESUME-006`, possibly after `RC-RESUME-046` and re-entry, completes cancellation; or a race reaches terminal `FAILED` before cancellation | Preserve the request and exact Appendix C/§6-owned journal delta ending in the authoritative terminal event, including `run.cancelled` when cancellation completes; exit 4 |
+| `CANCEL-007` | append `cancel.requested` under §6 for the selected nonterminal run | the selected Appendix C case yields its named Appendix D halt | Preserve the request and any later confirmed Appendix C-owned journal prefix, append no halt event, and report the selected halt reason; exit 5 |
+| `CANCEL-008` | append `cancel.requested` under §6 for the selected nonterminal run | `RC-RESUME-046` remains an intermediate wait, or another selected action is interrupted, while the run remains nonterminal | Preserve the request and any later confirmed Appendix C-owned journal prefix, perform no further mutation, and leave the run to `partitur resume <run-id>`; exit 6 |
 
 ### `partitur validate` precondition matrix
 
