@@ -322,6 +322,12 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 		adjacent Input
 	}{
 		{
+			name:     "torn tail repair",
+			input:    withTailRepair(baseInput()),
+			wantCase: CaseTailRepair, wantKind: ActionRepairJournalTail, replan: true,
+			adjacent: baseInput(),
+		},
+		{
 			name:     "terminal cleanup outranks every other condition",
 			input:    withTerminal(baseInput()),
 			wantCase: CaseTerminal, wantKind: ActionTerminalCleanup,
@@ -439,7 +445,7 @@ func TestPlanC1RowsAndAdjacentStates(t *testing.T) {
 	}
 
 	for _, caseID := range []CaseID{
-		CaseOpenExecution, CaseTerminal, CaseStaleLease, CaseOrphanLease, CaseOwnerUnverifiable, CaseLiveOwner,
+		CaseOpenExecution, CaseTailRepair, CaseTerminal, CaseStaleLease, CaseOrphanLease, CaseOwnerUnverifiable, CaseLiveOwner,
 		CaseCancellation, CasePendingPrepare, CaseReclaimAuthority, CaseRootSnapshotDivergence,
 		CaseMissingReference, CaseBlockedProposalRoute, CaseRoutedAmendment, CaseRevisionRestart, CaseCompositionTerminal,
 		CaseContinue,
@@ -523,6 +529,11 @@ func TestPlanC1Precedence(t *testing.T) {
 		want  CaseID
 	}{
 		{
+			name:  "tail repair outranks terminal cleanup and pending prepare",
+			input: withTailRepair(withPrepare(withTerminal(baseInput()))),
+			want:  CaseTailRepair,
+		},
+		{
 			name:  "terminal outranks stale lease and cancellation",
 			input: withCancel(withTerminal(withLease(baseInput(), LeaseObservation{Exists: true, Readable: true, Epoch: 1}, 2))),
 			want:  CaseTerminal,
@@ -599,6 +610,12 @@ func TestPlanC1ReplanActionsClearTheirOwnSelectionCut(t *testing.T) {
 		next   Input
 		caseID CaseID
 	}{
+		{
+			name:   "torn tail repair",
+			input:  withTailRepair(baseInput()),
+			next:   baseInput(),
+			caseID: CaseTailRepair,
+		},
 		{
 			name:   "stale lease removal",
 			input:  withLease(baseInput(), LeaseObservation{Exists: true, Readable: true, Epoch: 1}, 2),
@@ -1124,6 +1141,11 @@ func baseInput() Input {
 
 func withTerminal(input Input) Input {
 	input.Projection.State.Run = runstate.RunSucceeded
+	return input
+}
+
+func withTailRepair(input Input) Input {
+	input.Projection.TailRepairRequired = true
 	return input
 }
 

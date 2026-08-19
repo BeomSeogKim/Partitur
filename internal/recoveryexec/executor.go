@@ -133,7 +133,8 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 			result.Outcome = OutcomeHalted
 			return result, nil
 		}
-		if runEligibleCleanup && executor.Store != nil && executor.RunID != "" && !eligibleCleanupCompleted && clearOwnerCut(input) {
+		if runEligibleCleanup && executor.Store != nil && executor.RunID != "" && !eligibleCleanupCompleted &&
+			decision.Action.Kind != recovery.ActionRepairJournalTail && clearOwnerCut(input) {
 			if err := executor.cleanupUnreferencedRecoveryArtifacts(); err != nil {
 				if halted, ok := haltDecision(decision, err); ok {
 					executor.observeDecision(halted)
@@ -427,6 +428,7 @@ func (executor *Executor) cleanupUnreferencedRecoveryArtifacts() error {
 func actionRequiresDriver(action recovery.Action) bool {
 	switch action.Kind {
 	case recovery.ActionTerminalCleanup,
+		recovery.ActionRepairJournalTail,
 		recovery.ActionRebuildFinalization,
 		recovery.ActionRemoveStaleLease,
 		recovery.ActionQuarantineOrphanLease,
