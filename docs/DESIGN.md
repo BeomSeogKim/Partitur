@@ -5224,33 +5224,53 @@ adapter.probed {
   execution_dependency_hash,      # A.5; the exact request shape is now fixed
   identity_versions
 }
+```
 
+**`attempt.started` field clauses.** Each clause below constrains the named field in the adjacent
+coherent payload specimen.
+
+- `attempt.started.attempt_number` is the per-movement display ordinal.
+- `attempt.started.attempt_number` is never the attempt identifier (§6).
+- `attempt.started.adapter_process` is recorded before the trampoline's gate is released.
+- An adapter process absent from `attempt.started.adapter_process` can never have executed adapter
+  code (§4).
+- `attempt.started.adapter_process.session_id` equals `attempt.started.adapter_process.pid`.
+- The trampoline recorded by `attempt.started.adapter_process` is the session leader.
+- `attempt.started.adapter_process` deliberately has no `pgid` field.
+- At sweep time, §4 enumerates the recorded session and discovers its process groups.
+- `attempt.started.base_composition_hash` is the `movement_composition_dependency_hash` (A.4).
+- `attempt.started.base_composition_hash` is present if and only if the movement has dependencies.
+- `attempt.started.base_composition_hash` is journaled because §5 records it and §9 checks it.
+- A declared composition identity that is never persisted protects nothing.
+- A dependency set with zero contributing change sets uses `composition_mode: identity`.
+- `attempt.started.review_subject_input` is present if and only if the movement declares a review
+  criterion (§2).
+- When present, `attempt.started.review_subject_input` is `{instance_id, hash}`, the durable raw-byte
+  commitment to §4's reserved input.
+- The reserved-input path is derived from the `attempt.started` envelope and is never trusted input.
+- `attempt.started.granted_authority` is exactly the wire `grants` object of §4.
+
+```text
 attempt.started {
-  attempt_number,                 # per-movement display ordinal — never the identifier (§6)
-  adapter_process: {              # recorded BEFORE the trampoline's gate is released, so an
-    pid,                          #   unrecorded process can never have executed adapter code (§4)
-    session_id,                   #   == pid; the trampoline is the session leader
+  attempt_number,
+  adapter_process: {
+    pid,
+    session_id,
     start_identity: (
         {platform: "linux",  boot_id, start_ticks}
       | {platform: "darwin", start_tvsec, start_tvusec}
     )
-  },                              # PGID is deliberately absent: §4 enumerates the recorded session
-                                  #   and discovers its process groups at sweep time
-  base_composition_hash?,         # movement_composition_dependency_hash (A.4); present iff the
-                                  #   movement has dependencies. Journaled here because §5
-                                  #   records it and §9 checks it — a declared identity that is
-                                  #   never persisted protects nothing. A dependency set with
-                                  #   zero contributing change sets uses `composition_mode:
-                                  #   identity`
-  review_subject_input?,          # present iff this movement declares a review criterion (§2):
-    {instance_id, hash}           # the durable, raw-byte commitment to §4's reserved input;
-                                  #   its path is derived from this envelope, not trusted input
-  granted_authority: {            # exactly the wire `grants` object of §4
+  },
+  base_composition_hash?,
+  review_subject_input?: {instance_id, hash},
+  granted_authority: {
     paths_rw: [pattern], paths_ro: [pattern], shell: bool, network: bool
   },
   identity_versions
 }
+```
 
+```text
 performer.completed {             # appended ONLY for outcome `completed` — see the mapping below
   session_hint_stored: bool       # whether a hint was retained (§4). The hint itself is
                                   #   NEVER journaled

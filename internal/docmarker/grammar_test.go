@@ -29,18 +29,22 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	placementRows := []string{
 		"| `whole-block` | If a whole fenced block is one clause, its markers may surround the block. |",
 		"| `internal` | Markers may occur inside a block only when the host syntax remains valid and literal marker visibility is accepted. |",
-		"| `decomposition` | A fence containing several independently normative payloads may be split into one fence per payload, with each resulting specimen kept coherent or explicitly non-normative. |",
+		"| `decomposition` | A fence containing several independently normative payloads or annotations may be rewritten as one independently copyable fence per payload; field-level statements are lifted into adjacent prose clauses that cite the resulting coherent specimen. |",
 		"| `incompatible-host` | Otherwise the clause must be lifted into adjacent anchored prose or the marker representation must be revised; it must never be merged with another clause or classified as non-normative merely to avoid the placement problem. |",
 	}
 	placementTable := "| Placement | Rule |\n|---|---|\n" + strings.Join(placementRows, "\n")
 	requireOccurrence(t, document, placementTable, 1)
+	requireOccurrence(t, document, "Changing specimen bytes is not a marker-level exception.", 1)
+	requireOccurrence(t, document, "`baseline-activation` pins the exact blob that results from that review.", 1)
+	requireOccurrence(t, document, "Decomposition defines no canonicalization function or alternate byte equality.", 1)
+	requireOccurrence(t, document, "An inline\nannotation is not a detached field anchor:", 1)
 	invariantRows := []string{
 		"| `unwrapped-names` | Their existing unwrapped appearances are names, not markers. |",
 		"| `baseline-activation` | A document enters this regime only when a reviewed baseline registry names the document and its exact blob. |",
 		"| `unmarked-requirement` | An unmarked normative requirement is void. |",
 		"| `forward-range-coverage` | Every non-whitespace payload byte on an added source line, including the current side of a modified line, must be inside exactly one well-formed current range. |",
 		"| `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |",
-		"| `decomposition-preservation` | Before a fenced block is decomposed, every independently normative statement removed from a resulting specimen must have an adjacent anchored prose carrier; each retained payload must remain byte-identical, independently copyable, and either a coherent whole-block clause or explicitly non-normative. |",
+		"| `decomposition-preservation` | Before a fenced block is decomposed, every normative statement in the original must be inventoried and assigned exactly one resulting carrier before its source annotation is removed. Each resulting specimen must be independently copyable as one coherent whole-block clause or explicitly non-normative. A specimen whose bytes change is a replacement normative clause subject to ordinary review, never a formatting exemption; no clause may be merged or classified non-normative to avoid placement. |",
 	}
 	for _, row := range invariantRows {
 		requireOccurrence(t, document, row, 1)
