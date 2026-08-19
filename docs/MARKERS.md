@@ -29,9 +29,22 @@ The rules are closed:
 
 The marker-ID production admits the existing catalog-ID families (`RC-RESUME-001`, `RA-001`,
 `RS-001`, `INIT-001`, and command IDs such as `ANSWER-001`) as well as qualified event, enum, and
-domain identifiers such as `run.started`, `git_exit`, and `partitur/criterion-spec`. Their existing
-unwrapped appearances are names, not markers. In particular, an event name, enum value, domain name,
-or catalog ID does not confer marking merely because it appears in inline code or a table cell.
+domain identifiers such as `run.started`, `git_exit`, and `partitur/criterion-spec`. The
+`unwrapped-names` invariant below separates lexical acceptance from conferred marking.
+
+## Normative invariants
+
+These five rows are the canonical semantic rules of the grammar. They are conferred as table syntax
+for the same reason document marking is conferred as token syntax: deciding whether reworded prose
+means the same thing would recreate the inference problem this grammar removes.
+
+| Invariant | Rule |
+|---|---|
+| `unwrapped-names` | Their existing unwrapped appearances are names, not markers. |
+| `baseline-activation` | A document enters this regime only when a reviewed baseline registry names the document and its exact blob. |
+| `unmarked-requirement` | An unmarked normative requirement is void. |
+| `forward-range-coverage` | Every added non-whitespace source line must be inside exactly one well-formed current range. |
+| `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |
 
 ## Conferred meaning and activation
 
@@ -39,17 +52,18 @@ The grammar is syntactic. A parser recognizes only the token production and pair
 not decide whether prose is normative, whether a range is one coherent clause, or whether cited
 evidence proves it.
 
-A document enters this regime only when a reviewed baseline registry names the document and its
-exact blob. Before that enrollment, this grammar does not change the authority of existing text.
-Enrollment is the one-time human pass: every source line in the enrolled blob is classified exactly
-once as anchored text or explicitly non-normative text. A normative registry row is anchored text,
-not a third inferred form. The baseline records the review; no parser may claim to reconstruct it
-from modal verbs, prose, inline-code density, or identifier-shaped names.
+The `baseline-activation` invariant supplies the transition into this regime. Before enrollment,
+this grammar does not change the authority of existing text. Enrollment is the one-time human pass:
+every source line in the enrolled blob is classified exactly once as anchored text or explicitly
+non-normative text. A normative registry row is anchored text, not a third inferred form. The
+baseline records the review; no parser may claim to reconstruct it from modal verbs, prose,
+inline-code density, or identifier-shaped names.
 
-After enrollment, normative force is conferred only by an `anchor=<marker-id>` range. An unmarked
-normative requirement is void. A `non-normative` range is explicitly outside the normative and claim
-denominators. This rule is mechanical for text added after the baseline and is trusted to the
-one-time human classification for text already in the baseline blob.
+After enrollment, normative force is conferred only by an `anchor=<marker-id>` range. The
+`unmarked-requirement` invariant supplies the consequence of omitting one. A `non-normative` range
+is explicitly outside the normative and claim denominators. This rule is mechanical for text added
+after the baseline and is trusted to the one-time human classification for text already in the
+baseline blob.
 
 ## Two registries, one foreign key
 
@@ -70,11 +84,11 @@ this key and may not weaken its exact-match rule.
 
 The baseline lock fixes the reviewed blob and its complete ordered classification. For every later
 edit it compares that blob with the current document and treats a modified line as one deletion plus
-one addition. Every added non-whitespace source line must be inside exactly one well-formed current
-range. A changed marker ID or boundary must still reconcile exactly with the applicable registry;
-deleting text cannot create an unmarked obligation.
+one addition. The `forward-range-coverage` invariant owns the added-line requirement. A changed
+marker ID or boundary must still reconcile exactly with the applicable registry; deleting text
+cannot create an unmarked obligation.
 
-The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or
-re-run the baseline judgement. Text added inside a `non-normative` range is mechanically classified
-as non-normative; if it is written as a requirement anyway, the grammar makes that requirement void
-rather than asking a detector to recover the author's intent.
+The `no-normativity-inference` invariant bounds what the fence claims. Text added inside a
+`non-normative` range is mechanically classified as non-normative; if it is written as a requirement
+anyway, the grammar makes that requirement void rather than asking a detector to recover the
+author's intent.

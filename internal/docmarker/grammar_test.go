@@ -23,43 +23,19 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	requireOccurrence(t, document, markerProduction, 1)
 	requireOccurrence(t, document, "| `clause-evidence` |", 1)
 	requireOccurrence(t, document, "| `documentation-claim` |", 1)
-	requireProseOccurrence(t, document, "Their existing unwrapped appearances are names, not markers.", 1)
-	requireProseOccurrence(t, document, "A document enters this regime only when a reviewed baseline registry names the document and its exact blob.", 1)
-	requireProseOccurrence(t, document, "An unmarked normative requirement is void.", 1)
-	requireProseOccurrence(t, document, "Every added non-whitespace source line must be inside exactly one well-formed current range.", 1)
-	requireProseOccurrence(t, document, "The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement.", 1)
-}
-
-func TestProseOccurrenceNormalizesWhitespaceOnly(t *testing.T) {
-	canonical := "The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement."
-	rewrapped := "The fence checks syntax, range coverage,\nand registry-key equality. It does not infer\tnormativity or re-run the baseline judgement."
-	if got := proseOccurrenceCount(rewrapped, canonical); got != 1 {
-		t.Fatalf("rewrapped prose occurrences = %d, want 1", got)
+	requireOccurrence(t, document, "## Normative invariants", 1)
+	invariantRows := []string{
+		"| `unwrapped-names` | Their existing unwrapped appearances are names, not markers. |",
+		"| `baseline-activation` | A document enters this regime only when a reviewed baseline registry names the document and its exact blob. |",
+		"| `unmarked-requirement` | An unmarked normative requirement is void. |",
+		"| `forward-range-coverage` | Every added non-whitespace source line must be inside exactly one well-formed current range. |",
+		"| `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |",
 	}
-	paragraphBreak := strings.Replace(rewrapped, "coverage,\nand", "coverage,\n\nand", 1)
-	if !strings.Contains(paragraphBreak, "coverage,\n\nand") {
-		t.Fatal("paragraph-break fixture does not contain the injected blank line")
+	for _, row := range invariantRows {
+		requireOccurrence(t, document, row, 1)
 	}
-	if restored := strings.Replace(paragraphBreak, "coverage,\n\nand", "coverage,\nand", 1); restored != rewrapped {
-		t.Fatal("paragraph-break fixture differs from the passing rewrap by more than one newline")
-	}
-
-	mutations := []struct {
-		name  string
-		value string
-	}{
-		{name: "changed word", value: "The fence checks syntax, range coverage, and registry-key equality. It does not detect normativity or re-run the baseline judgement."},
-		{name: "dropped clause", value: "The fence checks syntax, range coverage, and registry-key equality."},
-		{name: "reordered sentences", value: "It does not infer normativity or re-run the baseline judgement. The fence checks syntax, range coverage, and registry-key equality."},
-		{name: "paragraph break", value: paragraphBreak},
-	}
-	for _, mutation := range mutations {
-		t.Run(mutation.name, func(t *testing.T) {
-			if got := proseOccurrenceCount(mutation.value, canonical); got != 0 {
-				t.Fatalf("mutated prose occurrences = %d, want 0", got)
-			}
-		})
-	}
+	invariantTable := "| Invariant | Rule |\n|---|---|\n" + strings.Join(invariantRows, "\n")
+	requireOccurrence(t, document, invariantTable+"\n\n## Conferred meaning and activation", 1)
 }
 
 func TestDocumentMarkerGrammarAcceptsBothRegistriesAndExistingIDs(t *testing.T) {
@@ -188,31 +164,4 @@ func requireOccurrence(t *testing.T, document, value string, want int) {
 	if got := strings.Count(document, value); got != want {
 		t.Fatalf("MARKERS occurrence of %q = %d, want %d", value, got, want)
 	}
-}
-
-func requireProseOccurrence(t *testing.T, document, value string, want int) {
-	t.Helper()
-	if got := proseOccurrenceCount(document, value); got != want {
-		t.Fatalf("MARKERS prose occurrence of %q = %d, want %d", value, got, want)
-	}
-}
-
-func proseOccurrenceCount(document, value string) int {
-	// Each single ASCII space in the expected prose admits exactly one of two
-	// source boundaries: one or more ASCII spaces/tabs, or one LF/CRLF with
-	// optional ASCII spaces/tabs on either side. Blank lines, bare CR, other
-	// Unicode whitespace, and every non-boundary byte remain significant.
-	parts := strings.Split(value, " ")
-	if value == "" {
-		return 0
-	}
-	quoted := make([]string, len(parts))
-	for index, part := range parts {
-		if part == "" || strings.ContainsAny(part, "\t\r\n") {
-			return 0
-		}
-		quoted[index] = regexp.QuoteMeta(part)
-	}
-	pattern := regexp.MustCompile(strings.Join(quoted, `(?:[ \t]+|[ \t]*\r?\n[ \t]*)`))
-	return len(pattern.FindAllStringIndex(document, -1))
 }
