@@ -43,23 +43,54 @@ func TestShippingExitMappingsAreSpecified(t *testing.T) {
 	lines := recoveryDesignLines(t)
 	globalCodes := globalExitCodeSet(t, lines)
 	applicability := exit7ApplicabilityByCommand(t, lines)
+	commands := completionCommandIDs(t)
+	accounting := commandExitAccounting()
+	accountedCommands := make([]string, 0, len(accounting))
+	for command := range accounting {
+		accountedCommands = append(accountedCommands, command)
+	}
+	requireSameUniqueStrings(t,
+		"command exit-code accounting", accountedCommands,
+		"COMPLETION section 1 commands", commands,
+	)
 
 	// When
-	for _, command := range []struct {
-		name         string
-		grammarOwned []int
-		unused       []int
-	}{
-		{name: "run", grammarOwned: []int{1}},
-		{name: "resume", unused: []int{3}},
-		{name: "cancel", unused: []int{3}},
-		{name: "apply", unused: []int{3}},
-		{name: "promote-score", unused: []int{3, 4}},
-	} {
-		t.Run(command.name, func(t *testing.T) {
-			codes := commandMatrixExitCodeDescriptions(t, lines, command.name, globalCodes)
-			assertShippingMatrixExitCodePartition(t, command.name, codes, command.grammarOwned, command.unused, applicability[command.name], globalCodes)
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			codes := commandMatrixExitCodeDescriptions(t, lines, command, globalCodes)
+			grammarOwned := []int(nil)
+			if codes[1] == "" {
+				grammarOwned = []int{1}
+			}
+			entry := accounting[command]
+			if entry.observationProse {
+				assertObservationAccounting(t, lines, command, codes, entry.unused, applicability[command])
+			}
+			assertShippingMatrixExitCodePartition(t, command, codes, grammarOwned, entry.unused, globalCodes)
 		})
+	}
+}
+
+type commandExitAccountingEntry struct {
+	unused           []int
+	observationProse bool
+}
+
+func commandExitAccounting() map[string]commandExitAccountingEntry {
+	return map[string]commandExitAccountingEntry{
+		"init":          {unused: []int{3, 4, 5, 6}},
+		"validate":      {unused: []int{4, 5, 6}},
+		"run":           {},
+		"status":        {unused: []int{3, 4, 6}, observationProse: true},
+		"logs":          {unused: []int{3, 4, 6}, observationProse: true},
+		"answer":        {unused: []int{3, 4}},
+		"approve":       {unused: []int{4}},
+		"amend":         {unused: []int{4}},
+		"cancel":        {unused: []int{3}},
+		"resume":        {unused: []int{3}},
+		"apply":         {unused: []int{3}},
+		"promote-score": {unused: []int{3, 4}},
+		"version":       {unused: []int{2, 3, 4, 5, 6}},
 	}
 }
 
@@ -89,7 +120,7 @@ func commandMatrixExitCodeDescriptions(t *testing.T, lines []string, command str
 	return descriptions
 }
 
-func assertShippingMatrixExitCodePartition(t *testing.T, command string, matrix map[int]string, grammarOwned, unused []int, exit7Applicable bool, global map[int]struct{}) {
+func assertShippingMatrixExitCodePartition(t *testing.T, command string, matrix map[int]string, grammarOwned, unused []int, global map[int]struct{}) {
 	t.Helper()
 
 	accounted := make(map[int]string)
@@ -108,9 +139,6 @@ func assertShippingMatrixExitCodePartition(t *testing.T, command string, matrix 
 	for _, code := range unused {
 		add(code, "exhaustive matrix absence")
 	}
-	if !exit7Applicable {
-		t.Fatalf("%s must be applicable in the exit-7 registry", command)
-	}
 	add(7, "exit-7 applicability registry")
 
 	got := make(map[int]struct{}, len(accounted))
@@ -122,18 +150,28 @@ func assertShippingMatrixExitCodePartition(t *testing.T, command string, matrix 
 	}
 }
 
-func TestObservationExitMappingsPartitionGlobalExitCodes(t *testing.T) {
-	// Given
-	lines := recoveryDesignLines(t)
-	globalCodes := globalExitCodeSet(t, lines)
+func assertObservationAccounting(t *testing.T, lines []string, command string, matrix map[int]string, unused []int, exit7Applicable bool) {
+	t.Helper()
 
-	// When
-	statusEnumerated, statusNegated := observationExitCodeSets(t, lines, "status")
-	logsEnumerated, logsNegated := observationExitCodeSets(t, lines, "logs")
-
-	// Then
-	assertExitCodePartition(t, "status", statusEnumerated, statusNegated, globalCodes)
-	assertExitCodePartition(t, "logs", logsEnumerated, logsNegated, globalCodes)
+	enumerated, negated := observationExitCodeSets(t, lines, command)
+	matrixCodes := make(map[int]struct{}, len(matrix))
+	for code := range matrix {
+		matrixCodes[code] = struct{}{}
+	}
+	if !sameIntSet(enumerated, matrixCodes) {
+		t.Fatalf("%s prose-enumerated exit codes = %v, want matrix result codes %v", command, sortedIntSet(enumerated), sortedIntSet(matrixCodes))
+	}
+	wantNegated := make(map[int]struct{}, len(unused)+1)
+	for _, code := range unused {
+		wantNegated[code] = struct{}{}
+	}
+	wantNegated[7] = struct{}{}
+	if !sameIntSet(negated, wantNegated) {
+		t.Fatalf("%s prose-negated exit codes = %v, want exhaustive absences plus exit 7 %v", command, sortedIntSet(negated), sortedIntSet(wantNegated))
+	}
+	if exit7Applicable {
+		t.Fatalf("%s prose says exit 7 is unused but the applicability registry says Applicable", command)
+	}
 }
 
 func observationExitCodeSets(t *testing.T, lines []string, command string) (map[int]struct{}, map[int]struct{}) {
@@ -183,26 +221,6 @@ func observationExitCodeSets(t *testing.T, lines []string, command string) (map[
 		}
 	}
 	return enumerated, negated
-}
-
-func assertExitCodePartition(t *testing.T, command string, enumerated, negated, global map[int]struct{}) {
-	t.Helper()
-
-	for code := range enumerated {
-		if _, overlap := negated[code]; overlap {
-			t.Fatalf("%s exit mapping code %d is both enumerated and negated", command, code)
-		}
-	}
-	union := make(map[int]struct{}, len(enumerated)+len(negated))
-	for code := range enumerated {
-		union[code] = struct{}{}
-	}
-	for code := range negated {
-		union[code] = struct{}{}
-	}
-	if !sameIntSet(union, global) {
-		t.Fatalf("%s exit mapping union = %v, want global exit-code set %v", command, sortedIntSet(union), sortedIntSet(global))
-	}
 }
 
 func sameIntSet(left, right map[int]struct{}) bool {

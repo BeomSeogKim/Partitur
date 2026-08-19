@@ -28,10 +28,11 @@ func TestExit7ApplicabilityRegistryCoversShippingCommands(t *testing.T) {
 	)
 }
 
-func TestPresentCommandMatricesFollowGrammar(t *testing.T) {
+func TestCommandMatricesCoverCompletionCommandsAndFollowGrammar(t *testing.T) {
 	// Given
 	lines := recoveryDesignLines(t)
 	globalCodes := globalExitCodeSet(t, lines)
+	wantCommands := completionCommandIDs(t)
 	grammar := uniqueLineIndex(t, lines, "### Command precondition-matrix grammar")
 	headingPattern := regexp.MustCompile("^### `partitur ([a-z]+(?:-[a-z]+)*)` precondition matrix$")
 	exitPattern := regexp.MustCompile(`\bexit ([0-9]+)\b`)
@@ -73,6 +74,14 @@ func TestPresentCommandMatricesFollowGrammar(t *testing.T) {
 	if matrixCount == 0 {
 		t.Fatal("DESIGN contains no command precondition matrices")
 	}
+	gotCommands := make([]string, 0, len(seenCommands))
+	for command := range seenCommands {
+		gotCommands = append(gotCommands, command)
+	}
+	requireSameUniqueStrings(t,
+		"DESIGN command precondition matrices", gotCommands,
+		"COMPLETION section 1 commands", wantCommands,
+	)
 }
 
 type exit7ApplicabilityRow struct {
