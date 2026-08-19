@@ -1111,12 +1111,45 @@ func TestPendingPrepareRefusesOrdinaryLifecycleMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Apply(state, fixtureEvent(EventMovementReady, map[string]any{}, func(event *Event) { event.MovementID = "m1" }))
-	if !errors.Is(err, ErrIllegalTransition) || !strings.Contains(err.Error(), "prepare_pending") {
-		t.Fatalf("ordinary lifecycle mutation error = %v, want prepare_pending", err)
+	for _, event := range []Event{
+		fixtureEvent(EventMovementReady, map[string]any{}, func(event *Event) { event.MovementID = "m1" }),
+		attemptStartedEvent(attemptStartedPayload()),
+		fixtureEvent(EventAcceptanceStarted, map[string]any{
+			"subject_tree": "git-sha1:tree", "acceptance_spec_hash": "sha256:acceptance",
+			"planned_criterion_ids": []any{"c1"}, "identity_versions": testIdentityVersions(),
+		}, attemptEnvelope),
+		fixtureEvent(EventDecisionRequested, map[string]any{
+			"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
+		}, attemptEnvelope),
+		fixtureEvent(EventDecisionResolved, map[string]any{
+			"decision_id": "decision-1", "decision_type": "question", "disposition": "answered", "answer": "yes",
+		}, attemptEnvelope),
+	} {
+		_, err := Apply(state, event)
+		if !errors.Is(err, ErrIllegalTransition) || !strings.Contains(err.Error(), string(event.Type)+": prepare_pending") {
+			t.Fatalf("%s error = %v, want prepare_pending", event.Type, err)
+		}
 	}
 	if _, err := Apply(state, fixtureEvent(EventCancelRequested, map[string]any{"requested_by": "cli"}, nil)); err != nil {
 		t.Fatalf("cancellation remains permitted while prepare pending: %v", err)
+	}
+}
+
+func TestJournalTailTruncatedPreservesPendingPrepare(t *testing.T) {
+	state := runningAttemptState(t)
+	state, err := Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := *state.PendingPrepare
+	next, err := Apply(state, fixtureEvent(EventJournalTailTruncated, map[string]any{
+		"truncated_seq": 1, "discarded_bytes": 19,
+	}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Run != state.Run || next.ScoreHead != state.ScoreHead || !reflect.DeepEqual(next.PendingPrepare, &before) {
+		t.Fatalf("tail repair changed pending projection:\nafter=%+v\nbefore=%+v", next, state)
 	}
 }
 
