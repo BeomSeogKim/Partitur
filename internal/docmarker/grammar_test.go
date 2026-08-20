@@ -29,7 +29,7 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	placementRows := []string{
 		"| `whole-block` | If a whole fenced block is one clause, its markers may surround the block. |",
 		"| `internal` | Markers may occur inside a block only when the host syntax remains valid and literal marker visibility is accepted. |",
-		"| `decomposition` | A fence containing several independently normative payloads or annotations may be rewritten as one independently copyable fence per payload; field-level statements are lifted into adjacent prose clauses that cite the resulting coherent specimen. |",
+		"| `decomposition` | A fence containing several independently violable normative statements, whether carried by separate payloads or by annotations within one payload, is not one whole-block clause. It may be rewritten as one independently copyable fence per payload; field-level statements are lifted into adjacent prose clauses that cite the resulting coherent specimen. |",
 		"| `incompatible-host` | Otherwise the clause must be lifted into adjacent anchored prose or the marker representation must be revised; it must never be merged with another clause or classified as non-normative merely to avoid the placement problem. |",
 	}
 	placementTable := "| Placement | Rule |\n|---|---|\n" + strings.Join(placementRows, "\n")
@@ -38,6 +38,26 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	requireOccurrence(t, document, "`baseline-activation` pins the exact blob that results from that review.", 1)
 	requireOccurrence(t, document, "Decomposition defines no canonicalization function or alternate byte equality.", 1)
 	requireOccurrence(t, document, "An inline\nannotation is not a detached field anchor:", 1)
+	criterion := "That statement-level boundary is the P3 preparation gate. P3 classifies every normative statement\n" +
+		"and maps each resulting clause to evidence, so a reviewer must be able to discharge one independently\n" +
+		"violable field rule without accepting unrelated field rules in the same specimen. Top-level payload\n" +
+		"count cannot supply that boundary: A.5's one execution-dependency payload contains thirteen\n" +
+		"independently violable rules, and treating its 78 lines as one clause would make it indistinguishable\n" +
+		"from the score YAML, whose many independent field rules already require decomposition."
+	requireOccurrence(t, document, criterion, 1)
+	remainingRows := []string{
+		"| Routed proposal record | `782–794` |",
+		"| Amendment proposal shape | `811–818` |",
+		"| Illustrative cast schema | `1002–1018` |",
+		"| Application-candidate identity | `4024–4030` |",
+		"| `actual_impact` shape | `4413–4422` |",
+		"| A.5 execution-dependency projection | `5012–5089` |",
+		"| A.5.1 `global_invariants` projection | `5152–5165` |",
+	}
+	remainingTable := "| Fence | Source lines in the pinned blob |\n|---|---:|\n" + strings.Join(remainingRows, "\n")
+	requireOccurrence(t, document, "At `DESIGN.md` blob `d6a6331c148b5bb3c1a61f14d69f8655f1275aca`, all thirteen fences previously\n"+
+		"selected by payload plurality have landed, but the statement-level gate remains open on these seven\n"+
+		"fences that selection did not enumerate:\n\n"+remainingTable, 1)
 	invariantRows := []string{
 		"| `unwrapped-names` | Their existing unwrapped appearances are names, not markers. |",
 		"| `baseline-activation` | A document enters this regime only when a reviewed baseline registry names the document and its exact blob. |",
