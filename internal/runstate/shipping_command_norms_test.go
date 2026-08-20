@@ -374,7 +374,7 @@ func shippingCLIForms(t *testing.T, lines []string) map[string]map[string]bool {
 	}
 
 	forms := make(map[string]map[string]bool)
-	for _, line := range commandCodeBlock(t, "CLI command list", lines[start+1:end]) {
+	for _, line := range commandProseForms(t, "CLI command list", lines[start+1:end]) {
 		fields := commandFields(t, "CLI command list", line)
 		command := fields[1]
 		variant := "normal"
@@ -393,6 +393,33 @@ func shippingCLIForms(t *testing.T, lines []string) map[string]map[string]bool {
 		t.Fatal("CLI command list extracted no command IDs")
 	}
 	return forms
+}
+
+func commandProseForms(t *testing.T, name string, lines []string) []string {
+	t.Helper()
+
+	var commands []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "```") {
+			t.Fatalf("%s still uses a fenced representation", name)
+		}
+		if !strings.HasPrefix(line, "- `partitur ") {
+			continue
+		}
+		form := strings.TrimPrefix(line, "- `")
+		end := strings.Index(form, "`")
+		if end < 0 {
+			t.Fatalf("%s has unterminated command form %q", name, line)
+		}
+		if strings.TrimSpace(form[end+1:]) == "" {
+			t.Fatalf("%s command form has no prose carrier %q", name, line)
+		}
+		commands = append(commands, form[:end])
+	}
+	if len(commands) == 0 {
+		t.Fatalf("%s has no prose command forms", name)
+	}
+	return commands
 }
 
 func shippingOperandForms(t *testing.T, lines []string) map[string]string {
