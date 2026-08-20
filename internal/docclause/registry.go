@@ -34,21 +34,42 @@ type ReviewReceipt struct {
 }
 
 type RegionReceipt struct {
-	Key      RegionKey      `json:"key"`
-	Proposed Proposal       `json:"machine_proposals"`
-	Review   *ReviewReceipt `json:"review_receipt,omitempty"`
+	Key    RegionKey      `json:"key"`
+	Review *ReviewReceipt `json:"review_receipt,omitempty"`
 }
 
 type Registry struct {
-	Receipts []RegionReceipt `json:"region_receipts"`
+	DocumentPath           string          `json:"document_path"`
+	InputBlob              string          `json:"input_blob"`
+	NonblankLinesPerRegion int             `json:"nonblank_lines_per_region"`
+	RegionUniverse         []RegionKey     `json:"region_universe"`
+	Receipts               []RegionReceipt `json:"region_receipts"`
+	Activation             *ActivationPins `json:"baseline_activation"`
 }
 
-// StagingRegistry is deliberately empty until the human classification pass.
-var StagingRegistry = Registry{}
-
-func ValidateRegistry(document []byte, inputBlob string, regions []Region, registry Registry) error {
+func ValidateRegistry(documentPath string, document []byte, inputBlob string, regions []Region, registry Registry) error {
+	if actual := GitBlobID(document); actual != inputBlob {
+		return fmt.Errorf("document blob %q does not match input blob %q", actual, inputBlob)
+	}
 	if err := ValidateUniverse(document, inputBlob, regions); err != nil {
 		return err
+	}
+	if registry.DocumentPath != documentPath {
+		return fmt.Errorf("registry document path %q does not match %q", registry.DocumentPath, documentPath)
+	}
+	if registry.InputBlob != inputBlob {
+		return fmt.Errorf("registry input blob %q does not match %q", registry.InputBlob, inputBlob)
+	}
+	if registry.NonblankLinesPerRegion != NonblankLinesPerRegion {
+		return fmt.Errorf("registry nonblank lines per region = %d, want %d", registry.NonblankLinesPerRegion, NonblankLinesPerRegion)
+	}
+	if len(registry.RegionUniverse) != len(regions) {
+		return fmt.Errorf("registry region universe has %d keys, want %d", len(registry.RegionUniverse), len(regions))
+	}
+	for index, region := range regions {
+		if registry.RegionUniverse[index] != region.Key {
+			return fmt.Errorf("registry region universe key %d does not match generated universe", index+1)
+		}
 	}
 	want := make(map[string]Region, len(regions))
 	starts := make(map[string]int, len(regions))
@@ -100,8 +121,8 @@ func Pending(regions []Region, registry Registry) []RegionKey {
 	return pending
 }
 
-func ClassificationDigest(document []byte, inputBlob string, regions []Region, registry Registry) (string, error) {
-	if err := ValidateRegistry(document, inputBlob, regions, registry); err != nil {
+func ClassificationDigest(documentPath string, document []byte, inputBlob string, regions []Region, registry Registry) (string, error) {
+	if err := ValidateRegistry(documentPath, document, inputBlob, regions, registry); err != nil {
 		return "", err
 	}
 	if pending := Pending(regions, registry); len(pending) != 0 {

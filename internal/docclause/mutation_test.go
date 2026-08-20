@@ -19,6 +19,12 @@ func TestMutationRegionStructuralChecks(t *testing.T) {
 		name, source, before, after, target string
 	}{
 		{
+			name: "document bytes match input blob", source: "internal/docclause/registry.go",
+			before: "\tif actual := GitBlobID(document); actual != inputBlob {\n",
+			after:  "\tif actual := GitBlobID(document); false && actual != inputBlob { // mutation\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation",
+		},
+		{
 			name: "same blob", source: "internal/docclause/regions.go",
 			before: "\t\tif region.Key.InputBlob != inputBlob {\n",
 			after:  "\t\tif false && region.Key.InputBlob != inputBlob { // mutation\n",
@@ -43,6 +49,18 @@ func TestMutationRegionStructuralChecks(t *testing.T) {
 			target: "TestRegistryStructuralChecksAndReceiptInvalidation/registry_mismatch",
 		},
 		{
+			name: "registry input blob", source: "internal/docclause/registry.go",
+			before: "\tif registry.InputBlob != inputBlob {\n",
+			after:  "\tif false && registry.InputBlob != inputBlob { // mutation\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation/input_blob",
+		},
+		{
+			name: "pinned region universe", source: "internal/docclause/registry.go",
+			before: "\t\tif registry.RegionUniverse[index] != region.Key {\n",
+			after:  "\t\tif false && registry.RegionUniverse[index] != region.Key { // mutation\n",
+			target: "TestRegistryStructuralChecksAndReceiptInvalidation/region_universe_key",
+		},
+		{
 			name: "uncovered payload byte", source: "internal/docclause/registry.go",
 			before: "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
 			after:  "\t\tif false && !asciiWhitespace(value) && coverage[offset] == 0 { // mutation\n",
@@ -59,6 +77,42 @@ func TestMutationRegionStructuralChecks(t *testing.T) {
 			before: "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
 			after:  "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 && (offset == 0 || contents[offset-1] == '\\n') { // mutation\n",
 			target: "TestRegistryStructuralChecksAndReceiptInvalidation/uncovered_payload_byte_after_mid_line_end",
+		},
+		{
+			name: "materialized classification equality", source: "internal/docclause/activation.go",
+			before: "\tif !bytes.Equal(marked, materialized) {\n",
+			after:  "\tif false && !bytes.Equal(marked, materialized) { // mutation\n",
+			target: "TestActivationRequiresCompleteMaterializedAndPinnedClassification/materialized_bytes",
+		},
+		{
+			name: "marked blob pin", source: "internal/docclause/activation.go",
+			before: "\tif registry.Activation.MarkedBlob != markedBlob {\n",
+			after:  "\tif false && registry.Activation.MarkedBlob != markedBlob { // mutation\n",
+			target: "TestActivationRequiresCompleteMaterializedAndPinnedClassification/marked_blob_pin",
+		},
+		{
+			name: "ordered classification pin", source: "internal/docclause/activation.go",
+			before: "\tif registry.Activation.OrderedClassificationSHA256 != digest {\n",
+			after:  "\tif false && registry.Activation.OrderedClassificationSHA256 != digest { // mutation\n",
+			target: "TestActivationRequiresCompleteMaterializedAndPinnedClassification/classification_pin",
+		},
+		{
+			name: "baseline complete classification byte lock", source: "docs/MARKERS.md",
+			before: "| `baseline-complete-classification` | The enrolled blob has a complete ordered classification with `unclassified == ∅`;",
+			after:  "| `baseline-complete-classification` | The enrolled blob has an ordered classification with `unclassified == ∅`;",
+			target: "TestP3MarkerInvariantIsByteLocked",
+		},
+		{
+			name: "mechanical completion row byte lock", source: "docs/COMPLETION.md",
+			before: "its fixed completion predicate is `unclassified == ∅`. The check validates structure",
+			after:  "its completion predicate is `unclassified == ∅`. The check validates structure",
+			target: "TestP3CompletionRowsAreByteLockedAndCarryNoPendingEnumeration",
+		},
+		{
+			name: "manual completion row byte lock", source: "docs/COMPLETION.md",
+			before: "This is manual because a detector would reproduce reviewer errors",
+			after:  "This is manual because automation would reproduce reviewer errors",
+			target: "TestP3CompletionRowsAreByteLockedAndCarryNoPendingEnumeration",
 		},
 	}
 	for _, mutation := range mutations {
@@ -116,7 +170,7 @@ func runStructuralMutation(t *testing.T, source, before, after, target string) {
 }
 
 func copyMutationInputs(destination, source string) error {
-	for _, directory := range []string{"internal/docclause", "internal/docmarker"} {
+	for _, directory := range []string{"docs", "internal/docclause", "internal/docmarker"} {
 		if err := os.MkdirAll(filepath.Join(destination, directory), 0o700); err != nil {
 			return err
 		}
