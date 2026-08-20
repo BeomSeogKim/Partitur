@@ -41,9 +41,10 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	criterion := "That statement-level boundary is the P3 preparation gate. P3 classifies every normative statement\n" +
 		"and maps each resulting clause to evidence, so a reviewer must be able to discharge one independently\n" +
 		"violable field rule without accepting unrelated field rules in the same specimen. Top-level payload\n" +
-		"count cannot supply that boundary: A.5's one execution-dependency payload contains thirteen\n" +
-		"independently violable rules, and treating its 78 lines as one clause would make it indistinguishable\n" +
-		"from the score YAML, whose many independent field rules already require decomposition."
+		"count cannot supply that boundary: A.5's one execution-dependency payload carries twenty-one\n" +
+		"annotation runs of independently violable field rules, and treating its 78 lines as one clause would\n" +
+		"make it indistinguishable from the score YAML, whose many independent field rules already require\n" +
+		"decomposition."
 	requireOccurrence(t, document, criterion, 1)
 	remainingRows := []string{
 		"| Routed proposal record | `782–794` |",
