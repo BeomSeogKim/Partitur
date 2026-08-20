@@ -41,34 +41,12 @@ func statedCommandWitnessCount(t *testing.T) int {
 
 var commandWitnessCountPattern = regexp.MustCompile(`executed behavioural witnesses completed for (\d+) of the 96 parsed`)
 
-// firstUnwitnessedCatalogID picks a real ID the witness file does not register,
-// so the "+1 without a document update" mutation stays valid as batches land.
-// Naming one directly broke the moment its batch arrived: registering an
-// already-registered ID fails as a duplicate, not as a count mismatch, and the
-// proof reported a missing signature rather than a stale anchor.
-func firstUnwitnessedCatalogID(t *testing.T) string {
-	t.Helper()
-
-	registered, err := os.ReadFile(filepath.Join(repositoryRoot(t), "cmd", "partitur", "command_matrix_witness_test.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range commandMatrixCatalogIDs(t) {
-		if !strings.Contains(string(registered), "\""+id+"\"") {
-			return id
-		}
-	}
-	t.Fatal("every catalog ID is registered; this mutation must become a removal instead")
-	return ""
-}
-
 func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
 		t.Fatal(err)
 	}
 	stated := statedCommandWitnessCount(t)
-	unwitnessed := firstUnwitnessedCatalogID(t)
 	statedRow := "| Currently red: executed behavioural witnesses completed for " + strconv.Itoa(stated) + " of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |"
 	countSignature := func(document, executed int) string {
 		return "COMPLETION states " + strconv.Itoa(document) + " completed command witnesses, executed witnesses completed " + strconv.Itoa(executed)
@@ -89,13 +67,10 @@ func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 			failureSignature: countSignature(96, stated),
 		},
 		{
-			name:   "new returned witness requires a document count update",
-			source: "cmd/partitur/command_matrix_witness_test.go",
-			mutate: replaceCommandWitnessText(
-				"\trunInitCommandWitnesses(t, registry)\n\treconcileCommandWitnesses",
-				"\trunInitCommandWitnesses(t, registry)\n\tregistry.run(t, \""+unwitnessed+"\", witnessDischarged, 0, func(*testing.T) {}) // mutation: document count not updated\n\treconcileCommandWitnesses",
-			),
-			failureSignature: countSignature(stated, stated+1),
+			name:             "removed completion requires a document count update",
+			source:           "cmd/partitur/command_matrix_witness_test.go",
+			mutate:           removeFirstCommandWitnessCompletion,
+			failureSignature: countSignature(stated, stated-1),
 		},
 		{
 			name:   "completed ID must belong to the parsed denominator",
@@ -126,6 +101,21 @@ func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 			assertCommandWitnessMutationKilled(t, environment, mutation.source, mutation.mutate, mutation.failureSignature)
 		})
 	}
+}
+
+// removeFirstCommandWitnessCompletion leaves the fixture invoked and returned
+// but changes its disposition so reconciliation loses exactly one completion.
+// Once every catalog ID appeared in the witness file, adding another real ID
+// could only fail as a duplicate (or exhaust the derived set), which measured
+// the wrong property instead of the document-count equality.
+func removeFirstCommandWitnessCompletion(contents string) (string, error) {
+	const before = "witnessDischarged, 0,"
+	index := strings.Index(contents, before)
+	if index == -1 {
+		return "", &commandWitnessMutationAnchorError{anchor: before}
+	}
+	const after = "witnessDivergent, 999,"
+	return contents[:index] + after + contents[index+len(before):], nil
 }
 
 func replaceCommandWitnessText(before, after string) func(string) (string, error) {
