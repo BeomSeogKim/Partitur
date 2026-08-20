@@ -44,7 +44,7 @@ meaning.
 |---|---|
 | `whole-block` | If a whole fenced block is one clause, its markers may surround the block. |
 | `internal` | Markers may occur inside a block only when the host syntax remains valid and literal marker visibility is accepted. |
-| `decomposition` | A fence containing several independently normative payloads or annotations may be rewritten as one independently copyable fence per payload; field-level statements are lifted into adjacent prose clauses that cite the resulting coherent specimen. |
+| `decomposition` | A fence containing several independently violable normative statements, whether carried by separate payloads or by annotations within one payload, is not one whole-block clause. It may be rewritten as one independently copyable fence per payload; field-level statements are lifted into adjacent prose clauses that cite the resulting coherent specimen. |
 | `incompatible-host` | Otherwise the clause must be lifted into adjacent anchored prose or the marker representation must be revised; it must never be merged with another clause or classified as non-normative merely to avoid the placement problem. |
 
 These placement choices are authoring guidance: a bad choice can corrupt the host specimen, but it
@@ -57,6 +57,27 @@ forward fence applies. `baseline-activation` pins the exact blob that results fr
 Decomposition defines no canonicalization function or alternate byte equality. An inline
 annotation is not a detached field anchor: the field rule moves to prose that names the field,
 while the specimen bytes remain in their separately classified whole-block clause.
+
+That statement-level boundary is the P3 preparation gate. P3 classifies every normative statement
+and maps each resulting clause to evidence, so a reviewer must be able to discharge one independently
+violable field rule without accepting unrelated field rules in the same specimen. Top-level payload
+count cannot supply that boundary: A.5's one execution-dependency payload contains thirteen
+independently violable rules, and treating its 78 lines as one clause would make it indistinguishable
+from the score YAML, whose many independent field rules already require decomposition.
+
+At `DESIGN.md` blob `d6a6331c148b5bb3c1a61f14d69f8655f1275aca`, all thirteen fences previously
+selected by payload plurality have landed, but the statement-level gate remains open on these seven
+fences that selection did not enumerate:
+
+| Fence | Source lines in the pinned blob |
+|---|---:|
+| Routed proposal record | `782–794` |
+| Amendment proposal shape | `811–818` |
+| Illustrative cast schema | `1002–1018` |
+| Application-candidate identity | `4024–4030` |
+| `actual_impact` shape | `4413–4422` |
+| A.5 execution-dependency projection | `5012–5089` |
+| A.5.1 `global_invariants` projection | `5152–5165` |
 
 The marker-ID production admits the existing catalog-ID families (`RC-RESUME-001`, `RA-001`,
 `RS-001`, `INIT-001`, and command IDs such as `ANSWER-001`) as well as qualified event, enum, and
