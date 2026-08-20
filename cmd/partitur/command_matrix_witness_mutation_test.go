@@ -51,7 +51,7 @@ func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	stated, denominator := statedCommandWitnessProgress(t)
-	statedRow := "| Currently red: executed behavioural witnesses completed for " + strconv.Itoa(stated) + " of the " + strconv.Itoa(denominator) + " parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |"
+	statedRow := "| Currently green: executed behavioural witnesses completed for " + strconv.Itoa(stated) + " of the " + strconv.Itoa(denominator) + " parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |"
 	countSignature := func(document, executed int) string {
 		return "COMPLETION states " + strconv.Itoa(document) + " completed command witnesses, executed witnesses completed " + strconv.Itoa(executed)
 	}
@@ -66,9 +66,9 @@ func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 			source: "docs/COMPLETION.md",
 			mutate: replaceCommandWitnessText(
 				statedRow,
-				"| Currently green: executed behavioural witnesses completed for "+strconv.Itoa(denominator)+" of the "+strconv.Itoa(denominator)+" parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |",
+				"| Currently green: executed behavioural witnesses completed for "+strconv.Itoa(denominator-1)+" of the "+strconv.Itoa(denominator-1)+" parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |",
 			),
-			failureSignature: countSignature(denominator, stated),
+			failureSignature: "COMPLETION command-witness denominator=" + strconv.Itoa(denominator-1) + ", parsed denominator=" + strconv.Itoa(denominator),
 		},
 		{
 			name:             "removed completion requires a document count update",

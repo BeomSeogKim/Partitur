@@ -54,8 +54,10 @@ func (store *Store) PromoteScore(ctx context.Context, runID runstate.RunID, reco
 		} else {
 			result, err = store.promoteScore(ctx, transaction, &state)
 		}
+		// A normal-form refusal occurs before score.promotion_started; do not
+		// reinterpret its active entry state as an operational recovery halt.
 		if err == nil || (errors.Is(err, ErrPromotionNotAllowed) &&
-			(state.Promotion.State == runstate.PromotionNotPromoted || state.Promotion.State == runstate.PromotionPromoted)) {
+			(!recoverOnly || state.Promotion.State == runstate.PromotionNotPromoted || state.Promotion.State == runstate.PromotionPromoted)) {
 			return err
 		}
 		if errors.Is(err, ErrJournalDurabilityUnconfirmed) {
