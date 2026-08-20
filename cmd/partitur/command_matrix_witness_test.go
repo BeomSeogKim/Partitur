@@ -3,18 +3,25 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
+	"github.com/BeomSeogKim/Partitur/internal/score"
+	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
 )
 
 type commandWitnessState string
@@ -83,7 +90,312 @@ func TestCommandMatrixWitnesses(t *testing.T) {
 	registry := newCommandWitnessRegistry()
 	runAnswerCommandWitnesses(t, registry)
 	runApproveCommandWitnesses(t, registry)
+	runVersionCommandWitnesses(t, registry)
+	runValidateCommandWitnesses(t, registry)
+	runLogsCommandWitnesses(t, registry)
+	runStatusCommandWitnesses(t, registry)
+	runInitCommandWitnesses(t, registry)
 	reconcileCommandWitnesses(t, registry.returned, registry.completed, commandMatrixCatalogIDs(t))
+}
+
+func runVersionCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "VERSION-001", witnessDischarged, 0, func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, ".partitur"), []byte("invalid state anchor\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("version")
+
+		if code != 0 || stdout != version+"\n" || stderr != "" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want core version line", code, stdout, stderr)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+}
+
+func runValidateCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "VALIDATE-001", witnessDischarged, 0, func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("HOME", t.TempDir())
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("validate")
+
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "kind=\"required_input_unavailable\"") ||
+			!strings.Contains(stderr, filepath.Join(root, "partitur.yaml")) {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want refused score acquisition", code, stdout, stderr)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "VALIDATE-002", witnessDischarged, 0, func(t *testing.T) {
+		root := validateCommandWitnessFixture(t, "enforcement", false)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("validate")
+
+		want := "enforcement: movement=\"plan-movement\" part=\"plan\" performer=\"performer\" unmet=[\"read_only\"]\n"
+		if code != 3 || stdout != "" || stderr != want {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want complete diagnostic output %q", code, stdout, stderr, want)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "VALIDATE-003", witnessDischarged, 0, func(t *testing.T) {
+		root := validateCommandWitnessFixture(t, "advisory", true)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("validate")
+
+		want := "enforcement advisory: movement=\"plan-movement\" part=\"plan\" performer=\"performer\" unmet=[\"read_only\"]\n"
+		if code != 0 || stdout != "" || stderr != want {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want complete advisory output %q", code, stdout, stderr, want)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+}
+
+func runLogsCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "LOGS-001", witnessDischarged, 0, func(t *testing.T) {
+		t.Run("output completes", func(t *testing.T) {
+			root, store := resumeAttemptFixture(t)
+			want := appendCommandWitnessLog(t, store)
+			t.Chdir(root)
+			before := snapshotInitTree(t, root)
+
+			code, stdout, stderr := invokeCommand("logs", "run-1", "--jsonl")
+
+			var got logstream.Entry
+			if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+				t.Fatalf("decode logs JSONL %q: %v", stdout, err)
+			}
+			if code != 0 || stderr != "" || !reflect.DeepEqual(got, want) {
+				t.Fatalf("exit=%d stderr=%q entry=%+v, want %+v", code, stderr, got, want)
+			}
+			assertCommandWitnessTree(t, root, before)
+		})
+		for _, test := range []struct {
+			name string
+			err  error
+		}{
+			{name: "broken pipe", err: syscall.EPIPE},
+			{name: "closed pipe", err: io.ErrClosedPipe},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				root, store := resumeAttemptFixture(t)
+				appendCommandWitnessLog(t, store)
+				t.Chdir(root)
+				before := snapshotInitTree(t, root)
+				var stderr bytes.Buffer
+
+				code := run([]string{"logs", "run-1", "--jsonl"}, &failingWriter{err: test.err}, &stderr)
+
+				if code != 0 || stderr.Len() != 0 {
+					t.Fatalf("exit=%d stderr=%q, want silent successful pipe close", code, stderr.String())
+				}
+				assertCommandWitnessTree(t, root, before)
+			})
+		}
+	})
+
+	registry.run(t, "LOGS-002", witnessDischarged, 0, func(t *testing.T) {
+		root, _ := resumeAttemptFixture(t)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("logs", "bad/id")
+
+		if code != 1 || stdout != "" || stderr != "usage error: detail=\"invalid run id\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want semantic run-id usage error", code, stdout, stderr)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "LOGS-003", witnessDischarged, 0, func(t *testing.T) {
+		root, _ := resumeAttemptFixture(t)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("logs", "missing-run")
+
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "precondition refused:") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want observation refusal", code, stdout, stderr)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "LOGS-004", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		appendCommandWitnessLog(t, store)
+		journalPath, corrupted := corruptFixtureJournal(t, root)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("logs", "run-1")
+
+		if code != 5 || stdout != "" || !strings.Contains(stderr, "recovery halted:") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want unavailable stream", code, stdout, stderr)
+		}
+		assertFileBytes(t, journalPath, corrupted)
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "LOGS-005", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		appendCommandWitnessLog(t, store)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+		var stderr bytes.Buffer
+
+		code := run([]string{"logs", "run-1", "--jsonl"}, &failingWriter{err: errors.New("disk full")}, &stderr)
+
+		want := "precondition refused: detail=\"output stream is unwritable: logs output failed: disk full\"\n"
+		if code != 2 || stderr.String() != want {
+			t.Fatalf("exit=%d stderr=%q, want unwritable-output refusal %q", code, stderr.String(), want)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+}
+
+func runStatusCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "STATUS-001", witnessDischarged, 0, func(t *testing.T) {
+		t.Run("output completes", func(t *testing.T) {
+			root, _ := resumeAttemptFixture(t)
+			t.Chdir(root)
+			before := snapshotInitTree(t, root)
+
+			code, stdout, stderr := invokeCommand("status", "run-1", "--json")
+
+			var report statusprojection.Report
+			if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+				t.Fatalf("decode status JSON %q: %v", stdout, err)
+			}
+			if code != 0 || stderr != "" || report.Schema != "partitur/status+json;v=1" ||
+				report.Run.ID != "run-1" || report.Run.Lifecycle != string(runstate.RunRunning) {
+				t.Fatalf("exit=%d stderr=%q report=%+v, want selected RUNNING projection", code, stderr, report)
+			}
+			assertCommandWitnessTree(t, root, before)
+		})
+		for _, test := range []struct {
+			name string
+			err  error
+		}{
+			{name: "broken pipe", err: syscall.EPIPE},
+			{name: "closed pipe", err: io.ErrClosedPipe},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				root, _ := resumeAttemptFixture(t)
+				t.Chdir(root)
+				before := snapshotInitTree(t, root)
+				var stderr bytes.Buffer
+
+				code := run([]string{"status", "run-1", "--json"}, &failingWriter{err: test.err}, &stderr)
+
+				if code != 0 || stderr.Len() != 0 {
+					t.Fatalf("exit=%d stderr=%q, want silent successful pipe close", code, stderr.String())
+				}
+				assertCommandWitnessTree(t, root, before)
+			})
+		}
+	})
+
+	registry.run(t, "STATUS-002", witnessDischarged, 0, func(t *testing.T) {
+		root, _ := resumeAttemptFixture(t)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("status", "bad/id")
+
+		if code != 1 || stdout != "" || stderr != "usage error: detail=\"invalid run id\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want semantic run-id usage error", code, stdout, stderr)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "STATUS-003", witnessDischarged, 0, func(t *testing.T) {
+		root, _ := resumeAttemptFixture(t)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("status", "missing-run")
+
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "precondition refused:") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want observation refusal", code, stdout, stderr)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "STATUS-004", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeAttemptFixture(t)
+		appendCommandWitnessLog(t, store)
+		journalPath, corrupted := corruptFixtureJournal(t, root)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("status", "run-1")
+
+		if code != 5 || stdout != "" || !strings.Contains(stderr, "recovery halted:") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want unavailable projection", code, stdout, stderr)
+		}
+		assertFileBytes(t, journalPath, corrupted)
+		assertCommandWitnessTree(t, root, before)
+	})
+
+	registry.run(t, "STATUS-005", witnessDischarged, 0, func(t *testing.T) {
+		root, _ := resumeAttemptFixture(t)
+		t.Chdir(root)
+		before := snapshotInitTree(t, root)
+		var stderr bytes.Buffer
+
+		code := run([]string{"status", "run-1", "--json"}, &failingWriter{err: errors.New("disk full")}, &stderr)
+
+		want := "precondition refused: detail=\"output stream is unwritable: disk full\"\n"
+		if code != 2 || stderr.String() != want {
+			t.Fatalf("exit=%d stderr=%q, want unwritable-output refusal %q", code, stderr.String(), want)
+		}
+		assertCommandWitnessTree(t, root, before)
+	})
+}
+
+func runInitCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "INIT-001", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{})
+	})
+	registry.run(t, "INIT-002", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{score: []byte("existing score bytes\n")})
+	})
+	registry.run(t, "INIT-003", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{stateExists: true})
+	})
+	registry.run(t, "INIT-004", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{stateExists: true, score: []byte("existing score bytes\n")})
+	})
+	registry.run(t, "INIT-005", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{stateExists: true, ignore: []byte(initIgnoreContents)})
+	})
+	registry.run(t, "INIT-006", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{
+			stateExists: true,
+			ignore:      []byte(initIgnoreContents),
+			score:       []byte("existing score bytes\n"),
+		})
+	})
+	registry.run(t, "INIT-007", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{stateExists: true, ignore: []byte("work/\nruns/\n")})
+	})
+	registry.run(t, "INIT-008", witnessDischarged, 0, func(t *testing.T) {
+		witnessInitCommand(t, initFixture{
+			stateExists: true,
+			ignore:      []byte("work/\nruns/\n"),
+			score:       []byte("existing score bytes\n"),
+		})
+	})
 }
 
 func runAnswerCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
@@ -450,6 +762,121 @@ func runApproveCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) 
 		}
 		assertJournalLength(t, store, before)
 	})
+}
+
+func validateCommandWitnessFixture(t *testing.T, adapterID string, advisory bool) string {
+	t.Helper()
+	repository := t.TempDir()
+	bin := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(bin, "partitur-adapter-"+adapterID)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", bin)
+	t.Setenv(fakeAdapterEnvironment, "1")
+
+	scoreDocument := e2eScore("plan")
+	castDocument := e2eCast(map[string]string{"plan": "performer"})
+	performer := castDocument["performers"].(map[string]any)["performer"].(map[string]any)
+	performer["adapter"] = adapterID
+	if advisory {
+		performer["allow_advisory_enforcement"] = true
+	}
+	writeValidateInputs(t, repository, scoreDocument, castDocument)
+	return repository
+}
+
+func appendCommandWitnessLog(t *testing.T, store *runstore.Store) logstream.Entry {
+	t.Helper()
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		_, err := tx.At("command-witness.log").Append(resumeEvent("run-1", runstate.EventLog, map[string]any{
+			"level": "info", "message": "witness observation",
+		}))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := journal.Events[len(journal.Events)-1]
+	return logstream.Entry{
+		Schema: "partitur/logs+jsonl;v=1", RunID: "run-1", Seq: event.Seq,
+		TS: event.Timestamp, Type: "log", Level: "info", Message: "witness observation",
+	}
+}
+
+func witnessInitCommand(t *testing.T, fixture initFixture) {
+	t.Helper()
+	repository := writeInitFixture(t, fixture)
+	t.Chdir(repository)
+	before := snapshotInitTree(t, repository)
+
+	code, stdout, stderr := invokeCommand("init")
+
+	if fixture.ignore != nil && !bytes.Equal(fixture.ignore, []byte(initIgnoreContents)) {
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "precondition refused:") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want differing-ignore refusal", code, stdout, stderr)
+		}
+		assertCommandWitnessTree(t, repository, before)
+		return
+	}
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want initialized repository", code, stdout, stderr)
+	}
+	ignore, err := os.ReadFile(filepath.Join(repository, ".partitur", ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(ignore, []byte(initIgnoreContents)) {
+		t.Fatalf("ignore bytes=%q, want %q", ignore, initIgnoreContents)
+	}
+	scoreBytes, err := os.ReadFile(filepath.Join(repository, "partitur.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixture.score != nil {
+		if !bytes.Equal(scoreBytes, fixture.score) {
+			t.Fatalf("score bytes=%q, want preserved %q", scoreBytes, fixture.score)
+		}
+	} else {
+		compiled, diagnostics := score.Compile(scoreBytes)
+		if len(diagnostics) != 0 {
+			t.Fatalf("created score diagnostics=%v", diagnostics)
+		}
+		movements := compiled.Movements()
+		parts := compiled.Parts()
+		if compiled.Status() != "draft" || len(movements) != 1 || len(parts) != 1 ||
+			compiled.DraftInterviewMovement() != movements[0].ID || movements[0].Phase != "draft" ||
+			movements[0].PartID != parts[0].ID {
+			t.Fatalf(
+				"created score status=%q interview=%q movements=%+v parts=%+v, want one-part interview draft",
+				compiled.Status(), compiled.DraftInterviewMovement(), movements, parts,
+			)
+		}
+	}
+	want := make(map[string][]byte, len(before)+3)
+	for path, contents := range before {
+		want[path] = append([]byte(nil), contents...)
+	}
+	if !fixture.stateExists {
+		want[".partitur/"] = nil
+	}
+	want[".partitur/.gitignore"] = []byte(initIgnoreContents)
+	want["partitur.yaml"] = append([]byte(nil), scoreBytes...)
+	assertCommandWitnessTree(t, repository, want)
+}
+
+func assertCommandWitnessTree(t *testing.T, root string, want map[string][]byte) {
+	t.Helper()
+	if got := snapshotInitTree(t, root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("command mutated repository tree\n before=%#v\n after=%#v", want, got)
+	}
 }
 
 func invokeCommand(args ...string) (int, string, string) {

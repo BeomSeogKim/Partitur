@@ -30,19 +30,19 @@ func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 			name:   "document count alone cannot complete the row",
 			source: "docs/COMPLETION.md",
 			mutate: replaceCommandWitnessText(
-				"| Currently red: executed behavioural witnesses completed for 18 of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |",
+				"| Currently red: executed behavioural witnesses completed for 40 of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |",
 				"| Currently green: executed behavioural witnesses completed for 96 of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |",
 			),
-			failureSignature: "COMPLETION states 96 completed command witnesses, executed witnesses completed 18",
+			failureSignature: "COMPLETION states 96 completed command witnesses, executed witnesses completed 40",
 		},
 		{
 			name:   "new returned witness requires a document count update",
 			source: "cmd/partitur/command_matrix_witness_test.go",
 			mutate: replaceCommandWitnessText(
-				"\trunApproveCommandWitnesses(t, registry)\n\treconcileCommandWitnesses",
-				"\trunApproveCommandWitnesses(t, registry)\n\tregistry.run(t, \"AMEND-001\", witnessDischarged, 0, func(*testing.T) {}) // mutation: document count not updated\n\treconcileCommandWitnesses",
+				"\trunInitCommandWitnesses(t, registry)\n\treconcileCommandWitnesses",
+				"\trunInitCommandWitnesses(t, registry)\n\tregistry.run(t, \"AMEND-001\", witnessDischarged, 0, func(*testing.T) {}) // mutation: document count not updated\n\treconcileCommandWitnesses",
 			),
-			failureSignature: "COMPLETION states 18 completed command witnesses, executed witnesses completed 19",
+			failureSignature: "COMPLETION states 40 completed command witnesses, executed witnesses completed 41",
 		},
 		{
 			name:   "completed ID must belong to the parsed denominator",
@@ -57,16 +57,16 @@ func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 			name:   "skipped fixture cannot record completion",
 			source: "cmd/partitur/command_matrix_witness_test.go",
 			mutate: replaceCommandWitnessText(
-				"registry.run(t, \"ANSWER-001\", witnessDischarged, 0, func(t *testing.T) {\n\t\troot, store := resumeAttemptFixture(t)",
-				"registry.run(t, \"ANSWER-001\", witnessDischarged, 0, func(t *testing.T) {\n\t\tt.Skip(\"mutation: fixture did not return\")\n\t\troot, store := resumeAttemptFixture(t)",
+				"registry.run(t, \"VERSION-001\", witnessDischarged, 0, func(t *testing.T) {\n\t\troot := t.TempDir()",
+				"registry.run(t, \"VERSION-001\", witnessDischarged, 0, func(t *testing.T) {\n\t\tt.Skip(\"mutation: fixture did not return\")\n\t\troot := t.TempDir()",
 			),
-			failureSignature: "COMPLETION states 18 completed command witnesses, executed witnesses completed 17",
+			failureSignature: "COMPLETION states 40 completed command witnesses, executed witnesses completed 39",
 		},
 		{
 			name:             "omitted fixture invocation cannot record completion",
 			source:           "cmd/partitur/command_matrix_witness_test.go",
 			mutate:           omitFirstCommandWitness,
-			failureSignature: "COMPLETION states 18 completed command witnesses, executed witnesses completed 17",
+			failureSignature: "COMPLETION states 40 completed command witnesses, executed witnesses completed 39",
 		},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
