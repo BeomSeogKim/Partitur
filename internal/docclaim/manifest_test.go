@@ -17,27 +17,13 @@ import (
 )
 
 var (
-	markerIDPattern = regexp.MustCompile(`^[A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)*$`)
-	testNamePattern = regexp.MustCompile(`^Test[A-Za-z0-9_]+$`)
-	packagePattern  = regexp.MustCompile(`^\./[A-Za-z0-9_./-]+$`)
+	markerIDPattern        = regexp.MustCompile(`^[A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)*$`)
+	testNamePattern        = regexp.MustCompile(`^Test[A-Za-z0-9_]+$`)
+	packagePattern         = regexp.MustCompile(`^\./[A-Za-z0-9_./-]+$`)
+	errManifestUnpopulated = errors.New("documentation claim manifest is unpopulated")
 )
 
-type baseline struct {
-	documentPath string
-	gitBlob      string
-}
-
-type claim struct {
-	documentPath    string
-	markerID        string
-	evidencePackage string
-	evidenceTest    string
-}
-
-type manifest struct {
-	baselines []baseline
-	claims    []claim
-}
+const p5OutstandingText = "The canonical P5 registry and its batched executed-evidence gate are bound, but the registry intentionally contains zero baselines and zero claim rows because the reviewed marking pass has not happened. P5 therefore remains an outstanding prerequisite; its remaining work is the human review of every in-scope document, the complete baseline and claim population, and promotion to a completion row only after that review is complete."
 
 func TestDocumentationClaimSchemaIsLocked(t *testing.T) {
 	document := readClaimsDocument(t)
@@ -48,7 +34,8 @@ func TestDocumentationClaimSchemaIsLocked(t *testing.T) {
 	requireOccurrence(t, document, "## Discharge", 1)
 	requireOccurrence(t, document, "## Activation boundary", 1)
 	requireOccurrence(t, document, "membership in the\nmanifest confers its claim status", 1)
-	requireOccurrence(t, document, "A package-level zero with no matching test is a failure.", 1)
+	requireOccurrence(t, strings.Join(strings.Fields(document), " "), "A package-level zero with no matching test is a failure.", 1)
+	requireOccurrence(t, document, "`internal/docclaim/manifest.go`", 1)
 
 	rowBaseline := "| `baseline` | `document_path`, `git_blob` | Exactly one row for every in-scope document. `git_blob` is the lowercase 40-hex Git blob ID of the reviewed document. |"
 	rowClaim := "| `claim` | `document_path`, `marker_id`, `evidence_package`, `evidence_test` | The claim key is unique, names one unique anchor in its baseline document, and names one top-level Go test. |"
@@ -79,6 +66,35 @@ func TestDocumentationClaimSchemaIsLocked(t *testing.T) {
 	}
 }
 
+func TestDocumentationClaimManifest(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	scope, err := documentationScope(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents, err := readDocuments(repoRoot, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = validateManifest(documentationClaimManifest, scope, documents)
+	if errors.Is(err, errManifestUnpopulated) {
+		if len(documentationClaimManifest.baselines) != 0 || len(documentationClaimManifest.claims) != 0 {
+			t.Fatal("unpopulated canonical manifest must have zero baselines and zero claims")
+		}
+		completion := strings.Join(strings.Fields(readCompletionDocument(t)), " ")
+		if got := strings.Count(completion, p5OutstandingText); got != 1 {
+			t.Fatalf("COMPLETION P5 outstanding statement occurrences = %d, want 1", got)
+		}
+	} else if err != nil {
+		t.Fatalf("canonical manifest rejected: %v", err)
+	}
+
+	if err := runEvidence(repoRoot, documentationClaimManifest.claims); err != nil {
+		t.Fatalf("canonical manifest evidence rejected: %v", err)
+	}
+}
+
 func TestDocumentationClaimSchemaValidatesPopulation(t *testing.T) {
 	document := "<!-- partitur:mark begin anchor=run.started -->The run records its start.<!-- partitur:mark end anchor=run.started -->"
 	otherDocument := "<!-- partitur:mark begin non-normative -->Context.<!-- partitur:mark end non-normative -->"
@@ -103,7 +119,7 @@ func TestDocumentationClaimSchemaValidatesPopulation(t *testing.T) {
 		mutate func(*testing.T, *manifest, map[string]string)
 		want   string
 	}{
-		{"empty manifest", func(_ *testing.T, got *manifest, _ map[string]string) { *got = manifest{} }, "baseline population is empty"},
+		{"empty manifest", func(_ *testing.T, got *manifest, _ map[string]string) { *got = manifest{} }, "manifest is unpopulated"},
 		{"missing scope member", func(_ *testing.T, got *manifest, _ map[string]string) { got.baselines = got.baselines[:1] }, "has no baseline"},
 		{"duplicate baseline", func(_ *testing.T, got *manifest, _ map[string]string) {
 			got.baselines = append(got.baselines, got.baselines[0])
@@ -142,15 +158,82 @@ func TestDocumentationClaimSchemaValidatesPopulation(t *testing.T) {
 }
 
 func TestDocumentationClaimEvidenceRequiresObservedPass(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
 	passing := claim{evidencePackage: "./internal/docclaim/testdata/evidence", evidenceTest: "TestClaimEvidenceFixture"}
-	if err := runEvidence(filepath.Join("..", ".."), passing); err != nil {
+	other := claim{evidencePackage: passing.evidencePackage, evidenceTest: "TestOtherClaimEvidenceFixture"}
+	if err := runEvidence(repoRoot, []claim{passing, passing, other}); err != nil {
 		t.Fatalf("passing evidence rejected: %v", err)
 	}
 
 	absent := passing
 	absent.evidenceTest = "TestClaimEvidenceDoesNotExist"
-	if err := runEvidence(filepath.Join("..", ".."), absent); err == nil || !strings.Contains(err.Error(), "did not run and pass") {
+	if err := runEvidence(repoRoot, []claim{absent}); err == nil || !strings.Contains(err.Error(), "did not run and pass") {
 		t.Fatalf("absent evidence error = %v, want did-not-run failure", err)
+	}
+
+	goCache := t.TempDir()
+	err := runEvidencePackage(repoRoot, goCache, passing.evidencePackage,
+		[]string{other.evidenceTest}, []string{passing.evidenceTest})
+	if err == nil || !strings.Contains(err.Error(), other.evidenceTest+" did not run and pass") {
+		t.Fatalf("unselected existing evidence error = %v, want exact did-not-run failure", err)
+	}
+
+	t.Run("pass without run", func(t *testing.T) {
+		output := []byte(`{"Action":"pass","Test":"TestClaimEvidenceFixture"}` + "\n")
+		err := requireObservedEvidence(passing.evidencePackage, []string{passing.evidenceTest}, output, nil)
+		if err == nil || !strings.Contains(err.Error(), "did not run and pass") {
+			t.Fatalf("pass-only evidence error = %v, want did-not-run failure", err)
+		}
+	})
+	t.Run("run without pass", func(t *testing.T) {
+		output := []byte(`{"Action":"run","Test":"TestClaimEvidenceFixture"}` + "\n")
+		err := requireObservedEvidence(passing.evidencePackage, []string{passing.evidenceTest}, output, nil)
+		if err == nil || !strings.Contains(err.Error(), "did not run and pass") {
+			t.Fatalf("run-only evidence error = %v, want did-not-pass failure", err)
+		}
+	})
+}
+
+func TestDocumentationClaimEvidenceBatchesByPackageAndCoordinate(t *testing.T) {
+	rows := []claim{
+		{evidencePackage: "./internal/z", evidenceTest: "TestZ"},
+		{evidencePackage: "./internal/a", evidenceTest: "TestB"},
+		{documentPath: "docs/one.md", evidencePackage: "./internal/a", evidenceTest: "TestA"},
+		{documentPath: "docs/two.md", evidencePackage: "./internal/a", evidenceTest: "TestA"},
+	}
+	got := evidenceBatches(rows)
+	want := []evidenceBatch{
+		{packagePath: "./internal/a", testNames: []string{"TestA", "TestB"}},
+		{packagePath: "./internal/z", testNames: []string{"TestZ"}},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("evidence batches = %v, want %v", got, want)
+	}
+
+	var caches []string
+	err := runEvidenceWithRunner("unused", rows, func(_ string, goCache string, _ evidenceBatch) error {
+		if info, err := os.Stat(goCache); err != nil || !info.IsDir() {
+			t.Fatalf("shared Go cache = %q, stat error = %v", goCache, err)
+		}
+		caches = append(caches, goCache)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caches) != 2 || caches[0] != caches[1] {
+		t.Fatalf("package command caches = %v, want two commands sharing one cache", caches)
+	}
+}
+
+func TestDocumentationClaimEvidenceRequiresPackageExitZero(t *testing.T) {
+	failing := claim{
+		evidencePackage: "./internal/docclaim/testdata/failure",
+		evidenceTest:    "TestClaimEvidenceFailureFixture",
+	}
+	err := runEvidence(filepath.Join("..", ".."), []claim{failing})
+	if err == nil || !strings.Contains(err.Error(), "evidence package "+failing.evidencePackage+" failed") {
+		t.Fatalf("failing evidence error = %v, want package failure", err)
 	}
 }
 
@@ -182,6 +265,9 @@ func documentationScope(repoRoot string) ([]string, error) {
 }
 
 func validateManifest(got manifest, scope []string, documents map[string]string) error {
+	if len(got.baselines) == 0 && len(got.claims) == 0 {
+		return errManifestUnpopulated
+	}
 	if len(got.baselines) == 0 {
 		return errors.New("baseline population is empty")
 	}
@@ -266,46 +352,101 @@ func validateManifest(got manifest, scope []string, documents map[string]string)
 	return nil
 }
 
-func runEvidence(repoRoot string, row claim) error {
+type evidenceBatch struct {
+	packagePath string
+	testNames   []string
+}
+
+func evidenceBatches(rows []claim) []evidenceBatch {
+	byPackage := make(map[string]map[string]bool)
+	for _, row := range rows {
+		if byPackage[row.evidencePackage] == nil {
+			byPackage[row.evidencePackage] = make(map[string]bool)
+		}
+		byPackage[row.evidencePackage][row.evidenceTest] = true
+	}
+	packages := make([]string, 0, len(byPackage))
+	for packagePath := range byPackage {
+		packages = append(packages, packagePath)
+	}
+	sort.Strings(packages)
+
+	batches := make([]evidenceBatch, 0, len(packages))
+	for _, packagePath := range packages {
+		testNames := make([]string, 0, len(byPackage[packagePath]))
+		for testName := range byPackage[packagePath] {
+			testNames = append(testNames, testName)
+		}
+		sort.Strings(testNames)
+		batches = append(batches, evidenceBatch{packagePath: packagePath, testNames: testNames})
+	}
+	return batches
+}
+
+func runEvidence(repoRoot string, rows []claim) error {
+	return runEvidenceWithRunner(repoRoot, rows, func(repoRoot, goCache string, batch evidenceBatch) error {
+		return runEvidencePackage(repoRoot, goCache, batch.packagePath, batch.testNames, batch.testNames)
+	})
+}
+
+func runEvidenceWithRunner(repoRoot string, rows []claim, runner func(string, string, evidenceBatch) error) error {
 	goCache, err := os.MkdirTemp("", "partitur-docclaim-gocache-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(goCache)
 
-	pattern := "^" + regexp.QuoteMeta(row.evidenceTest) + "$"
-	command := exec.Command("go", "test", "-json", "-count=1", "-run", pattern, row.evidencePackage)
+	for _, batch := range evidenceBatches(rows) {
+		if err := runner(repoRoot, goCache, batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runEvidencePackage(repoRoot, goCache, packagePath string, expectedTests, selectedTests []string) error {
+	quoted := make([]string, len(selectedTests))
+	for i, testName := range selectedTests {
+		quoted[i] = regexp.QuoteMeta(testName)
+	}
+	pattern := "^(" + strings.Join(quoted, "|") + ")$"
+	command := exec.Command("go", "test", "-json", "-count=1", "-run", pattern, packagePath)
 	command.Dir = repoRoot
 	command.Env = append(os.Environ(), "GOCACHE="+goCache)
 	output, commandErr := command.CombinedOutput()
+	return requireObservedEvidence(packagePath, expectedTests, output, commandErr)
+}
 
+func requireObservedEvidence(packagePath string, expectedTests []string, output []byte, commandErr error) error {
 	type event struct {
 		Action string
 		Test   string
 	}
-	run := false
-	pass := false
+	run := make(map[string]bool, len(expectedTests))
+	pass := make(map[string]bool, len(expectedTests))
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	for scanner.Scan() {
 		var got event
-		if json.Unmarshal(scanner.Bytes(), &got) != nil || got.Test != row.evidenceTest {
+		if json.Unmarshal(scanner.Bytes(), &got) != nil {
 			continue
 		}
 		switch got.Action {
 		case "run":
-			run = true
+			run[got.Test] = true
 		case "pass":
-			pass = true
+			pass[got.Test] = true
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
 	if commandErr != nil {
-		return fmt.Errorf("evidence %s %s failed: %w\n%s", row.evidencePackage, row.evidenceTest, commandErr, output)
+		return fmt.Errorf("evidence package %s failed: %w\n%s", packagePath, commandErr, output)
 	}
-	if !run || !pass {
-		return fmt.Errorf("evidence %s %s did not run and pass", row.evidencePackage, row.evidenceTest)
+	for _, testName := range expectedTests {
+		if !run[testName] || !pass[testName] {
+			return fmt.Errorf("evidence %s %s did not run and pass", packagePath, testName)
+		}
 	}
 	return nil
 }
@@ -343,6 +484,27 @@ func readClaimsDocument(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(contents)
+}
+
+func readCompletionDocument(t *testing.T) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join("..", "..", "docs", "COMPLETION.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents)
+}
+
+func readDocuments(repoRoot string, paths []string) (map[string]string, error) {
+	documents := make(map[string]string, len(paths))
+	for _, path := range paths {
+		contents, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(path)))
+		if err != nil {
+			return nil, fmt.Errorf("read %q: %w", path, err)
+		}
+		documents[path] = string(contents)
+	}
+	return documents, nil
 }
 
 func requireOccurrence(t *testing.T, document, value string, want int) {

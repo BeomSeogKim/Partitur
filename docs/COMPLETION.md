@@ -407,9 +407,14 @@ without anyone deciding to move it.
 is decidable today over a member set it cannot silently lose: either pinned to a normative
 enumeration, or — where no document owns the set — derived by a closure that fails closed, as the
 member-set section describes. Surfaces that still need an evidence artefact before they can be
-stated that way — an inventory mapping normative clauses to their evidence and a claim manifest for
-documentation — are tracked as outstanding prerequisites, and each becomes a row here when its
-artefact exists.
+stated that way are tracked as outstanding prerequisites, and each becomes a row here only when its
+population exists.
+
+The canonical P5 registry and its batched executed-evidence gate are bound, but the registry
+intentionally contains zero baselines and zero claim rows because the reviewed marking pass has not
+happened. P5 therefore remains an outstanding prerequisite; its remaining work is the human review
+of every in-scope document, the complete baseline and claim population, and promotion to a
+completion row only after that review is complete.
 
 Five have since been promoted rather than dropped: the derived-event source-projection lock is
 section 7, the single typed boundary for unit-owned deferrals is section 3's sixth and seventh
