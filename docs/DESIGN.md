@@ -114,62 +114,120 @@ manifests.
 write must sit outside authoritative run storage, so a misbehaving performer cannot
 corrupt evidence by writing where evidence lives:
 
+**Repository-layout clauses.** Each clause below constrains the named path in the two adjacent,
+coherent layout specimens.
+
+- `<repo>/partitur.yaml` is the score.
+- `<repo>/partitur.yaml` is committed.
+- `<repo>/.partitur/.gitignore` is created by `partitur init`.
+- `<repo>/.partitur/.gitignore` contains entries for `runs/` and `work/`.
+- The run state under `<repo>/.partitur/runs/` and staging under `<repo>/.partitur/work/` are never
+  committed.
+- `<repo>/.partitur/cast.yaml` is the project cast override.
+- The user chooses whether `<repo>/.partitur/cast.yaml` is committed or ignored.
+- `<repo>/.partitur/runs/.state.lock` is the persistent repository-scoped state-mutation lock (§6).
+- `<repo>/.partitur/runs/<run-id>/` is authoritative run storage.
+- Only the core writes `<repo>/.partitur/runs/<run-id>/`.
+- `<repo>/.partitur/runs/<run-id>/` is never agent-writable.
+- `<repo>/.partitur/runs/<run-id>/journal.jsonl` is an append-only event log.
+- The core is the single writer of `<repo>/.partitur/runs/<run-id>/journal.jsonl`.
+- `<repo>/.partitur/runs/<run-id>/manifest.yaml` is a rebuildable projection.
+- `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the score revision and hash.
+- `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the resolved cast pins.
+- `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the per-attempt enforcement record.
+- `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the artifact index.
+- `<repo>/.partitur/runs/<run-id>/scores/revision-<n>.yaml` is an immutable score snapshot governed
+  by the snapshot rules below.
+- `<repo>/.partitur/runs/<run-id>/prepares/<prepare-id>.json` contains the complete planned
+  `amendment.approved` payload.
+- The core writes and fsyncs `<repo>/.partitur/runs/<run-id>/prepares/<prepare-id>.json` before the
+  prepare event (§6).
+- Recovery replays the prepare plan rather than recomputing one.
+- An auto approval has no proposal record from which to rebuild its prepare plan.
+- `<repo>/.partitur/runs/<run-id>/proposals/<proposal-id>.json` is an immutable routed-proposal
+  record.
+- `<repo>/.partitur/runs/<run-id>/proposals/<proposal-id>.json` has schema
+  `partitur/proposal-record+json;v=1` (§9).
+- Decision-time re-validation replays the pipeline from the original operations in the routed-
+  proposal record.
+- A typed delta cannot reconstruct the routed proposal's original operations.
+- The typed delta is lossy by design.
+- `<repo>/.partitur/runs/<run-id>/quarantine/<kind>/<content-sha256>/<source-basename>` is the
+  durable destination for quarantined run files.
+- `<repo>/.partitur/runs/<run-id>/resolved-cast.yaml` is the fully resolved cast used by the run.
+- `<repo>/.partitur/runs/<run-id>/artifacts/<logical-output-id>/<attempt-id>` stores immutable
+  artifact instances.
+- The artifact-instance identity and atomicity rules are stated below.
+- A retry never overwrites earlier artifact evidence.
+- `<repo>/.partitur/runs/<run-id>/inputs/<movement-id>/revision-<n>/subject-tree.json` is immutable.
+- The core publishes the review subject input at that path (§4).
+- The review subject input is outside every worktree.
+- The review subject input is read-only to the performer.
+- A retry or fallback on the same movement revision reuses the same review-subject bytes.
+- `<repo>/.partitur/runs/<run-id>/session/` stores session hints.
+- `<repo>/.partitur/runs/<run-id>/session/` has mode `0600` (§4 privacy).
+- `<repo>/.partitur/runs/<run-id>/driver.lease` is the execution-driver lease (§6).
+- `<repo>/.partitur/runs/<run-id>/driver.lease` is absent when no driver runs.
+- `<repo>/.partitur/runs/<run-id>/authority.json` is the execution-authority checkpoint for the
+  current epoch only (§6).
+- `<repo>/.partitur/runs/<run-id>/authority.json` projects `authority.granted` and `run.*` events.
+- `<repo>/.partitur/runs/<run-id>/authority.json` is rebuildable.
+- `<repo>/.partitur/runs/<run-id>/authority.json` is never the authority itself.
+- `<repo>/.partitur/runs/<run-id>/authority.json` does not hold the incarnation token.
+- The incarnation token lives solely in `driver.lease` and its owner's memory.
+- A value that proves incarnation identity must not sit in a rebuildable file.
+- `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/stderr` stores sanitized vendor and adapter
+  diagnostics under §4's privacy rules.
+- `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/trace.jsonl` is the protocol trace.
+- `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/criteria/<criterion-id>/stdout` is the
+  bounded criterion stdout capture (§7).
+- `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/criteria/<criterion-id>/stderr` is the
+  bounded criterion stderr capture (§7).
+- `<repo>/.partitur/work/<run-id>/<attempt-id>/` is non-authoritative staging.
+- `<repo>/.partitur/work/<run-id>/<attempt-id>/` is agent-writable.
+- `<repo>/.partitur/work/<run-id>/<attempt-id>/output/` is the attempt's `output_dir` (§5).
+- Artifacts are copied from that output directory into
+  `<repo>/.partitur/runs/<run-id>/artifacts/`.
+- Only the immutable artifact copy under the run root counts.
+- `<repo>/.partitur/work/<run-id>/<attempt-id>/tmp/` is the default temporary-file directory for
+  criterion commands (§7).
+- `~/.config/partitur/cast.yaml` is the user-global cast override.
+
 ```text
 <repo>/
-  partitur.yaml                # the score (committed)
+  partitur.yaml
   .partitur/
-    .gitignore                 # created by `partitur init`; contains `runs/` and `work/`
-                               #   (run state and staging; neither is ever committed)
-    cast.yaml                  # project cast override (committed or ignored, user's choice)
+    .gitignore
+    cast.yaml
 
-    runs/.state.lock           # persistent repository-scoped state-mutation lock (§6)
-    runs/<run-id>/             # AUTHORITATIVE — core-written only, never agent-writable
-      journal.jsonl            # append-only event log (single writer: core)
-      manifest.yaml            # rebuildable projection: score revision + hash, resolved
-                               # cast pins, per-attempt enforcement record, artifact index
-      scores/revision-<n>.yaml # immutable score snapshots (see below)
+    runs/.state.lock
+    runs/<run-id>/
+      journal.jsonl
+      manifest.yaml
+      scores/revision-<n>.yaml
       prepares/<prepare-id>.json
-                               # the complete planned amendment.approved payload, written and
-                               #   fsynced BEFORE the prepare event (§6). Recovery replays this
-                               #   plan rather than recomputing one — an auto approval has no
-                               #   proposal record to rebuild from
       proposals/<proposal-id>.json
-                               # immutable routed-proposal record, schema
-                               #   partitur/proposal-record+json;v=1 (§9). Decision-time
-                               #   re-validation replays the pipeline from the ORIGINAL
-                               #   operations, which a typed delta cannot reconstruct — the
-                               #   delta is lossy by design
       quarantine/<kind>/<content-sha256>/<source-basename>
-                               # durable destination for quarantined run files
-      resolved-cast.yaml       # the fully resolved cast used by this run
+      resolved-cast.yaml
       artifacts/<logical-output-id>/<attempt-id>
-                               # immutable artifact instances (identity and atomicity
-                               # below); a retry never overwrites earlier evidence
       inputs/<movement-id>/revision-<n>/subject-tree.json
-                               # immutable core-published review subject input (§4). It is
-                               # outside every worktree and read-only to the performer; a retry
-                               # or fallback on this movement revision reuses the same bytes
-      session/                 # session hints, mode 0600 (see §4 privacy)
-      driver.lease             # execution-driver lease (§6); absent when no driver runs
-      authority.json           # execution-authority checkpoint: current **epoch only** (§6).
-                               #   A PROJECTION of authority.granted / run.* events, like the
-                               #   manifest — rebuildable, never the authority itself. It does
-                               #   NOT hold the token: the token lives solely in driver.lease
-                               #   and its owner's memory, because a value that proves
-                               #   incarnation identity must not sit in a rebuildable file
+      session/
+      driver.lease
+      authority.json
       attempts/<attempt-id>/
-        stderr                 # sanitized vendor/adapter diagnostics (§4 privacy)
-        trace.jsonl            # protocol trace
+        stderr
+        trace.jsonl
         criteria/<criterion-id>/
-          stdout               # bounded criterion stdout capture (§7)
-          stderr               # bounded criterion stderr capture (§7)
+          stdout
+          stderr
 
-    work/<run-id>/<attempt-id>/   # NON-AUTHORITATIVE staging — agent-writable
-      output/                  # the attempt's output_dir (§5); artifacts are copied out
-                               # of here into runs/.../artifacts/ and only the copy counts
-      tmp/                     # default temporary-file directory for criterion commands (§7)
+    work/<run-id>/<attempt-id>/
+      output/
+      tmp/
+```
 
-~/.config/partitur/cast.yaml   # user-global cast override
+```text
+~/.config/partitur/cast.yaml
 ```
 
 Git refs the core owns — never user-visible branches, and never garbage-collected while
@@ -401,61 +459,137 @@ read the per-attempt record, never the part-level binding.
 
 ## 2. Score schema v0.2 (`partitur.yaml`)
 
-```yaml
-score: "0.2"                    # schema version
-name: rsvp-deadline-reminders
-revision: 1                     # bumped only by amendments
-status: draft                   # draft | finalized
+**Score-example field clauses.** Each clause below constrains the named field in the adjacent,
+coherent YAML document.
 
-goal: |                         # finalized user intent — prose, in the user's language
+- `score` is the schema version.
+- `revision` is bumped only by amendments.
+- `status` is one of the closed values `draft` and `finalized`.
+- `goal` records finalized user intent.
+- `goal` is prose in the user's language.
+- `context` records project facts the user supplied.
+- `context` is optional.
+- `draft.interview_movement` names the one movement allowed to run while `status` is `draft`.
+- `open_questions` is the draft gate.
+- Finalization requires every `open_questions` entry to be discharged.
+- Each `open_questions` entry is resolved or explicitly waived.
+- `open_questions[].waived: true` is an explicit waiver.
+- An explicit open-question waiver is recorded forever.
+- `verification.expectation` and `verification.final_movement` are two distinct concepts.
+- `verification.expectation.intent` is one of `write-basic-tests`, `pass-existing-tests`, and
+  `none`.
+- `verification.expectation.intent` records work intent.
+- The core forwards that intent as `brief.verification_expectation`.
+- An intent of `none` is always explicit.
+- Verification intent is not ship policy.
+- `verification.expectation.apply_gate` determines which evidence `apply` demands.
+- Exactly one of `verification.expectation.apply_gate.require` and
+  `verification.expectation.apply_gate.waived` is present.
+- `verification.expectation.apply_gate.require` is non-empty.
+- `verification.expectation.apply_gate.require` is duplicate-free.
+- Every `verification.expectation.apply_gate.require` value is in the closed set `verified`,
+  `approved`, and `reviewed`.
+- `verification.expectation.apply_gate.predicates` is optional.
+- `verification.expectation.apply_gate.predicates` uses the closed enum in §8.
+- `verification.final_movement` is required if and only if the apply gate is not waived.
+- `verification.final_movement` is forbidden when the apply gate is waived.
+- `verification.final_movement` is the run's terminal sink (§8).
+- A deliberately ungated run sets `verification.expectation.intent` to `none`.
+- A deliberately ungated run sets `verification.expectation.apply_gate.waived` to `true`.
+- `verification.expectation.apply_gate.reason` is mandatory and non-empty on a waived gate.
+- `"spike; will be rewritten"` is an example non-empty waiver reason.
+- `parts` declares logical roles.
+- Part ids are never vendor or model names.
+- A part with `read_only: true` never receives a write grant.
+- `movements` declares units of work.
+- `movements[].needs` defines the movement DAG.
+- Each movement is played by one part.
+- A movement with `phase: draft` runs while the score status is `draft`, under the draft-phase
+  contract.
+- An output with `kind: change_set` is core-synthesized.
+- The performer never emits a `change_set` as an artifact.
+- The core captures the `change_set` from the worktree.
+- §5 governs `change_set` capture.
+- `movements[].acceptance` is mandatory when the movement has a `repo_write` grant.
+- That acceptance contains at least one hard criterion or sets `human_gate: always`.
+- A hard criterion id is explicit.
+- A hard criterion id is unique within its movement.
+- Marks bind to the hard criterion id.
+- `verification.final_movement` identifies the final movement.
+- The final movement is the run's terminal sink.
+- The final movement transitively needs every non-draft movement.
+- The final movement has no downstream movement.
+- The final movement never holds `repo_write`.
+- In this example, `apply_gate.require` is exactly `[verified, reviewed]`.
+- The final movement therefore carries at least one hard criterion and at least one review
+  criterion.
+- That combination makes the example's apply gate achievable under §8.
+- `acceptance.review[].findings` is a typed requirement for the named findings artifact.
+- The named findings artifact must exist and be well-formed.
+- `acceptance.human_gate` is one of `always`, `on_contested`, and `never`.
+- `policy.allowed_paths` is an unordered union.
+- Every `policy.allowed_paths` member is a positive glob pattern.
+- Duplicate `policy.allowed_paths` values are a compiler error.
+- `policy.allowed_paths` order carries no semantics.
+- v0.2 accepts only an empty `policy.side_effects` list.
+- A non-empty `policy.side_effects` list is rejected until a typed side-effect registry is
+  specified.
+- `policy.budget.active_wall_clock_min` limits active execution time only.
+- Active execution includes adapter runs, acceptance, retries, and fallbacks.
+- `WAITING_HUMAN` and stopped time are excluded from active execution time.
+- Consumed active time is persisted through journal events.
+- Each attempt receives the remaining active-time budget at its start.
+- `policy.budget.retries_per_movement` is the quality-retry budget per movement (§3).
+- `policy.amendment.auto` is one of `off` and `envelope`.
+- `policy.amendment.auto` defaults to `off`.
+- `policy.amendment.auto: envelope` auto-approves only provably monotone changes inside the bounds
+  below (§9).
+- Every other amendment waits for a human.
+
+```yaml
+score: "0.2"
+name: rsvp-deadline-reminders
+revision: 1
+status: draft
+
+goal: |
   Guests who have not answered their RSVP get a reminder 7 days before
   the deadline, once, by email.
 
-context: |                      # project facts the user supplied (optional)
+context: |
   Email goes through the existing `notifier` package. Timezone is Asia/Seoul.
 
 draft:
-  interview_movement: clarify   # the one movement allowed to run while status: draft
+  interview_movement: clarify
 
-open_questions:                 # DRAFT gate — finalization requires every entry
-  - id: q-1                     # resolved or explicitly waived
+open_questions:
+  - id: q-1
     question: "Should reminders also go to partially-answered groups?"
     resolution: "No — only fully unanswered."
   - id: q-2
     question: "Is there a quiet-hours window for sending?"
-    waived: true                # explicit waiver, recorded forever
+    waived: true
 
-verification:                   # two separate concepts — see below
+verification:
   expectation:
-    intent: write-basic-tests   # write-basic-tests | pass-existing-tests | none
-                                #   work intent; forwarded to briefs as
-                                #   brief.verification_expectation. 'none' is always
-                                #   explicit. NOT ship policy.
-    apply_gate:                 # which evidence `apply` demands — require XOR waived
-      require: [verified, reviewed]     # non-empty, duplicate-free subset of
-                                        # {verified, approved, reviewed}
-      predicates: [no_unresolved_blocking_findings]   # optional; closed enum, §8
-  final_movement: check         # required iff apply_gate is not waived; forbidden when
-                                # waived. The run's terminal sink — §8.
-  # — or, for a deliberately ungated run —
-  #  expectation:
-  #    intent: none
-  #    apply_gate:
-  #      waived: true
-  #      reason: "spike; will be rewritten"   # non-empty reason mandatory
+    intent: write-basic-tests
+    apply_gate:
+      require: [verified, reviewed]
+      predicates: [no_unresolved_blocking_findings]
+  final_movement: check
 
-parts:                          # logical roles — never vendor or model names
+parts:
   plan:
     capabilities: [repo_read]
   implement:
     capabilities: [repo_read, repo_write, shell]
   verify:
     capabilities: [repo_read, shell]
-    read_only: true             # never receives a write grant
+    read_only: true
 
-movements:                      # units of work; DAG via `needs`; each played by one part
+movements:
   - id: clarify
-    phase: draft                # runs while status: draft — see DRAFT phase contract
+    phase: draft
     part: plan
     grants: [repo_read]
     instruction: |
@@ -479,18 +613,17 @@ movements:                      # units of work; DAG via `needs`; each played by
       Implement the reminder flow per the design note.
     inputs: [design-note]
     outputs:
-      - id: change-set         # kind: change_set is CORE-SYNTHESIZED — the performer never
-        kind: change_set       #   emits it as an artifact; the core captures it from the
-                               #   worktree. See §5.
-    acceptance:                 # a movement with a repo_write grant MUST have ≥1
-      hard:                     # hard criterion or human_gate: always
-        - id: unit-tests        # explicit, unique within the movement — marks bind to it
+      - id: change-set
+        kind: change_set
+    acceptance:
+      hard:
+        - id: unit-tests
           run: ["go", "test", "./..."]
         - id: vet
           run: ["go", "vet", "./..."]
-  - id: check                   # verification.final_movement — the run's terminal sink:
-    part: verify                #   transitively needs every non-draft movement, has no
-    needs: [build]              #   downstream, and never holds repo_write
+  - id: check
+    part: verify
+    needs: [build]
     grants: [repo_read, shell]
     instruction: |
       Review the change against the goal. Report findings with file, line,
@@ -499,32 +632,24 @@ movements:                      # units of work; DAG via `needs`; each played by
     outputs:
       - id: review-findings
         kind: findings
-    acceptance:                 # apply_gate.require is [verified, reviewed], so this
-      hard:                     # movement must carry ≥1 hard AND ≥1 review criterion
-        - id: full-suite        #   (achievability, §8)
+    acceptance:
+      hard:
+        - id: full-suite
           run: ["go", "test", "./..."]
       review:
         - id: goal-review
-          findings: review-findings   # typed requirement: this findings artifact must
-          rubric: [requirement_coverage, regression_risk]   # exist and be well-formed
-      human_gate: on_contested  # always | on_contested | never
+          findings: review-findings
+          rubric: [requirement_coverage, regression_risk]
+      human_gate: on_contested
 
 policy:
   allowed_paths: ["internal/**", "cmd/**", "**/*_test.go"]
-                                # unordered union of positive glob patterns; duplicates
-                                # are a compiler error and order carries no semantics
-  side_effects: []              # v0.2 accepts only an empty list; non-empty values are
-                                # rejected until a typed side-effect registry is specified
+  side_effects: []
   budget:
-    active_wall_clock_min: 90   # active execution time only — adapter runs, acceptance,
-                                # retries, fallbacks. WAITING_HUMAN and stopped time are
-                                # excluded. Consumed time is persisted via journal events;
-                                # each attempt receives the remainder at its start.
-    retries_per_movement: 2     # quality-retry budget per movement — see §3
+    active_wall_clock_min: 90
+    retries_per_movement: 2
   amendment:
-    auto: "off"                 # off | envelope; default off. envelope = only
-                                # provably-monotone changes inside the bounds below are
-                                # auto-approved (§9); everything else waits for a human.
+    auto: "off"
 ```
 
 **Path policy semantics.** `allowed_paths` patterns are repository-relative POSIX-style
@@ -1136,6 +1261,73 @@ long-lived credentials and that diagnostics never echo them.
 strings; the journal's numeric attempt counter (§6) is a core-internal projection, not
 the protocol identifier.
 
+**Adapter-method field clauses.** Each clause below constrains the named field in the three
+adjacent, coherent wire-form specimens.
+
+- `probe.features` is a protocol 2 field.
+- `probe.features` is an open list of feature tokens, not a closed enum.
+- A closed feature enum would require a protocol bump for every future token, defeating feature
+  negotiation.
+- A core ignores feature tokens it does not know.
+- An adapter advertises only feature tokens it implements.
+- No feature tokens are defined in v0.2.
+- An absent or empty `probe.features` means that the adapter supports none.
+- `probe.enforcement` reports what the adapter and vendor agent actually enforce.
+- An absent `probe.enforcement` Boolean decodes as false.
+- Decoding absent enforcement Booleans as false makes enforcement fail closed.
+- `probe.enforcement.path_grants` means the adapter confines both writes and reads to granted paths.
+- `probe.enforcement.read_only` means the adapter can run with all repository writes disabled.
+- `probe.enforcement.network_grants` means the adapter can disable data-plane network access.
+- `probe.enforcement.shell_grants` means the adapter can disable command execution entirely.
+- `probe.enforcement.shell_grants` is true only if every command-execution route is closed.
+- `probe.enforcement.read_grants` means the adapter can deny repository reads.
+- `execute.request.brief` is the score projection for this part.
+- `execute.request.brief` carries the intent, constraints, and invariants the part needs under the
+  concept.
+- `execute.request.brief.context` is omitted entirely when the score omits context (§2 defaults).
+- `execute.request.brief.context` is never sent as an empty string in place of omission.
+- `execute.request.brief.verification_expectation` is user intent.
+- The core forwards `execute.request.brief.verification_expectation` to relevant parts.
+- Acceptance, never the adapter, judges whether the verification expectation was met.
+- `execute.request.brief.global_invariants` is a deterministic core-computed projection.
+- That projection is computed from the goal, finalized resolutions, and policy.
+- `execute.request.brief.global_invariants` is not a separate score field.
+- The core, not the adapter, computes `execute.request.brief.global_invariants`.
+- `execute.request.brief.outputs` contains this movement's declared outputs.
+- Only artifact ids in `execute.request.brief.outputs` may be emitted by the attempt.
+- `execute.request.inputs[].instance_id` is delivered, not merely hashed.
+- A.5 binds `execute.request.inputs[].instance_id`.
+- The performer and core must agree which input instance an `instance_id` denotes.
+- `execute.request.feedback` carries diagnostics from prior failed attempts (§7).
+- Feedback is delivered like any other input, with a readable path and a hash.
+- A bare feedback artifact id is not something a performer can open.
+- `execute.request.feedback[].path` is read-only.
+- `execute.request.feedback[].path` is inside the attempt's readable area.
+- `execute.request.feedback[].hash` is the SHA-256 of the raw bytes.
+- The feedback hash makes tampering detectable.
+- `execute.request.feedback` is read-only.
+- Feedback is never applied to the base.
+- `execute.request.resolved_decisions` is a tagged union.
+- Every `execute.request.resolved_decisions` entry carries `kind`.
+- The blocking handshake below defines the closed resolved-decision variants.
+- `execute.request.workdir` is the attempt worktree (§5).
+- `execute.request.output_dir` is the artifact area (§5).
+- `execute.request.output_dir` is always writable.
+- `execute.request.budget.remaining_ms` is the remaining budget at attempt start.
+- `execute.request.budget.remaining_ms` is an integer number of milliseconds.
+- The wire budget field is not `active_wall_clock_min`.
+- The score declares the cap in minutes, but the remainder is tracked and compared in milliseconds
+  (§6).
+- A minutes-only wire field could not carry the remainder losslessly.
+- `execute.request.extensions`, when present, contains only the namespace matching this adapter's id.
+- `execute.result.failure` is present when `outcome` is `failed`.
+- `execute.result.pending_decision_ids` is present when `outcome` is `waiting_human`.
+- An attempt may raise several questions.
+- A waiting-human attempt blocks on every id in `execute.result.pending_decision_ids`.
+- `execute.result` reports only the transport-level outcome.
+- The adapter never judges success.
+- The core runs acceptance.
+
 ```text
 probe() -> {
   protocol: 2,
@@ -1145,81 +1337,67 @@ probe() -> {
     resumable_sessions: bool,
     models: [ { id, aliases? } ]
   },
-  features: [string],           # protocol 2. An OPEN list of feature tokens, not a closed enum:
-                                #   a closed enum would need a bump for every future token, which
-                                #   is the problem negotiation exists to solve. A core ignores
-                                #   tokens it does not know; an adapter advertises only what it
-                                #   implements. No tokens are defined in v0.2; absent or empty
-                                #   means none.
-  enforcement: {                # what the adapter/vendor agent actually enforces.
-                                # Absent booleans decode as false — fail closed.
-    path_grants: bool,          # confines writes AND reads to granted paths
-    read_only: bool,            # can run with all repository writes disabled
-    network_grants: bool,       # can disable data-plane network
-    shell_grants: bool,         # can disable command execution entirely — true only if
-                                #   EVERY command-execution route is closed
-    read_grants: bool           # can deny repository reads
+  features: [string],
+  enforcement: {
+    path_grants: bool,
+    read_only: bool,
+    network_grants: bool,
+    shell_grants: bool,
+    read_grants: bool
   }
 }
+```
 
+```text
 execute(request) -> streams `event` notifications, then returns result
   request: {
     run_id, movement_id, attempt_id, score_revision,
     model,
-    brief: {                    # the score projection for this part — the intent,
-      goal,                     # constraints, and invariants it needs (per CONCEPT)
-      context?,                 # omitted entirely when the score omits it (§2 defaults) —
-                                #   never sent as ""
+    brief: {
+      goal,
+      context?,
 
       instruction,
-      verification_expectation, # user intent, forwarded to relevant parts; whether it
-      acceptance,               # was met is judged by acceptance, never by the adapter
-      global_invariants,        # deterministic projection computed by the core from
-                                # goal, finalized resolutions, and policy — not a
-                                # separate score field
-      outputs: [                # this movement's declared outputs — the only
-        { artifact_id, kind }   # artifact ids the attempt may emit
+      verification_expectation,
+      acceptance,
+      global_invariants,
+      outputs: [
+        { artifact_id, kind }
       ]
     },
     inputs: [ { artifact_id, kind, instance_id, path, hash } ],
-                                #   `instance_id` is delivered, not just hashed: A.5 binds it, so a
-                                #   performer and the core must agree on which instance this is
-    feedback: [                 # diagnostics from prior failed attempts (see §7). Delivered like
-      { previous_attempt_id,    #   any other input — a readable path and a hash — because a bare
-        kind,                   #   artifact id is not something a performer can open
+    feedback: [
+      { previous_attempt_id,
+        kind,
         artifact_instance_id,
-        path,                   # read-only, inside the attempt's readable area
-        hash }                  # sha256: raw bytes, so tampering is detectable
-    ],                          # read-only; never applied to the base
-    resolved_decisions: [       # tagged union; every entry carries `kind`
-      { decision_id, kind, ... } # see the blocking handshake below for the closed variants
+        path,
+        hash }
     ],
-    workdir,                    # the attempt worktree (see §5)
-    output_dir,                 # always-writable artifact area (see §5)
+    resolved_decisions: [
+      { decision_id, kind, ... }
+    ],
+    workdir,
+    output_dir,
     grants: { paths_rw, paths_ro, shell, network },
-    budget: { remaining_ms },    # remaining at attempt start, INTEGER MILLISECONDS. Not
-                                #   `active_wall_clock_min`: the score declares the cap in
-                                #   minutes but the remainder is tracked and compared in ms
-                                #   (§6), and a minutes-only field could not carry it losslessly
+    budget: { remaining_ms },
     session_hint?,
-    extensions?                 # only the namespace matching this adapter's id
+    extensions?
   }
   result: {
     outcome: completed | failed | cancelled | waiting_human,
-    failure?: {                 # present when outcome = failed
+    failure?: {
       kind: adapter_unavailable | model_unavailable | provider_timeout |
             rate_limited | authentication | protocol_error |
             grant_denied | task_failed,
       detail?
     },
-    pending_decision_ids?: [],  # present when outcome = waiting_human; an attempt may
-                                # raise several questions and blocks on all of them
+    pending_decision_ids?: [],
     session_hint?,
     detail?
   }
-  # transport-level outcome only — the adapter NEVER judges success;
-  # the core runs acceptance.
+```
 
+```text
 cancel(attempt_id) -> graceful stop; core terminates on grace timeout, then force-kills
 ```
 
@@ -1394,16 +1572,38 @@ after its in-memory session identity reaches the same empty boundary.
 
 **Event notifications** (adapter → core, during `execute`):
 
+**Event-notification field clauses.** Each clause below constrains the named field in the five
+adjacent, coherent notification specimens.
+
+- `artifact.path` must be inside `output_dir`.
+- The core immediately copies the file announced by an `artifact` notification.
+- The copy is stored under `runs/<id>/artifacts/`.
+- §1's atomicity rules govern that copy.
+- Only the immutable artifact copy is treated as recorded.
+- `proposal.amendment` is the structured amendment in §2's format.
+- The core validates a notified proposal.
+- `proposal.id` is stable within the attempt.
+- The blocking handshake below governs `question` notifications.
+
 ```text
-log        { level, message }
-progress   { message }
-artifact   { artifact_id, path }        # path must be inside output_dir; the core
-                                        # immediately copies the file into
-                                        # runs/<id>/artifacts/ (see §1 atomicity) and
-                                        # treats only that immutable copy as recorded
-proposal   { id, amendment,             # structured amendment (§2 format); core
-             requires_decision }        # validates; id is stable within the attempt
-question   { id, question }             # see blocking handshake below
+log { level, message }
+```
+
+```text
+progress { message }
+```
+
+```text
+artifact { artifact_id, path }
+```
+
+```text
+proposal { id, amendment,
+           requires_decision }
+```
+
+```text
+question { id, question }
 ```
 
 Code changes are never communicated as `artifact` events — the core itself captures them
@@ -1594,25 +1794,40 @@ the worktree, and are never declared in the score:
 placed there; when a semantic identity must reach the performer it is a field **inside**
 the file:
 
+**Reserved-input field clauses.** Each clause below constrains the named field in the two adjacent,
+coherent reserved-input specimens.
+
+- `partitur.score-base` is the reserved input for proposal-capable movements.
+- `partitur.score-base` is supplied to every movement whose `may_propose` is true (§2).
+- `partitur.score-base.base_revision` must equal a proposal's `base_revision`.
+- `partitur.score-base.base_hash` must equal a proposal's `base_hash`.
+- `partitur.score-base.base_hash` is the semantic `partitur/score` identity from Appendix A.
+- Binding the proposal to `partitur.score-base.base_hash` makes it stale-checkable (§9).
+- `partitur.score-base.score` is the canonical JSON score at `base_revision`.
+- `partitur.subject-tree` is the reserved input for review movements.
+- `partitur.subject-tree` is supplied to every movement that declares a review criterion.
+- `partitur.subject-tree.subject_tree` is the core-observed tree.
+- A review performer cannot compute `partitur.subject-tree.subject_tree` itself.
+- In particular, a review performer with no shell cannot compute the subject tree itself.
+
 ```text
-artifact_id: partitur.score-base           # supplied to any movement whose `may_propose`
-kind:        partitur/score-base+json;v=1  #   is true (§2)
+artifact_id: partitur.score-base
+kind:        partitur/score-base+json;v=1
 hash:        <sha256 of the file bytes>
 file content:
   { schema: "partitur/score-base+json;v=1",
-    base_revision,                  # a proposal's base_revision MUST equal this
-    base_hash,                      # ... and its base_hash MUST equal this — semantic
-                                    #     (partitur/score, Appendix A), which is what
-                                    #     makes the proposal stale-checkable (§9)
-    score }                         # the canonical JSON score at that revision
+    base_revision,
+    base_hash,
+    score }
+```
 
-artifact_id: partitur.subject-tree          # supplied to any movement declaring a review
-kind:        partitur/subject-tree+json;v=1 #   criterion
+```text
+artifact_id: partitur.subject-tree
+kind:        partitur/subject-tree+json;v=1
 hash:        <sha256 of the file bytes>
 file content:
   { schema: "partitur/subject-tree+json;v=1",
-    subject_tree,                   # the CORE-OBSERVED tree — a review performer cannot
-                                    #   compute this itself, especially with no shell
+    subject_tree,
     findings_schema: "partitur/findings+json;v=1",
     rubrics: [{ id, required_coverage: true }] }
 ```
@@ -3128,28 +3343,27 @@ not after continuation; if there is no live owner, a later `resume` performs tha
 
 **CLI v0.2.**
 
-```text
-partitur init            # create .partitur/, its .gitignore (runs/ and work/), and — when no
-                         #   score exists — a minimal draft partitur.yaml with an
-                         #   interview movement. Never overwrites an existing score.
-partitur validate        # compile the score (§2) AND resolve the cast and probe its
-                         #   adapters, evaluating the fail-closed predicate (§4)
-partitur run             # start a run (interview first while draft); takes the lease
-partitur status          # states, pending decisions, marks with provenance (§8)
-partitur logs --jsonl    # stream the journal
-partitur answer          # answer pending questions
-partitur approve         # approve/reject amendments, gates, finalization
-partitur amend           # propose an amendment from the CLI
-partitur cancel          # cancel the RUN (run-scoped; §6 control channel). There is no
-                         #   attempt-scoped cancel — see §6
-partitur resume          # resume after interruption; recovers by Appendix C, then takes the
-                         #   lease only when §6 authorizes it
-partitur apply           # apply the candidate to the checkout (§8)
-partitur apply --recover           # only from APPLYING | RECOVERY_REQUIRED
-partitur promote-score             # copy a run revision to partitur.yaml (§1, §8)
-partitur promote-score --recover   # only from PROMOTING | RECOVERY_REQUIRED
-partitur version         # prints the core version; no run state is read or written
-```
+- `partitur init` creates `.partitur/`, its `.gitignore` entries for `runs/` and `work/`, and — when
+  no score exists — a minimal draft `partitur.yaml` with an interview movement. It never overwrites
+  an existing score.
+- `partitur validate` compiles the score (§2), resolves the cast, probes its adapters, and evaluates
+  the fail-closed predicate (§4).
+- `partitur run` starts a run, beginning with the interview while the score is draft, and takes the
+  lease.
+- `partitur status` reports states, pending decisions, and marks with provenance (§8).
+- `partitur logs --jsonl` streams the journal.
+- `partitur answer` answers pending questions.
+- `partitur approve` approves or rejects amendments, gates, and finalization.
+- `partitur amend` proposes an amendment from the CLI.
+- `partitur cancel` cancels the run through §6's run-scoped control channel. There is no
+  attempt-scoped cancel (§6).
+- `partitur resume` resumes after interruption, recovers by Appendix C, and takes the lease only
+  when §6 authorizes it.
+- `partitur apply` applies the candidate to the checkout (§8).
+- `partitur apply --recover` is permitted only from `APPLYING` or `RECOVERY_REQUIRED`.
+- `partitur promote-score` copies a run revision to `partitur.yaml` (§1, §8).
+- `partitur promote-score --recover` is permitted only from `PROMOTING` or `RECOVERY_REQUIRED`.
+- `partitur version` prints the core version and reads or writes no run state.
 
 ### Command precondition-matrix grammar
 

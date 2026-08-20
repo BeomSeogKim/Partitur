@@ -1,0 +1,115 @@
+[repository-layout]
+the score (committed)
+created by `partitur init`; contains `runs/` and `work/` (run state and staging; neither is ever committed)
+project cast override (committed or ignored, user's choice)
+persistent repository-scoped state-mutation lock (§6)
+AUTHORITATIVE — core-written only, never agent-writable
+append-only event log (single writer: core)
+rebuildable projection: score revision + hash, resolved cast pins, per-attempt enforcement record, artifact index
+immutable score snapshots (see below)
+the complete planned amendment.approved payload, written and fsynced BEFORE the prepare event (§6). Recovery replays this plan rather than recomputing one — an auto approval has no proposal record to rebuild from
+immutable routed-proposal record, schema partitur/proposal-record+json;v=1 (§9). Decision-time re-validation replays the pipeline from the ORIGINAL operations, which a typed delta cannot reconstruct — the delta is lossy by design
+durable destination for quarantined run files
+the fully resolved cast used by this run
+immutable artifact instances (identity and atomicity below); a retry never overwrites earlier evidence
+immutable core-published review subject input (§4). It is outside every worktree and read-only to the performer; a retry or fallback on this movement revision reuses the same bytes
+session hints, mode 0600 (see §4 privacy)
+execution-driver lease (§6); absent when no driver runs
+execution-authority checkpoint: current **epoch only** (§6). A PROJECTION of authority.granted / run.* events, like the manifest — rebuildable, never the authority itself. It does NOT hold the token: the token lives solely in driver.lease and its owner's memory, because a value that proves incarnation identity must not sit in a rebuildable file
+sanitized vendor/adapter diagnostics (§4 privacy)
+protocol trace
+bounded criterion stdout capture (§7)
+bounded criterion stderr capture (§7)
+NON-AUTHORITATIVE staging — agent-writable
+the attempt's output_dir (§5); artifacts are copied out of here into runs/.../artifacts/ and only the copy counts
+default temporary-file directory for criterion commands (§7)
+user-global cast override
+
+[score-example]
+schema version
+bumped only by amendments
+draft | finalized
+finalized user intent — prose, in the user's language
+project facts the user supplied (optional)
+the one movement allowed to run while status: draft
+DRAFT gate — finalization requires every entry
+resolved or explicitly waived
+explicit waiver, recorded forever
+two separate concepts — see below
+write-basic-tests | pass-existing-tests | none work intent; forwarded to briefs as brief.verification_expectation. 'none' is always explicit. NOT ship policy.
+which evidence `apply` demands — require XOR waived
+non-empty, duplicate-free subset of {verified, approved, reviewed}
+optional; closed enum, §8
+required iff apply_gate is not waived; forbidden when waived. The run's terminal sink — §8. — or, for a deliberately ungated run — expectation: intent: none apply_gate: waived: true reason: "spike; will be rewritten"   # non-empty reason mandatory
+logical roles — never vendor or model names
+never receives a write grant
+units of work; DAG via `needs`; each played by one part
+runs while status: draft — see DRAFT phase contract
+kind: change_set is CORE-SYNTHESIZED — the performer never
+emits it as an artifact; the core captures it from the worktree. See §5.
+a movement with a repo_write grant MUST have ≥1
+hard criterion or human_gate: always
+explicit, unique within the movement — marks bind to it
+verification.final_movement — the run's terminal sink:
+transitively needs every non-draft movement, has no
+downstream, and never holds repo_write
+apply_gate.require is [verified, reviewed], so this
+movement must carry ≥1 hard AND ≥1 review criterion
+(achievability, §8)
+typed requirement: this findings artifact must
+exist and be well-formed
+always | on_contested | never
+unordered union of positive glob patterns; duplicates are a compiler error and order carries no semantics
+v0.2 accepts only an empty list; non-empty values are rejected until a typed side-effect registry is specified
+active execution time only — adapter runs, acceptance, retries, fallbacks. WAITING_HUMAN and stopped time are excluded. Consumed time is persisted via journal events; each attempt receives the remainder at its start.
+quality-retry budget per movement — see §3
+off | envelope; default off. envelope = only provably-monotone changes inside the bounds below are auto-approved (§9); everything else waits for a human.
+
+[adapter-methods]
+protocol 2. An OPEN list of feature tokens, not a closed enum: a closed enum would need a bump for every future token, which is the problem negotiation exists to solve. A core ignores tokens it does not know; an adapter advertises only what it implements. No tokens are defined in v0.2; absent or empty means none.
+what the adapter/vendor agent actually enforces. Absent booleans decode as false — fail closed.
+confines writes AND reads to granted paths
+can run with all repository writes disabled
+can disable data-plane network
+can disable command execution entirely — true only if EVERY command-execution route is closed
+can deny repository reads
+the score projection for this part — the intent,
+constraints, and invariants it needs (per CONCEPT)
+omitted entirely when the score omits it (§2 defaults) — never sent as ""
+user intent, forwarded to relevant parts; whether it
+was met is judged by acceptance, never by the adapter
+deterministic projection computed by the core from goal, finalized resolutions, and policy — not a separate score field
+this movement's declared outputs — the only
+artifact ids the attempt may emit
+`instance_id` is delivered, not just hashed: A.5 binds it, so a performer and the core must agree on which instance this is
+diagnostics from prior failed attempts (see §7). Delivered like
+any other input — a readable path and a hash — because a bare
+artifact id is not something a performer can open
+read-only, inside the attempt's readable area
+sha256: raw bytes, so tampering is detectable
+read-only; never applied to the base
+tagged union; every entry carries `kind`
+see the blocking handshake below for the closed variants
+the attempt worktree (see §5)
+always-writable artifact area (see §5)
+remaining at attempt start, INTEGER MILLISECONDS. Not `active_wall_clock_min`: the score declares the cap in minutes but the remainder is tracked and compared in ms (§6), and a minutes-only field could not carry it losslessly
+only the namespace matching this adapter's id
+present when outcome = failed
+present when outcome = waiting_human; an attempt may raise several questions and blocks on all of them
+transport-level outcome only — the adapter NEVER judges success; the core runs acceptance.
+
+[event-notifications]
+path must be inside output_dir; the core immediately copies the file into runs/<id>/artifacts/ (see §1 atomicity) and treats only that immutable copy as recorded
+structured amendment (§2 format); core
+validates; id is stable within the attempt
+see blocking handshake below
+
+[reserved-inputs]
+supplied to any movement whose `may_propose`
+is true (§2)
+a proposal's base_revision MUST equal this
+... and its base_hash MUST equal this — semantic (partitur/score, Appendix A), which is what makes the proposal stale-checkable (§9)
+the canonical JSON score at that revision
+supplied to any movement declaring a review
+criterion
+the CORE-OBSERVED tree — a review performer cannot compute this itself, especially with no shell
