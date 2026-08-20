@@ -20,11 +20,13 @@ import (
 var errInjectedJournalSync = errors.New("injected journal fsync failure")
 
 type journalFailureFS struct {
-	failSync     bool
-	failSyncAt   int
-	journalSyncs int
-	failAppend   bool
-	reached      bool
+	failSync       bool
+	failSyncAt     int
+	journalSyncs   int
+	failAppend     bool
+	failAppendAt   int
+	journalAppends int
+	reached        bool
 }
 
 func (filesystem *journalFailureFS) MkdirAll(path string, mode fs.FileMode) error {
@@ -59,7 +61,10 @@ func (filesystem *journalFailureFS) WriteTemp(directory, pattern string, content
 }
 
 func (filesystem *journalFailureFS) Append(path string, contents []byte, mode fs.FileMode) error {
-	if filesystem.failAppend && filepath.Base(path) == "journal.jsonl" {
+	if filepath.Base(path) == "journal.jsonl" {
+		filesystem.journalAppends++
+	}
+	if (filesystem.failAppend || filesystem.failAppendAt != 0 && filesystem.journalAppends == filesystem.failAppendAt) && filepath.Base(path) == "journal.jsonl" {
 		filesystem.reached = true
 		return errors.New("injected journal append interruption")
 	}
