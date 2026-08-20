@@ -1,0 +1,30 @@
+{
+  "owned-git-refs": [
+    "refs/partitur/runs/<run-id>/base                              # the run's base commit (§5)",
+    "refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset   # storage handle (§5)",
+    "refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject     # writer acceptance subject (§7)",
+    "refs/partitur/runs/<run-id>/movements/<movement-id>/base      # a composed base when one or more writers contribute (§5)",
+    "refs/partitur/runs/<run-id>/candidate                         # the candidate result tree (§8)"
+  ],
+  "may-propose": [
+    "    may_propose: true           # default false. Receives the reserved\n                                #   partitur.score-base input (§4); its\n                                #   execution dependency includes the score base, so a\n                                #   later amendment invalidates this attempt."
+  ],
+  "inapplicable-state": [
+    "          | INAPPLICABLE     # a draft movement in a finalized run (§2) — never scheduled"
+  ],
+  "cli-surface": [
+    "                                  [--override <artifact-instance-id>:<finding-id>]... --reason <text> # human_gate only",
+    "                              | --reject [--reason <text>] # human_gate only",
+    "                              | --reject --reason <text>   # amendment | finalization; B.5 `human_reason`",
+    "partitur amend   [<run-id>] --patch <path> # RFC 6902 JSON; - reads stdin"
+  ],
+  "acceptance-spec": [
+    "  hard:   [criterion_spec_hash],   # declared hard criteria in DECLARATION order, replacements\n                                   #   applied, then core-generated integrity checks in output\n                                   #   declaration order",
+    "  review: [criterion_spec_hash],   # declared review criteria in declaration order",
+    "  human_gate: \"always\" | \"on_contested\" | \"never\"    # always explicit, never omitted"
+  ],
+  "disposition": [
+    "  movement_terminal: bool,         # true ⇔ charged: \"none\" and no further path exists",
+    "  terminal_reason?                 # REQUIRED iff movement_terminal; a movement.failed reason\n                                   #   (Appendix D), selected by §3.1's first arm"
+  ]
+}

@@ -256,22 +256,22 @@ func runDraftResultNormsMutation(t *testing.T, anchor, replacement, testPattern,
 
 func TestMutationApprovalDecisionTypeSyntaxKeepsRejectTypeRestriction(t *testing.T) {
 	assertApprovalDecisionTypeSyntaxMutationKilled(t,
-		"# amendment | finalization; B.5 `human_reason`",
-		"# B.5 `human_reason`",
+		"- Amendment and finalization rejection requires `--reason <text>` under B.5's `human_reason` rule.",
+		"- Rejection requires `--reason <text>` under B.5's `human_reason` rule.",
 		"approval reject grammar no longer restricts the required-reason form to amendment and finalization")
 }
 
 func TestMutationApprovalDecisionTypeSyntaxKeepsAmendmentReasonRequired(t *testing.T) {
 	assertApprovalDecisionTypeSyntaxMutationKilled(t,
-		"| --reject --reason <text>   # amendment | finalization; B.5 `human_reason`",
-		"| --reject [--reason <text>] # amendment | finalization; B.5 `human_reason`",
+		"| --reject --reason <text>\n",
+		"| --reject [--reason <text>]\n",
 		"approval reject grammar no longer requires a reason for amendment and finalization")
 }
 
 func TestMutationApprovalDecisionTypeSyntaxKeepsB5ReasonMapping(t *testing.T) {
 	assertApprovalDecisionTypeSyntaxMutationKilled(t,
-		"; B.5 `human_reason`",
-		"",
+		" under B.5's `human_reason` rule.",
+		".",
 		"approval reject grammar no longer maps amendment and finalization reasons to B.5 human_reason")
 }
 

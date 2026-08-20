@@ -1,0 +1,60 @@
+{
+  "routed-proposal": [
+    "  origin,                          # adapter | cli | core_finalization",
+    "  attempt_id?,                      # present iff origin = adapter",
+    "  emitted_id?,                      # present iff origin = adapter",
+    "  operations,                       # the RFC 6902 array VERBATIM, as submitted",
+    "  claimed_impact?,                # optional scope claim; §9 checks containment only when present"
+  ],
+  "amendment-proposal": [
+    "  base_revision, base_hash,        # stale-rejected if either mismatches",
+    "  operations: [...],               # RFC 6902 JSON Patch, applied to the canonical JSON\n                                   # representation of the YAML score (Appendix A)",
+    "  claimed_impact?: { ... }         # same shape as actual_impact; optional scope claim (§9)"
+  ],
+  "cast-schema": [
+    "    allow_advisory_enforcement: false   # default false; see §4 trust boundary",
+    "      codex:                    # adapter-namespaced, opaque to the core; the core",
+    "        effort: xhigh           # forwards only the namespace matching the performer's\n                                # adapter id"
+  ],
+  "application-candidate": [
+    "# The candidate additionally records candidate_composition_dependency_hash (A.4). With one or\n# more contributors it binds the composition ENVIRONMENT — the same trees composed under a\n# different Git build or merge configuration are not the same composition (§5). With zero\n# contributors its tagged identity projection records that no merge ran and binds no fictitious\n# environment.",
+    "                 { base_tree, result_tree, ordered_change_sets })      # Appendix A"
+  ],
+  "actual-impact": [
+    "    allowed_paths: {added: [...], removed: [...]},     # exact pattern strings",
+    "    side_effects: {added: [...], removed: [...]}       # added must be [] in v0.2"
+  ],
+  "execution-dependency": [
+    "  actual_adapter_id,                  # the adapter that SERVED this attempt (§1 per-attempt\n                                      #   record) — never the part's intended binding, so\n                                      #   changing extensions.<fallback> after a fallback\n                                      #   attempt succeeded is detected",
+    "    part,                             # the part id",
+    "    needs:      [movement_id],        # sorted — a set",
+    "                                      # sorted by artifact_id. `kind` is included because\n                                      #   RenderPrompt shows it; `instance_id` and `content_hash`\n                                      #   because two attempts can legitimately receive DIFFERENT\n                                      #   bytes for the same logical input (an upstream retry\n                                      #   produced a new instance). Binding only the logical id\n                                      #   would let those two attempts share a dependency hash",
+    "    outputs:    [{artifact_id, kind}],# DECLARATION order — it controls generated-check\n                                      #   order (§7), so it is semantic",
+    "    grants:     [grant],              # sorted — the movement's declared grants",
+    "    may_propose: bool,                # effective value including the implicit default",
+    "    score_base_hash?,                 # = H(\"partitur/score\", complete validated score AST) —\n                                      #   the score-base input's SEMANTIC base_hash, never the\n                                      #   raw file hash of the delivered artifact.\n                                      #   REQUIRED iff may_propose is true, omitted otherwise.\n                                      #   A may_propose attempt receives the COMPLETE score\n                                      #   base (§4), so the whole score is one of its\n                                      #   execution dependencies and any later amendment\n                                      #   invalidates it (§2). The boolean alone would not\n                                      #   capture that — two attempts with may_propose true\n                                      #   under different scores must not share a hash",
+    "    acceptance: acceptance_spec_hash,  # the effective compiled plan (A.4.2)",
+    "    base_composition_hash?             # movement_composition_dependency_hash (A.4), REQUIRED\n                                       #   iff the movement has ≥1 `needs` — how its clean base\n                                       #   was assembled. `needs` with zero contributing change\n                                       #   sets uses the tagged `identity` projection. Without\n                                       #   the hash, changing contributor\n                                       #   membership, order, or the composition environment\n                                       #   would leave a succeeded attempt looking valid (§5)",
+    "    capabilities: [capability],       # sorted",
+    "  model,                              # the model requested of the performer — part of what\n                                      #   the attempt was asked to do, and this projection is\n                                      #   performer-derived, not purely score-derived",
+    "  authority: {                        # the movement's EFFECTIVE authority, not raw policy —",
+    "    paths_rw: [pattern],              #   see below",
+    "    paths_ro: [pattern],              #   all sorted, duplicate-free",
+    "    side_effects: [side_effect]       # sorted; empty in v0.2",
+    "    context?,                           # omitted when absent, never encoded as \"\"",
+    "    global_invariants,                # A.5.1 — enumerated",
+    "    verification_expectation_intent   # forwarded into briefs, hence a dependency",
+    "  resolved_decisions: [{decision_id, kind, digest}],\n                                      # digest = H(\"partitur/resolution-body\", …) — A.4\n                                      # in DELIVERED order (§4: resolving seq, after truncation) —\n                                      #   not re-sorted, because the hash must bind what was\n                                      #   actually sent. Opposite human answers must not\n                                      #   yield the same hash — the answers are part of what the\n                                      #   attempt was asked to do. `digest` is a canonical hash of\n                                      #   the resolution body rather than the body itself, so an\n                                      #   answer's length cannot bloat the projection",
+    "  feedback: [{previous_attempt_id, kind, artifact_instance_id, content_hash}],\n                                      # sorted by (previous_attempt_id, artifact_instance_id) —\n                                      #   an exact key, since one prior attempt can contribute\n                                      #   several diagnostics. Empty for a first attempt. Feedback changes the\n                                      #   rendered brief (§7), so it changes what was asked"
+  ],
+  "global-invariants": [
+    "  resolved_questions: [                               # sorted by id; a tagged union, because",
+    "    {id, question, disposition: \"resolved\", resolution}   # a shape that requires `resolution`",
+    "    | {id, question, disposition: \"waived\"}               # cannot also express a waiver",
+    "  effective_paths: {                                  # the MOVEMENT's effective authority,",
+    "    rw: [pattern], ro: [pattern]                      #   sorted — never raw",
+    "  },                                                  #   policy.allowed_paths, which would\n                                                      #   reintroduce the narrowing problem\n                                                      #   A.5 exists to avoid",
+    "  side_effects_permitted: [side_effect],              # sorted; empty in v0.2",
+    "  protected_paths: [pattern]                          # sorted — §2, stated so a performer can\n                                                      #   avoid an unrecoverable violation"
+  ]
+}

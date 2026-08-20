@@ -41,24 +41,13 @@ func TestDocumentMarkerGrammarIsLocked(t *testing.T) {
 	criterion := "That statement-level boundary is the P3 preparation gate. P3 classifies every normative statement\n" +
 		"and maps each resulting clause to evidence, so a reviewer must be able to discharge one independently\n" +
 		"violable field rule without accepting unrelated field rules in the same specimen. Top-level payload\n" +
-		"count cannot supply that boundary: A.5's one execution-dependency payload carries twenty-one\n" +
-		"annotation runs of independently violable field rules, and treating its 78 lines as one clause would\n" +
-		"make it indistinguishable from the score YAML, whose many independent field rules already require\n" +
-		"decomposition."
+		"count cannot supply that boundary: before decomposition, A.5's one execution-dependency payload\n" +
+		"carried twenty-one annotation runs of independently violable field rules, and treating its 78 lines\n" +
+		"as one clause would have made it indistinguishable from the score YAML, whose many independent field\n" +
+		"rules already required decomposition."
 	requireOccurrence(t, document, criterion, 1)
-	remainingRows := []string{
-		"| Routed proposal record | `782–794` |",
-		"| Amendment proposal shape | `811–818` |",
-		"| Illustrative cast schema | `1002–1018` |",
-		"| Application-candidate identity | `4024–4030` |",
-		"| `actual_impact` shape | `4413–4422` |",
-		"| A.5 execution-dependency projection | `5012–5089` |",
-		"| A.5.1 `global_invariants` projection | `5152–5165` |",
-	}
-	remainingTable := "| Fence | Source lines in the pinned blob |\n|---|---:|\n" + strings.Join(remainingRows, "\n")
-	requireOccurrence(t, document, "At `DESIGN.md` blob `d6a6331c148b5bb3c1a61f14d69f8655f1275aca`, all thirteen fences previously\n"+
-		"selected by payload plurality have landed, but the statement-level gate remains open on these seven\n"+
-		"fences that selection did not enumerate:\n\n"+remainingTable, 1)
+	requireOccurrence(t, document, "The `decomposition-preservation` invariant below, not a historical blob-and-line inventory, governs\n"+
+		"later fenced-block edits.", 1)
 	invariantRows := []string{
 		"| `unwrapped-names` | Their existing unwrapped appearances are names, not markers. |",
 		"| `baseline-activation` | A document enters this regime only when a reviewed baseline registry names the document and its exact blob. |",

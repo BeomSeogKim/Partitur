@@ -61,24 +61,13 @@ while the specimen bytes remain in their separately classified whole-block claus
 That statement-level boundary is the P3 preparation gate. P3 classifies every normative statement
 and maps each resulting clause to evidence, so a reviewer must be able to discharge one independently
 violable field rule without accepting unrelated field rules in the same specimen. Top-level payload
-count cannot supply that boundary: A.5's one execution-dependency payload carries twenty-one
-annotation runs of independently violable field rules, and treating its 78 lines as one clause would
-make it indistinguishable from the score YAML, whose many independent field rules already require
-decomposition.
+count cannot supply that boundary: before decomposition, A.5's one execution-dependency payload
+carried twenty-one annotation runs of independently violable field rules, and treating its 78 lines
+as one clause would have made it indistinguishable from the score YAML, whose many independent field
+rules already required decomposition.
 
-At `DESIGN.md` blob `d6a6331c148b5bb3c1a61f14d69f8655f1275aca`, all thirteen fences previously
-selected by payload plurality have landed, but the statement-level gate remains open on these seven
-fences that selection did not enumerate:
-
-| Fence | Source lines in the pinned blob |
-|---|---:|
-| Routed proposal record | `782–794` |
-| Amendment proposal shape | `811–818` |
-| Illustrative cast schema | `1002–1018` |
-| Application-candidate identity | `4024–4030` |
-| `actual_impact` shape | `4413–4422` |
-| A.5 execution-dependency projection | `5012–5089` |
-| A.5.1 `global_invariants` projection | `5152–5165` |
+The `decomposition-preservation` invariant below, not a historical blob-and-line inventory, governs
+later fenced-block edits.
 
 The marker-ID production admits the existing catalog-ID families (`RC-RESUME-001`, `RA-001`,
 `RS-001`, `INIT-001`, and command IDs such as `ANSWER-001`) as well as qualified event, enum, and
