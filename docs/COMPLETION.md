@@ -356,7 +356,7 @@ obligation for it is not here.
 | Every command matrix satisfies the precondition-matrix grammar |
 | For every command, matrix results, grammar-owned usage, exhaustive absences, and the exit-7 applicability registry partition the global exit-code enumeration exactly once |
 | The exit-7 applicability registry answers every command in section 1 |
-| Currently red: executed behavioural witnesses completed for 18 of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |
+| Currently red: executed behavioural witnesses completed for 40 of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |
 
 The section 1 command table is the member set. Matrix headings are reconciled for exact equality
 with that table, so adding a command without a matrix and adding a matrix for an unlisted command
