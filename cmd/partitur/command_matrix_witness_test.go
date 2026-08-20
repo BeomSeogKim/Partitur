@@ -16,14 +16,21 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	logstream "github.com/BeomSeogKim/Partitur/internal/logs"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
+	"github.com/BeomSeogKim/Partitur/internal/protocol"
+	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryexec"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
 	statusprojection "github.com/BeomSeogKim/Partitur/internal/status"
+	validation "github.com/BeomSeogKim/Partitur/internal/validate"
 )
 
 type commandWitnessState string
@@ -90,6 +97,9 @@ func (registry *commandWitnessRegistry) run(
 
 func TestCommandMatrixWitnesses(t *testing.T) {
 	registry := newCommandWitnessRegistry()
+	runRunCommandWitnesses(t, registry)
+	runResumeCommandWitnesses(t, registry)
+	runPromoteScoreCommandWitnesses(t, registry)
 	runAnswerCommandWitnesses(t, registry)
 	runApproveCommandWitnesses(t, registry)
 	runAmendCommandWitnesses(t, registry)
@@ -101,6 +111,826 @@ func TestCommandMatrixWitnesses(t *testing.T) {
 	runStatusCommandWitnesses(t, registry)
 	runInitCommandWitnesses(t, registry)
 	reconcileCommandWitnesses(t, registry.returned, registry.completed, commandMatrixCatalogIDs(t))
+}
+
+func runRunCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "RUN-001", witnessDischarged, 0, func(t *testing.T) {
+		for _, kind := range []validation.RefusalKind{
+			validation.RefusalWorkingDirectory,
+			validation.RefusalRequiredInput,
+			validation.RefusalDiscoveredInput,
+			validation.RefusalUserHomeDirectory,
+		} {
+			t.Run(string(kind), func(t *testing.T) {
+				root := t.TempDir()
+				t.Chdir(root)
+				before := snapshotInitTree(t, root)
+				drove := false
+				var stdout, stderr bytes.Buffer
+				code := runWithRunners(
+					[]string{"run"}, &stdout, &stderr,
+					func() validation.Result { return validation.Result{} },
+					func() (*validation.Preparation, validation.Result) {
+						return nil, validation.Result{Refusal: &validation.Refusal{Kind: kind, Path: "fixture", Detail: "unavailable"}}
+					},
+					func(context.Context, *validation.Preparation, driver.StartedObserver) driver.Result {
+						drove = true
+						return driver.Result{}
+					},
+				)
+				if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), string(kind)) || drove {
+					t.Fatalf("kind=%s drove=%t exit=%d stdout=%q stderr=%q", kind, drove, code, stdout.String(), stderr.String())
+				}
+				assertCommandWitnessTree(t, root, before)
+			})
+		}
+	})
+
+	registry.run(t, "RUN-002", witnessDischarged, 0, func(t *testing.T) {
+		for _, test := range []struct {
+			name  string
+			entry validation.Entry
+			want  string
+		}{
+			{name: "score diagnostic", entry: validation.Entry{Kind: validation.EntryScore, Rule: "score.schema", Pointer: "/goal", Detail: "required"}, want: "score: rule=\"score.schema\" pointer=\"/goal\" detail=\"required\"\n"},
+			{name: "cast diagnostic", entry: validation.Entry{Kind: validation.EntryCast, Rule: "cast.schema", Origin: "project", Pointer: "/performers/worker/model", Detail: "required"}, want: "cast: rule=\"cast.schema\" origin=\"project\" pointer=\"/performers/worker/model\" detail=\"required\"\n"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				root := t.TempDir()
+				t.Chdir(root)
+				before := snapshotInitTree(t, root)
+				drove := false
+				var stdout, stderr bytes.Buffer
+				code := runWithRunners(
+					[]string{"run"}, &stdout, &stderr,
+					func() validation.Result { return validation.Result{} },
+					func() (*validation.Preparation, validation.Result) {
+						return nil, validation.Result{Entries: []validation.Entry{test.entry}}
+					},
+					func(context.Context, *validation.Preparation, driver.StartedObserver) driver.Result {
+						drove = true
+						return driver.Result{}
+					},
+				)
+				if code != 3 || stdout.Len() != 0 || stderr.String() != test.want || drove {
+					t.Fatalf("drove=%t exit=%d stdout=%q stderr=%q, want %q", drove, code, stdout.String(), stderr.String(), test.want)
+				}
+				assertCommandWitnessTree(t, root, before)
+			})
+		}
+	})
+
+	registry.run(t, "RUN-003", witnessDischarged, 0, func(t *testing.T) {
+		root, preparation := commandWitnessRunPreparation(t, false)
+		t.Chdir(root)
+		var stdout, stderr bytes.Buffer
+		adapter := &commandWitnessAdapter{t: t, mode: commandWitnessAdapterSucceeded, root: root}
+
+		code := runWithRunners(
+			[]string{"run"}, &stdout, &stderr,
+			func() validation.Result { return validation.Result{} },
+			func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+			commandWitnessRunDriver(t, adapter),
+		)
+
+		if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "precondition refused:") || adapter.called {
+			t.Fatalf("adapter_called=%t exit=%d stdout=%q stderr=%q", adapter.called, code, stdout.String(), stderr.String())
+		}
+		assertCommandWitnessRunCount(t, root, 0)
+	})
+
+	registry.run(t, "RUN-004", witnessDischarged, 0, func(t *testing.T) {
+		root, preparation := commandWitnessRunPreparation(t, true)
+		if err := os.WriteFile(filepath.Join(root, resumeFixtureBaseFile), []byte("dirty fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+		var stdout, stderr bytes.Buffer
+		adapter := &commandWitnessAdapter{t: t, mode: commandWitnessAdapterSucceeded, root: root}
+
+		code := runWithRunners(
+			[]string{"run"}, &stdout, &stderr,
+			func() validation.Result { return validation.Result{} },
+			func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+			commandWitnessRunDriver(t, adapter),
+		)
+
+		if code != 3 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "run validation failed:") || adapter.called {
+			t.Fatalf("adapter_called=%t exit=%d stdout=%q stderr=%q", adapter.called, code, stdout.String(), stderr.String())
+		}
+		assertCommandWitnessRunCount(t, root, 0)
+	})
+
+	registry.run(t, "RUN-005", witnessDischarged, 0, func(t *testing.T) {
+		root, preparation := commandWitnessRunPreparation(t, true)
+		t.Chdir(root)
+		stdout := &failingWriter{err: errors.New("stdout unavailable")}
+		var stderr bytes.Buffer
+		adapter := &commandWitnessAdapter{t: t, mode: commandWitnessAdapterSucceeded, root: root}
+
+		code := runWithRunners(
+			[]string{"run"}, stdout, &stderr,
+			func() validation.Result { return validation.Result{} },
+			func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+			commandWitnessRunDriver(t, adapter),
+		)
+
+		if code != 6 || stdout.calls != 1 || !strings.Contains(stderr.String(), "stdout unavailable") || adapter.called {
+			t.Fatalf("adapter_called=%t exit=%d stdout_calls=%d stderr=%q", adapter.called, code, stdout.calls, stderr.String())
+		}
+		store, runID := commandWitnessSoleRun(t, root)
+		assertCommandWitnessJournalDeltaFor(t, store, runID, 0, runstate.EventRunStarted)
+		if _, present, err := store.ReadLease(runID); err != nil || present {
+			t.Fatalf("driver lease present=%t err=%v, want absent", present, err)
+		}
+		assertCommandWitnessRunStateFor(t, store, runID, runstate.RunRunning)
+	})
+
+	registry.run(t, "RUN-006", witnessDischarged, 0, func(t *testing.T) {
+		for _, test := range []struct {
+			name  string
+			mode  commandWitnessAdapterMode
+			state runstate.RunLifecycle
+		}{
+			{name: "succeeded", mode: commandWitnessAdapterSucceeded, state: runstate.RunSucceeded},
+			{name: "waiting human", mode: commandWitnessAdapterWaitingHuman, state: runstate.RunWaitingHuman},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				var root string
+				var preparation *validation.Preparation
+				if test.mode == commandWitnessAdapterWaitingHuman {
+					root, preparation = commandWitnessHumanGateRunPreparation(t, true)
+				} else {
+					root, preparation = commandWitnessRunPreparation(t, true)
+				}
+				t.Chdir(root)
+				adapter := &commandWitnessAdapter{t: t, mode: test.mode, root: root}
+				var stdout, stderr bytes.Buffer
+
+				code := runWithRunners(
+					[]string{"run"}, &stdout, &stderr,
+					func() validation.Result { return validation.Result{} },
+					func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+					commandWitnessRunDriver(t, adapter),
+				)
+
+				if code != 0 || stderr.Len() != 0 || !adapter.called {
+					store, runID := commandWitnessSoleRun(t, root)
+					journal, err := store.ReadJournal(runID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Fatalf("adapter_called=%t exit=%d stdout=%q stderr=%q journal=%v", adapter.called, code, stdout.String(), stderr.String(), eventKinds(journal.Events))
+				}
+				store, runID := commandWitnessSoleRun(t, root)
+				if stdout.String() != string(runID)+"\n" {
+					t.Fatalf("stdout=%q, want run id %q once", stdout.String(), runID)
+				}
+				assertCommandWitnessRunStateFor(t, store, runID, test.state)
+				assertCommandWitnessLiveJournal(t, store, runID, test.mode)
+				if _, present, err := store.ReadLease(runID); err != nil || present {
+					t.Fatalf("driver lease present=%t err=%v, want absent", present, err)
+				}
+			})
+		}
+	})
+
+	registry.run(t, "RUN-007", witnessDischarged, 0, func(t *testing.T) {
+		for _, test := range []struct {
+			name  string
+			mode  commandWitnessAdapterMode
+			state runstate.RunLifecycle
+		}{
+			{name: "failed", mode: commandWitnessAdapterFailed, state: runstate.RunFailed},
+			{name: "cancelled", mode: commandWitnessAdapterCancelled, state: runstate.RunCancelled},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				root, preparation := commandWitnessRunPreparation(t, true)
+				t.Chdir(root)
+				adapter := &commandWitnessAdapter{t: t, mode: test.mode, root: root}
+				var stdout, stderr bytes.Buffer
+
+				code := runWithRunners(
+					[]string{"run"}, &stdout, &stderr,
+					func() validation.Result { return validation.Result{} },
+					func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+					commandWitnessRunDriver(t, adapter),
+				)
+
+				if code != 4 || !adapter.called || !strings.Contains(stderr.String(), string(test.state)) {
+					t.Fatalf("adapter_called=%t exit=%d stdout=%q stderr=%q", adapter.called, code, stdout.String(), stderr.String())
+				}
+				store, runID := commandWitnessSoleRun(t, root)
+				if stdout.String() != string(runID)+"\n" {
+					t.Fatalf("stdout=%q, want run id %q once", stdout.String(), runID)
+				}
+				assertCommandWitnessRunStateFor(t, store, runID, test.state)
+				assertCommandWitnessLiveJournal(t, store, runID, test.mode)
+			})
+		}
+	})
+
+	registry.run(t, "RUN-008", witnessDischarged, 0, func(t *testing.T) {
+		root, preparation := commandWitnessRunPreparation(t, true)
+		t.Chdir(root)
+		adapter := &commandWitnessAdapter{t: t, mode: commandWitnessAdapterHalted, root: root}
+		var stdout, stderr bytes.Buffer
+
+		code := runWithRunners(
+			[]string{"run"}, &stdout, &stderr,
+			func() validation.Result { return validation.Result{} },
+			func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+			commandWitnessRunDriver(t, adapter),
+		)
+
+		if code != 5 || !adapter.called || !strings.Contains(stderr.String(), "sweep_unverifiable") {
+			t.Fatalf("adapter_called=%t exit=%d stdout=%q stderr=%q", adapter.called, code, stdout.String(), stderr.String())
+		}
+		store, runID := commandWitnessSoleRun(t, root)
+		if stdout.String() != string(runID)+"\n" {
+			t.Fatalf("stdout=%q, want run id %q once", stdout.String(), runID)
+		}
+		assertCommandWitnessRunStateFor(t, store, runID, runstate.RunRunning)
+		assertCommandWitnessLiveJournal(t, store, runID, commandWitnessAdapterHalted)
+	})
+
+	registry.run(t, "RUN-009", witnessDischarged, 0, func(t *testing.T) {
+		root, preparation := commandWitnessRunPreparation(t, true)
+		t.Chdir(root)
+		adapter := &commandWitnessAdapter{t: t, mode: commandWitnessAdapterInterrupted, root: root}
+		var stdout, stderr bytes.Buffer
+
+		code := runWithRunners(
+			[]string{"run"}, &stdout, &stderr,
+			func() validation.Result { return validation.Result{} },
+			func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+			commandWitnessRunDriver(t, adapter),
+		)
+
+		if code != 6 || !adapter.called || !strings.Contains(stderr.String(), "partitur resume") {
+			t.Fatalf("adapter_called=%t exit=%d stdout=%q stderr=%q", adapter.called, code, stdout.String(), stderr.String())
+		}
+		store, runID := commandWitnessSoleRun(t, root)
+		if stdout.String() != string(runID)+"\n" {
+			t.Fatalf("stdout=%q, want run id %q once", stdout.String(), runID)
+		}
+		assertCommandWitnessRunStateFor(t, store, runID, runstate.RunRunning)
+		assertCommandWitnessLiveJournal(t, store, runID, commandWitnessAdapterInterrupted)
+	})
+}
+
+func runResumeCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "RESUME-001", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeFixture(t, "")
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("resume", "bad/id")
+
+		if code != 1 || stdout != "" || stderr != "usage error: detail=\"invalid run id\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		assertCommandWitnessJournalDelta(t, store, before)
+	})
+
+	registry.run(t, "RESUME-002", witnessDischarged, 0, func(t *testing.T) {
+		for _, test := range []struct {
+			name string
+			args []string
+		}{
+			{name: "explicit missing run", args: []string{"resume", "missing-run"}},
+			{name: "no active run", args: []string{"resume"}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				root := t.TempDir()
+				t.Chdir(root)
+				before := snapshotInitTree(t, root)
+
+				code, stdout, stderr := invokeCommand(test.args...)
+
+				if code != 2 || stdout != "" || !strings.Contains(stderr, "precondition refused:") {
+					t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+				}
+				assertCommandWitnessTree(t, root, before)
+			})
+		}
+	})
+
+	registry.run(t, "RESUME-003", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeFixture(t, "")
+		journalPath := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+		contents, err := os.ReadFile(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		corrupted := append(append([]byte(nil), contents...), []byte("\n{}\n{}\n")...)
+		if err := os.WriteFile(journalPath, corrupted, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+
+		code, stdout, stderr := invokeCommand("resume", "run-1")
+
+		if code != 5 || stdout != "" || stderr != "recovery halted: run_id=\"run-1\" reason=\"journal_corrupt\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		assertFileBytes(t, journalPath, corrupted)
+		_ = store
+	})
+
+	registry.run(t, "RESUME-004", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeFixture(t, "")
+		driverLease, err := store.AcquireRecoveryDriver("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer driverLease.Release()
+		journalPath := filepath.Join(root, ".partitur", "runs", "run-1", "journal.jsonl")
+		leasePath := filepath.Join(root, ".partitur", "runs", "run-1", "driver.lease")
+		beforeJournal, err := os.ReadFile(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeLease, err := os.ReadFile(leasePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+
+		code, stdout, stderr := invokeCommand("resume", "run-1")
+
+		if code != 2 || stdout != "" || stderr != "precondition refused: detail=\"driver authority is already held\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		assertFileBytes(t, journalPath, beforeJournal)
+		assertFileBytes(t, leasePath, beforeLease)
+	})
+
+	registry.run(t, "RESUME-005", witnessDischarged, 0, func(t *testing.T) {
+		witnessTerminalResumeCleanup(t, "SUCCEEDED", 0)
+	})
+
+	registry.run(t, "RESUME-006", witnessDischarged, 0, func(t *testing.T) {
+		root, preparation := commandWitnessHumanGateRunPreparation(t, true)
+		t.Chdir(root)
+		adapter := &commandWitnessAdapter{t: t, mode: commandWitnessAdapterWaitingHuman, root: root}
+		var runOut, runErr bytes.Buffer
+		if code := runWithRunners(
+			[]string{"run"}, &runOut, &runErr,
+			func() validation.Result { return validation.Result{} },
+			func() (*validation.Preparation, validation.Result) { return preparation, validation.Result{} },
+			commandWitnessRunDriver(t, adapter),
+		); code != 0 || runErr.Len() != 0 {
+			t.Fatalf("prepare waiting run exit=%d stdout=%q stderr=%q", code, runOut.String(), runErr.String())
+		}
+		store, runID := commandWitnessSoleRun(t, root)
+		before := journalLengthFor(t, store, runID)
+
+		code, stdout, stderr := invokeCommand("resume", string(runID))
+
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		assertCommandWitnessJournalDeltaFor(t, store, runID, before)
+		assertCommandWitnessRunStateFor(t, store, runID, runstate.RunWaitingHuman)
+		if _, present, err := store.ReadLease(runID); err != nil || present {
+			t.Fatalf("driver lease present=%t err=%v, want absent", present, err)
+		}
+	})
+
+	registry.run(t, "RESUME-007", witnessDischarged, 0, func(t *testing.T) {
+		for _, terminal := range []struct {
+			state string
+			code  int
+		}{
+			{state: "FAILED", code: 4},
+			{state: "CANCELLED", code: 4},
+		} {
+			t.Run(terminal.state, func(t *testing.T) {
+				witnessTerminalResumeCleanup(t, terminal.state, terminal.code)
+			})
+		}
+	})
+
+	registry.run(t, "RESUME-008", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeFixture(t, "")
+		loaded := false
+		executor := &recoveryexec.Executor{Store: store, RunID: "run-1"}
+		executor.Load = func(context.Context) (recovery.Input, error) {
+			durable, err := store.LoadRunInput("run-1")
+			if err != nil {
+				return recovery.Input{}, err
+			}
+			if !loaded {
+				loaded = true
+				if err := os.Remove(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-1.yaml")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return recovery.Input{Projection: durable.Projection}, nil
+		}
+		before := journalLength(t, store)
+		var stdout, stderr bytes.Buffer
+
+		code := runResume("run-1", &stdout, &stderr, func(ctx context.Context, _ string) (recoveryexec.Result, error) {
+			return executor.Execute(ctx)
+		})
+
+		if code != 5 || stdout.Len() != 0 || stderr.String() != "recovery halted: run_id=\"run-1\" reason=\"missing_snapshot_file\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		assertCommandWitnessJournalDelta(t, store, before)
+	})
+
+	registry.run(t, "RESUME-009", witnessDischarged, 0, func(t *testing.T) {
+		root, store := resumeFixtureWithInputs(t, "", resumeWriterScore(), resumeWriterCast())
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("resume", "run-1")
+
+		if code != 6 || stdout != "" || !strings.Contains(stderr, "partitur resume run-1") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		assertCommandWitnessJournalDelta(t, store, before,
+			runstate.EventAuthorityGranted,
+			runstate.EventMovementReady,
+			runstate.EventMovementStarted,
+			runstate.EventPerformerSelected,
+		)
+		assertCommandWitnessRunState(t, store, runstate.RunRunning)
+	})
+}
+
+func runPromoteScoreCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "PROMOTE-SCORE-001", witnessDivergent, 304, func(t *testing.T) {
+		root, store, _ := promotionFixture(t, true)
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("promote-score", "bad/id")
+
+		if code != 2 || stdout != "" || stderr != "precondition refused: detail=\"invalid runstore path: run id\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want observed divergence exit 2 refusal", code, stdout, stderr)
+		}
+		assertCommandWitnessJournalDelta(t, store, before)
+		assertCommandWitnessPromotionState(t, store, runstate.PromotionNotPromoted)
+	})
+
+	registry.run(t, "PROMOTE-SCORE-002", witnessDischarged, 0, func(t *testing.T) {
+		t.Run("run selection", func(t *testing.T) {
+			root, store, _ := promotionFixture(t, true)
+			t.Chdir(root)
+			before := journalLength(t, store)
+
+			code, stdout, stderr := invokeCommand("promote-score", "missing-run")
+
+			if code != 2 || stdout != "" || !strings.Contains(stderr, "precondition refused:") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			assertCommandWitnessJournalDelta(t, store, before)
+		})
+		for _, test := range []struct {
+			name   string
+			mutate func(*testing.T, string, string)
+			want   []string
+		}{
+			{
+				name: "missing target snapshot",
+				mutate: func(t *testing.T, _, snapshot string) {
+					if err := os.Remove(snapshot); err != nil {
+						t.Fatal(err)
+					}
+				},
+				want: []string{"required promotion target snapshot", "is missing"},
+			},
+			{
+				name: "unreadable target snapshot",
+				mutate: func(t *testing.T, _, snapshot string) {
+					if err := os.Remove(snapshot); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Mkdir(snapshot, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				},
+				want: []string{"required promotion target snapshot", "is unreadable"},
+			},
+			{
+				name: "hash-mismatched target snapshot",
+				mutate: func(t *testing.T, _, snapshot string) {
+					if err := os.WriteFile(snapshot, []byte("mismatched target\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				},
+				want: []string{"promotion target hash", "does not match pinned head"},
+			},
+			{
+				name: "pre-start root conflict",
+				mutate: func(t *testing.T, root, _ string) {
+					if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), []byte("third root state\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				},
+				want: []string{"root file hash", "does not match expected"},
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				root, store, _, _ := promotionRecoveryFixture(t)
+				snapshot := filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml")
+				test.mutate(t, root, snapshot)
+				t.Chdir(root)
+				before := journalLength(t, store)
+
+				code, stdout, stderr := invokeCommand("promote-score", "run-1")
+
+				if code != 2 || stdout != "" {
+					t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+				}
+				for _, want := range test.want {
+					if !strings.Contains(stderr, want) {
+						t.Fatalf("stderr=%q, want %q", stderr, want)
+					}
+				}
+				assertCommandWitnessJournalDelta(t, store, before)
+				if test.name == "pre-start root conflict" {
+					assertCommandWitnessPromotionState(t, store, runstate.PromotionNotPromoted)
+				}
+			})
+		}
+	})
+
+	registry.run(t, "PROMOTE-SCORE-003", witnessDivergent, 303, func(t *testing.T) {
+		for _, state := range []runstate.PromotionState{runstate.PromotionPromoting, runstate.PromotionRecoveryRequired} {
+			t.Run(string(state), func(t *testing.T) {
+				root, store, _, _ := commandWitnessPromotionFixture(t, state)
+				t.Chdir(root)
+				before := journalLength(t, store)
+
+				code, stdout, stderr := invokeCommand("promote-score", "run-1")
+
+				if code != 5 || stdout != "" || !strings.Contains(stderr, "normal promotion is refused from "+string(state)) {
+					t.Fatalf("state=%s exit=%d stdout=%q stderr=%q", state, code, stdout, stderr)
+				}
+				if state == runstate.PromotionPromoting {
+					assertCommandWitnessJournalDelta(t, store, before, runstate.EventScorePromotionRecoveryRequired)
+				} else {
+					assertCommandWitnessJournalDelta(t, store, before)
+				}
+				assertCommandWitnessPromotionState(t, store, runstate.PromotionRecoveryRequired)
+			})
+		}
+	})
+
+	registry.run(t, "PROMOTE-SCORE-004", witnessDischarged, 0, func(t *testing.T) {
+		for _, state := range []runstate.PromotionState{runstate.PromotionNotPromoted, runstate.PromotionPromoted} {
+			t.Run(string(state), func(t *testing.T) {
+				root, store, _, _ := promotionRecoveryFixture(t)
+				t.Chdir(root)
+				if state == runstate.PromotionPromoted {
+					if code, stdout, stderr := invokeCommand("promote-score", "run-1"); code != 0 || stdout != "" || stderr != "" {
+						t.Fatalf("prepare PROMOTED exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+					}
+				}
+				before := journalLength(t, store)
+
+				code, stdout, stderr := invokeCommand("promote-score", "run-1", "--recover")
+
+				if code != 2 || stdout != "" || !strings.Contains(stderr, "--recover is refused from "+string(state)) {
+					t.Fatalf("state=%s exit=%d stdout=%q stderr=%q", state, code, stdout, stderr)
+				}
+				assertCommandWitnessJournalDelta(t, store, before)
+				assertCommandWitnessPromotionState(t, store, state)
+			})
+		}
+	})
+
+	registry.run(t, "PROMOTE-SCORE-005", witnessDischarged, 0, func(t *testing.T) {
+		root, store, _, target := promotionRecoveryFixture(t)
+		t.Chdir(root)
+		if code, stdout, stderr := invokeCommand("promote-score", "run-1"); code != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("prepare PROMOTED exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		before := journalLength(t, store)
+		beforeTree := snapshotInitTree(t, root)
+
+		code, stdout, stderr := invokeCommand("promote-score", "run-1")
+
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		assertCommandWitnessJournalDelta(t, store, before)
+		assertCommandWitnessPromotionState(t, store, runstate.PromotionPromoted)
+		assertCommandWitnessTree(t, root, beforeTree)
+		assertFileBytes(t, filepath.Join(root, "partitur.yaml"), target)
+		assertCommandWitnessRunState(t, store, runstate.RunSucceeded)
+	})
+
+	registry.run(t, "PROMOTE-SCORE-006", witnessDischarged, 0, func(t *testing.T) {
+		root, store, _, target := promotionRecoveryFixture(t)
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("promote-score", "run-1")
+
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		delta := assertCommandWitnessJournalDelta(t, store, before,
+			runstate.EventScorePromotionStarted,
+			runstate.EventScorePromoted,
+		)
+		assertCommandWitnessPromotionTransaction(t, delta)
+		assertCommandWitnessPromotionState(t, store, runstate.PromotionPromoted)
+		assertFileBytes(t, filepath.Join(root, "partitur.yaml"), target)
+		assertCommandWitnessRunState(t, store, runstate.RunSucceeded)
+	})
+
+	registry.run(t, "PROMOTE-SCORE-007", witnessDischarged, 0, func(t *testing.T) {
+		root, store, _, _ := promotionRecoveryFixture(t)
+		replacement := []byte("operator edit at rename boundary\n")
+		filesystem := &commandWitnessPromotionConflictFS{
+			rootPath:    filepath.Join(root, "partitur.yaml"),
+			replacement: replacement,
+		}
+		installCommandWitnessFileSystem(t, filesystem)
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("promote-score", "run-1")
+
+		if !filesystem.reached || code != 5 || stdout != "" || !strings.Contains(stderr, "matches neither expected nor target") {
+			t.Fatalf("interleave_reached=%t exit=%d stdout=%q stderr=%q", filesystem.reached, code, stdout, stderr)
+		}
+		delta := assertCommandWitnessJournalDelta(t, store, before,
+			runstate.EventScorePromotionStarted,
+			runstate.EventScorePromotionRecoveryRequired,
+		)
+		assertCommandWitnessPromotionRecoveryTransaction(t, delta)
+		assertCommandWitnessPromotionState(t, store, runstate.PromotionRecoveryRequired)
+		assertFileBytes(t, filepath.Join(root, "partitur.yaml"), replacement)
+	})
+
+	registry.run(t, "PROMOTE-SCORE-008", witnessDischarged, 0, func(t *testing.T) {
+		root, store, _, target := promotionRecoveryFixture(t)
+		filesystem := &commandWitnessPromotionAppendLimitFS{allowedJournalAppends: 1}
+		installCommandWitnessFileSystem(t, filesystem)
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("promote-score", "run-1")
+
+		if !filesystem.reached || code != 6 || stdout != "" || !strings.Contains(stderr, "partitur promote-score run-1 --recover") {
+			t.Fatalf("injection_reached=%t exit=%d stdout=%q stderr=%q", filesystem.reached, code, stdout, stderr)
+		}
+		assertCommandWitnessJournalDelta(t, store, before, runstate.EventScorePromotionStarted)
+		assertCommandWitnessPromotionState(t, store, runstate.PromotionPromoting)
+		assertFileBytes(t, filepath.Join(root, "partitur.yaml"), target)
+	})
+
+	registry.run(t, "PROMOTE-SCORE-009", witnessDischarged, 0, func(t *testing.T) {
+		for _, state := range []runstate.PromotionState{runstate.PromotionPromoting, runstate.PromotionRecoveryRequired} {
+			t.Run(string(state), func(t *testing.T) {
+				root, store, _, target := commandWitnessPromotionFixture(t, state)
+				if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), target, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Chdir(root)
+				before := journalLength(t, store)
+
+				code, stdout, stderr := invokeCommand("promote-score", "run-1", "--recover")
+
+				if code != 0 || stdout != "" || stderr != "" {
+					t.Fatalf("state=%s exit=%d stdout=%q stderr=%q", state, code, stdout, stderr)
+				}
+				delta := assertCommandWitnessJournalDelta(t, store, before, runstate.EventScorePromoted)
+				assertCommandWitnessPromotionCompletion(t, delta, commandWitnessPromotionTransactionID(t, store))
+				assertCommandWitnessPromotionState(t, store, runstate.PromotionPromoted)
+				assertFileBytes(t, filepath.Join(root, "partitur.yaml"), target)
+			})
+		}
+	})
+
+	registry.run(t, "PROMOTE-SCORE-010", witnessDischarged, 0, func(t *testing.T) {
+		for _, state := range []runstate.PromotionState{runstate.PromotionPromoting, runstate.PromotionRecoveryRequired} {
+			t.Run(string(state), func(t *testing.T) {
+				root, store, expected, target := commandWitnessPromotionFixture(t, state)
+				t.Chdir(root)
+				before := journalLength(t, store)
+				txnID := commandWitnessPromotionTransactionID(t, store)
+
+				code, stdout, stderr := invokeCommand("promote-score", "run-1", "--recover")
+
+				if code != 0 || stdout != "" || stderr != "" {
+					t.Fatalf("state=%s exit=%d stdout=%q stderr=%q", state, code, stdout, stderr)
+				}
+				delta := assertCommandWitnessJournalDelta(t, store, before, runstate.EventScorePromoted)
+				assertCommandWitnessPromotionCompletion(t, delta, txnID)
+				assertCommandWitnessPromotionState(t, store, runstate.PromotionPromoted)
+				assertFileBytes(t, filepath.Join(root, "partitur.yaml"), target)
+				if bytes.Equal(expected, target) {
+					t.Fatal("same-transaction recovery fixture has equal expected and target bytes")
+				}
+			})
+		}
+	})
+
+	registry.run(t, "PROMOTE-SCORE-011", witnessDischarged, 0, func(t *testing.T) {
+		for _, state := range []runstate.PromotionState{runstate.PromotionPromoting, runstate.PromotionRecoveryRequired} {
+			for _, test := range []struct {
+				name   string
+				mutate func(*testing.T, string)
+				want   []string
+			}{
+				{
+					name: "missing target snapshot",
+					mutate: func(t *testing.T, root string) {
+						if err := os.Remove(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml")); err != nil {
+							t.Fatal(err)
+						}
+					},
+					want: []string{"required promotion target snapshot", "is missing"},
+				},
+				{
+					name: "unreadable target snapshot",
+					mutate: func(t *testing.T, root string) {
+						path := filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml")
+						if err := os.Remove(path); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Mkdir(path, 0o700); err != nil {
+							t.Fatal(err)
+						}
+					},
+					want: []string{"required promotion target snapshot", "is unreadable"},
+				},
+				{
+					name: "hash-mismatched target snapshot",
+					mutate: func(t *testing.T, root string) {
+						if err := os.WriteFile(filepath.Join(root, ".partitur", "runs", "run-1", "scores", "revision-2.yaml"), []byte("mismatched target\n"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					},
+					want: []string{"promotion target hash", "does not match pinned head"},
+				},
+				{
+					name: "root matches neither expected nor target",
+					mutate: func(t *testing.T, root string) {
+						if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), []byte("third root state\n"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					},
+					want: []string{"matches neither expected nor target"},
+				},
+			} {
+				t.Run(string(state)+"/"+test.name, func(t *testing.T) {
+					root, store, _, _ := commandWitnessPromotionFixture(t, state)
+					test.mutate(t, root)
+					t.Chdir(root)
+					before := journalLength(t, store)
+
+					code, stdout, stderr := invokeCommand("promote-score", "run-1", "--recover")
+
+					if code != 5 || stdout != "" {
+						t.Fatalf("state=%s exit=%d stdout=%q stderr=%q", state, code, stdout, stderr)
+					}
+					for _, want := range test.want {
+						if !strings.Contains(stderr, want) {
+							t.Fatalf("stderr=%q, want %q", stderr, want)
+						}
+					}
+					if state == runstate.PromotionPromoting {
+						assertCommandWitnessJournalDelta(t, store, before, runstate.EventScorePromotionRecoveryRequired)
+					} else {
+						assertCommandWitnessJournalDelta(t, store, before)
+					}
+					if test.name == "root matches neither expected nor target" {
+						assertCommandWitnessPromotionState(t, store, runstate.PromotionRecoveryRequired)
+					}
+				})
+			}
+		}
+	})
+
+	registry.run(t, "PROMOTE-SCORE-012", witnessDischarged, 0, func(t *testing.T) {
+		root, store, _, target := commandWitnessPromotionFixture(t, runstate.PromotionPromoting)
+		if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), target, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		filesystem := &commandWitnessPromotionAppendLimitFS{allowedJournalAppends: 0}
+		installCommandWitnessFileSystem(t, filesystem)
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("promote-score", "run-1", "--recover")
+
+		if !filesystem.reached || code != 6 || stdout != "" || !strings.Contains(stderr, "partitur promote-score run-1 --recover") {
+			t.Fatalf("injection_reached=%t exit=%d stdout=%q stderr=%q", filesystem.reached, code, stdout, stderr)
+		}
+		assertCommandWitnessJournalDelta(t, store, before)
+		assertCommandWitnessPromotionState(t, store, runstate.PromotionPromoting)
+		assertFileBytes(t, filepath.Join(root, "partitur.yaml"), target)
+	})
 }
 
 func runVersionCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
@@ -1407,6 +2237,556 @@ func runApplyCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 		assertCommandWitnessApplicationState(t, store, runstate.ApplicationApplying)
 		assertCommandWitnessBaseCheckout(t, root)
 	})
+}
+
+type commandWitnessAdapterMode string
+
+const (
+	commandWitnessAdapterSucceeded    commandWitnessAdapterMode = "succeeded"
+	commandWitnessAdapterWaitingHuman commandWitnessAdapterMode = "waiting-human"
+	commandWitnessAdapterFailed       commandWitnessAdapterMode = "failed"
+	commandWitnessAdapterCancelled    commandWitnessAdapterMode = "cancelled"
+	commandWitnessAdapterHalted       commandWitnessAdapterMode = "halted"
+	commandWitnessAdapterInterrupted  commandWitnessAdapterMode = "interrupted"
+)
+
+type commandWitnessAdapter struct {
+	t      *testing.T
+	mode   commandWitnessAdapterMode
+	root   string
+	called bool
+}
+
+func (fixture *commandWitnessAdapter) Resolve(adapterID string) (string, error) {
+	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+func (fixture *commandWitnessAdapter) Execute(_ context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	fixture.t.Helper()
+	fixture.called = true
+	start, err := procid.Read(os.Getpid())
+	if err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	if _, err := plan.RecordIdentity(runstate.ProcessIdentity{PID: os.Getpid(), SessionID: os.Getpid(), Start: start}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	probe := protocol.ProbeResult{
+		Protocol: protocol.ProtocolVersion,
+		Adapter:  protocol.AdapterIdentity{ID: plan.AdapterID, Version: "command-witness"},
+		Capabilities: protocol.Capabilities{
+			RepoRead: true,
+			Shell:    true,
+			Models:   []protocol.Model{{ID: "model"}},
+		},
+		Enforcement: protocol.Enforcement{
+			PathGrants: true, ReadOnly: true, NetworkGrants: true, ShellGrants: true, ReadGrants: true,
+		},
+	}
+	if _, err := plan.Recorder.RecordProbe(probe); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+	switch fixture.mode {
+	case commandWitnessAdapterHalted:
+		return adapter.ExecuteReport{}, &adapter.HaltError{Reason: adapter.ErrSweepUnverifiable, Cause: errors.New("command witness halt")}
+	case commandWitnessAdapterInterrupted:
+		return adapter.ExecuteReport{}, errors.New("command witness adapter interruption")
+	case commandWitnessAdapterCancelled:
+		store, err := runstore.New(fixture.root, faultpoint.Nop{})
+		if err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+		if err := store.RequestCancellation(runstate.RunID(plan.Request.RunID)); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+		select {
+		case <-plan.Cancel:
+		case <-time.After(5 * time.Second):
+			return adapter.ExecuteReport{}, errors.New("command witness cancellation was not observed")
+		}
+	}
+	artifacts := []adapter.ArtifactObservation(nil)
+	if fixture.mode == commandWitnessAdapterSucceeded || fixture.mode == commandWitnessAdapterWaitingHuman || fixture.mode == commandWitnessAdapterCancelled {
+		path := filepath.Join(plan.Request.OutputDir, "report")
+		if err := os.WriteFile(path, []byte("command witness report\n"), 0o600); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+		artifact := adapter.ArtifactObservation{ArtifactID: "report", Kind: "artifact", Path: path, SourcePath: "report"}
+		if _, err := plan.Recorder.RecordArtifact(artifact); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if _, err := plan.Recorder.RecordExecutionStopped(adapter.ExecutionStop{
+		IntervalID: plan.IntervalID, Reason: "normal", Charging: "measured", ObservedAt: plan.IntervalOpened,
+	}); err != nil {
+		return adapter.ExecuteReport{}, err
+	}
+
+	switch fixture.mode {
+	case commandWitnessAdapterFailed:
+		result := protocol.ExecuteResult{Outcome: protocol.OutcomeFailed, Failure: &protocol.Failure{Kind: protocol.FailureTaskFailed, Detail: "fixture task failed"}}
+		if _, err := plan.Recorder.RecordOutcome(adapter.OutcomeObservation{
+			EventType: string(runstate.EventAttemptFailed), Result: result,
+		}); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+		return adapter.ExecuteReport{Probe: probe, Result: &result, Artifacts: artifacts}, nil
+	default:
+		result := protocol.ExecuteResult{Outcome: protocol.OutcomeCompleted}
+		if _, err := plan.Recorder.RecordOutcome(adapter.OutcomeObservation{
+			EventType: string(runstate.EventPerformerCompleted), Result: result,
+		}); err != nil {
+			return adapter.ExecuteReport{}, err
+		}
+		return adapter.ExecuteReport{Probe: probe, Result: &result}, nil
+	}
+}
+
+func commandWitnessRunPreparation(t *testing.T, repository bool) (string, *validation.Preparation) {
+	return commandWitnessRunPreparationWithGate(t, repository, false)
+}
+
+func commandWitnessHumanGateRunPreparation(t *testing.T, repository bool) (string, *validation.Preparation) {
+	return commandWitnessRunPreparationWithGate(t, repository, true)
+}
+
+func commandWitnessRunPreparationWithGate(t *testing.T, repository, humanGate bool) (string, *validation.Preparation) {
+	t.Helper()
+	root := t.TempDir()
+	bin := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(bin, "partitur-adapter-adapter")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(fakeAdapterEnvironment, "1")
+	if err := os.MkdirAll(filepath.Join(root, ".partitur"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gate := "never"
+	if humanGate {
+		gate = "always"
+	}
+	scoreBytes := []byte(fmt.Sprintf(`score: "0.2"
+name: command-witness-run
+revision: 1
+status: finalized
+goal: exercise the live command transaction
+verification:
+  expectation:
+    intent: pass-existing-tests
+    apply_gate:
+      require: [verified]
+  final_movement: review
+parts:
+  reviewer:
+    capabilities: [repo_read, shell]
+movements:
+  - id: review
+    part: reviewer
+    grants: [repo_read, shell]
+    instruction: inspect
+    outputs:
+      - id: report
+        kind: artifact
+    acceptance:
+      hard:
+        - id: report-present
+          artifact: report
+      human_gate: %s
+policy:
+  allowed_paths: ["**"]
+  budget:
+    active_wall_clock_min: 10
+`, gate))
+	if err := os.WriteFile(filepath.Join(root, "partitur.yaml"), scoreBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	castBytes := []byte("cast: \"0.1\"\nperformers:\n  reviewer:\n    adapter: adapter\n    model: model\nbindings:\n  reviewer:\n    performer: reviewer\n")
+	if err := os.WriteFile(filepath.Join(root, ".partitur", "cast.yaml"), castBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	if err := initializeRepository(); err != nil {
+		t.Fatal(err)
+	}
+	if repository {
+		runGit(t, root, "init")
+		runGit(t, root, "config", "user.name", "Partitur Test")
+		runGit(t, root, "config", "user.email", "partitur@example.invalid")
+		runGit(t, root, "add", "partitur.yaml", ".partitur/cast.yaml", ".partitur/.gitignore")
+		runGit(t, root, "commit", "-m", "fixture")
+	}
+	preparation, result := validation.Prepare()
+	if result.Refusal != nil || result.HasDiagnostics() || len(result.Entries) != 0 {
+		t.Fatalf("run preparation refusal=%v entries=%v", result.Refusal, result.Entries)
+	}
+	return root, preparation
+}
+
+func commandWitnessRunDriver(t *testing.T, client *commandWitnessAdapter) runDriver {
+	t.Helper()
+	return func(ctx context.Context, preparation *validation.Preparation, started driver.StartedObserver) driver.Result {
+		execution := driver.DefaultExecutionDependencies(faultpoint.Nop{})
+		execution.Client = client
+		execution.ResolveTrampoline = func() (string, error) { return "/fixture/partitur-trampoline", nil }
+		execution.StoreFactory = runstore.New
+		return driver.RunWithExecutionDependencies(ctx, preparation, started, execution)
+	}
+}
+
+func assertCommandWitnessRunCount(t *testing.T, root string, want int) {
+	t.Helper()
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runIDs, err := store.RunIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runIDs) != want {
+		t.Fatalf("run ids=%v, want count %d", runIDs, want)
+	}
+}
+
+func commandWitnessSoleRun(t *testing.T, root string) (*runstore.Store, runstate.RunID) {
+	t.Helper()
+	store, err := runstore.New(root, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runIDs, err := store.RunIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runIDs) != 1 {
+		t.Fatalf("run ids=%v, want exactly one", runIDs)
+	}
+	return store, runIDs[0]
+}
+
+func journalLengthFor(t *testing.T, store *runstore.Store, runID runstate.RunID) int {
+	t.Helper()
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(journal.Events)
+}
+
+func assertCommandWitnessJournalDeltaFor(
+	t *testing.T,
+	store *runstore.Store,
+	runID runstate.RunID,
+	before int,
+	want ...runstate.EventType,
+) []runstate.Event {
+	t.Helper()
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Events) < before {
+		t.Fatalf("journal shrank from %d to %d events", before, len(journal.Events))
+	}
+	delta := journal.Events[before:]
+	if len(delta) != len(want) {
+		t.Fatalf("journal delta=%v, want %v", eventKinds(delta), want)
+	}
+	for index, eventType := range want {
+		if delta[index].Type != eventType {
+			t.Fatalf("journal delta=%v, want %v", eventKinds(delta), want)
+		}
+	}
+	return delta
+}
+
+func assertCommandWitnessRunStateFor(t *testing.T, store *runstore.Store, runID runstate.RunID, want runstate.RunLifecycle) {
+	t.Helper()
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Run != want {
+		t.Fatalf("run state=%s, want %s", input.Projection.State.Run, want)
+	}
+}
+
+func assertCommandWitnessLiveJournal(t *testing.T, store *runstore.Store, runID runstate.RunID, mode commandWitnessAdapterMode) {
+	t.Helper()
+	common := []runstate.EventType{
+		runstate.EventRunStarted,
+		runstate.EventAuthorityGranted,
+		runstate.EventApplicationCandidateRecorded,
+		runstate.EventMovementReady,
+		runstate.EventMovementStarted,
+		runstate.EventPerformerSelected,
+		runstate.EventExecutionStarted,
+		runstate.EventAttemptStarted,
+		runstate.EventAdapterProbed,
+	}
+	var tail []runstate.EventType
+	switch mode {
+	case commandWitnessAdapterSucceeded:
+		tail = []runstate.EventType{
+			runstate.EventArtifactRecorded,
+			runstate.EventExecutionStopped,
+			runstate.EventPerformerCompleted,
+			runstate.EventVerificationPassed,
+			runstate.EventExecutionStarted,
+			runstate.EventAcceptanceStarted,
+			runstate.EventCriterionStarted,
+			runstate.EventCriterionCompleted,
+			runstate.EventAcceptanceEvaluationCompleted,
+			runstate.EventExecutionStopped,
+			runstate.EventAttemptCompleted,
+			runstate.EventMovementSucceeded,
+		}
+	case commandWitnessAdapterWaitingHuman:
+		tail = []runstate.EventType{
+			runstate.EventArtifactRecorded,
+			runstate.EventExecutionStopped,
+			runstate.EventPerformerCompleted,
+			runstate.EventVerificationPassed,
+			runstate.EventExecutionStarted,
+			runstate.EventAcceptanceStarted,
+			runstate.EventCriterionStarted,
+			runstate.EventCriterionCompleted,
+			runstate.EventAcceptanceEvaluationCompleted,
+			runstate.EventExecutionStopped,
+			runstate.EventDecisionRequested,
+		}
+	case commandWitnessAdapterFailed:
+		tail = []runstate.EventType{
+			runstate.EventExecutionStopped,
+			runstate.EventAttemptFailed,
+			runstate.EventMovementFailed,
+			runstate.EventRunFailed,
+		}
+	case commandWitnessAdapterCancelled:
+		tail = []runstate.EventType{
+			runstate.EventCancelRequested,
+			runstate.EventArtifactRecorded,
+			runstate.EventExecutionStopped,
+			runstate.EventPerformerCompleted,
+			runstate.EventRunCancelled,
+		}
+	case commandWitnessAdapterHalted, commandWitnessAdapterInterrupted:
+	default:
+		t.Fatalf("unknown adapter mode %q", mode)
+	}
+	assertCommandWitnessJournalDeltaFor(t, store, runID, 0, append(common, tail...)...)
+}
+
+func witnessTerminalResumeCleanup(t *testing.T, terminal string, wantCode int) {
+	t.Helper()
+	root, store := resumeFixture(t, "")
+	if _, err := store.AcquireRecoveryDriver("run-1"); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		return appendFixtureTerminal(t, tx, root, input.BaseCommit, input.BaseTree, terminal)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runRoot := filepath.Join(root, ".partitur", "runs", "run-1")
+	residues := map[string][]byte{
+		filepath.Join(root, ".partitur", "work", "run-1", "attempt-staging"):          []byte("staging"),
+		filepath.Join(runRoot, "driver.quiesced.prepare-1"):                           []byte("sidecar"),
+		filepath.Join(runRoot, "prepares", "prepare-1.json"):                          []byte("prepare"),
+		filepath.Join(runRoot, "inputs", "review", "revision-1", "subject-tree.json"): []byte("review input"),
+	}
+	for path, contents := range residues {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(root)
+	before := journalLength(t, store)
+
+	code, stdout, stderr := invokeCommand("resume", "run-1")
+
+	if code != wantCode || stdout != "" || stderr != "" {
+		t.Fatalf("terminal=%s exit=%d stdout=%q stderr=%q, want exit %d", terminal, code, stdout, stderr, wantCode)
+	}
+	assertCommandWitnessJournalDelta(t, store, before)
+	for path := range residues {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("terminal resume retained residue %q: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(runRoot, "driver.lease")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal resume retained driver lease: %v", err)
+	}
+}
+
+func commandWitnessPromotionFixture(
+	t *testing.T,
+	state runstate.PromotionState,
+) (string, *runstore.Store, []byte, []byte) {
+	t.Helper()
+	root, store, expected, target := promotionRecoveryFixture(t)
+	if state == runstate.PromotionNotPromoted {
+		return root, store, expected, target
+	}
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := map[string]any{}
+	if err := json.Unmarshal(input.Projection.State.ApplicationCandidate.IdentityVersions, &versions); err != nil {
+		t.Fatal(err)
+	}
+	txnID := "promotion-command-witness"
+	startedPayload := map[string]any{
+		"txn_id":                    txnID,
+		"candidate_id":              input.Projection.State.ApplicationCandidate.ID,
+		"identity_versions":         versions,
+		"expected_root_file_hash":   resumeHash(expected),
+		"target_snapshot_file_hash": resumeHash(target),
+		"target_revision":           2,
+	}
+	if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
+		if _, err := tx.At("command-witness.promotion.started").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 2, Type: runstate.EventScorePromotionStarted,
+			Payload: resumePayload(t, startedPayload),
+		}); err != nil {
+			return err
+		}
+		if state != runstate.PromotionRecoveryRequired {
+			return nil
+		}
+		_, err := tx.At("command-witness.promotion.recovery-required").Append(runstate.Event{
+			RunID: "run-1", ScoreRevision: 2, Type: runstate.EventScorePromotionRecoveryRequired,
+			Payload: resumePayload(t, map[string]any{
+				"txn_id":            txnID,
+				"candidate_id":      input.Projection.State.ApplicationCandidate.ID,
+				"identity_versions": versions,
+				"failure_detail":    "command witness cause",
+			}),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCommandWitnessPromotionState(t, store, state)
+	return root, store, expected, target
+}
+
+func assertCommandWitnessPromotionState(t *testing.T, store *runstore.Store, want runstate.PromotionState) {
+	t.Helper()
+	input, err := store.LoadRunInput("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Promotion.State != want {
+		t.Fatalf("promotion state=%s, want %s", input.Projection.State.Promotion.State, want)
+	}
+	if input.Projection.State.Run != runstate.RunSucceeded {
+		t.Fatalf("promotion changed run state=%s, want SUCCEEDED", input.Projection.State.Run)
+	}
+}
+
+func commandWitnessPromotionTransactionID(t *testing.T, store *runstore.Store) string {
+	t.Helper()
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return promotionTransactionIDFromJournal(t, journal.Events)
+}
+
+func assertCommandWitnessPromotionTransaction(t *testing.T, delta []runstate.Event) {
+	t.Helper()
+	if len(delta) != 2 {
+		t.Fatalf("promotion delta=%v, want two events", eventKinds(delta))
+	}
+	txnID := promotionTransactionIDFromJournal(t, delta)
+	assertCommandWitnessPromotionCompletion(t, delta[1:], txnID)
+}
+
+func assertCommandWitnessPromotionRecoveryTransaction(t *testing.T, delta []runstate.Event) {
+	t.Helper()
+	if len(delta) != 2 || delta[0].Type != runstate.EventScorePromotionStarted || delta[1].Type != runstate.EventScorePromotionRecoveryRequired {
+		t.Fatalf("promotion recovery delta=%v, want started then recovery-required", eventKinds(delta))
+	}
+	txnID := promotionTransactionIDFromJournal(t, delta)
+	payload := eventPayloadMap(t, delta[1])
+	if payload["txn_id"] != txnID || payload["candidate_id"] == "" || payload["failure_detail"] == "" {
+		t.Fatalf("promotion recovery payload=%v, want transaction %q and durable cause", payload, txnID)
+	}
+}
+
+func assertCommandWitnessPromotionCompletion(t *testing.T, events []runstate.Event, txnID string) {
+	t.Helper()
+	if len(events) != 1 || events[0].Type != runstate.EventScorePromoted {
+		t.Fatalf("promotion completion events=%v, want score.promoted", eventKinds(events))
+	}
+	payload := eventPayloadMap(t, events[0])
+	if payload["txn_id"] != txnID || payload["candidate_id"] == "" || payload["target_revision"] != float64(2) {
+		t.Fatalf("promotion completion payload=%v, want transaction %q revision 2", payload, txnID)
+	}
+}
+
+type commandWitnessPromotionConflictFS struct {
+	journalFailureFS
+	rootPath    string
+	replacement []byte
+	rootReads   int
+	reached     bool
+}
+
+func (filesystem *commandWitnessPromotionConflictFS) ReadFile(path string) ([]byte, error) {
+	if path == filesystem.rootPath {
+		filesystem.rootReads++
+		if filesystem.rootReads == 2 {
+			filesystem.reached = true
+			if err := os.WriteFile(path, filesystem.replacement, 0o600); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return os.ReadFile(path)
+}
+
+type commandWitnessPromotionAppendLimitFS struct {
+	journalFailureFS
+	allowedJournalAppends int
+	journalAppends        int
+	reached               bool
+}
+
+func (filesystem *commandWitnessPromotionAppendLimitFS) Append(path string, contents []byte, mode os.FileMode) error {
+	if filepath.Base(path) == "journal.jsonl" {
+		filesystem.journalAppends++
+		if filesystem.journalAppends > filesystem.allowedJournalAppends {
+			filesystem.reached = true
+			return errors.New("injected promotion journal append interruption")
+		}
+	}
+	return filesystem.journalFailureFS.Append(path, contents, mode)
+}
+
+func installCommandWitnessFileSystem(t *testing.T, filesystem runstore.FileSystem) {
+	t.Helper()
+	previous := newRunStore
+	newRunStore = func(root string, probe faultpoint.Probe, observers ...runstore.ReceiptObserver) (*runstore.Store, error) {
+		return runstore.NewWithFileSystem(root, probe, filesystem, observers...)
+	}
+	t.Cleanup(func() { newRunStore = previous })
 }
 
 func validateCommandWitnessFixture(t *testing.T, adapterID string, advisory bool) string {
