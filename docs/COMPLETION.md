@@ -348,7 +348,7 @@ obligation for it is not here.
 
 ## 8. Command outcome specification
 
-**Green when** all four hold. **Mechanical.**
+**Green when** all five hold. **Mechanical.**
 
 | Check |
 |---|
@@ -356,6 +356,7 @@ obligation for it is not here.
 | Every command matrix satisfies the precondition-matrix grammar |
 | For every command, matrix results, grammar-owned usage, exhaustive absences, and the exit-7 applicability registry partition the global exit-code enumeration exactly once |
 | The exit-7 applicability registry answers every command in section 1 |
+| Currently red: executed behavioural witnesses completed for 18 of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |
 
 The section 1 command table is the member set. Matrix headings are reconciled for exact equality
 with that table, so adding a command without a matrix and adding a matrix for an unlisted command
@@ -369,11 +370,12 @@ the codes enumerated by its prose mapping, takes exhaustive absences from that m
 negation, and leaves exit 7 to the applicability registry. They participate in this one partition
 lock rather than being counted again by a separate observation partition.
 
-This row proves that the command-outcome specification artefact is complete and mechanically
-reconciled. **It does not prove that production honours a matrix or that any catalog scenario has
-executed.** The disclosed divergences #265, #266, #267, and #271, and exit 7's absence from the
-implementation, remain outside this row. Executed behavioural evidence for the matrices remains an
-outstanding prerequisite below.
+The first four checks prove that the command-outcome specification artefact is complete and
+mechanically reconciled. **They do not prove that production honours a matrix or that any catalog
+scenario has executed.** The fifth row carries that execution obligation without an exception list:
+its denominator is parsed from the matrices, and its witnessed count is checked against fixtures
+that returned successfully. The full missing set remains derived by the reconciliation and is
+printed only on explicit request.
 
 ## 9. P3 baseline classification
 
@@ -405,19 +407,17 @@ without anyone deciding to move it.
 is decidable today over a member set it cannot silently lose: either pinned to a normative
 enumeration, or — where no document owns the set — derived by a closure that fails closed, as the
 member-set section describes. Surfaces that still need an evidence artefact before they can be
-stated that way — **executed behavioural evidence for every command-matrix scenario** (currently 96
-catalog IDs across thirteen matrices, each requiring a fixture that runs the scenario and asserts
-its observable result), an inventory mapping normative clauses to their evidence, a claim manifest
-for documentation — are tracked as outstanding prerequisites, and each becomes a row here when its
+stated that way — an inventory mapping normative clauses to their evidence and a claim manifest for
+documentation — are tracked as outstanding prerequisites, and each becomes a row here when its
 artefact exists.
 
-Four have since been promoted rather than dropped: the derived-event source-projection lock is
+Five have since been promoted rather than dropped: the derived-event source-projection lock is
 section 7, the single typed boundary for unit-owned deferrals is section 3's sixth and seventh
 checks, the strengthened dispatch lock is section 3's fourth, and the command-outcome specification
-artefact is section 8. The last promotion is deliberately narrower than behavioural conformance:
-the matrices now exist and are mechanically bounded, while their executed scenario evidence remains
-in the prerequisite list above. Each moved because its stated artefact exists, which is the only
-route out of this list.
+artefact and executed command-witness progress are section 8. The executed-evidence promotion stays
+red at its measured shortfall; it moved because the witness registry and its document reconciliation
+now exist, not because the obligation was softened. Each moved because its stated artefact exists,
+which is the only route out of this list.
 
 So the rule is explicit rather than implied:
 
