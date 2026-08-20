@@ -5,13 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
 const NonblankLinesPerRegion = 200
-
-var catalogIDPattern = regexp.MustCompile(`\b(?:RC-RESUME|RA|RS|INIT|RC-DISPOSITION|RC-APPLY|RC-PROMOTE)-[0-9]{3}\b`)
 
 type RegionKey struct {
 	InputBlob string `json:"input_blob"`
@@ -21,10 +18,8 @@ type RegionKey struct {
 }
 
 type Region struct {
-	Key              RegionKey
-	Lines            []string
-	CatalogIDLines   int
-	WithoutCatalogID int
+	Key   RegionKey
+	Lines []string
 }
 
 func GenerateRegions(document []byte, inputBlob string) ([]Region, error) {
@@ -139,13 +134,6 @@ func SourceDigest(lines []string) string {
 func makeRegion(blob string, ordinal, start, end int, lines []string) Region {
 	region := Region{Key: RegionKey{InputBlob: blob, Ordinal: ordinal, StartLine: start + 1, EndLine: end + 1}}
 	region.Lines = append([]string(nil), lines[start:end+1]...)
-	for _, line := range region.Lines {
-		if catalogIDPattern.MatchString(line) {
-			region.CatalogIDLines++
-		} else {
-			region.WithoutCatalogID++
-		}
-	}
 	return region
 }
 

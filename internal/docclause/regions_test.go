@@ -46,19 +46,24 @@ func TestRegionUniverseCompleteness(t *testing.T) {
 
 func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 	document := []byte("alpha beta\n")
-	regions, err := GenerateRegions(document, "blob-a")
+	blob := GitBlobID(document)
+	regions, err := GenerateRegions(document, blob)
 	if err != nil {
 		t.Fatal(err)
 	}
-	valid := Registry{Receipts: []RegionReceipt{{
+	valid := testRegistry("docs/example.md", blob, regions, []RegionReceipt{{
 		Key: regions[0].Key,
 		Review: &ReviewReceipt{SourceSHA256: SourceDigest(regions[0].Lines), Decisions: []Classification{
 			{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "proposed/alpha"},
 			{StartByte: 6, EndByte: 10, Kind: ClassificationNonNormative},
 		}},
-	}}}
-	if err := ValidateRegistry(document, "blob-a", regions, valid); err != nil {
+	}})
+	if err := ValidateRegistry("docs/example.md", document, blob, regions, valid); err != nil {
 		t.Fatalf("valid registry rejected: %v", err)
+	}
+	changedDocument := bytes.Replace(document, []byte("alpha"), []byte("ALPHA"), 1)
+	if err := ValidateRegistry("docs/example.md", changedDocument, blob, regions, valid); err == nil || !strings.Contains(err.Error(), "document blob") {
+		t.Fatalf("changed document error = %v, want document blob mismatch", err)
 	}
 	encodedDecision, err := json.Marshal(valid.Receipts[0].Review.Decisions[0])
 	if err != nil {
@@ -76,6 +81,10 @@ func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 		mutate func(*Registry)
 		want   string
 	}{
+		{"document path", func(got *Registry) { got.DocumentPath = "docs/other.md" }, "document path"},
+		{"input blob", func(got *Registry) { got.InputBlob = strings.Repeat("0", 40) }, "registry input blob"},
+		{"workload parameter", func(got *Registry) { got.NonblankLinesPerRegion++ }, "nonblank lines per region"},
+		{"region universe key", func(got *Registry) { got.RegionUniverse[0].EndLine++ }, "universe key"},
 		{"duplicate receipt", func(got *Registry) { got.Receipts = append(got.Receipts, got.Receipts[0]) }, "duplicate region receipt"},
 		{"registry mismatch", func(got *Registry) { got.Receipts[0].Key.EndLine++ }, "does not match immutable universe"},
 		{"uncovered_payload_byte_after_mid_line_end", func(got *Registry) { got.Receipts[0].Review.Decisions[1].EndByte-- }, "uncovered"},
@@ -86,7 +95,7 @@ func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got := cloneRegistry(valid)
 			test.mutate(&got)
-			err := ValidateRegistry(document, "blob-a", regions, got)
+			err := ValidateRegistry("docs/example.md", document, blob, regions, got)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validation error = %v, want %q", err, test.want)
 			}
@@ -100,33 +109,93 @@ func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 	}
 }
 
-func TestPendingDigestAndMaterialization(t *testing.T) {
+func TestActivationRequiresCompleteMaterializedAndPinnedClassification(t *testing.T) {
 	document := []byte("alpha beta\n")
-	regions, err := GenerateRegions(document, "blob-a")
+	blob := GitBlobID(document)
+	regions, err := GenerateRegions(document, blob)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending := Pending(regions, StagingRegistry); len(pending) != 1 {
-		t.Fatalf("empty staging pending = %v, want sole region", pending)
-	}
-	if _, err := ClassificationDigest(document, "blob-a", regions, StagingRegistry); err == nil || !strings.Contains(err.Error(), "pending") {
-		t.Fatalf("empty staging digest error = %v, want pending", err)
-	}
-	registry := Registry{Receipts: []RegionReceipt{{
+	registry := testRegistry("docs/example.md", blob, regions, []RegionReceipt{{
 		Key: regions[0].Key,
 		Review: &ReviewReceipt{SourceSHA256: SourceDigest(regions[0].Lines), Decisions: []Classification{
 			{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "example.alpha"},
 			{StartByte: 6, EndByte: 10, Kind: ClassificationNonNormative},
 		}},
-	}}}
-	digest, err := ClassificationDigest(document, "blob-a", regions, registry)
+	}})
+	if pending := Pending(regions, registry); len(pending) != 0 {
+		t.Fatalf("complete synthetic registry pending = %v, want empty", pending)
+	}
+	marked, err := Materialize("docs/example.md", document, blob, regions, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := ClassificationDigest("docs/example.md", document, blob, regions, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.Activation = &ActivationPins{
+		MarkedBlob:                  GitBlobID(marked),
+		OrderedClassificationSHA256: digest,
+	}
+	if err := ValidateActivation("docs/example.md", document, marked, blob, regions, registry); err != nil {
+		t.Fatalf("valid activation rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Registry, *[]byte)
+		want   string
+	}{
+		{"missing activation", func(got *Registry, _ *[]byte) { got.Activation = nil }, "activation is absent"},
+		{"materialized bytes", func(_ *Registry, got *[]byte) { *got = bytes.Replace(*got, []byte("alpha"), []byte("ALPHA"), 1) }, "does not equal materialized"},
+		{"marked blob pin", func(got *Registry, _ *[]byte) { got.Activation.MarkedBlob = strings.Repeat("0", 40) }, "marked blob"},
+		{"classification pin", func(got *Registry, _ *[]byte) { got.Activation.OrderedClassificationSHA256 = strings.Repeat("0", 64) }, "ordered classification digest"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotRegistry := cloneRegistry(registry)
+			activation := *registry.Activation
+			gotRegistry.Activation = &activation
+			gotMarked := append([]byte(nil), marked...)
+			test.mutate(&gotRegistry, &gotMarked)
+			err := ValidateActivation("docs/example.md", document, gotMarked, blob, regions, gotRegistry)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("activation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPendingDigestAndMaterialization(t *testing.T) {
+	document := []byte("alpha beta\n")
+	blob := GitBlobID(document)
+	regions, err := GenerateRegions(document, blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := testRegistry("docs/example.md", blob, regions, nil)
+	if pending := Pending(regions, empty); len(pending) != 1 {
+		t.Fatalf("empty staging pending = %v, want sole region", pending)
+	}
+	if _, err := ClassificationDigest("docs/example.md", document, blob, regions, empty); err == nil || !strings.Contains(err.Error(), "pending") {
+		t.Fatalf("empty staging digest error = %v, want pending", err)
+	}
+	registry := testRegistry("docs/example.md", blob, regions, []RegionReceipt{{
+		Key: regions[0].Key,
+		Review: &ReviewReceipt{SourceSHA256: SourceDigest(regions[0].Lines), Decisions: []Classification{
+			{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "example.alpha"},
+			{StartByte: 6, EndByte: 10, Kind: ClassificationNonNormative},
+		}},
+	}})
+	digest, err := ClassificationDigest("docs/example.md", document, blob, regions, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(digest) != 64 {
 		t.Fatalf("digest length = %d, want 64", len(digest))
 	}
-	materialized, err := Materialize(document, "blob-a", regions, registry)
+	materialized, err := Materialize("docs/example.md", document, blob, regions, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,11 +204,11 @@ func TestPendingDigestAndMaterialization(t *testing.T) {
 		t.Fatalf("materialized =\n%s\nwant:\n%s", materialized, want)
 	}
 	tampered := bytes.Replace(materialized, []byte("anchor=example.alpha"), []byte("anchor=example.beta"), 2)
-	if err := ValidateMaterialized(tampered, document, "blob-a", regions, registry); err == nil || !strings.Contains(err.Error(), "does not match registry") {
+	if err := ValidateMaterialized("docs/example.md", tampered, document, blob, regions, registry); err == nil || !strings.Contains(err.Error(), "does not match registry") {
 		t.Fatalf("materialized registry mismatch error = %v", err)
 	}
 	unmatched := []byte("<!-- partitur:mark begin anchor=broken -->\nalpha\n")
-	if _, err := Materialize(unmatched, "blob-a", regions, registry); err == nil || !strings.Contains(err.Error(), "unmatched source marker token") {
+	if _, err := Materialize("docs/example.md", unmatched, blob, regions, registry); err == nil || !strings.Contains(err.Error(), "unmatched source marker token") {
 		t.Fatalf("unmatched marker error = %v", err)
 	}
 
@@ -148,30 +217,8 @@ func TestPendingDigestAndMaterialization(t *testing.T) {
 		{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "duplicate"},
 		{StartByte: 6, EndByte: 10, Kind: ClassificationAnchor, MarkerID: "duplicate"},
 	}
-	if _, err := ClassificationDigest(document, "blob-a", regions, duplicate); err == nil || !strings.Contains(err.Error(), "duplicate anchor") {
+	if _, err := ClassificationDigest("docs/example.md", document, blob, regions, duplicate); err == nil || !strings.Contains(err.Error(), "duplicate anchor") {
 		t.Fatalf("duplicate anchor error = %v", err)
-	}
-}
-
-func TestProposalCarriesNoClassificationJudgement(t *testing.T) {
-	document := []byte("# Heading\n\nRC-RESUME-001 applies here.\ncontinued\n")
-	regions, err := GenerateRegions(document, "blob-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposal := Propose(regions[0])
-	if len(proposal.Anchors) != 1 || proposal.Anchors[0].MarkerID != "RC-RESUME-001" {
-		t.Fatalf("anchor proposals = %+v", proposal.Anchors)
-	}
-	if len(proposal.Boundaries) != 2 || len(proposal.Names) != 1 {
-		t.Fatalf("proposal = %+v", proposal)
-	}
-	encoded, err := json.Marshal(proposal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), string(ClassificationNonNormative)) || strings.Contains(string(encoded), `"kind"`) {
-		t.Fatal("proposal classified content as non-normative")
 	}
 }
 
@@ -195,7 +242,9 @@ func cloneRegions(source []Region) []Region {
 }
 
 func cloneRegistry(source Registry) Registry {
-	clone := Registry{Receipts: append([]RegionReceipt(nil), source.Receipts...)}
+	clone := source
+	clone.RegionUniverse = append([]RegionKey(nil), source.RegionUniverse...)
+	clone.Receipts = append([]RegionReceipt(nil), source.Receipts...)
 	for index := range clone.Receipts {
 		if source.Receipts[index].Review != nil {
 			review := *source.Receipts[index].Review
@@ -204,4 +253,18 @@ func cloneRegistry(source Registry) Registry {
 		}
 	}
 	return clone
+}
+
+func testRegistry(documentPath, inputBlob string, regions []Region, receipts []RegionReceipt) Registry {
+	universe := make([]RegionKey, len(regions))
+	for index, region := range regions {
+		universe[index] = region.Key
+	}
+	return Registry{
+		DocumentPath:           documentPath,
+		InputBlob:              inputBlob,
+		NonblankLinesPerRegion: NonblankLinesPerRegion,
+		RegionUniverse:         universe,
+		Receipts:               receipts,
+	}
 }

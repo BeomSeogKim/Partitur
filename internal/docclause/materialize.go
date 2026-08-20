@@ -11,14 +11,14 @@ import (
 
 var materializedMarkerPattern = regexp.MustCompile(docmarker.Production)
 
-func Materialize(document []byte, inputBlob string, regions []Region, registry Registry) ([]byte, error) {
+func Materialize(documentPath string, document []byte, inputBlob string, regions []Region, registry Registry) ([]byte, error) {
 	if strings.Contains(string(document), "<!-- partitur:mark") {
 		if _, err := docmarker.Parse(string(document)); err != nil {
 			return nil, fmt.Errorf("unmatched source marker token: %w", err)
 		}
 		return nil, fmt.Errorf("source already contains marker tokens")
 	}
-	if _, err := ClassificationDigest(document, inputBlob, regions, registry); err != nil {
+	if _, err := ClassificationDigest(documentPath, document, inputBlob, regions, registry); err != nil {
 		return nil, err
 	}
 	classifications, err := orderedClassifications(regions, registry)
@@ -40,14 +40,14 @@ func Materialize(document []byte, inputBlob string, regions []Region, registry R
 	}
 	output.Write(document[cursor:])
 	materialized := output.Bytes()
-	if err := ValidateMaterialized(materialized, document, inputBlob, regions, registry); err != nil {
+	if err := ValidateMaterialized(documentPath, materialized, document, inputBlob, regions, registry); err != nil {
 		return nil, err
 	}
 	return materialized, nil
 }
 
-func ValidateMaterialized(materialized, source []byte, inputBlob string, regions []Region, registry Registry) error {
-	if _, err := ClassificationDigest(source, inputBlob, regions, registry); err != nil {
+func ValidateMaterialized(documentPath string, materialized, source []byte, inputBlob string, regions []Region, registry Registry) error {
+	if _, err := ClassificationDigest(documentPath, source, inputBlob, regions, registry); err != nil {
 		return err
 	}
 	classifications, err := orderedClassifications(regions, registry)

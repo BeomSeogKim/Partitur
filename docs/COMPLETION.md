@@ -375,6 +375,20 @@ executed.** The disclosed divergences #265, #266, #267, and #271, and exit 7's a
 implementation, remain outside this row. Executed behavioural evidence for the matrices remains an
 outstanding prerequisite below.
 
+## 9. P3 baseline classification
+
+**Green when both rows below are green.** Neither row is evidence for the other.
+
+| Check | Kind |
+|---|---|
+| The atomic P3 activation check accepts only when every region names the same immutable input blob, the ordered region universe covers every physical source line without a gap or overlap, classifications cover every non-whitespace payload byte exactly once, the classifications materialise as inline marker ranges, and the resulting marked blob and ordered classification match their pins; its fixed completion predicate is `unclassified == ∅`. The check validates structure and never proposes or infers a classification. | mechanical |
+| A human reviews every region of the pinned input blob and confirms the complete ordered byte-range classification, including each independently violable normative statement and every explicitly non-normative range. This is manual because a detector would reproduce reviewer errors where judgement is hard and introduce errors elsewhere. | manual |
+
+The staging ledger records one immutable region universe and review receipts. Reviewed and
+unreviewed are derived states; it stores no editable status and the completion row stores no pending
+region enumeration. Until the manual row is complete and the activation pins are present, the P3
+baseline remains red and the document is not enrolled.
+
 ---
 
 ## Using this contract
