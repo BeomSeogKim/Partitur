@@ -88,6 +88,20 @@ func TestMutationPromoteScoreConjuncts(t *testing.T) {
 			testName:    "TestParsePromoteScoreArgs",
 		},
 		{
+			name:   "promote-score rejects a semantically malformed run identifier as operand usage",
+			source: "cmd/partitur/main.go",
+			before: "func runPromoteScore(requestedID string, recoverOnly bool, stderr io.Writer) int {\n" +
+				"\tif err := statusprojection.ValidateRunID(requestedID); err != nil {\n" +
+				"\t\trenderStatusError(stderr, err)\n" +
+				"\t\treturn statusErrorCode(err)\n" +
+				"\t}\n" +
+				"\troot, err := os.Getwd()",
+			after: "func runPromoteScore(requestedID string, recoverOnly bool, stderr io.Writer) int {\n" +
+				"\troot, err := os.Getwd()",
+			packagePath: "./cmd/partitur",
+			testName:    "TestCommandMatrixWitnesses/PROMOTE-SCORE-001",
+		},
+		{
 			name:        "recover admits only a promoting transaction",
 			source:      "internal/runstore/promotion.go",
 			before:      "state.Promotion.State != runstate.PromotionPromoting && ",

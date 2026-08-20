@@ -165,6 +165,20 @@ func TestMutationApplyConjuncts(t *testing.T) {
 			testName:    "TestParseApplyArgs",
 		},
 		{
+			name:   "apply rejects a semantically malformed run identifier as operand usage",
+			source: "cmd/partitur/main.go",
+			before: "func runApply(requestedID string, recoverOnly bool, stderr io.Writer) int {\n" +
+				"\tif err := statusprojection.ValidateRunID(requestedID); err != nil {\n" +
+				"\t\trenderStatusError(stderr, err)\n" +
+				"\t\treturn statusErrorCode(err)\n" +
+				"\t}\n" +
+				"\troot, err := os.Getwd()",
+			after: "func runApply(requestedID string, recoverOnly bool, stderr io.Writer) int {\n" +
+				"\troot, err := os.Getwd()",
+			packagePath: "./cmd/partitur",
+			testName:    "TestCommandMatrixWitnesses/APPLY-001",
+		},
+		{
 			name:        "normal apply admits the not-applied state",
 			source:      "internal/runstore/application.go",
 			before:      "state.Application.State != runstate.ApplicationNotApplied && ",

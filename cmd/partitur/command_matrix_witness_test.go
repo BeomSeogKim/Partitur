@@ -563,15 +563,15 @@ func runResumeCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 }
 
 func runPromoteScoreCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
-	registry.run(t, "PROMOTE-SCORE-001", witnessDivergent, 304, func(t *testing.T) {
+	registry.run(t, "PROMOTE-SCORE-001", witnessDischarged, 0, func(t *testing.T) {
 		root, store, _ := promotionFixture(t, true)
 		t.Chdir(root)
 		before := journalLength(t, store)
 
 		code, stdout, stderr := invokeCommand("promote-score", "bad/id")
 
-		if code != 2 || stdout != "" || stderr != "precondition refused: detail=\"invalid runstore path: run id\"\n" {
-			t.Fatalf("exit=%d stdout=%q stderr=%q, want observed divergence exit 2 refusal", code, stdout, stderr)
+		if code != 1 || stdout != "" || stderr != "usage error: detail=\"invalid run id\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want semantic run-id usage error", code, stdout, stderr)
 		}
 		assertCommandWitnessJournalDelta(t, store, before)
 		assertCommandWitnessPromotionState(t, store, runstate.PromotionNotPromoted)
@@ -1600,13 +1600,26 @@ func runApproveCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) 
 }
 
 func runAmendCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
+	registry.run(t, "AMEND-007", witnessDischarged, 0, func(t *testing.T) {
+		root, store := amendCommandFixture(t, true)
+		t.Chdir(root)
+		before := journalLength(t, store)
+
+		code, stdout, stderr := invokeCommand("amend", "bad/id", "--patch", "patch.json", "--reason", "fixture")
+
+		if code != 1 || stdout != "" || stderr != "usage error: detail=\"invalid run id\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want semantic run-id usage error", code, stdout, stderr)
+		}
+		assertJournalLength(t, store, before)
+	})
+
 	registry.run(t, "AMEND-001", witnessDischarged, 0, func(t *testing.T) {
 		for _, test := range []struct {
 			name  string
 			setup func(*testing.T, string)
 			args  []string
 		}{
-			{name: "run selection", args: []string{"amend", "missing-run", "--patch", "patch.json", "--reason", "fixture"}},
+			{name: "missing run selection", args: []string{"amend", "missing-run", "--patch", "patch.json", "--reason", "fixture"}},
 			{name: "patch source", args: []string{"amend", "run-1", "--patch", "missing-patch.json", "--reason", "fixture"}},
 			{
 				name: "claimed impact source",
@@ -1936,15 +1949,15 @@ func runCancelCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 }
 
 func runApplyCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
-	registry.run(t, "APPLY-001", witnessDivergent, 301, func(t *testing.T) {
+	registry.run(t, "APPLY-001", witnessDischarged, 0, func(t *testing.T) {
 		root, store, _ := applyRequireFixture(t, applyGate{require: []string{"verified"}})
 		t.Chdir(root)
 		before := journalLength(t, store)
 
 		code, stdout, stderr := invokeCommand("apply", "bad/id")
 
-		if code != 2 || stdout != "" || stderr != "precondition refused: detail=\"invalid runstore path: run id\"\n" {
-			t.Fatalf("exit=%d stdout=%q stderr=%q, want observed divergence exit 2 refusal", code, stdout, stderr)
+		if code != 1 || stdout != "" || stderr != "usage error: detail=\"invalid run id\"\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want semantic run-id usage error", code, stdout, stderr)
 		}
 		assertCommandWitnessJournalDelta(t, store, before)
 		assertCommandWitnessApplicationState(t, store, runstate.ApplicationNotApplied)

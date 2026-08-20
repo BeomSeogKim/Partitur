@@ -32,6 +32,15 @@ var (
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
+// ValidateRunID applies the semantic run-id check shared by commands that
+// accept an explicit run identifier.
+func ValidateRunID(requestedID string) error {
+	if !runIDPattern.MatchString(requestedID) {
+		return ErrInvalidRunID
+	}
+	return nil
+}
+
 // Report is the versioned, interface-neutral status projection.
 type Report struct {
 	Schema                string                `json:"schema"`
@@ -148,8 +157,8 @@ func Read(repositoryRoot, requestedID string) (Report, error) {
 		return Report{}, fmt.Errorf("%w: %v", ErrRequiredInput, err)
 	}
 	if requestedID != "" {
-		if !runIDPattern.MatchString(requestedID) {
-			return Report{}, ErrInvalidRunID
+		if err := ValidateRunID(requestedID); err != nil {
+			return Report{}, err
 		}
 		return readRun(store, runstate.RunID(requestedID))
 	}
