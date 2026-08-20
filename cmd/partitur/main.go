@@ -446,6 +446,10 @@ func parseApplyArgs(args []string) (runID string, recoverOnly bool, ok bool) {
 }
 
 func runApply(requestedID string, recoverOnly bool, stderr io.Writer) int {
+	if err := statusprojection.ValidateRunID(requestedID); err != nil {
+		renderStatusError(stderr, err)
+		return statusErrorCode(err)
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())
@@ -503,6 +507,10 @@ func parsePromoteScoreArgs(args []string) (runID string, recoverOnly bool, ok bo
 }
 
 func runPromoteScore(requestedID string, recoverOnly bool, stderr io.Writer) int {
+	if err := statusprojection.ValidateRunID(requestedID); err != nil {
+		renderStatusError(stderr, err)
+		return statusErrorCode(err)
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "precondition refused: detail=%q\n", err.Error())

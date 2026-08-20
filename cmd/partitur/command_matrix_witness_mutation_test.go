@@ -16,12 +16,12 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
 )
 
-// statedCommandWitnessCount reads the completion count out of the document the
-// reconciliation checks against, so a batch of new witnesses updates one place
-// rather than two. Hardcoding it here let the anchors go stale silently: the
-// substitution matched nothing, no mutation landed, and the proof reported a
-// missing signature rather than a missing mutation.
-func statedCommandWitnessCount(t *testing.T) int {
+// statedCommandWitnessProgress reads both completion counts out of the document
+// the reconciliation checks against, so a batch of new witnesses updates one
+// place rather than two. Hardcoding either count here let the anchors go stale
+// silently: the substitution matched nothing, no mutation landed, and the proof
+// reported a missing signature rather than a missing mutation.
+func statedCommandWitnessProgress(t *testing.T) (int, int) {
 	t.Helper()
 
 	contents, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "COMPLETION.md"))
@@ -32,22 +32,26 @@ func statedCommandWitnessCount(t *testing.T) int {
 	if matches == nil {
 		t.Fatal("COMPLETION.md states no command-witness completion count")
 	}
-	count, err := strconv.Atoi(matches[1])
+	witnessed, err := strconv.Atoi(matches[1])
 	if err != nil {
 		t.Fatal(err)
 	}
-	return count
+	denominator, err := strconv.Atoi(matches[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return witnessed, denominator
 }
 
-var commandWitnessCountPattern = regexp.MustCompile(`executed behavioural witnesses completed for (\d+) of the 96 parsed`)
+var commandWitnessCountPattern = regexp.MustCompile(`executed behavioural witnesses completed for (\d+) of the (\d+) parsed`)
 
 func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
 		t.Fatal(err)
 	}
-	stated := statedCommandWitnessCount(t)
-	statedRow := "| Currently red: executed behavioural witnesses completed for " + strconv.Itoa(stated) + " of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |"
+	stated, denominator := statedCommandWitnessProgress(t)
+	statedRow := "| Currently red: executed behavioural witnesses completed for " + strconv.Itoa(stated) + " of the " + strconv.Itoa(denominator) + " parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |"
 	countSignature := func(document, executed int) string {
 		return "COMPLETION states " + strconv.Itoa(document) + " completed command witnesses, executed witnesses completed " + strconv.Itoa(executed)
 	}
@@ -62,9 +66,9 @@ func TestMutationCommandMatrixWitnessReconciliation(t *testing.T) {
 			source: "docs/COMPLETION.md",
 			mutate: replaceCommandWitnessText(
 				statedRow,
-				"| Currently green: executed behavioural witnesses completed for 96 of the 96 parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |",
+				"| Currently green: executed behavioural witnesses completed for "+strconv.Itoa(denominator)+" of the "+strconv.Itoa(denominator)+" parsed command-matrix catalog IDs. This row is green only when the witnessed and denominator counts are equal. |",
 			),
-			failureSignature: countSignature(96, stated),
+			failureSignature: countSignature(denominator, stated),
 		},
 		{
 			name:             "removed completion requires a document count update",

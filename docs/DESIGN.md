@@ -4383,13 +4383,16 @@ authority boundary, not an origin-specific §9 policy outcome.
 Input acquisition includes active-run selection, the captured head, the patch source, and the
 optional claimed-impact source. Once those inputs are acquired, §9 exclusively owns the
 admissibility, barrier, routing, preparation, and approval partitions; the matrix names only its
-three outcomes. Those outcomes are mutually exclusive by the §9 evaluator. An operational
-interruption may retain any confirmed prefix already established by that transaction, while a
-durability-unconfirmed append remains owned by the exit-7 registry.
+three outcomes. A semantically malformed explicit run-id is rejected before input acquisition;
+every other invocation either omits the run-id or supplies a semantically valid one, so that split
+is mutually exclusive and exhaustive. The §9 outcomes are mutually exclusive by the §9 evaluator.
+An operational interruption may retain any confirmed prefix already established by that
+transaction, while a durability-unconfirmed append remains owned by the exit-7 registry.
 
 | Catalog ID | Input acquisition and projection | §9 transaction result | Result |
 |---|---|---|---|
-| `AMEND-001` | refused before the §9 transaction, including an unreadable patch or claimed-impact source | not started | Refuse the required input or run-selection precondition and append nothing; exit 2 |
+| `AMEND-007` | explicit run-id is semantically malformed | not started | Report the operand usage error and append nothing; exit 1 |
+| `AMEND-001` | run-id is omitted or semantically valid, and input acquisition is refused before the §9 transaction, including a missing run or an unreadable patch or claimed-impact source | not started | Refuse the required input or run-selection precondition and append nothing; exit 2 |
 | `AMEND-002` | no current projection can be built | not started | Report the unavailable projection and append nothing; exit 5 |
 | `AMEND-003` | succeeds | `Rejected` | Append exactly one §9-owned `amendment.rejected` terminal event and exit 3 |
 | `AMEND-004` | succeeds | `Routed` | Append the §9-owned `amendment.routed_human` followed by its `decision.requested`, and exit 0 |
