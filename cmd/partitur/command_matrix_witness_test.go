@@ -660,7 +660,7 @@ func runPromoteScoreCommandWitnesses(t *testing.T, registry *commandWitnessRegis
 		}
 	})
 
-	registry.run(t, "PROMOTE-SCORE-003", witnessDivergent, 303, func(t *testing.T) {
+	registry.run(t, "PROMOTE-SCORE-003", witnessDischarged, 0, func(t *testing.T) {
 		for _, state := range []runstate.PromotionState{runstate.PromotionPromoting, runstate.PromotionRecoveryRequired} {
 			t.Run(string(state), func(t *testing.T) {
 				root, store, _, _ := commandWitnessPromotionFixture(t, state)
@@ -669,15 +669,11 @@ func runPromoteScoreCommandWitnesses(t *testing.T, registry *commandWitnessRegis
 
 				code, stdout, stderr := invokeCommand("promote-score", "run-1")
 
-				if code != 5 || stdout != "" || !strings.Contains(stderr, "normal promotion is refused from "+string(state)) {
+				if code != 2 || stdout != "" || !strings.Contains(stderr, "normal promotion is refused from "+string(state)) {
 					t.Fatalf("state=%s exit=%d stdout=%q stderr=%q", state, code, stdout, stderr)
 				}
-				if state == runstate.PromotionPromoting {
-					assertCommandWitnessJournalDelta(t, store, before, runstate.EventScorePromotionRecoveryRequired)
-				} else {
-					assertCommandWitnessJournalDelta(t, store, before)
-				}
-				assertCommandWitnessPromotionState(t, store, runstate.PromotionRecoveryRequired)
+				assertCommandWitnessJournalDelta(t, store, before)
+				assertCommandWitnessPromotionState(t, store, state)
 			})
 		}
 	})
