@@ -233,12 +233,23 @@ coherent layout specimens.
 Git refs the core owns — never user-visible branches, and never garbage-collected while
 the run exists:
 
+**Owned Git-ref clauses.**
+
+- `refs/partitur/runs/<run-id>/base` points to the run's base commit (§5).
+- `refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset` is the change-set storage handle
+  (§5).
+- `refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject` points to the writer acceptance
+  subject (§7).
+- `refs/partitur/runs/<run-id>/movements/<movement-id>/base` points to a composed base when one or
+  more writers contribute (§5).
+- `refs/partitur/runs/<run-id>/candidate` points to the candidate result tree (§8).
+
 ```text
-refs/partitur/runs/<run-id>/base                              # the run's base commit (§5)
-refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset   # storage handle (§5)
-refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject     # writer acceptance subject (§7)
-refs/partitur/runs/<run-id>/movements/<movement-id>/base      # a composed base when one or more writers contribute (§5)
-refs/partitur/runs/<run-id>/candidate                         # the candidate result tree (§8)
+refs/partitur/runs/<run-id>/base
+refs/partitur/runs/<run-id>/attempts/<attempt-id>/changeset
+refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject
+refs/partitur/runs/<run-id>/movements/<movement-id>/base
+refs/partitur/runs/<run-id>/candidate
 ```
 
 **Everything the run will need later is pinned, not just change sets.** A tree or commit reachable
@@ -778,18 +789,26 @@ that phase there is nothing for it to do.
 **Routed proposal record.** When a proposal is routed to a human its exact submission is persisted,
 because re-validation replays the pipeline from the original operations (§1):
 
+**Routed-proposal-record field clauses.**
+
+- `origin` is one of `adapter`, `cli`, or `core_finalization`.
+- `attempt_id` is present if and only if `origin` is `adapter`.
+- `emitted_id` is present if and only if `origin` is `adapter`.
+- `operations` is the RFC 6902 array verbatim as submitted.
+- `claimed_impact` is an optional scope claim; §9 checks containment only when it is present.
+
 ```text
 {
   schema: "partitur/proposal-record+json;v=1",
   proposal_id,
-  origin,                          # adapter | cli | core_finalization
-  attempt_id?,                      # present iff origin = adapter
-  emitted_id?,                      # present iff origin = adapter
+  origin,
+  attempt_id?,
+  emitted_id?,
   base_revision, base_hash,
-  operations,                       # the RFC 6902 array VERBATIM, as submitted
+  operations,
   reason,
   evidence?: [artifact_instance_id],
-  claimed_impact?,                # optional scope claim; §9 checks containment only when present
+  claimed_impact?,
   requires_decision
 }
 ```
@@ -807,14 +826,20 @@ canonical hash of something that cannot be canonically encoded would be unimplem
 
 **Amendment format v0.2.** A `proposal` carries:
 
+**Amendment-proposal field clauses.**
+
+- A proposal is stale-rejected if either `base_revision` or `base_hash` mismatches.
+- `operations` is an RFC 6902 JSON Patch applied to the canonical JSON representation of the YAML
+  score.
+- `claimed_impact` has the same shape as `actual_impact` and is an optional scope claim (§9).
+
 ```text
 {
-  base_revision, base_hash,        # stale-rejected if either mismatches
-  operations: [...],               # RFC 6902 JSON Patch, applied to the canonical JSON
-                                   # representation of the YAML score (Appendix A)
+  base_revision, base_hash,
+  operations: [...],
   reason,
   evidence?: [artifact_instance_id],
-  claimed_impact?: { ... }         # same shape as actual_impact; optional scope claim (§9)
+  claimed_impact?: { ... }
 }
 ```
 
@@ -966,13 +991,17 @@ after any movement succeeded — the envelope would be dead on arrival.
 
 Proposal authority is therefore opt-in per movement:
 
+**`may_propose` example field clauses.**
+
+- `may_propose` defaults to `false`.
+- `may_propose: true` makes the movement receive the reserved `partitur.score-base` input (§4).
+- The movement's execution dependency includes that score base.
+- Any later amendment consequently invalidates the attempt.
+
 ```yaml
   - id: design
     part: plan
-    may_propose: true           # default false. Receives the reserved
-                                #   partitur.score-base input (§4); its
-                                #   execution dependency includes the score base, so a
-                                #   later amendment invalidates this attempt.
+    may_propose: true
 ```
 
 **A non-blocking proposal is advisory and expires.** Because a `may_propose` attempt's dependency
@@ -1007,11 +1036,10 @@ performers:
   sol:
     adapter: codex
     model: gpt-5.6-sol
-    allow_advisory_enforcement: false   # default false; see §4 trust boundary
+    allow_advisory_enforcement: false
     extensions:
-      codex:                    # adapter-namespaced, opaque to the core; the core
-        effort: xhigh           # forwards only the namespace matching the performer's
-                                # adapter id
+      codex:
+        effort: xhigh
 bindings:
   plan:      { performer: fable, fallbacks: [sol] }
   implement: { performer: fable }
@@ -2290,10 +2318,15 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
 
 Three lifecycle levels, deliberately separate:
 
+**`INAPPLICABLE` state clauses.**
+
+- `INAPPLICABLE` is the state of a draft movement in a finalized run (§2).
+- An `INAPPLICABLE` movement is never scheduled.
+
 ```text
 Run:      RUNNING | WAITING_HUMAN | SUCCEEDED | FAILED | CANCELLED
 Movement: PENDING | READY | RUNNING | WAITING_HUMAN | SUCCEEDED | FAILED | CANCELLED
-          | INAPPLICABLE     # a draft movement in a finalized run (§2) — never scheduled
+          | INAPPLICABLE
 Attempt:  STARTING | RUNNING | VERIFYING | COMPLETED | BLOCKED | FAILED | CANCELLED
           | SUPERSEDED
 ```
@@ -3451,16 +3484,24 @@ not a convention (§8).
 **Operands and options.** Enough to be a contract rather than a sketch; anything not listed is not
 part of v0.2's surface:
 
+**CLI operand and option clauses.**
+
+- Repeated `--override <artifact-instance-id>:<finding-id>` options are valid only for a
+  `human_gate` approval.
+- `--reject [--reason <text>]` is valid only for `human_gate`.
+- Amendment and finalization rejection requires `--reason <text>` under B.5's `human_reason` rule.
+- `partitur amend --patch <path>` accepts RFC 6902 JSON, and `-` reads it from stdin.
+
 ```text
 partitur init
 partitur validate
 partitur answer  <decision-id> --answer <text> | --answer-file <path>
 partitur approve <decision-id> --approve
                               | --approve --override <artifact-instance-id>:<finding-id>
-                                  [--override <artifact-instance-id>:<finding-id>]... --reason <text> # human_gate only
-                              | --reject [--reason <text>] # human_gate only
-                              | --reject --reason <text>   # amendment | finalization; B.5 `human_reason`
-partitur amend   [<run-id>] --patch <path> # RFC 6902 JSON; - reads stdin
+                                  [--override <artifact-instance-id>:<finding-id>]... --reason <text>
+                              | --reject [--reason <text>]
+                              | --reject --reason <text>
+partitur amend   [<run-id>] --patch <path>
                  --reason <text> [--claimed-impact <path>]
 partitur cancel  [<run-id>]
 partitur run
@@ -4020,14 +4061,20 @@ Composition takes the approved change sets of every successful, non-superseded `
 movement, deduplicated, in the deterministic fan-in order of §5, into
 `(base_tree, result_tree)`:
 
+**Application-candidate identity clauses.**
+
+- The candidate additionally records `candidate_composition_dependency_hash` (A.4).
+- With one or more contributors, `candidate_composition_dependency_hash` binds the composition
+  environment.
+- The same trees composed under a different Git build or merge configuration are not the same
+  composition (§5).
+- With zero contributors, the tagged identity projection records that no merge ran and binds no
+  fictitious environment.
+- `candidate_id` uses Appendix A's hash definition.
+
 ```text
-# The candidate additionally records candidate_composition_dependency_hash (A.4). With one or
-# more contributors it binds the composition ENVIRONMENT — the same trees composed under a
-# different Git build or merge configuration are not the same composition (§5). With zero
-# contributors its tagged identity projection records that no merge ran and binds no fictitious
-# environment.
 candidate_id = H("partitur/candidate",
-                 { base_tree, result_tree, ordered_change_sets })      # Appendix A
+                 { base_tree, result_tree, ordered_change_sets })
 ```
 
 It is a **content** identity, independent of score revision. A run with no write movements
@@ -4409,14 +4456,19 @@ validated score **ASTs**:
 
 **`actual_impact`** — the normative shape, which `claimed_impact` also uses (§2):
 
+**`actual_impact` field clauses.**
+
+- `actual_impact.authority.allowed_paths.added` and `.removed` contain exact pattern strings.
+- `actual_impact.authority.side_effects.added` must be empty in v0.2.
+
 ```text
 actual_impact = {
   score_changes: [{ selector, operation: add | remove | replace,
                     before_hash?, after_hash? }],
   authority: {
-    allowed_paths: {added: [...], removed: [...]},     # exact pattern strings
+    allowed_paths: {added: [...], removed: [...]},
     grants: [{movement_id, added: [...], removed: [...]}],
-    side_effects: {added: [...], removed: [...]}       # added must be [] in v0.2
+    side_effects: {added: [...], removed: [...]}
   },
   budget: { active_wall_clock_min?: {from, to}, retries_per_movement?: {from, to} }
 }
@@ -4983,13 +5035,18 @@ criterion's index, not its source line. A core-generated integrity check (§7) p
 The **effective compiled plan**, not the acceptance block as written — a mark must bind to what
 actually ran (§7):
 
+**Acceptance-spec field clauses.**
+
+- `hard` lists declared hard criteria in declaration order after replacements, followed by
+  core-generated integrity checks in output declaration order.
+- `review` lists declared review criteria in declaration order.
+- `human_gate` is always explicit and is never omitted.
+
 ```text
 {
-  hard:   [criterion_spec_hash],   # declared hard criteria in DECLARATION order, replacements
-                                   #   applied, then core-generated integrity checks in output
-                                   #   declaration order
-  review: [criterion_spec_hash],   # declared review criteria in declaration order
-  human_gate: "always" | "on_contested" | "never"    # always explicit, never omitted
+  hard:   [criterion_spec_hash],
+  review: [criterion_spec_hash],
+  human_gate: "always" | "on_contested" | "never"
 }
 ```
 
@@ -5008,83 +5065,110 @@ comes from the resolved cast, and the adapter id is the one that actually served
 The core computes it after the gated peer answers `probe`, when it fixes the exact request including
 bounded `resolved_decisions` delivery, and records it in `adapter.probed` before sending `execute`.
 
+**Execution-dependency field clauses.**
+
+- `actual_adapter_id` names the adapter that served this attempt (§1).
+- `actual_adapter_id` is recorded per attempt and is never the part's intended binding.
+- Binding the serving adapter detects a change to `extensions.<fallback>` after a fallback attempt
+  succeeded.
+- `movement.part` is the part id.
+- `movement.needs` is a set of movement ids.
+- `movement.needs` is encoded in sorted order.
+- `movement.inputs` is sorted by `artifact_id`.
+- Every `movement.inputs` entry includes `kind` because `RenderPrompt` shows it.
+- Every `movement.inputs` entry includes `instance_id` and `content_hash` because two attempts can
+  legitimately receive different bytes for the same logical input when an upstream retry produces
+  a new instance.
+- Binding only the logical artifact id would let those two attempts share an execution-dependency
+  hash.
+- `movement.outputs` preserves declaration order.
+- Output declaration order is semantic because it controls generated-check order (§7).
+- `movement.grants` contains the movement's declared grants.
+- `movement.grants` is encoded in sorted order.
+- `movement.may_propose` is the effective boolean value, including the implicit default.
+- `movement.score_base_hash`, when present, is `H("partitur/score", complete validated score AST)`.
+- `movement.score_base_hash` is the score-base input's semantic `base_hash`, never the raw file hash
+  of the delivered artifact.
+- `movement.score_base_hash` is required if and only if `movement.may_propose` is `true` and is
+  omitted otherwise.
+- A `may_propose` attempt receives the complete score base (§4), so the whole score is one of its
+  execution dependencies and any later amendment invalidates it (§2).
+- The boolean alone cannot capture that dependency: two `may_propose` attempts under different
+  scores must not share an execution-dependency hash.
+- `movement.acceptance` is the effective compiled plan (A.4.2).
+- `movement.base_composition_hash` is the `movement_composition_dependency_hash` (A.4).
+- `movement.base_composition_hash` is required if and only if the movement has at least one
+  `needs` entry.
+- `movement.base_composition_hash` records how the movement's clean base was assembled.
+- A dependency set with zero contributing change sets uses the tagged `identity` projection.
+- Without `movement.base_composition_hash`, changing contributor membership, contributor order, or
+  the composition environment would leave a succeeded attempt looking valid (§5).
+- `part.capabilities` is encoded in sorted order.
+- `model` is the model requested of the performer.
+- `model` is included because it is part of what the attempt was asked to do and the projection is
+  performer-derived, not purely score-derived.
+- `authority` is the movement's effective authority, never raw policy.
+- `authority.paths_rw` is defined by the effective-authority rules below.
+- `authority.paths_rw` and `authority.paths_ro` are encoded in sorted order.
+- `authority.paths_rw` and `authority.paths_ro` are duplicate-free.
+- `authority.side_effects` is encoded in sorted order.
+- `authority.side_effects` is empty in v0.2.
+- `score.context` is omitted when absent.
+- An absent `score.context` is never encoded as an empty string.
+- `score.global_invariants` is the enumerated A.5.1 projection.
+- `score.verification_expectation_intent` is included because it is forwarded into briefs and is
+  therefore an execution dependency.
+- `resolved_decisions[].digest` is `H("partitur/resolution-body", ...)` (A.4).
+- `resolved_decisions` preserves delivered order: resolving sequence after truncation (§4).
+- `resolved_decisions` is not re-sorted because the hash must bind what was actually sent.
+- Opposite human answers must not yield the same execution-dependency hash because the answers are
+  part of what the attempt was asked to do.
+- `resolved_decisions[].digest` carries the canonical hash of the resolution body rather than the
+  body itself, so an answer's length cannot bloat the projection.
+- `feedback` is sorted by the exact key `(previous_attempt_id, artifact_instance_id)`.
+- The feedback key is exact because one prior attempt can contribute several diagnostics.
+- `feedback` is empty for a first attempt.
+- `feedback` is included because it changes the rendered brief (§7), and therefore changes what the
+  attempt was asked to do.
+
 ```text
 {
-  actual_adapter_id,                  # the adapter that SERVED this attempt (§1 per-attempt
-                                      #   record) — never the part's intended binding, so
-                                      #   changing extensions.<fallback> after a fallback
-                                      #   attempt succeeded is detected
+  actual_adapter_id,
   movement: {
     id,
-    part,                             # the part id
+    part,
     instruction,
-    needs:      [movement_id],        # sorted — a set
+    needs:      [movement_id],
     inputs: [{artifact_id, kind, instance_id, content_hash}],
-                                      # sorted by artifact_id. `kind` is included because
-                                      #   RenderPrompt shows it; `instance_id` and `content_hash`
-                                      #   because two attempts can legitimately receive DIFFERENT
-                                      #   bytes for the same logical input (an upstream retry
-                                      #   produced a new instance). Binding only the logical id
-                                      #   would let those two attempts share a dependency hash
-    outputs:    [{artifact_id, kind}],# DECLARATION order — it controls generated-check
-                                      #   order (§7), so it is semantic
-    grants:     [grant],              # sorted — the movement's declared grants
-    may_propose: bool,                # effective value including the implicit default
-    score_base_hash?,                 # = H("partitur/score", complete validated score AST) —
-                                      #   the score-base input's SEMANTIC base_hash, never the
-                                      #   raw file hash of the delivered artifact.
-                                      #   REQUIRED iff may_propose is true, omitted otherwise.
-                                      #   A may_propose attempt receives the COMPLETE score
-                                      #   base (§4), so the whole score is one of its
-                                      #   execution dependencies and any later amendment
-                                      #   invalidates it (§2). The boolean alone would not
-                                      #   capture that — two attempts with may_propose true
-                                      #   under different scores must not share a hash
+    outputs:    [{artifact_id, kind}],
+    grants:     [grant],
+    may_propose: bool,
+    score_base_hash?,
     phase:      "draft" | omitted,
-    acceptance: acceptance_spec_hash,  # the effective compiled plan (A.4.2)
-    base_composition_hash?             # movement_composition_dependency_hash (A.4), REQUIRED
-                                       #   iff the movement has ≥1 `needs` — how its clean base
-                                       #   was assembled. `needs` with zero contributing change
-                                       #   sets uses the tagged `identity` projection. Without
-                                       #   the hash, changing contributor
-                                       #   membership, order, or the composition environment
-                                       #   would leave a succeeded attempt looking valid (§5)
+    acceptance: acceptance_spec_hash,
+    base_composition_hash?
   },
   part: {
-    capabilities: [capability],       # sorted
+    capabilities: [capability],
     read_only:    bool
   },
-  model,                              # the model requested of the performer — part of what
-                                      #   the attempt was asked to do, and this projection is
-                                      #   performer-derived, not purely score-derived
-  authority: {                        # the movement's EFFECTIVE authority, not raw policy —
-    paths_rw: [pattern],              #   see below
-    paths_ro: [pattern],              #   all sorted, duplicate-free
+  model,
+  authority: {
+    paths_rw: [pattern],
+    paths_ro: [pattern],
     shell:    bool,
     network:  bool,
-    side_effects: [side_effect]       # sorted; empty in v0.2
+    side_effects: [side_effect]
   },
   score: {
     goal,
-    context?,                           # omitted when absent, never encoded as ""
+    context?,
 
-    global_invariants,                # A.5.1 — enumerated
-    verification_expectation_intent   # forwarded into briefs, hence a dependency
+    global_invariants,
+    verification_expectation_intent
   },
   resolved_decisions: [{decision_id, kind, digest}],
-                                      # digest = H("partitur/resolution-body", …) — A.4
-                                      # in DELIVERED order (§4: resolving seq, after truncation) —
-                                      #   not re-sorted, because the hash must bind what was
-                                      #   actually sent. Opposite human answers must not
-                                      #   yield the same hash — the answers are part of what the
-                                      #   attempt was asked to do. `digest` is a canonical hash of
-                                      #   the resolution body rather than the body itself, so an
-                                      #   answer's length cannot bloat the projection
   feedback: [{previous_attempt_id, kind, artifact_instance_id, content_hash}],
-                                      # sorted by (previous_attempt_id, artifact_instance_id) —
-                                      #   an exact key, since one prior attempt can contribute
-                                      #   several diagnostics. Empty for a first attempt. Feedback changes the
-                                      #   rendered brief (§7), so it changes what was asked
   extensions: <canonical extensions.<actual_adapter_id> subtree, or omitted>
 }
 ```
@@ -5148,20 +5232,34 @@ reaches every attempt in the wire request. The precise position is:
 §4 calls this "a deterministic projection computed by the core from goal, finalized resolutions,
 and policy — not a separate score field". Enumerated:
 
+**`global_invariants` field clauses.**
+
+- `resolved_questions` is sorted by question id.
+- `resolved_questions` is a tagged union.
+- The tagged union is required because resolved and waived questions have different field rules.
+- A `resolved` question requires `resolution`.
+- A `waived` question cannot also carry `resolution`.
+- `effective_paths` is the movement's effective authority.
+- `effective_paths.rw` and `.ro` are encoded in sorted order.
+- `effective_paths.rw` and `.ro` never contain raw `policy.allowed_paths`.
+- Hashing raw `policy.allowed_paths` here would reintroduce the narrowing problem A.5 avoids.
+- `side_effects_permitted` is encoded in sorted order.
+- `side_effects_permitted` is empty in v0.2.
+- `protected_paths` is encoded in sorted order.
+- `protected_paths` carries the §2 protected-path rules so a performer can avoid an unrecoverable
+  violation.
+
 ```text
 {
-  resolved_questions: [                               # sorted by id; a tagged union, because
-    {id, question, disposition: "resolved", resolution}   # a shape that requires `resolution`
-    | {id, question, disposition: "waived"}               # cannot also express a waiver
+  resolved_questions: [
+    {id, question, disposition: "resolved", resolution}
+    | {id, question, disposition: "waived"}
   ],
-  effective_paths: {                                  # the MOVEMENT's effective authority,
-    rw: [pattern], ro: [pattern]                      #   sorted — never raw
-  },                                                  #   policy.allowed_paths, which would
-                                                      #   reintroduce the narrowing problem
-                                                      #   A.5 exists to avoid
-  side_effects_permitted: [side_effect],              # sorted; empty in v0.2
-  protected_paths: [pattern]                          # sorted — §2, stated so a performer can
-                                                      #   avoid an unrecoverable violation
+  effective_paths: {
+    rw: [pattern], ro: [pattern]
+  },
+  side_effects_permitted: [side_effect],
+  protected_paths: [pattern]
 }
 ```
 
@@ -5276,12 +5374,17 @@ proving the wrong thing.
 **Disposition.** Failure events that may or may not authorize another attempt carry the decision
 explicitly, because recovery replays it and must never recompute admissibility (§3.1, Appendix C):
 
+**Disposition field clauses.**
+
+- `movement_terminal` is true if and only if `charged` is `none` and no further path exists.
+- `terminal_reason` is required if and only if `movement_terminal` is true.
+- `terminal_reason` is a `movement.failed` reason from Appendix D selected by §3.1's first arm.
+
 ```text
 disposition: {
   charged: "quality_retry" | "fallback" | "none",
-  movement_terminal: bool,         # true ⇔ charged: "none" and no further path exists
-  terminal_reason?                 # REQUIRED iff movement_terminal; a movement.failed reason
-                                   #   (Appendix D), selected by §3.1's first arm
+  movement_terminal: bool,
+  terminal_reason?
 }
 ```
 

@@ -29,8 +29,8 @@ func TestClaimedImpactOptionalityIsSpecified(t *testing.T) {
 	contents := strings.Join(strings.Fields(strings.Join(lines, "\n")), " ")
 
 	for _, clause := range []string{
-		"claimed_impact?, # optional scope claim; §9 checks containment only when present",
-		"claimed_impact?: { ... } # same shape as actual_impact; optional scope claim (§9)",
+		"- `claimed_impact` is an optional scope claim; §9 checks containment only when it is present.",
+		"- `claimed_impact` has the same shape as `actual_impact` and is an optional scope claim (§9).",
 		"7. **Impact computation and claim containment** — when `claimed_impact` is present, a claim narrower than the actual impact on any component rejects with `claim_narrower`; when it is absent, no containment check applies. The optional claim is a proposer-supplied scope assertion, not authority over the core-computed `actual_impact`.",
 	} {
 		if count := strings.Count(contents, clause); count != 1 {
@@ -145,41 +145,34 @@ func amendmentFinalizationApprovalPolicy(t *testing.T, lines []string) approvalD
 func approvalRejectForms(t *testing.T, lines []string) []approvalRejectForm {
 	t.Helper()
 
+	narrative := strings.Join(strings.Fields(strings.Join(lines, "\n")), " ")
+	const humanGateCarrier = "- `--reject [--reason <text>]` is valid only for `human_gate`."
+	const amendmentCarrier = "- Amendment and finalization rejection requires `--reason <text>` under B.5's `human_reason` rule."
+	for _, carrier := range []string{humanGateCarrier, amendmentCarrier} {
+		if count := strings.Count(narrative, carrier); count != 1 {
+			t.Fatalf("approve reject carrier count = %d, want 1: %q", count, carrier)
+		}
+	}
+
 	var forms []approvalRejectForm
 	for _, line := range lines {
-		command, comment, found := strings.Cut(strings.TrimSpace(line), "#")
-		if !found || !strings.HasPrefix(strings.TrimSpace(command), "| --reject") {
+		command := strings.TrimSpace(line)
+		if !strings.HasPrefix(command, "| --reject") {
 			continue
 		}
 
 		form := approvalRejectForm{decisionTypes: make(map[string]struct{})}
-		switch strings.TrimSpace(command) {
+		switch command {
 		case "| --reject [--reason <text>]":
 			form.reason = "optional"
+			form.decisionTypes["human_gate"] = struct{}{}
 		case "| --reject --reason <text>":
 			form.reason = "required"
+			form.decisionTypes["amendment"] = struct{}{}
+			form.decisionTypes["finalization"] = struct{}{}
+			form.reasonField = "human_reason"
 		default:
 			t.Fatalf("unparseable approve reject grammar %q", line)
-		}
-
-		decisionTypes, mapping, found := strings.Cut(strings.TrimSpace(comment), ";")
-		decisionTypes = strings.TrimSuffix(strings.TrimSpace(decisionTypes), " only")
-		if decisionTypes == "" {
-			t.Fatalf("approve reject grammar has no decision-type restriction %q", line)
-		}
-		for _, decisionType := range strings.Split(decisionTypes, " | ") {
-			if decisionType == "" {
-				t.Fatalf("unparseable decision-type restriction %q", line)
-			}
-			form.decisionTypes[decisionType] = struct{}{}
-		}
-		if found {
-			mapping = strings.TrimSpace(mapping)
-			const prefix = "B.5 `"
-			if !strings.HasPrefix(mapping, prefix) || !strings.HasSuffix(mapping, "`") {
-				t.Fatalf("unparseable B.5 mapping %q", line)
-			}
-			form.reasonField = strings.TrimSuffix(strings.TrimPrefix(mapping, prefix), "`")
 		}
 		forms = append(forms, form)
 	}
