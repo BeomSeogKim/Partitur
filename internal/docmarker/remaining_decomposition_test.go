@@ -21,7 +21,9 @@ type remainingBlockExpectation struct {
 	end                string
 	carrierMarker      string
 	carrierHash        string
+	referenceCount     int
 	carrierAssignments []int
+	relocatedCarriers  map[int][]string
 	specimens          []remainingSpecimenExpectation
 }
 
@@ -34,13 +36,70 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 
 	blocks := []remainingBlockExpectation{
 		{
-			name:          "repository-layout",
-			start:         "**Repository-layout clauses.**",
-			end:           "Git refs the core owns — never user-visible branches",
-			carrierMarker: "**Repository-layout clauses.**",
-			carrierHash:   "977875d71f10194b31881a0390534872c912e9079f1106dd50526f55bd2c638e",
+			name:           "repository-layout",
+			start:          "**Repository-layout clauses.**",
+			end:            "Git refs the core owns — never user-visible branches",
+			carrierMarker:  "**Repository-layout clauses.**",
+			carrierHash:    "b68fe3023223a0e3245d5e858e9a8d23e3fca87122484cca721edaa6deb909cf",
+			referenceCount: 14,
 			carrierAssignments: []int{
-				2, 3, 2, 1, 3, 2, 5, 1, 4, 5, 1, 1, 3, 5, 2, 2, 7, 1, 1, 1, 1, 2, 3, 1, 1,
+				2, 1, 2, 1, 3, 2, 1, 1, 0, 2, 1, 1, 1, 1, 0, 2, 1, 0, 1, 0, 0, 2, 1, 0, 1,
+			},
+			relocatedCarriers: map[int][]string{
+				2: {
+					"`partitur init` creates `.partitur/`, its `.gitignore` entries for `runs/` and `work/`",
+				},
+				7: {
+					"`manifest.yaml` is a rebuildable projection/checkpoint of the journal.",
+					"The manifest records the source revision and both hashes.",
+					"The run manifest pins the resolved performer, adapter id, and model for every part",
+					"the manifest additionally records, **per attempt**, that observed",
+				},
+				9: {
+					"**The snapshot and the complete approval payload are written *before* the prepare.**",
+					"an **auto** proposal has no durable proposal record to rebuild them from.",
+					"Recovery then\n  *replays* a plan rather than recomputing one.",
+				},
+				10: {
+					"Decision-time revalidation needs the original operations because §9 re-runs steps 1–9.",
+					"Neither `typed_delta` nor `actual_impact` can reconstruct the original operations; both are lossy",
+				},
+				13: {
+					"**Artifact instances.** Score-declared output ids are *logical* ids.",
+					"**Artifact recording atomicity.** Recording an artifact follows a fixed order:",
+				},
+				14: {
+					"`runs/<run-id>/inputs/<movement-id>/revision-<score-revision>/subject-tree.json`.",
+					"read-only to the performer. Its delivered `instance_id` is",
+					"all retries and fallbacks on that movement\nrevision reuse that instance and its exact raw bytes.",
+				},
+				15: {
+					"**Session hints and privacy.** Session continuity across attempts is carried by an",
+					"they live in `runs/<id>/session/` with mode\n`0600` and are deleted with the run.",
+				},
+				17: {
+					"`runs/<run-id>/authority.json` is a\n  fsynced checkpoint of that projection, not its authority.",
+					"It lives in `driver.lease` and in the owner's memory only.",
+					"`authority.json` is never consulted for the\n  token, and never authoritative for the epoch.",
+				},
+				18: {
+					"**Diagnostics privacy.** Vendor and adapter `stderr` may contain a session id the adapter",
+					"Adapters MUST buffer `stderr` to a bounded size and sanitize it against",
+				},
+				20: {
+					"the core captures `stdout` and `stderr` separately at\n  `attempts/<attempt-id>/criteria/<criterion-id>/stdout` and `stderr`.",
+				},
+				21: {
+					"the core captures `stdout` and `stderr` separately at\n  `attempts/<attempt-id>/criteria/<criterion-id>/stdout` and `stderr`.",
+				},
+				23: {
+					"The core immediately copies the file announced by an `artifact` notification.",
+					"Only the immutable artifact copy is treated as recorded.",
+				},
+				24: {
+					"TMPDIR=<attempt staging directory>/tmp\n  TMP=<attempt staging directory>/tmp\n  TEMP=<attempt staging directory>/tmp",
+					"The three temporary-directory spellings are core-set to the attempt staging\n  directory",
+				},
 			},
 			specimens: []remainingSpecimenExpectation{
 				{language: "text", prefix: "<repo>/\n", hash: "e9d8317897c69d1389551fa42b898e858be535750437a0afc9f103f007197847"},
@@ -142,11 +201,29 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			if got := sha256Text(carrierText); got != block.carrierHash {
 				t.Fatalf("carrier bytes hash = %s, want %s", got, block.carrierHash)
 			}
-			carriers := markdownBullets(carrierText)
+			var carriers []string
+			references := 0
+			for _, bullet := range markdownBullets(carrierText) {
+				if strings.HasPrefix(bullet, "- For ") {
+					references++
+					continue
+				}
+				carriers = append(carriers, bullet)
+			}
+			if references != block.referenceCount {
+				t.Fatalf("reference-only bullets = %d, want %d", references, block.referenceCount)
+			}
 			assigned := 0
 			for index, count := range block.carrierAssignments {
-				if count <= 0 || assigned+count > len(carriers) {
+				if count < 0 || assigned+count > len(carriers) {
 					t.Fatalf("original annotation run %d has invalid carrier assignment %d", index+1, count)
+				}
+				relocated := block.relocatedCarriers[index+1]
+				if count == 0 && len(relocated) == 0 {
+					t.Fatalf("original annotation run %d has neither a local nor relocated carrier", index+1)
+				}
+				for _, carrier := range relocated {
+					requireOccurrence(t, string(contents), carrier, 1)
 				}
 				assigned += count
 			}
@@ -202,8 +279,8 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			if len(seenSpecimens) != len(block.specimens) {
 				t.Fatalf("top-level payloads = %d, want %d", len(seenSpecimens), len(block.specimens))
 			}
-			t.Logf("%s decomposition: %d original annotation runs, %d prose carriers, %d independently copyable top-level payloads, 0 comment markers",
-				block.name, len(originals), len(carriers), len(seenSpecimens))
+			t.Logf("%s decomposition: %d original annotation runs, %d local prose carriers, %d relocated carrier groups, %d reference-only bullets, %d independently copyable top-level payloads, 0 comment markers",
+				block.name, len(originals), len(carriers), len(block.relocatedCarriers), references, len(seenSpecimens))
 		})
 	}
 }

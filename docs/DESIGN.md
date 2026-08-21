@@ -112,8 +112,7 @@ coherent layout specimens.
 
 - `<repo>/partitur.yaml` is the score.
 - `<repo>/partitur.yaml` is committed.
-- `<repo>/.partitur/.gitignore` is created by `partitur init`.
-- `<repo>/.partitur/.gitignore` contains entries for `runs/` and `work/`.
+- For init-created repository metadata, see §7's "CLI v0.2" clause.
 - The run state under `<repo>/.partitur/runs/` and staging under `<repo>/.partitur/work/` are never
   committed.
 - `<repo>/.partitur/cast.yaml` is the project cast override.
@@ -124,66 +123,43 @@ coherent layout specimens.
 - `<repo>/.partitur/runs/<run-id>/` is never agent-writable.
 - `<repo>/.partitur/runs/<run-id>/journal.jsonl` is an append-only event log.
 - The core is the single writer of `<repo>/.partitur/runs/<run-id>/journal.jsonl`.
-- `<repo>/.partitur/runs/<run-id>/manifest.yaml` is a rebuildable projection.
-- `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the score revision and hash.
-- `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the resolved cast pins.
-- `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the per-attempt enforcement record.
+- For manifest authority and rebuildability, see §1's "Authority within run state" clause.
+- For manifest score metadata, see §1's "Score snapshots and the root score" clause.
+- For manifest cast and per-attempt metadata, see §1's "Cast layering" clause.
 - `<repo>/.partitur/runs/<run-id>/manifest.yaml` records the artifact index.
 - `<repo>/.partitur/runs/<run-id>/scores/revision-<n>.yaml` is an immutable score snapshot governed
   by the snapshot rules below.
-- `<repo>/.partitur/runs/<run-id>/prepares/<prepare-id>.json` contains the complete planned
-  `amendment.approved` payload.
-- The core writes and fsyncs `<repo>/.partitur/runs/<run-id>/prepares/<prepare-id>.json` before the
-  prepare event (§6).
-- Recovery replays the prepare plan rather than recomputing one.
-- An auto approval has no proposal record from which to rebuild its prepare plan.
+- For prepare-plan persistence and recovery, see §6's "The snapshot and the complete approval
+  payload are written before the prepare" clause.
 - `<repo>/.partitur/runs/<run-id>/proposals/<proposal-id>.json` is an immutable routed-proposal
   record.
 - `<repo>/.partitur/runs/<run-id>/proposals/<proposal-id>.json` has schema
   `partitur/proposal-record+json;v=1` (§9).
-- Decision-time re-validation replays the pipeline from the original operations in the routed-
-  proposal record.
-- A typed delta cannot reconstruct the routed proposal's original operations.
-- The typed delta is lossy by design.
+- For routed-proposal re-validation inputs, see Appendix B.5's routed-proposal notes.
 - `<repo>/.partitur/runs/<run-id>/quarantine/<kind>/<content-sha256>/<source-basename>` is the
   durable destination for quarantined run files.
 - `<repo>/.partitur/runs/<run-id>/resolved-cast.yaml` is the fully resolved cast used by the run.
 - `<repo>/.partitur/runs/<run-id>/artifacts/<logical-output-id>/<attempt-id>` stores immutable
   artifact instances.
-- The artifact-instance identity and atomicity rules are stated below.
-- A retry never overwrites earlier artifact evidence.
-- `<repo>/.partitur/runs/<run-id>/inputs/<movement-id>/revision-<n>/subject-tree.json` is immutable.
-- The core publishes the review subject input at that path (§4).
+- For artifact-instance identity, atomicity, and retry behavior, see §1's "Artifact instances" and
+  "Artifact recording atomicity" clauses.
+- For review-subject publication at
+  `<repo>/.partitur/runs/<run-id>/inputs/<movement-id>/revision-<n>/subject-tree.json`, see §4's
+  "Review-subject publication" clause.
 - The review subject input is outside every worktree.
-- The review subject input is read-only to the performer.
-- A retry or fallback on the same movement revision reuses the same review-subject bytes.
-- `<repo>/.partitur/runs/<run-id>/session/` stores session hints.
-- `<repo>/.partitur/runs/<run-id>/session/` has mode `0600` (§4 privacy).
+- For session-hint storage and privacy, see §4's "Session hints and privacy" clause.
 - `<repo>/.partitur/runs/<run-id>/driver.lease` is the execution-driver lease (§6).
 - `<repo>/.partitur/runs/<run-id>/driver.lease` is absent when no driver runs.
-- `<repo>/.partitur/runs/<run-id>/authority.json` is the execution-authority checkpoint for the
-  current epoch only (§6).
 - `<repo>/.partitur/runs/<run-id>/authority.json` projects `authority.granted` and `run.*` events.
-- `<repo>/.partitur/runs/<run-id>/authority.json` is rebuildable.
-- `<repo>/.partitur/runs/<run-id>/authority.json` is never the authority itself.
-- `<repo>/.partitur/runs/<run-id>/authority.json` does not hold the incarnation token.
-- The incarnation token lives solely in `driver.lease` and its owner's memory.
-- A value that proves incarnation identity must not sit in a rebuildable file.
-- `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/stderr` stores sanitized vendor and adapter
-  diagnostics under §4's privacy rules.
+- For authority-checkpoint and incarnation-token rules, see §6's execution-driver lease clauses.
+- For persisted adapter diagnostics, see §4's "Diagnostics privacy" clause.
 - `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/trace.jsonl` is the protocol trace.
-- `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/criteria/<criterion-id>/stdout` is the
-  bounded criterion stdout capture (§7).
-- `<repo>/.partitur/runs/<run-id>/attempts/<attempt-id>/criteria/<criterion-id>/stderr` is the
-  bounded criterion stderr capture (§7).
+- For criterion output capture, see §7's acceptance-runner authority clause.
 - `<repo>/.partitur/work/<run-id>/<attempt-id>/` is non-authoritative staging.
 - `<repo>/.partitur/work/<run-id>/<attempt-id>/` is agent-writable.
 - `<repo>/.partitur/work/<run-id>/<attempt-id>/output/` is the attempt's `output_dir` (§5).
-- Artifacts are copied from that output directory into
-  `<repo>/.partitur/runs/<run-id>/artifacts/`.
-- Only the immutable artifact copy under the run root counts.
-- `<repo>/.partitur/work/<run-id>/<attempt-id>/tmp/` is the default temporary-file directory for
-  criterion commands (§7).
+- For output-directory artifact ingestion, see §4's "Event-notification field clauses".
+- For criterion temporary files, see §7's acceptance-runner authority clause.
 - `~/.config/partitur/cast.yaml` is the user-global cast override.
 
 ```text
