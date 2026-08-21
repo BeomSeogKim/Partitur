@@ -2,6 +2,7 @@ package docclause
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,13 @@ import (
 	"strings"
 	"testing"
 )
+
+type confirmedPacketPin struct {
+	DecisionCount int
+	AnchorCount   int
+	SourceSHA256  string
+	DecisionsHash string
+}
 
 func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.T) {
 	_, current, _, ok := runtime.Caller(0)
@@ -63,8 +71,18 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 	if len(regions) == 0 {
 		t.Fatal("generated region universe is empty")
 	}
-	reviewedOrdinals := map[int]struct{}{1: {}}
+	reviewedOrdinals := map[int]confirmedPacketPin{
+		1: {
+			DecisionCount: 77,
+			AnchorCount:   51,
+			SourceSHA256:  "916f5c3dab897c61d2ee77cf013c6ec3a246cc5bc6e985c08838b23836420e4b",
+			DecisionsHash: "e3d994f50c4373b72b5dd00a7be093fe23216bd86106161d91e6ae39b366c09d",
+		},
+	}
 	if err := validateStagingReviewProgress(regions, registry, reviewedOrdinals); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateConfirmedPacketPins(registry, reviewedOrdinals); err != nil {
 		t.Fatal(err)
 	}
 	if len(regions) < 2 {
@@ -142,9 +160,96 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 			}
 		})
 	}
+
+	decisionMutations := []struct {
+		name         string
+		mutate       func(*testing.T, *Registry)
+		existingWant string
+		pinWant      string
+	}{
+		{
+			name: "decision end byte moved by one",
+			mutate: func(t *testing.T, got *Registry) {
+				review := packetReview(t, got, 1)
+				review.Decisions[0].EndByte++
+			},
+			pinWant: "decisions digest",
+		},
+		{
+			name: "decision kind flipped",
+			mutate: func(t *testing.T, got *Registry) {
+				review := packetReview(t, got, 1)
+				for index := range review.Decisions {
+					if review.Decisions[index].Kind == ClassificationAnchor {
+						review.Decisions[index].Kind = ClassificationNonNormative
+						return
+					}
+				}
+				t.Fatal("packet 1 anchor decision not found")
+			},
+			existingWant: "non-normative classification carries marker ID",
+			pinWant:      "anchor count",
+		},
+		{
+			name: "decision marker ID renamed",
+			mutate: func(t *testing.T, got *Registry) {
+				review := packetReview(t, got, 1)
+				for index := range review.Decisions {
+					if review.Decisions[index].Kind == ClassificationAnchor {
+						review.Decisions[index].MarkerID += ".renamed"
+						return
+					}
+				}
+				t.Fatal("packet 1 anchor decision not found")
+			},
+			pinWant: "decisions digest",
+		},
+		{
+			name: "decision removed",
+			mutate: func(t *testing.T, got *Registry) {
+				review := packetReview(t, got, 1)
+				review.Decisions = append(review.Decisions[:0], review.Decisions[1:]...)
+			},
+			existingWant: "packet 1 is locked as reviewed but is pending",
+			pinWant:      "decision count",
+		},
+	}
+	for _, mutation := range decisionMutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			got := cloneRegistry(registry)
+			mutation.mutate(t, &got)
+			existingErr := ValidateRegistry(documentPath, document, commandBlob, regions, got)
+			if existingErr == nil {
+				existingErr = validateStagingReviewProgress(regions, got, reviewedOrdinals)
+			}
+			if mutation.existingWant == "" {
+				if existingErr != nil {
+					t.Fatalf("existing registry validation rejected mutation: %v", existingErr)
+				}
+			} else if existingErr == nil || !strings.Contains(existingErr.Error(), mutation.existingWant) {
+				t.Fatalf("existing registry validation error = %v, want %q", existingErr, mutation.existingWant)
+			}
+
+			pinErr := validateConfirmedPacketPins(got, reviewedOrdinals)
+			if pinErr == nil || !strings.Contains(pinErr.Error(), mutation.pinWant) {
+				t.Fatalf("confirmed-packet pin error = %v, want %q", pinErr, mutation.pinWant)
+			}
+		})
+	}
 }
 
-func validateStagingReviewProgress(regions []Region, registry Registry, reviewedOrdinals map[int]struct{}) error {
+func packetReview(t *testing.T, registry *Registry, ordinal int) *ReviewReceipt {
+	t.Helper()
+	for index := range registry.Receipts {
+		if registry.Receipts[index].Key.Ordinal == ordinal && registry.Receipts[index].Review != nil {
+			return registry.Receipts[index].Review
+		}
+	}
+	t.Fatalf("packet %d review receipt not found", ordinal)
+	return nil
+}
+
+func validateStagingReviewProgress(regions []Region, registry Registry, reviewedOrdinals map[int]confirmedPacketPin) error {
 	receiptOrdinals := make(map[int]bool, len(registry.Receipts))
 	for _, receipt := range registry.Receipts {
 		ordinal := receipt.Key.Ordinal
@@ -173,6 +278,70 @@ func validateStagingReviewProgress(regions []Region, registry Registry, reviewed
 		return fmt.Errorf("baseline activation must remain absent while staging regions are pending")
 	}
 	return nil
+}
+
+func validateConfirmedPacketPins(registry Registry, reviewedOrdinals map[int]confirmedPacketPin) error {
+	for ordinal, pin := range reviewedOrdinals {
+		var review *ReviewReceipt
+		for index := range registry.Receipts {
+			if registry.Receipts[index].Key.Ordinal == ordinal {
+				review = registry.Receipts[index].Review
+				break
+			}
+		}
+		if review == nil {
+			return fmt.Errorf("packet %d confirmed review receipt is absent", ordinal)
+		}
+		if len(review.Decisions) != pin.DecisionCount {
+			return fmt.Errorf("packet %d decision count = %d, want %d", ordinal, len(review.Decisions), pin.DecisionCount)
+		}
+		anchors := 0
+		for _, decision := range review.Decisions {
+			if decision.Kind == ClassificationAnchor {
+				anchors++
+			}
+		}
+		if anchors != pin.AnchorCount {
+			return fmt.Errorf("packet %d anchor count = %d, want %d", ordinal, anchors, pin.AnchorCount)
+		}
+		if review.SourceSHA256 != pin.SourceSHA256 {
+			return fmt.Errorf("packet %d source SHA-256 = %q, want %q", ordinal, review.SourceSHA256, pin.SourceSHA256)
+		}
+		digest, err := confirmedDecisionsDigest(review.Decisions)
+		if err != nil {
+			return fmt.Errorf("packet %d decisions digest: %w", ordinal, err)
+		}
+		if digest != pin.DecisionsHash {
+			return fmt.Errorf("packet %d decisions digest = %q, want %q", ordinal, digest, pin.DecisionsHash)
+		}
+	}
+	return nil
+}
+
+func confirmedDecisionsDigest(decisions []Classification) (string, error) {
+	// Lexical field order and json.Marshal's compact encoding define the object
+	// form; the slice retains the receipt's stored decision order.
+	type canonicalDecision struct {
+		EndByte   int                `json:"end_source_byte"`
+		Kind      ClassificationKind `json:"kind"`
+		MarkerID  string             `json:"marker_id,omitempty"`
+		StartByte int                `json:"start_source_byte"`
+	}
+	canonical := make([]canonicalDecision, len(decisions))
+	for index, decision := range decisions {
+		canonical[index] = canonicalDecision{
+			EndByte:   decision.EndByte,
+			Kind:      decision.Kind,
+			MarkerID:  decision.MarkerID,
+			StartByte: decision.StartByte,
+		}
+	}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", digest), nil
 }
 
 func TestP3CompletionRowsAreByteLockedAndCarryNoPendingEnumeration(t *testing.T) {
