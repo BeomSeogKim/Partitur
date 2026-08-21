@@ -107,14 +107,26 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			},
 		},
 		{
-			name:          "score-example",
-			start:         "**Score-example field clauses.**",
-			end:           "**Path policy semantics.**",
-			carrierMarker: "**Score-example field clauses.**",
-			carrierHash:   "9388db72963a7256d59fccf27aa1589e1240dd04a6b6a4dfd136b36bf594ca1e",
+			name:           "score-example",
+			start:          "**Score-example field clauses.**",
+			end:            "**Path policy semantics.**",
+			carrierMarker:  "**Score-example field clauses.**",
+			carrierHash:    "5b9a67c333437237e238797d1f251b4c67a33f7e8699d284390c308ef0472c60",
+			referenceCount: 4,
 			carrierAssignments: []int{
-				1, 1, 1, 2, 2, 1, 2, 1, 2, 1, 5, 2, 3, 2, 7, 2, 1, 3, 1,
+				1, 1, 0, 2, 1, 0, 1, 0, 2, 1, 5, 2, 3, 2, 7, 2, 1, 3, 1,
 				1, 3, 1, 1, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 4, 2, 5, 1, 4,
+			},
+			relocatedCarriers: map[int][]string{
+				3: {
+					"| `status` | required | — | either `draft` or `finalized` |",
+				},
+				6: {
+					"While `status: draft`, only the movement named by\n`draft.interview_movement` may run.",
+				},
+				8: {
+					"1. `status: finalized` requires every open question resolved or waived,",
+				},
 			},
 			specimens: []remainingSpecimenExpectation{
 				{language: "yaml", prefix: "score: \"0.2\"\n", hash: "5b3f5c65fc2c32177336e28cc38cdc07600a84e3810fe6bf536fa2275ac1fa7c"},

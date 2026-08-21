@@ -240,9 +240,9 @@ source rather than escaped at each use site:
   compiler error (§2 rule 16). This grammar is simultaneously path-safe, ref-safe, and
   selector-safe, so no escaping layer is needed anywhere.
 - **`run_id` and `attempt_id`** are **core-generated** UUIDv7 — time-ordered, collision-free
-  without coordination, and trivially path- and ref-safe. They remain opaque strings on the
-  wire (§4): the protocol never constrains their form, and the core never parses meaning out
-  of them. Collision freedom is load-bearing namespace separation: a `run_id` names the
+  without coordination, and trivially path- and ref-safe. For their wire representation, see §4's
+  “Methods” clause. The core never parses meaning out of either id. Collision freedom is
+  load-bearing namespace separation: a `run_id` names the
   authoritative run directory, writable staging root, owned Git refs, and every journal envelope,
   so a collision would alias two runs' state rather than merely label them alike. UUIDv7's time
   ordering is an allocation property only — no projection, command selection, or recovery rule
@@ -279,11 +279,10 @@ before the core proceeds (Appendix B, `sync` column). Fsync is required for ever
 that authorizes an irreversible effect or that a recovery rule keys on; ordinary
 `log`/`progress` mirroring is not synced.
 
-If a complete event line is appended but its required fsync fails, the event's durability and the
-resulting transaction state are **unconfirmed**: the line may or may not be on stable storage. The
-command stops further mutation and returns exit 7. It must not classify the transaction by rereading
-`journal.jsonl` through the affected host's page cache or promise a continuation from either the
-event's presence or absence there. The operator must preserve the run and determine whether the
+If a complete event line is appended but its required fsync fails, follow §7's exit-7 registry. The
+command must not classify the transaction by rereading `journal.jsonl` through the affected host's
+page cache or promise a continuation from either the event's presence or absence there. The operator
+must preserve the run and determine whether the
 event is present through a storage-level observation independent of that page cache, such as a
 storage snapshot or replica. If no such external observation is available, v0.2 cannot determine
 the transaction outcome; the operator must treat it as unknown rather than invoke a continuation
@@ -295,8 +294,8 @@ that assumes a durable projection.
   file, and the truncation is recorded as `journal.tail_truncated` at the next append.
 - An unparseable line anywhere else halts recovery — this is corruption, not something to
   repair silently.
-- `seq` is contiguous and strictly increasing within a run. A truncated tail therefore
-  never leaves a gap, because the truncated event was never observed by anything.
+- For `seq` allocation, see §6's event-envelope clause. A truncated tail therefore never leaves a
+  gap, because the truncated event was never observed by anything.
 - **The truncation record itself can be lost**, and v0.2 accepts that: a crash after truncating but
   before appending `journal.tail_truncated` leaves no evidence the truncation happened. This is a
   narrow *audit* loss with no correctness consequence — the discarded event was never observed, so
@@ -309,17 +308,18 @@ distinct immutable instance identified by `(logical_output_id, attempt_id)`. Bec
 referenced from payload arrays, proposal evidence, and finding overrides, it needs a single scalar
 form, so the `artifact_instance_id` is the **reversible string** `<logical_output_id>@<attempt_id>`.
 Both components are constrained by the identifier grammar above — the slug excludes `@`, and a
-UUIDv7 contains none — so the split point is unambiguous and no escaping is required. Stored at
-`artifacts/<logical-output-id>/<attempt-id>`, both safe path segments by that same grammar. A logical output may be
+UUIDv7 contains none — so the split point is unambiguous and no escaping is required. For the
+instance storage path, see §1's “Repository-layout clauses”; both components are safe path segments
+under that same identifier grammar. A logical output may be
 emitted **at most once per attempt**; a second notification for the same logical id is
 rejected before any append, and the attempt fails with `protocol_error`
-(`duplicate_artifact_instance`). A declared output never emitted is caught by the
-artifact-integrity criterion (§7). Journal entries, hashes, marks, and finding overrides
+(`duplicate_artifact_instance`). For declared-but-unemitted outputs, see §7's core-generated
+integrity-check clause. Journal entries, hashes, marks, and finding overrides
 reference instances. A downstream movement's logical input resolves to the instance from
 the **completing successful, non-superseded attempt**, so retries and revision re-runs
 never collide with earlier immutable evidence.
 
-`kind: change_set` is the one exception: it is never an artifact instance. See §5.
+For `kind: change_set`, see §5's core-synthesized change-set clause.
 
 **Artifact publication and immutability.** The file at an announced path must be complete and
 must not change afterwards. Concretely, in the merged design the vendor process closes its
@@ -339,24 +339,23 @@ file without an event is quarantined; an event whose file is missing is a recove
 that halts the run.
 
 **Resolved-cast persistence.** `resolved-cast.yaml` is authoritative *input*: `run.started` records
-only its hash, and the layering that produced it (project → user-global → factory) can change
-underneath, so the hash alone cannot reconstruct the bindings and fallbacks a not-yet-attempted
-movement will need. It is written before `run.started` under the same discipline as snapshots —
-temp → fsync → atomic rename → parent-directory fsync — and a `run.started` whose
+only its hash, and the source layers described in §1's “Cast layering” clause can change underneath,
+so the hash alone cannot reconstruct the bindings and fallbacks a not-yet-attempted movement will
+need. It is written and durably flushed before `run.started`; its temp-to-rename transaction follows
+§1's “Rename durability” clause. A `run.started` whose
 `resolved-cast.yaml` is missing or hash-mismatched is a recovery halt (`missing_resolved_cast`). An
 orphan file with no `run.started` is quarantined.
 
-**Routed-proposal records.** A proposal routed to a human must survive a crash, because
-decision-time re-validation replays the pipeline from the original operations (§9). It follows the
-same discipline as artifacts and snapshots, for the same reason — the file must exist before the
-event that makes it authoritative:
+**Routed-proposal records.** A proposal routed to a human must survive a crash; for decision-time
+re-validation inputs, see Appendix B.5's routed-proposal field clauses. It follows the same
+discipline as artifacts and snapshots, for the same reason — the file must exist before the event
+that makes it authoritative:
 
 - Write to a temporary file → compute `sha256` and durably flush → atomic rename into
   `proposals/<proposal-id>.json` before the first durable reference. That reference is ordinarily
   `amendment.routed_human` (fsynced) carrying `proposal_record_hash`. For a blocking adapter
-  proposal, it is instead the route descriptor in the terminal `attempt.blocked`; that descriptor
-  carries the same hash and the already-decided route payload, and `amendment.routed_human` follows
-  it (§4).
+  proposal's first durable reference and subsequent route append, see §4's blocking-handshake
+  clause.
 - **Command-origin publication interval.** For an ordinary command-origin route, the repository
   state lock is retained from the successful proposal-record rename through the fsynced
   `amendment.routed_human` append. These are distinct durable operations, not one atomic write:
@@ -393,9 +392,9 @@ conflating them would let the core silently destroy a user's comments or formatt
 | `score_file_hash` (raw) | the **exact bytes** of the file (`sha256:<hex>`) | the `promote-score` pre-rename hash check and the byte-exact write |
 
 The semantic hash deliberately ignores comments and formatting, which is correct for
-"did the meaning change?" and **wrong** for "may I overwrite this file?". Promotion
-therefore compares `expected_root_file_hash` and writes the pinned snapshot's exact bytes
-(§8), so a user's formatting-only edit surfaces as a conflict rather than being clobbered.
+"did the meaning change?" and **wrong** for "may I overwrite this file?". For promotion's root-file
+conflict check and byte-exact write, see §1's “Score snapshots and the root score” and §9's
+“Snapshot bytes are canonical, not pretty-printed” clauses.
 
 **Score snapshots and the root score.** `partitur.yaml` stays editable by the user, so a
 revision number alone cannot reproduce a run:
@@ -444,15 +443,15 @@ coherent YAML document.
 
 - `score` is the schema version.
 - `revision` is bumped only by amendments.
-- `status` is one of the closed values `draft` and `finalized`.
+- For `status`'s allowed values, see §2's “Defaults, optionality, and ranges” table.
 - `goal` records finalized user intent.
 - `goal` is prose in the user's language.
 - `context` records project facts the user supplied.
-- `context` is optional.
-- `draft.interview_movement` names the one movement allowed to run while `status` is `draft`.
+- For `context` optionality and omission semantics, see §2's “Defaults, optionality, and ranges”
+  table.
+- For which movement may run while `status` is `draft`, see §2's “DRAFT phase contract”.
 - `open_questions` is the draft gate.
-- Finalization requires every `open_questions` entry to be discharged.
-- Each `open_questions` entry is resolved or explicitly waived.
+- For finalization's open-question condition, see §2 rule 1.
 - `open_questions[].waived: true` is an explicit waiver.
 - An explicit open-question waiver is recorded forever.
 - `verification.expectation` and `verification.final_movement` are two distinct concepts.
