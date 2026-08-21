@@ -3,40 +3,655 @@
   "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
   "nonblank_lines_per_region": 200,
   "region_universe": [
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":1,"start_source_line":1,"end_source_line":233},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":2,"start_source_line":234,"end_source_line":460},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":3,"start_source_line":461,"end_source_line":677},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":4,"start_source_line":678,"end_source_line":900},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":5,"start_source_line":901,"end_source_line":1141},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":6,"start_source_line":1142,"end_source_line":1359},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":7,"start_source_line":1360,"end_source_line":1587},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":8,"start_source_line":1588,"end_source_line":1823},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":9,"start_source_line":1824,"end_source_line":2050},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":10,"start_source_line":2051,"end_source_line":2281},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":11,"start_source_line":2282,"end_source_line":2515},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":12,"start_source_line":2516,"end_source_line":2741},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":13,"start_source_line":2742,"end_source_line":2968},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":14,"start_source_line":2969,"end_source_line":3198},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":15,"start_source_line":3199,"end_source_line":3427},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":16,"start_source_line":3428,"end_source_line":3650},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":17,"start_source_line":3651,"end_source_line":3881},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":18,"start_source_line":3882,"end_source_line":4115},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":19,"start_source_line":4116,"end_source_line":4346},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":20,"start_source_line":4347,"end_source_line":4577},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":21,"start_source_line":4578,"end_source_line":4806},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":22,"start_source_line":4807,"end_source_line":5052},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":23,"start_source_line":5053,"end_source_line":5275},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":24,"start_source_line":5276,"end_source_line":5505},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":25,"start_source_line":5506,"end_source_line":5721},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":26,"start_source_line":5722,"end_source_line":5936},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":27,"start_source_line":5937,"end_source_line":6155},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":28,"start_source_line":6156,"end_source_line":6360},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":29,"start_source_line":6361,"end_source_line":6596},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":30,"start_source_line":6597,"end_source_line":6826},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":31,"start_source_line":6827,"end_source_line":7054},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":32,"start_source_line":7055,"end_source_line":7313},
-    {"input_blob":"d35d03d2375b9c7708f88f0c70bf332bbf58aaab","ordinal":33,"start_source_line":7314,"end_source_line":7489}
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 1,
+      "start_source_line": 1,
+      "end_source_line": 233
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 2,
+      "start_source_line": 234,
+      "end_source_line": 460
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 3,
+      "start_source_line": 461,
+      "end_source_line": 677
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 4,
+      "start_source_line": 678,
+      "end_source_line": 900
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 5,
+      "start_source_line": 901,
+      "end_source_line": 1141
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 6,
+      "start_source_line": 1142,
+      "end_source_line": 1359
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 7,
+      "start_source_line": 1360,
+      "end_source_line": 1587
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 8,
+      "start_source_line": 1588,
+      "end_source_line": 1823
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 9,
+      "start_source_line": 1824,
+      "end_source_line": 2050
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 10,
+      "start_source_line": 2051,
+      "end_source_line": 2281
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 11,
+      "start_source_line": 2282,
+      "end_source_line": 2515
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 12,
+      "start_source_line": 2516,
+      "end_source_line": 2741
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 13,
+      "start_source_line": 2742,
+      "end_source_line": 2968
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 14,
+      "start_source_line": 2969,
+      "end_source_line": 3198
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 15,
+      "start_source_line": 3199,
+      "end_source_line": 3427
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 16,
+      "start_source_line": 3428,
+      "end_source_line": 3650
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 17,
+      "start_source_line": 3651,
+      "end_source_line": 3881
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 18,
+      "start_source_line": 3882,
+      "end_source_line": 4115
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 19,
+      "start_source_line": 4116,
+      "end_source_line": 4346
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 20,
+      "start_source_line": 4347,
+      "end_source_line": 4577
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 21,
+      "start_source_line": 4578,
+      "end_source_line": 4806
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 22,
+      "start_source_line": 4807,
+      "end_source_line": 5052
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 23,
+      "start_source_line": 5053,
+      "end_source_line": 5275
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 24,
+      "start_source_line": 5276,
+      "end_source_line": 5505
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 25,
+      "start_source_line": 5506,
+      "end_source_line": 5721
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 26,
+      "start_source_line": 5722,
+      "end_source_line": 5936
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 27,
+      "start_source_line": 5937,
+      "end_source_line": 6155
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 28,
+      "start_source_line": 6156,
+      "end_source_line": 6360
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 29,
+      "start_source_line": 6361,
+      "end_source_line": 6596
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 30,
+      "start_source_line": 6597,
+      "end_source_line": 6826
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 31,
+      "start_source_line": 6827,
+      "end_source_line": 7054
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 32,
+      "start_source_line": 7055,
+      "end_source_line": 7313
+    },
+    {
+      "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+      "ordinal": 33,
+      "start_source_line": 7314,
+      "end_source_line": 7489
+    }
   ],
-  "region_receipts": [],
+  "region_receipts": [
+    {
+      "key": {
+        "input_blob": "d35d03d2375b9c7708f88f0c70bf332bbf58aaab",
+        "ordinal": 1,
+        "start_source_line": 1,
+        "end_source_line": 233
+      },
+      "review_receipt": {
+        "source_sha256": "916f5c3dab897c61d2ee77cf013c6ec3a246cc5bc6e985c08838b23836420e4b",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 0,
+            "end_source_byte": 296,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 298,
+            "end_source_byte": 832,
+            "kind": "anchor",
+            "marker_id": "design.authority"
+          },
+          {
+            "start_source_byte": 834,
+            "end_source_byte": 894,
+            "kind": "anchor",
+            "marker_id": "versions.independence"
+          },
+          {
+            "start_source_byte": 896,
+            "end_source_byte": 1368,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 1370,
+            "end_source_byte": 1848,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 1850,
+            "end_source_byte": 2155,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 2157,
+            "end_source_byte": 2905,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 2907,
+            "end_source_byte": 3135,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 3137,
+            "end_source_byte": 3503,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 3505,
+            "end_source_byte": 4095,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 4097,
+            "end_source_byte": 6499,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 6501,
+            "end_source_byte": 6546,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 6548,
+            "end_source_byte": 6657,
+            "kind": "anchor",
+            "marker_id": "core.role"
+          },
+          {
+            "start_source_byte": 6658,
+            "end_source_byte": 6792,
+            "kind": "anchor",
+            "marker_id": "agent-output.buffering"
+          },
+          {
+            "start_source_byte": 6793,
+            "end_source_byte": 6860,
+            "kind": "anchor",
+            "marker_id": "movement-execution.order"
+          },
+          {
+            "start_source_byte": 6861,
+            "end_source_byte": 6871,
+            "kind": "anchor",
+            "marker_id": "core.daemon-mode"
+          },
+          {
+            "start_source_byte": 6872,
+            "end_source_byte": 7061,
+            "kind": "anchor",
+            "marker_id": "run-state.writer"
+          },
+          {
+            "start_source_byte": 7062,
+            "end_source_byte": 7113,
+            "kind": "anchor",
+            "marker_id": "run-state.transitions"
+          },
+          {
+            "start_source_byte": 7114,
+            "end_source_byte": 7186,
+            "kind": "anchor",
+            "marker_id": "command-semantics.authority"
+          },
+          {
+            "start_source_byte": 7188,
+            "end_source_byte": 7217,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 7219,
+            "end_source_byte": 7286,
+            "kind": "anchor",
+            "marker_id": "score-cast.format"
+          },
+          {
+            "start_source_byte": 7287,
+            "end_source_byte": 7311,
+            "kind": "anchor",
+            "marker_id": "yaml.duplicate-keys"
+          },
+          {
+            "start_source_byte": 7312,
+            "end_source_byte": 7367,
+            "kind": "anchor",
+            "marker_id": "yaml.advanced-features"
+          },
+          {
+            "start_source_byte": 7368,
+            "end_source_byte": 7421,
+            "kind": "anchor",
+            "marker_id": "yaml.string-coercion"
+          },
+          {
+            "start_source_byte": 7422,
+            "end_source_byte": 7477,
+            "kind": "anchor",
+            "marker_id": "run-state.format"
+          },
+          {
+            "start_source_byte": 7479,
+            "end_source_byte": 7617,
+            "kind": "anchor",
+            "marker_id": "run-storage.separation"
+          },
+          {
+            "start_source_byte": 7618,
+            "end_source_byte": 7825,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 7827,
+            "end_source_byte": 7865,
+            "kind": "anchor",
+            "marker_id": "root-score.location"
+          },
+          {
+            "start_source_byte": 7866,
+            "end_source_byte": 7904,
+            "kind": "anchor",
+            "marker_id": "root-score.commitment"
+          },
+          {
+            "start_source_byte": 7905,
+            "end_source_byte": 7973,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 7974,
+            "end_source_byte": 8086,
+            "kind": "anchor",
+            "marker_id": "run-work-roots.commitment"
+          },
+          {
+            "start_source_byte": 8087,
+            "end_source_byte": 8147,
+            "kind": "anchor",
+            "marker_id": "project-cast.location"
+          },
+          {
+            "start_source_byte": 8148,
+            "end_source_byte": 8228,
+            "kind": "anchor",
+            "marker_id": "project-cast.commitment"
+          },
+          {
+            "start_source_byte": 8229,
+            "end_source_byte": 8329,
+            "kind": "anchor",
+            "marker_id": "state-lock.location"
+          },
+          {
+            "start_source_byte": 8330,
+            "end_source_byte": 8395,
+            "kind": "anchor",
+            "marker_id": "run-storage.authority"
+          },
+          {
+            "start_source_byte": 8396,
+            "end_source_byte": 8453,
+            "kind": "anchor",
+            "marker_id": "run-storage.writer"
+          },
+          {
+            "start_source_byte": 8454,
+            "end_source_byte": 8514,
+            "kind": "anchor",
+            "marker_id": "run-storage.agent-access"
+          },
+          {
+            "start_source_byte": 8515,
+            "end_source_byte": 8592,
+            "kind": "anchor",
+            "marker_id": "journal.append-only"
+          },
+          {
+            "start_source_byte": 8593,
+            "end_source_byte": 8675,
+            "kind": "anchor",
+            "marker_id": "journal.writer"
+          },
+          {
+            "start_source_byte": 8676,
+            "end_source_byte": 8933,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 8934,
+            "end_source_byte": 9010,
+            "kind": "anchor",
+            "marker_id": "manifest.artifact-index"
+          },
+          {
+            "start_source_byte": 9011,
+            "end_source_byte": 9141,
+            "kind": "anchor",
+            "marker_id": "score-snapshots.immutability"
+          },
+          {
+            "start_source_byte": 9142,
+            "end_source_byte": 9286,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 9287,
+            "end_source_byte": 9392,
+            "kind": "anchor",
+            "marker_id": "routed-proposal-record.storage"
+          },
+          {
+            "start_source_byte": 9393,
+            "end_source_byte": 9512,
+            "kind": "anchor",
+            "marker_id": "routed-proposal-record.schema"
+          },
+          {
+            "start_source_byte": 9513,
+            "end_source_byte": 9598,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 9599,
+            "end_source_byte": 9742,
+            "kind": "anchor",
+            "marker_id": "quarantined-files.destination"
+          },
+          {
+            "start_source_byte": 9743,
+            "end_source_byte": 9840,
+            "kind": "anchor",
+            "marker_id": "resolved-cast.location"
+          },
+          {
+            "start_source_byte": 9841,
+            "end_source_byte": 9957,
+            "kind": "anchor",
+            "marker_id": "artifact-instances.storage"
+          },
+          {
+            "start_source_byte": 9958,
+            "end_source_byte": 10272,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 10273,
+            "end_source_byte": 10326,
+            "kind": "anchor",
+            "marker_id": "review-subject.location"
+          },
+          {
+            "start_source_byte": 10327,
+            "end_source_byte": 10412,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 10413,
+            "end_source_byte": 10497,
+            "kind": "anchor",
+            "marker_id": "driver-lease.location"
+          },
+          {
+            "start_source_byte": 10498,
+            "end_source_byte": 10576,
+            "kind": "anchor",
+            "marker_id": "driver-lease.absence"
+          },
+          {
+            "start_source_byte": 10577,
+            "end_source_byte": 10675,
+            "kind": "anchor",
+            "marker_id": "authority-checkpoint.projection"
+          },
+          {
+            "start_source_byte": 10676,
+            "end_source_byte": 10850,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 10851,
+            "end_source_byte": 10942,
+            "kind": "anchor",
+            "marker_id": "protocol-trace.location"
+          },
+          {
+            "start_source_byte": 10943,
+            "end_source_byte": 11020,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 11021,
+            "end_source_byte": 11099,
+            "kind": "anchor",
+            "marker_id": "work-staging.authority"
+          },
+          {
+            "start_source_byte": 11100,
+            "end_source_byte": 11167,
+            "kind": "anchor",
+            "marker_id": "work-staging.agent-access"
+          },
+          {
+            "start_source_byte": 11168,
+            "end_source_byte": 11260,
+            "kind": "anchor",
+            "marker_id": "output-directory.location"
+          },
+          {
+            "start_source_byte": 11261,
+            "end_source_byte": 11428,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 11429,
+            "end_source_byte": 11495,
+            "kind": "anchor",
+            "marker_id": "user-cast.location"
+          },
+          {
+            "start_source_byte": 11497,
+            "end_source_byte": 12231,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 12233,
+            "end_source_byte": 12288,
+            "kind": "anchor",
+            "marker_id": "owned-git-refs.visibility"
+          },
+          {
+            "start_source_byte": 12289,
+            "end_source_byte": 12338,
+            "kind": "anchor",
+            "marker_id": "owned-git-refs.retention"
+          },
+          {
+            "start_source_byte": 12340,
+            "end_source_byte": 12366,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 12368,
+            "end_source_byte": 12443,
+            "kind": "anchor",
+            "marker_id": "run-base-ref.target"
+          },
+          {
+            "start_source_byte": 12444,
+            "end_source_byte": 12549,
+            "kind": "anchor",
+            "marker_id": "changeset-ref.target"
+          },
+          {
+            "start_source_byte": 12550,
+            "end_source_byte": 12660,
+            "kind": "anchor",
+            "marker_id": "acceptance-subject-ref.target"
+          },
+          {
+            "start_source_byte": 12661,
+            "end_source_byte": 12792,
+            "kind": "anchor",
+            "marker_id": "movement-base-ref.target"
+          },
+          {
+            "start_source_byte": 12793,
+            "end_source_byte": 12877,
+            "kind": "anchor",
+            "marker_id": "candidate-ref.target"
+          },
+          {
+            "start_source_byte": 12879,
+            "end_source_byte": 13136,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 13138,
+            "end_source_byte": 13209,
+            "kind": "anchor",
+            "marker_id": "run-objects.pinning"
+          },
+          {
+            "start_source_byte": 13210,
+            "end_source_byte": 13717,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 13718,
+            "end_source_byte": 13814,
+            "kind": "anchor",
+            "marker_id": "pinned-trees.commit-wrapping"
+          },
+          {
+            "start_source_byte": 13815,
+            "end_source_byte": 13988,
+            "kind": "non-normative"
+          }
+        ]
+      }
+    }
+  ],
   "baseline_activation": null
 }
