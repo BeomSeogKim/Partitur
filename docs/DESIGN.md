@@ -20,27 +20,21 @@ this document and a decision record differ, this document governs. Consult the d
 | This document | 0.2 | supersedes 0.1 |
 | Score schema (`score:`) | `"0.2"` | **breaking** — `verification` and acceptance-criterion shapes are incompatible with 0.1 |
 | Cast schema (`cast:`) | `"0.1"` | unchanged |
-| Adapter protocol (`protocol:`) | `2` | the sole accepted version. Tagged `resolved_decisions` is the baseline form. `probe.features` remains an open extension point because feature negotiation cannot later be introduced by a field that itself needs negotiating; no tokens are defined in v0.2, and absent or empty means none. Enforcement booleans remain fail-closed because absence decodes `false` |
+| Adapter protocol (`protocol:`) | `2` | See "Frozen wire rules", "Adapter-method field clauses", and the resolution-delivery clauses. |
 | Adapter result envelope | `1` | unchanged (adapter-internal) |
 
 **A fourth spike has run: process-identity handoff.** Three questions resisted prose because the
 answer is whatever the OS actually permits, and all three **changed the document** rather than
 confirming it:
 
-- **Quiesce handshake** (§6) — an acknowledgement cannot be an append, because the approver holds the
-  state lock. It is a **lease move** bound to a new durable `amendment.approval_prepared`. No second
-  fencing event is needed, so §9's single-transition rule survives intact.
-- **Spawn window** (§4) — neither spawn-first nor append-first is recoverable. A **gated
-  session-leader trampoline** records identity before any adapter code executes, so an unrecorded
-  *trampoline* may survive a crash but an unrecorded **mutator** cannot.
-- **Acceptance subprocess** (§7) — `criterion.started` needed the same identity, and recovery must
-  sweep before synthesizing `ERROR`, or it would verify a worktree an orphan is still mutating. A
-  synthesized completion omits `duration_ms` rather than fabricating one.
+- **Quiesce handshake** — see §6's driver-disposition handshake and §9's "Journal taxonomy".
+- **Spawn window** — see §4's handoff contract and Appendix C.2.
+- **Acceptance subprocess** — see §7's external-criterion launch and session clauses and Appendix C.3.
 
 One measurement is worth keeping in view while implementing: on Linux, start ticks are coarse enough
 that 500 rapidly-spawned children yielded only **10 distinct start identities** — 490 of the 500
-observations repeated an identity already seen. Start identity alone does not distinguish processes;
-PID must remain in the tuple, exactly as §6 has it.
+observations repeated an identity already seen. The resulting process-identity tuple is specified in
+§6.
 
 **Three earlier rules were gated on a bounded implementation spike.** All three have run against real
 behaviour:
@@ -55,11 +49,9 @@ behaviour:
 Each is now stated as its spike confirmed or corrected it, and the `[SPIKE]` markers are gone.
 Full method, matrices, and reproduction: [`spikes/REPORT.md`](../spikes/REPORT.md).
 
-What the spikes **changed** rather than confirmed: A.1's YAML
-rejection point and its negative-zero/underflow ingress policy; §5's merge invocation, Git floor,
-custom-driver policy, and the fact that Git version alone does not determine the composed tree;
-§6's fencing, which requires a per-mutation compare-and-swap rather than a single act; and §4's
-descendant-cleanup claim, which was absolute and is now correctly scoped to conforming adapters.
+For the rules the spikes **changed** rather than confirmed, see Appendix A.1's "YAML → JSON
+mapping" and "Rejected at ingress" clauses, §5's composition clauses, §6's fencing clause, and
+§4's "Process supervision" boundary.
 
 Six questions remain undetermined and are recorded as such rather than assumed: the exact Git
 compatibility floor between 2.43 and 2.47, whether any Git upgrade changes a clean result tree,
@@ -7143,8 +7135,7 @@ runner failure.
 
 **Decision types** (Appendix B): `question`, `human_gate`, `amendment`, `finalization`.
 
-**Adapter features** (§4 `probe`) — no tokens are defined in v0.2. The list remains an open
-extension point; absent or empty means none, and the core ignores unknown tokens.
+**Adapter features** — see §4's "Adapter-method field clauses".
 
 **Output kinds** (§2) — **not a closed enum**, and the name is `output`, not `artifact`,
 because one of the reserved kinds is deliberately never an artifact:
