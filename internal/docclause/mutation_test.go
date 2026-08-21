@@ -62,9 +62,9 @@ func TestMutationRegionStructuralChecks(t *testing.T) {
 		},
 		{
 			name: "uncovered payload byte", source: "internal/docclause/registry.go",
-			before: "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
-			after:  "\t\tif false && !asciiWhitespace(value) && coverage[offset] == 0 { // mutation\n",
-			target: "TestRegistryStructuralChecksAndReceiptInvalidation/uncovered_payload_byte_after_mid_line_end",
+			before: "\t\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
+			after:  "\t\t\tif false && !asciiWhitespace(value) && coverage[offset] == 0 { // mutation\n",
+			target: "TestPendingPacketPreviewRendersOnlyConfirmedClassifications",
 		},
 		{
 			name: "within-line overlap", source: "internal/docclause/registry.go",
@@ -74,15 +74,27 @@ func TestMutationRegionStructuralChecks(t *testing.T) {
 		},
 		{
 			name: "line-boundary-only coverage", source: "internal/docclause/registry.go",
-			before: "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
-			after:  "\t\tif !asciiWhitespace(value) && coverage[offset] == 0 && (offset == 0 || contents[offset-1] == '\\n') { // mutation\n",
-			target: "TestRegistryStructuralChecksAndReceiptInvalidation/uncovered_payload_byte_after_mid_line_end",
+			before: "\t\t\tif !asciiWhitespace(value) && coverage[offset] == 0 {\n",
+			after:  "\t\t\tif !asciiWhitespace(value) && coverage[offset] == 0 && (offset == 0 || contents[offset-1] == '\\n') { // mutation\n",
+			target: "TestPendingPacketPreviewRendersOnlyConfirmedClassifications",
 		},
 		{
 			name: "materialized classification equality", source: "internal/docclause/activation.go",
 			before: "\tif !bytes.Equal(marked, materialized) {\n",
 			after:  "\tif false && !bytes.Equal(marked, materialized) { // mutation\n",
 			target: "TestActivationRequiresCompleteMaterializedAndPinnedClassification/materialized_bytes",
+		},
+		{
+			name: "packet preview cannot substitute for materialized document", source: "internal/docclause/activation.go",
+			before: "\tif !bytes.Equal(marked, materialized) {\n",
+			after:  "\tif false && !bytes.Equal(marked, materialized) { // mutation\n",
+			target: "TestActivationRequiresCompleteMaterializedAndPinnedClassification/packet_preview",
+		},
+		{
+			name: "unclassified preview bytes remain visible", source: "internal/docclause/preview.go",
+			before: "\t\toutput.WriteString(\"[[UNCLASSIFIED]]\")\n",
+			after:  "\t\toutput.WriteString(\"\") // mutation\n",
+			target: "TestPendingPacketPreviewRendersOnlyConfirmedClassifications",
 		},
 		{
 			name: "marked blob pin", source: "internal/docclause/activation.go",

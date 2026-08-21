@@ -87,7 +87,6 @@ func TestRegistryStructuralChecksAndReceiptInvalidation(t *testing.T) {
 		{"region universe key", func(got *Registry) { got.RegionUniverse[0].EndLine++ }, "universe key"},
 		{"duplicate receipt", func(got *Registry) { got.Receipts = append(got.Receipts, got.Receipts[0]) }, "duplicate region receipt"},
 		{"registry mismatch", func(got *Registry) { got.Receipts[0].Key.EndLine++ }, "does not match immutable universe"},
-		{"uncovered_payload_byte_after_mid_line_end", func(got *Registry) { got.Receipts[0].Review.Decisions[1].EndByte-- }, "uncovered"},
 		{"within_line_overlap", func(got *Registry) { got.Receipts[0].Review.Decisions[1].StartByte = 4 }, "overlap"},
 		{"invalid marker", func(got *Registry) { got.Receipts[0].Review.Decisions[0].MarkerID = "not valid" }, "invalid marker ID"},
 	}
@@ -165,6 +164,20 @@ func TestActivationRequiresCompleteMaterializedAndPinnedClassification(t *testin
 			}
 		})
 	}
+	t.Run("packet_preview", func(t *testing.T) {
+		preview, err := RenderPacketPreview(regions, registry, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rendered bytes.Buffer
+		if _, err := preview.WriteTo(&rendered); err != nil {
+			t.Fatal(err)
+		}
+		err = ValidateActivation("docs/example.md", document, rendered.Bytes(), blob, regions, registry)
+		if err == nil || !strings.Contains(err.Error(), "does not equal materialized") {
+			t.Fatalf("preview substitution error = %v, want materialized equality refusal", err)
+		}
+	})
 }
 
 func TestPendingDigestAndMaterialization(t *testing.T) {
@@ -219,6 +232,50 @@ func TestPendingDigestAndMaterialization(t *testing.T) {
 	}
 	if _, err := ClassificationDigest("docs/example.md", document, blob, regions, duplicate); err == nil || !strings.Contains(err.Error(), "duplicate anchor") {
 		t.Fatalf("duplicate anchor error = %v", err)
+	}
+}
+
+func TestPendingPacketPreviewRendersOnlyConfirmedClassifications(t *testing.T) {
+	document := []byte("alpha beta gamma\n")
+	blob := GitBlobID(document)
+	regions, err := GenerateRegions(document, blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := testRegistry("docs/example.md", blob, regions, []RegionReceipt{{
+		Key: regions[0].Key,
+		Review: &ReviewReceipt{SourceSHA256: SourceDigest(regions[0].Lines), Decisions: []Classification{
+			{StartByte: 0, EndByte: 5, Kind: ClassificationAnchor, MarkerID: "example.alpha"},
+			{StartByte: 11, EndByte: 16, Kind: ClassificationNonNormative},
+		}},
+	}})
+	if err := ValidateRegistry("docs/example.md", document, blob, regions, registry); err != nil {
+		t.Fatalf("partial confirmed registry rejected: %v", err)
+	}
+	if pending := Pending(regions, registry); len(pending) != 1 {
+		t.Fatalf("partial confirmed registry pending = %v, want sole region", pending)
+	}
+	if _, err := ClassificationDigest("docs/example.md", document, blob, regions, registry); err == nil || !strings.Contains(err.Error(), "pending") {
+		t.Fatalf("partial confirmed digest error = %v, want pending", err)
+	}
+
+	preview, err := RenderPacketPreview(regions, registry, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered bytes.Buffer
+	if _, err := preview.WriteTo(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	want := "PARTITUR PACKET PREVIEW — VIEW ONLY; NOT AN ACTIVATION DOCUMENT\n" +
+		"packet 01 lines 1-1\n" +
+		"legend: [[CONFIRMED ...]]...[[/CONFIRMED]]  [[UNCLASSIFIED]]...[[/UNCLASSIFIED]]\n\n" +
+		"[[CONFIRMED anchor=example.alpha]]alpha[[/CONFIRMED]] [[UNCLASSIFIED]]beta[[/UNCLASSIFIED]] [[CONFIRMED non-normative]]gamma[[/CONFIRMED]]\n"
+	if got := rendered.String(); got != want {
+		t.Fatalf("packet preview =\n%s\nwant:\n%s", got, want)
+	}
+	if strings.Contains(rendered.String(), "partitur:mark") {
+		t.Fatal("packet preview contains activation marker syntax")
 	}
 }
 
