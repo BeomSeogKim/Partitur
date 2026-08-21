@@ -17,7 +17,7 @@ this document and a decision record differ, this document governs. Consult the d
 
 | Surface | Version | Note |
 |---|---|---|
-| This document | 0.2 | supersedes 0.1 |
+| This document | 0.2 | See "Normative status". |
 | Score schema (`score:`) | `"0.2"` | **breaking** — `verification` and acceptance-criterion shapes are incompatible with 0.1 |
 | Cast schema (`cast:`) | `"0.1"` | unchanged |
 | Adapter protocol (`protocol:`) | `2` | See "Frozen wire rules", "Adapter-method field clauses", and the resolution-delivery clauses. |
@@ -58,8 +58,9 @@ compatibility floor between 2.43 and 2.47, whether any Git upgrade changes a cle
 absolute macOS descendant containment, kernel-forced PID reuse under churn, Intel-macOS execution
 of the start-identity path, and the full 100-million-record JCS number corpus.
 
-**Implementation readiness.** All four spikes have run and their findings are folded in, so no surface
-of this document is marked non-normative. A.4/A.5 give the canonical-AST identity domains and the
+**Implementation readiness.** The completed spikes and removed `[SPIKE]` markers above establish
+only that no surface remains provisional pending a spike; they make no claim about whether a surface
+is classified as normative or non-normative. A.4/A.5 give the canonical-AST identity domains and the
 execution-dependency projection; B.0–B.7 give each authoritative event's payload; Appendix C defines
 surface-indexed recovery coverage for `resume` and indexes the two §8 shipping-recovery surfaces;
 Appendix E freezes the ordered-step boundaries that fault injection is performed against.
