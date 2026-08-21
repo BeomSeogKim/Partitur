@@ -15,6 +15,7 @@ import (
 func main() {
 	documentPath := flag.String("document", "docs/DESIGN.md", "unmarked specification document")
 	packet := flag.Int("packet", 0, "display one review packet without proposing classifications")
+	previewPacket := flag.Int("preview-packet", 0, "render one packet with confirmed classifications inline as a view on stdout")
 	context := flag.Int("context", 2, "surrounding physical lines to display")
 	registryPath := flag.String("registry", "docs/DESIGN.clause-staging.json", "staging receipt registry")
 	materializePath := flag.String("materialize", "", "write confirmed classifications to this new document")
@@ -49,6 +50,19 @@ func main() {
 	}
 	if err := docclause.ValidateRegistry(*documentPath, document, blob, regions, registry); err != nil {
 		fail(err)
+	}
+	if *previewPacket != 0 {
+		if *packet != 0 || *materializePath != "" || *markedPath != "" || *checkActivation {
+			fail(fmt.Errorf("-preview-packet is a view-only mode and cannot be combined with document or activation modes"))
+		}
+		preview, err := docclause.RenderPacketPreview(regions, registry, *previewPacket)
+		if err != nil {
+			fail(err)
+		}
+		if _, err := preview.WriteTo(os.Stdout); err != nil {
+			fail(err)
+		}
+		return
 	}
 	pending := docclause.Pending(regions, registry)
 	pendingByOrdinal := make(map[int]bool, len(pending))

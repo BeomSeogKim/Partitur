@@ -97,7 +97,7 @@ func ValidateRegistry(documentPath string, document []byte, inputBlob string, re
 		if receipt.Review.SourceSHA256 != SourceDigest(region.Lines) {
 			continue
 		}
-		if err := validateRegionDecisions(region, starts[key], receipt.Review.Decisions); err != nil {
+		if err := validateRegionDecisions(region, starts[key], receipt.Review.Decisions, false); err != nil {
 			return fmt.Errorf("region %d review: %w", region.Key.Ordinal, err)
 		}
 	}
@@ -113,7 +113,7 @@ func Pending(regions []Region, registry Registry) []RegionKey {
 	startByte := 0
 	for _, region := range regions {
 		receipt, ok := receipts[regionKey(region.Key)]
-		if !ok || receipt.Review == nil || receipt.Review.SourceSHA256 != SourceDigest(region.Lines) || validateRegionDecisions(region, startByte, receipt.Review.Decisions) != nil {
+		if !ok || receipt.Review == nil || receipt.Review.SourceSHA256 != SourceDigest(region.Lines) || validateRegionDecisions(region, startByte, receipt.Review.Decisions, true) != nil {
 			pending = append(pending, region.Key)
 		}
 		startByte += len(regionBytes(region))
@@ -182,7 +182,7 @@ func orderedClassifications(regions []Region, registry Registry) ([]Classificati
 	return merged, nil
 }
 
-func validateRegionDecisions(region Region, regionStart int, decisions []Classification) error {
+func validateRegionDecisions(region Region, regionStart int, decisions []Classification, requireComplete bool) error {
 	if len(decisions) == 0 {
 		return fmt.Errorf("confirmed decisions are empty")
 	}
@@ -224,9 +224,11 @@ func validateRegionDecisions(region Region, regionStart int, decisions []Classif
 			coverage[offset]++
 		}
 	}
-	for offset, value := range contents {
-		if !asciiWhitespace(value) && coverage[offset] == 0 {
-			return fmt.Errorf("classification leaves payload source byte %d uncovered", regionStart+offset)
+	if requireComplete {
+		for offset, value := range contents {
+			if !asciiWhitespace(value) && coverage[offset] == 0 {
+				return fmt.Errorf("classification leaves payload source byte %d uncovered", regionStart+offset)
+			}
 		}
 	}
 	return nil
