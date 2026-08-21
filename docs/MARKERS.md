@@ -76,7 +76,7 @@ domain identifiers such as `run.started`, `git_exit`, and `partitur/criterion-sp
 
 ## Normative invariants
 
-These seven rows are the canonical semantic rules of the grammar. They are conferred as table syntax
+These eight rows are the canonical semantic rules of the grammar. They are conferred as table syntax
 for the same reason document marking is conferred as token syntax: deciding whether reworded prose
 means the same thing would recreate the inference problem this grammar removes.
 
@@ -89,6 +89,7 @@ means the same thing would recreate the inference problem this grammar removes.
 | `no-normativity-inference` | The fence checks syntax, range coverage, and registry-key equality. It does not infer normativity or re-run the baseline judgement. |
 | `baseline-complete-classification` | The enrolled blob has a complete ordered classification with `unclassified == ∅`; every non-whitespace payload byte is classified exactly once as anchored or explicitly non-normative. |
 | `decomposition-preservation` | Before a fenced block is decomposed, every normative statement in the original must be inventoried and assigned exactly one resulting carrier before its source annotation is removed. Each resulting specimen must be independently copyable as one coherent whole-block clause or explicitly non-normative. A specimen whose bytes change is a replacement normative clause subject to ordinary review, never a formatting exemption; no clause may be merged or classified non-normative to avoid placement. |
+| `single-normative-carrier` | Each normative proposition has exactly one authoritative carrier. Secondary text references that carrier without paraphrasing it; a bare identifier or value in an index is a reference, not a paraphrase, because it restates no proposition. "summary" is not a normativity classification. |
 
 ## Conferred meaning and activation
 
