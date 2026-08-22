@@ -660,9 +660,9 @@ For how human answers change the score during a run, see §9. The cycle runs as 
 5. For finalization's preconditions, see §2 rule 1; for the finalization decision itself, see
    §2's “Finalization is an amendment, not a bare flag flip”.
 
-**Finalization is an amendment, not a bare flag flip.** `status` lives in the score, so
-changing it must produce a snapshot and a revision like any other score change; otherwise
-the run would carry a `finalized` status that no snapshot records and no revision explains.
+**Finalization is an amendment, not a bare flag flip.** For the finalization amendment's
+snapshot and revision effects, see §9's “Journal taxonomy”. Without those effects, the run
+would carry a `finalized` status that no snapshot records and no revision explains.
 Finalization therefore reuses the amendment transaction (§9) rather than inventing a parallel
 one:
 
@@ -670,10 +670,8 @@ one:
    changes only `/status` from `draft` to `finalized`.
 2. It routes to the human with `decision_type: finalization` (reason `draft_phase`, since the
    base is still a draft, so it is never envelope-eligible).
-3. Human approval is recorded as `amendment.approved {mode: human}`, which atomically writes
-   the new snapshot, increments the revision, and **resolves the finalization decision
-   itself** — no separate `decision.resolved` is appended, exactly as for every other
-   amendment path.
+3. For human approval of the reserved finalization amendment, including finalization-decision
+   closure, see §9's “Journal taxonomy”.
 4. **The same event closes the draft phase**, projecting the interview movement to
    `SUCCEEDED`. Without this the movement would return to `RUNNING` when its last blocking
    decision resolved while all its attempts stayed terminal `BLOCKED`, and the run could
