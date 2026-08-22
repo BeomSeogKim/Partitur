@@ -37,9 +37,9 @@ func TestMutationRemainingFenceDecomposition(t *testing.T) {
 			target: "TestSevenFenceDecomposition/routed-proposal",
 		},
 		{
-			name:   "amendment proposal dropped carrier",
-			before: "- A proposal is stale-rejected if either `base_revision` or `base_hash` mismatches.\n",
-			after:  "<!-- mutation: amendment-proposal carrier dropped -->\n",
+			name:   "amendment proposal relocated carrier dropped",
+			before: "2. **Stale re-check** — `base_revision` / `base_hash` must match the snapshot head.\n",
+			after:  "<!-- mutation: amendment-proposal relocated carrier dropped -->\n",
 			pkg:    "./internal/docmarker",
 			target: "TestSevenFenceDecomposition/amendment-proposal",
 		},

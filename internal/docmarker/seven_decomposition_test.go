@@ -17,8 +17,10 @@ type sevenBlockExpectation struct {
 	language             string
 	prefix               string
 	carrierHash          string
+	referenceCount       int
 	carrierAssignments   []int
 	duplicateCarrierRuns [][]string
+	relocatedCarriers    map[int][]string
 	specimenHash         string
 }
 
@@ -33,16 +35,37 @@ func TestSevenFenceDecomposition(t *testing.T) {
 		{
 			name: "routed-proposal", start: "**Routed-proposal-record field clauses.**", end: "Strictly decoded like every other core file:",
 			language: "text", prefix: "{\n  schema: \"partitur/proposal-record+json;v=1\",\n",
-			carrierHash:        "76683cc01eddf8d2aacf24d8db11b45a871d567293fe8aaf7cb817de7c260495",
-			carrierAssignments: []int{1, 1, 1, 1, 1},
-			specimenHash:       "40e2b3e14b712ac7b2face9b1384112c686a4b53622a6a11829b513563453ecf",
+			carrierHash:        "05e1d12a30f78f239061eeaddf4c20d5f60c4a4a9a38cf013b6e493faad031a6",
+			referenceCount:     1,
+			carrierAssignments: []int{1, 1, 1, 1, 0},
+			relocatedCarriers: map[int][]string{
+				5: {
+					"when `claimed_impact` is present, a claim\n   narrower than the actual impact",
+					"when it\n   is absent, no containment check applies. The optional claim is a proposer-supplied scope",
+				},
+			},
+			specimenHash: "40e2b3e14b712ac7b2face9b1384112c686a4b53622a6a11829b513563453ecf",
 		},
 		{
-			name: "amendment-proposal", start: "**Amendment-proposal field clauses.**", end: "`claimed_impact` carries no authority:",
+			name: "amendment-proposal", start: "**Amendment-proposal field clauses.**", end: "**Rules enforced by `partitur validate` (the score compiler).**",
 			language: "text", prefix: "{\n  base_revision, base_hash,\n",
-			carrierHash:        "c35b38b165fb4760e908db9284bb8b41f739cb747b777b76fcedd840f3ba008d",
-			carrierAssignments: []int{1, 1, 1},
-			specimenHash:       "9d31fa6f92bc828e7eb4d0db2a60323574f975b9f4d5134ff4883c82d877d1b3",
+			carrierHash:        "d279afa0510362fe2bc6f3c9d4e5831de37bb75fd0ba972e56c1d9b89276b9a3",
+			referenceCount:     3,
+			carrierAssignments: []int{0, 0, 0},
+			relocatedCarriers: map[int][]string{
+				1: {
+					"2. **Stale re-check** — `base_revision` / `base_hash` must match the snapshot head.",
+				},
+				2: {
+					"4. **Patch application** to the canonical JSON; any RFC 6902 error rejects.",
+				},
+				3: {
+					"**`actual_impact`** — the normative shape, which `claimed_impact` also uses (§2):",
+					"when `claimed_impact` is present, a claim\n   narrower than the actual impact",
+					"when it\n   is absent, no containment check applies. The optional claim is a proposer-supplied scope",
+				},
+			},
+			specimenHash: "9d31fa6f92bc828e7eb4d0db2a60323574f975b9f4d5134ff4883c82d877d1b3",
 		},
 		{
 			name: "cast-schema", start: "## 3. Cast schema v0.1 (`cast.yaml`)", end: "> **This example is illustrative, not runnable.**",
@@ -109,7 +132,18 @@ func TestSevenFenceDecomposition(t *testing.T) {
 			if fenceStart < 0 {
 				t.Fatalf("%s specimen is absent", block.language)
 			}
-			carriers := markdownBullets(section[:fenceStart])
+			var carriers []string
+			references := 0
+			for _, bullet := range markdownBullets(section[:fenceStart]) {
+				if strings.HasPrefix(bullet, "- For ") {
+					references++
+					continue
+				}
+				carriers = append(carriers, bullet)
+			}
+			if references != block.referenceCount {
+				t.Fatalf("reference-only bullets = %d, want %d", references, block.referenceCount)
+			}
 			if block.carrierHash == "" {
 				if len(carriers) != 0 {
 					t.Fatalf("prose carriers = %d, want 0 duplicate-only carriers", len(carriers))
@@ -123,13 +157,20 @@ func TestSevenFenceDecomposition(t *testing.T) {
 				if count < 0 || assigned+count > len(carriers) {
 					t.Fatalf("original annotation run %d has invalid carrier assignment %d", index+1, count)
 				}
+				var duplicates []string
 				if count == 0 {
-					if index >= len(block.duplicateCarrierRuns) || len(block.duplicateCarrierRuns[index]) == 0 {
-						t.Fatalf("original annotation run %d has neither a sole nor duplicate carrier", index+1)
+					if index < len(block.duplicateCarrierRuns) {
+						duplicates = block.duplicateCarrierRuns[index]
 					}
-					for _, duplicate := range block.duplicateCarrierRuns[index] {
-						requireOccurrence(t, string(contents), duplicate, 1)
+					if len(duplicates) == 0 && len(block.relocatedCarriers[index+1]) == 0 {
+						t.Fatalf("original annotation run %d has neither a local, duplicate, nor relocated carrier", index+1)
 					}
+				}
+				for _, duplicate := range duplicates {
+					requireOccurrence(t, string(contents), duplicate, 1)
+				}
+				for _, relocated := range block.relocatedCarriers[index+1] {
+					requireOccurrence(t, string(contents), relocated, 1)
 				}
 				assigned += count
 			}
@@ -156,8 +197,8 @@ func TestSevenFenceDecomposition(t *testing.T) {
 					t.Fatalf("specimen is not one safe YAML document: %v", err)
 				}
 			}
-			t.Logf("%s decomposition: %d original annotation runs, %d prose carriers, 1 independently copyable top-level payload, 0 comment markers",
-				block.name, len(originals), len(carriers))
+			t.Logf("%s decomposition: %d original annotation runs, %d prose carriers, %d relocated carrier groups, %d reference-only bullets, 1 independently copyable top-level payload, 0 comment markers",
+				block.name, len(originals), len(carriers), len(block.relocatedCarriers), references)
 		})
 	}
 }
