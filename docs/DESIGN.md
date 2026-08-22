@@ -710,32 +710,28 @@ itself under §9's executed-dependency rule. While `status: draft`:
 - **Ordinary acceptance can never make the interview movement succeed.** Only the finalization
   amendment projects it to `SUCCEEDED`.
 
-A patch touching anything besides `/status` is not a finalization amendment and is rejected as
-an ordinary proposal would be.
+For the reserved finalization patch, see §2's “Finalization is an amendment, not a bare flag flip”.
+For every other proposal, see §9's “Admissibility pipeline”.
 
 **Who constructs it, and when.** The core constructs and routes the finalization amendment when the
 draft movement's latest attempt is terminal **and** every open question is resolved or waived and
 `verification.expectation` is complete — checked by `run`/`resume` under the state lock, so it has an
-owner and a recovery point rather than depending on whoever happened to notice. If a crash lands
-between constructing the record and appending `amendment.routed_human`, the orphan record is
-quarantined (§1) and the next `resume` constructs it again. The core-finalization publisher holds
-that state lock from publication through the matching route append. Once the crash releases it,
-§1 quarantines the original route-absent record before `RC-RESUME-038` re-evaluates this predicate
-under the lock and constructs and routes one fresh `origin: core_finalization` record. A matching
-route raw-hash-binds and retains its record; after the ordinary route-to-request consequence is
-durable, a second `resume` appends neither another record nor another route.
+owner and a recovery point rather than depending on whoever happened to notice. The core-finalization
+publisher holds that state lock from publication through the matching route append. For crash recovery
+and idempotence after that interval, see Appendix C.1's `RC-RESUME-038`.
 
-**A finalized score still contains its draft movement**, since finalization changes only `/status`.
+For draft-movement retention after finalization, see §2 rule 8.
 A *new* run started from that score therefore has an interview movement and no finalization event.
-**It is not instantiated at all: the movement is projected `INAPPLICABLE`** — a projection value with
-no attempt, no evidence, and no participation in scheduling.
+It is not instantiated at all, with no attempt and no evidence. For its state and scheduling, see
+§6's “`INAPPLICABLE` state clauses”.
 
 Two rationales I considered and rejected. Projecting `SUCCEEDED` would manufacture a success nothing
 proved, and a directly hand-authored `finalized` score is not evidence that any interview ever ran.
-And the deadlock I first offered as justification does not exist: §2 rule 12 excludes draft movements
-from the final movement's dependency closure, so leaving one uninstantiated blocks nothing. The
-correct reason is simpler — a draft movement is meaningful only while `status: draft`, and outside
-that phase there is nothing for it to do.
+And the deadlock I first offered as justification does not exist. For draft-movement exclusion from
+the final movement's dependency closure, see §2's “DRAFT phase contract”; leaving one
+uninstantiated therefore blocks nothing. The correct reason is
+simpler — a draft movement is meaningful only while `status: draft`, and outside that phase there is
+nothing for it to do.
 
 **Routed proposal record.** When a proposal is routed to a human its exact submission is persisted,
 because re-validation replays the pipeline from the original operations (§1):
@@ -746,7 +742,7 @@ because re-validation replays the pipeline from the original operations (§1):
 - `attempt_id` is present if and only if `origin` is `adapter`.
 - `emitted_id` is present if and only if `origin` is `adapter`.
 - `operations` is the RFC 6902 array verbatim as submitted.
-- `claimed_impact` is an optional scope claim; §9 checks containment only when it is present.
+- For `claimed_impact` optionality and containment, see §9's “Admissibility pipeline”.
 
 ```text
 {
@@ -765,8 +761,8 @@ because re-validation replays the pipeline from the original operations (§1):
 ```
 
 Strictly decoded like every other core file: unknown fields, duplicate keys, and invalid UTF-8 are
-rejected, and the bytes are UTF-8 JSON — not canonical JSON, since `operations` must survive
-verbatim rather than being re-encoded.
+rejected, and the bytes are UTF-8 JSON — not canonical JSON. For verbatim operation storage, see the
+routed-proposal-record field clauses above.
 
 **A rejection before step 4 records no operations hash.** §9 says an early rejection records the
 `partitur/patch-operations` hash, but that hash is only constructible once the operations are known
@@ -779,10 +775,10 @@ canonical hash of something that cannot be canonically encoded would be unimplem
 
 **Amendment-proposal field clauses.**
 
-- A proposal is stale-rejected if either `base_revision` or `base_hash` mismatches.
-- `operations` is an RFC 6902 JSON Patch applied to the canonical JSON representation of the YAML
-  score.
-- `claimed_impact` has the same shape as `actual_impact` and is an optional scope claim (§9).
+- For proposal staleness, see §9's “Admissibility pipeline”, step 2.
+- For RFC 6902 application to the canonical score JSON, see §9's “Admissibility pipeline”, step 4.
+- For `claimed_impact`'s shape, see §9's “`actual_impact`”; for its optionality, see §9's
+  “Admissibility pipeline”, step 7.
 
 ```text
 {
@@ -794,11 +790,10 @@ canonical hash of something that cannot be canonically encoded would be unimplem
 }
 ```
 
-`claimed_impact` carries no authority: the core recomputes the authoritative
-`actual_impact` by **typed comparison of the two validated score ASTs** — never by
-inspecting the RFC 6902 operations or a generic JSON diff. The shape and containment
-rules, including the optional scope claim, are defined in §9. Approved patches apply only
-to the run's snapshot chain (see §1 for promotion to the root score). The full
+For the authority of `claimed_impact`, see §9's “Admissibility pipeline”, step 7. For authoritative
+impact computation, see §9's “Typed comparison, never a JSON diff”. The shape and containment
+rules, including the optional scope claim, are defined in §9. For amendment scope and root-score
+promotion, see §1's “Score snapshots and the root score”. The full
 admissibility pipeline, the auto-approval envelope, and the effects of approval on a
 running episode are §9.
 
@@ -814,9 +809,8 @@ assigned to a later rule.
    score itself has to say what counts as done. An explicitly declared `artifact`
    criterion does count. (Keyed on the movement's grant, not the part's capability —
    a write-capable part may still play read-only movements.)
-   This is a per-movement
-   **floor**; the ship judgment is made on the application candidate, never summed over
-   movements (§8).
+   This is a per-movement **floor**. For the ship judgment's candidate scope, see §8's “The `apply`
+   judgment”.
 3. `grants` ⊆ the part's `capabilities`. A `read_only` part can never receive
    `repo_write`. Read-only-ness is never inferred from instruction text or output names.
    (`policy` scopes *where* an authority applies — `allowed_paths`, `side_effects` — and
@@ -828,16 +822,14 @@ assigned to a later rule.
    must exist; every `inputs` entry must be an
    `outputs` id of a movement reachable through `needs`; **logical** output ids are unique
    within the score. (Runtime emissions are instances, §1 — uniqueness is a declaration
-   rule, not a storage rule.) No output id may use the reserved `partitur.` prefix, which
-   belongs to core-supplied inputs (§4).
+   rule, not a storage rule.)
 5. **Retired — artifact-path containment is a runtime ingest invariant, not a score rule.**
    The score declares logical output ids and kinds, but no artifact path, so the compiler has no
-   source pointer on which to enforce this check. The adapter rejects an absolute path, a `..`
-   segment, a post-symlink escape from `output_dir`, or a non-regular file when it validates the
-   result envelope (§4). The core independently repeats the same post-symlink containment and
+   source pointer on which to enforce this check. For adapter-side artifact-path validation, see
+   §4's “Result envelope v1”. The core independently repeats the same post-symlink containment and
    regular-file validation while recording the artifact (§1); the adapter-side check cannot
-   discharge the core-side one because the adapter is across the trust boundary. Rule number 5 is
-   not reused.
+   discharge the core-side one because the adapter is across the trust boundary. For retired-rule
+   numbering, see §2's compiler-rule preamble.
 6. Unknown fields in the core namespace are an error; adapter-specific data lives only
    under `extensions.<adapter-id>`.
 7. An `acceptance.review` entry must reference a `findings`-kind output of the same
@@ -849,8 +841,7 @@ assigned to a later rule.
    movement and a read-only reviewer movement. This deliberately forecloses self-review of a
    writer's just-completed worktree; admitting that later requires a separately named
    pre-execution subject and a specified relation between it and the writer acceptance subject.
-   Rule 2 still applies to the writer: review cannot replace its required declared hard criterion
-   or `human_gate: always`.
+   For a writer's acceptance floor, see §2 rule 2.
 8. **At most one** movement carries `phase: draft`, and if one exists it is the one
    `draft.interview_movement` names — and conversely. A `status: draft` score must have one; a
    finalized score retains whichever it had, since finalization patches only `/status`. A draft movement may not hold `repo_write`.
@@ -870,32 +861,30 @@ assigned to a later rule.
     (Appendix A). Numeric values below `extensions.<adapter-id>` are opaque and instead follow
     A.1's full finite-binary64 ingress rule; applying the schema range to them would collapse the
     deliberate split between core-authored schema and user-authored adapter-namespaced payloads.
-14. A `phase: draft` movement declares **no ordinary artifact outputs** — draft movements may
-    not emit `artifact` at all (§2 draft contract), so declaring one would be unsatisfiable.
+14. A `phase: draft` movement declares **no ordinary artifact outputs**. For draft semantic-output
+    admissibility, see §2's “DRAFT phase contract”.
     It may declare no `change_set` output either, since it holds no `repo_write`.
 15. A movement's `repo_write` grant and its `change_set` output must agree: a movement holding
     `repo_write` declares **exactly one** `kind: change_set` output, and a movement without
     `repo_write` declares none. This is what makes "which movements contribute to the
     candidate" a compile-time fact rather than a runtime discovery (§8).
-16. Every score-declared id matches the identifier grammar of §1
-    (`[A-Za-z0-9][A-Za-z0-9_-]{0,127}`), which excludes the reserved `partitur.` prefix by
-    construction.
+16. For score-declared identifier syntax, see §1's “Identifier grammar”.
 17. **At most one declared `artifact` criterion per ordinary output** within a movement. Two
     would make "which criterion replaces the generated check" ambiguous (§7), and the effective
     acceptance plan must be a function of the score, not of resolution order.
-18. An `artifact` criterion may not reference a `kind: change_set` output. Change sets are
-    core-synthesized and satisfied by `change_set.recorded` (§5), so such a criterion could
-    never pass.
-19. `may_propose` (below) defaults to `false` and is permitted on **any** movement. The
-    draft interview movement has it implicitly. The effective value — including that
-    implicit default — is materialized in the canonical AST, so it is visible to hashing.
+18. An `artifact` criterion may not reference a `kind: change_set` output. For change-set production
+    and satisfaction, see §5's core-synthesized change-set clause.
+19. For `may_propose` optionality, default, and the draft interview's implicit value, see §2's
+    “Defaults, optionality, and ranges” table. For movement eligibility for `may_propose`, see §2's
+    “A non-blocking proposal is advisory and expires”. The effective value — including the implicit
+    default — is materialized in the canonical AST, so it is visible to hashing.
     An explicit `may_propose: false` on the draft interview movement is a compiler error:
     the field cannot withdraw the authority that movement's purpose requires, and silently
     ignoring it would make the projected effective value disagree with the source.
 
-**Defaults, optionality, and ranges.** The canonical AST is built *after defaults are applied*
-(A.1), so two implementations cannot agree on an identity unless they agree on the defaults. The
-example above is illustrative; this table is normative:
+**Defaults, optionality, and ranges.** For canonical projection after defaults are applied, see
+Appendix A.1's “Omitted vs explicit defaults”. The example above is illustrative; this table is
+normative:
 
 | Field | Required? | Default when omitted | Range / constraint |
 |---|---|---|---|
@@ -903,7 +892,7 @@ example above is illustrative; this table is normative:
 | `revision` | required | — | integer ≥ 1 |
 | `status` | required | — | either `draft` or `finalized` |
 | `context` | optional | **absent** — omitted from the canonical projection, from `brief`, and from A.5 alike, never sent as `""` | — |
-| `draft.interview_movement` | required iff a `phase: draft` movement exists | — | must name it. Finalization changes only `/status`, so a finalized score **retains** both the field and the movement (rule 8 applies in either status) |
+| `draft.interview_movement` | required iff a `phase: draft` movement exists | — | §2 rule 8 |
 | `open_questions` | optional | `[]` | ids unique |
 | `verification.expectation.intent` | required iff `status: finalized` | — | closed enum. A draft may omit the whole `verification` block: discovering it is the interview's job (rule 1) |
 | `apply_gate.require` / `.waived` | exactly one, iff `status: finalized` | — | `require` non-empty, duplicate-free |
