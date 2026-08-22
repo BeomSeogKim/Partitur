@@ -111,11 +111,11 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			start:          "**Score-example field clauses.**",
 			end:            "**Path policy semantics.**",
 			carrierMarker:  "**Score-example field clauses.**",
-			carrierHash:    "5b9a67c333437237e238797d1f251b4c67a33f7e8699d284390c308ef0472c60",
-			referenceCount: 4,
+			carrierHash:    "475969535298313966debca0bd196a8f3484107a1599f3002c770d5a7060ff9f",
+			referenceCount: 31,
 			carrierAssignments: []int{
-				1, 1, 0, 2, 1, 0, 1, 0, 2, 1, 5, 2, 3, 2, 7, 2, 1, 3, 1,
-				1, 3, 1, 1, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 4, 2, 5, 1, 4,
+				1, 1, 0, 2, 1, 0, 1, 0, 2, 1, 4, 0, 1, 0, 4, 2, 0, 2, 0,
+				0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1,
 			},
 			relocatedCarriers: map[int][]string{
 				3: {
@@ -126,6 +126,65 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 				},
 				8: {
 					"1. `status: finalized` requires every open question resolved or waived,",
+				},
+				12: {
+					"**The `apply` judgment** branches explicitly on the gate",
+					"| `apply_gate.require` / `.waived` | exactly one, iff `status: finalized` | — | `require` non-empty, duplicate-free |",
+				},
+				14: {
+					"| `apply_gate.predicates` | optional | `[]` | closed enum |",
+				},
+				17: {
+					"A `read_only` part can never receive\n   `repo_write`.",
+				},
+				19: {
+					"While `status: draft`, only the movement named by\n`draft.interview_movement` may run.",
+				},
+				20: {
+					"**`kind: change_set` is a core-synthesized logical output, never an artifact.**",
+				},
+				21: {
+					"performer cannot emit one and must never be asked to.",
+					"satisfied only by `change_set.recorded`, which the core appends after capturing the\n    worktree.",
+				},
+				22: {
+					"A movement that requests a `repo_write` grant must **declare** ≥1 `hard` criterion or\n   `human_gate: always`.",
+				},
+				23: {
+					"A movement that requests a `repo_write` grant must **declare** ≥1 `hard` criterion or\n   `human_gate: always`.",
+				},
+				24: {
+					"Every **score-declared** acceptance criterion carries an `id` unique within its movement.",
+					"`status` and `apply` always attach the\ncriterion count and ids/spec hashes",
+				},
+				25: {
+					"**The final verification movement** (`verification.final_movement`, required unless the gate\nis waived) is the run's **terminal sink**",
+				},
+				26: {
+					"transitively depend on every non-draft movement via `needs`, must have no downstream\n    movement",
+				},
+				27: {
+					"otherwise it must be declared, must not hold `repo_write`, must\n    transitively depend",
+				},
+				29: {
+					"**Apply-gate achievability** — a finalized score whose gate can never be satisfied is\n    rejected (§8): `require ∋ verified` ⇒ the final movement **declares** ≥1 hard criterion;\n    `require ∋ reviewed` or any predicate present ⇒ it declares ≥1 review criterion with a\n    typed `findings` output; `require ∋ approved` ⇒ it declares `human_gate: always`.",
+				},
+				30: {
+					"**Apply-gate achievability** — a finalized score whose gate can never be satisfied is\n    rejected (§8): `require ∋ verified` ⇒ the final movement **declares** ≥1 hard criterion;\n    `require ∋ reviewed` or any predicate present ⇒ it declares ≥1 review criterion with a\n    typed `findings` output; `require ∋ approved` ⇒ it declares `human_gate: always`.",
+				},
+				31: {
+					"every\n  declared review criterion is satisfied by a well-formed, subject-bound findings artifact (§7).",
+				},
+				32: {
+					"every\n  declared review criterion is satisfied by a well-formed, subject-bound findings artifact (§7).",
+				},
+				36: {
+					"`active_wall_clock_min` bounds active execution only — adapter runs,\nacceptance, **composition**, retries, fallbacks, revision restarts, and decision resumes —\nexcluding `WAITING_HUMAN` and stopped time.",
+					"Active time is delimited by paired, fsynced `execution.started` / `execution.stopped`\n  events.",
+					"Each attempt receives the remainder at its start (`request.budget`).",
+				},
+				37: {
+					"`retries_per_movement` is the movement's **quality-retry budget**",
 				},
 			},
 			specimens: []remainingSpecimenExpectation{

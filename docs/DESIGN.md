@@ -458,71 +458,56 @@ coherent YAML document.
 - `verification.expectation.intent` is one of `write-basic-tests`, `pass-existing-tests`, and
   `none`.
 - `verification.expectation.intent` records work intent.
-- The core forwards that intent as `brief.verification_expectation`.
+- For verification-expectation forwarding, see §4's “Adapter-method field clauses”.
 - An intent of `none` is always explicit.
 - Verification intent is not ship policy.
-- `verification.expectation.apply_gate` determines which evidence `apply` demands.
-- Exactly one of `verification.expectation.apply_gate.require` and
-  `verification.expectation.apply_gate.waived` is present.
-- `verification.expectation.apply_gate.require` is non-empty.
-- `verification.expectation.apply_gate.require` is duplicate-free.
+- For the apply gate's evidence requirements, see §8's “The `apply` judgment”.
+- For `apply_gate.require` and `.waived` cardinality and `require` constraints, see §2's
+  “Defaults, optionality, and ranges” table.
 - Every `verification.expectation.apply_gate.require` value is in the closed set `verified`,
   `approved`, and `reviewed`.
-- `verification.expectation.apply_gate.predicates` is optional.
-- `verification.expectation.apply_gate.predicates` uses the closed enum in §8.
-- `verification.final_movement` is required if and only if the apply gate is not waived.
-- `verification.final_movement` is forbidden when the apply gate is waived.
-- `verification.final_movement` is the run's terminal sink (§8).
+- For `apply_gate.predicates` optionality and default, see §2's “Defaults, optionality, and
+  ranges” table.
+- For the `apply_gate.predicates` enum, see §8's “The `apply` judgment”.
+- For `verification.final_movement` presence and waiver semantics, see §2's “Defaults,
+  optionality, and ranges” table.
+- For the final movement's role, see §8's “The final verification movement”.
 - A deliberately ungated run sets `verification.expectation.intent` to `none`.
 - A deliberately ungated run sets `verification.expectation.apply_gate.waived` to `true`.
 - `verification.expectation.apply_gate.reason` is mandatory and non-empty on a waived gate.
 - `"spike; will be rewritten"` is an example non-empty waiver reason.
 - `parts` declares logical roles.
 - Part ids are never vendor or model names.
-- A part with `read_only: true` never receives a write grant.
+- For grants to a `read_only` part, see §2 rule 3.
 - `movements` declares units of work.
-- `movements[].needs` defines the movement DAG.
+- For `movements[].needs` graph constraints, see §2 rule 4.
 - Each movement is played by one part.
-- A movement with `phase: draft` runs while the score status is `draft`, under the draft-phase
-  contract.
-- An output with `kind: change_set` is core-synthesized.
-- The performer never emits a `change_set` as an artifact.
-- The core captures the `change_set` from the worktree.
-- §5 governs `change_set` capture.
-- `movements[].acceptance` is mandatory when the movement has a `repo_write` grant.
-- That acceptance contains at least one hard criterion or sets `human_gate: always`.
-- A hard criterion id is explicit.
-- A hard criterion id is unique within its movement.
-- Marks bind to the hard criterion id.
-- `verification.final_movement` identifies the final movement.
-- The final movement is the run's terminal sink.
-- The final movement transitively needs every non-draft movement.
-- The final movement has no downstream movement.
-- The final movement never holds `repo_write`.
+- For when a `phase: draft` movement runs, see §2's “DRAFT phase contract”.
+- For `kind: change_set`, see §5's core-synthesized change-set clause.
+- For the acceptance floor on a `repo_write` movement, see §2 rule 2.
+- For hard-criterion id requirements, see §2 rule 9.
+- For the criterion ids a mark carries, see §8's “Marks always carry their provenance”.
+- For final-movement designation and role, see §8's “The final verification movement”.
+- For final-movement closure, see §2 rule 12.
 - In this example, `apply_gate.require` is exactly `[verified, reviewed]`.
-- The final movement therefore carries at least one hard criterion and at least one review
-  criterion.
-- That combination makes the example's apply gate achievable under §8.
-- `acceptance.review[].findings` is a typed requirement for the named findings artifact.
-- The named findings artifact must exist and be well-formed.
+- For the example's apply-gate achievability, see §2 rule 11.
+- For review-criterion satisfaction, see §8's “Three grades, a set and never a ladder”.
 - `acceptance.human_gate` is one of `always`, `on_contested`, and `never`.
 - `policy.allowed_paths` is an unordered union.
-- Every `policy.allowed_paths` member is a positive glob pattern.
-- Duplicate `policy.allowed_paths` values are a compiler error.
-- `policy.allowed_paths` order carries no semantics.
-- v0.2 accepts only an empty `policy.side_effects` list.
+- For the `policy.allowed_paths` pattern language, see §2's “Path policy semantics”.
+- For duplicate `policy.allowed_paths` validation, see §2 rule 10.
+- For v0.2 `policy.side_effects` admissibility, see §2's “Defaults, optionality, and ranges”
+  table.
 - A non-empty `policy.side_effects` list is rejected until a typed side-effect registry is
   specified.
-- `policy.budget.active_wall_clock_min` limits active execution time only.
-- Active execution includes adapter runs, acceptance, retries, and fallbacks.
-- `WAITING_HUMAN` and stopped time are excluded from active execution time.
-- Consumed active time is persisted through journal events.
-- Each attempt receives the remaining active-time budget at its start.
-- `policy.budget.retries_per_movement` is the quality-retry budget per movement (§3).
-- `policy.amendment.auto` is one of `off` and `envelope`.
-- `policy.amendment.auto` defaults to `off`.
-- `policy.amendment.auto: envelope` auto-approves only provably monotone changes inside the bounds
-  below (§9).
+- For active-time inclusions and exclusions, see §6's “Budget accounting”.
+- For persistence of active-time consumption, see §6's “Budget accounting”.
+- For attempt budget delivery, see §6's “Budget accounting”.
+- For `retries_per_movement`, see §3's “Retry and fallback semantics”.
+- For `policy.amendment.auto` values and default, see §2's “Defaults, optionality, and ranges”
+  table.
+- For the auto-approval envelope and its runtime guards, see §9's approval-policy and whitelist
+  clauses.
 - Every other amendment waits for a human.
 
 ```yaml
@@ -650,32 +635,30 @@ Two different mechanisms, because a tree comparison cannot see everything:
 - **Shared Git refs and authoritative run state** live outside the worktree, so no candidate
   check can detect a `git update-ref` or a direct journal write. These are guarded by
   *isolation* — the worktree and its staging root are separate from run storage (§1) — plus
-  integrity and CAS checks at every core read and write. Under an unconfined advisory adapter
-  (§4), physical prevention is **not** claimed; detection and fail-closed recovery are.
+  integrity and CAS checks at every core read and write. For physical-enforcement guarantees under
+  advisory enforcement, see §4's “Environment enforcement — the trust boundary stated honestly”.
+  Detection and fail-closed recovery are claimed.
 
 **DRAFT phase contract.** While `status: draft`, only the movement named by
-`draft.interview_movement` may run. It is read-only (no write grant permitted). It may
+`draft.interview_movement` may run. For its grant restriction, see §2 rule 8. It may
 emit `log` and `progress` events, but its only *semantic* outputs are `question` and
 `proposal` — `artifact` events are forbidden entirely in draft movements. All other
 movements refuse to start until `status: finalized`.
 
-`phase: draft` and `draft.interview_movement` are one fact expressed twice, so the
-compiler reconciles them: **exactly one** movement may carry `phase: draft`, and it must
-be the movement `draft.interview_movement` names (rule 8). A draft movement is excluded
-from the final movement's dependency closure and contributes no candidate change set.
+For `phase: draft` and `draft.interview_movement` reconciliation, see §2 rule 8. A draft movement
+is excluded from the final movement's dependency closure and contributes no candidate change set.
 
-Human answers materialize into the score only through amendments — an answer is never a
-direct score mutation:
+For how human answers change the score during a run, see §9. The cycle runs as follows:
 
-1. The interview movement emits `question`(s); the attempt ends `BLOCKED`.
-2. The human answers; the core records `decision.resolved`.
-3. A new interview attempt receives the answers via `resolved_decisions` and emits a
-   `proposal` amending the score (resolving the open questions, setting or waiving the
-   verification expectation).
-4. The approved proposal produces a new immutable snapshot.
-5. When every open question and the verification expectation are materialized, the human
-   explicitly approves the `draft → finalized` transition — finalization is itself a
-   human decision, never automatic.
+1. For question emission and the resulting attempt state, see §4's “Blocking handshake for
+   questions and proposals”.
+2. For recording a question answer, see §4's decision-resolution clause.
+3. For delivery of resolved answers to a new attempt, see §4's `resolved_decisions` clause. The
+   attempt emits a `proposal` amending the score (resolving the open questions, setting or waiving
+   the verification expectation).
+4. For the durable effect of an approved proposal, see Appendix B.5's `amendment.approved` row.
+5. For finalization's preconditions, see §2 rule 1; for the finalization decision itself, see
+   §2's “Finalization is an amendment, not a bare flag flip”.
 
 **Finalization is an amendment, not a bare flag flip.** `status` lives in the score, so
 changing it must produce a snapshot and a revision like any other score change; otherwise
