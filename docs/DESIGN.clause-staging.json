@@ -1,211 +1,211 @@
 {
   "document_path": "docs/DESIGN.md",
-  "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+  "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
   "nonblank_lines_per_region": 200,
   "region_universe": [
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 1,
       "start_source_line": 1,
       "end_source_line": 233
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 2,
       "start_source_line": 234,
       "end_source_line": 460
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 3,
       "start_source_line": 461,
-      "end_source_line": 677
+      "end_source_line": 679
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 4,
-      "start_source_line": 678,
-      "end_source_line": 900
+      "start_source_line": 680,
+      "end_source_line": 902
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 5,
-      "start_source_line": 901,
-      "end_source_line": 1141
+      "start_source_line": 903,
+      "end_source_line": 1145
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 6,
-      "start_source_line": 1142,
+      "start_source_line": 1146,
       "end_source_line": 1359
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 7,
       "start_source_line": 1360,
-      "end_source_line": 1588
+      "end_source_line": 1593
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 8,
-      "start_source_line": 1589,
-      "end_source_line": 1823
+      "start_source_line": 1594,
+      "end_source_line": 1825
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 9,
-      "start_source_line": 1824,
-      "end_source_line": 2050
+      "start_source_line": 1826,
+      "end_source_line": 2052
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 10,
-      "start_source_line": 2051,
-      "end_source_line": 2281
+      "start_source_line": 2053,
+      "end_source_line": 2288
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 11,
-      "start_source_line": 2282,
-      "end_source_line": 2515
+      "start_source_line": 2289,
+      "end_source_line": 2519
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 12,
-      "start_source_line": 2516,
-      "end_source_line": 2741
+      "start_source_line": 2520,
+      "end_source_line": 2744
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 13,
-      "start_source_line": 2742,
-      "end_source_line": 2968
+      "start_source_line": 2745,
+      "end_source_line": 2969
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 14,
-      "start_source_line": 2969,
-      "end_source_line": 3198
+      "start_source_line": 2970,
+      "end_source_line": 3202
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 15,
-      "start_source_line": 3199,
-      "end_source_line": 3427
+      "start_source_line": 3203,
+      "end_source_line": 3429
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 16,
-      "start_source_line": 3428,
-      "end_source_line": 3650
+      "start_source_line": 3430,
+      "end_source_line": 3652
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 17,
-      "start_source_line": 3651,
-      "end_source_line": 3882
+      "start_source_line": 3653,
+      "end_source_line": 3883
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 18,
-      "start_source_line": 3883,
-      "end_source_line": 4115
+      "start_source_line": 3884,
+      "end_source_line": 4118
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 19,
-      "start_source_line": 4116,
-      "end_source_line": 4346
+      "start_source_line": 4119,
+      "end_source_line": 4349
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 20,
-      "start_source_line": 4347,
-      "end_source_line": 4577
+      "start_source_line": 4350,
+      "end_source_line": 4578
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 21,
-      "start_source_line": 4578,
-      "end_source_line": 4807
+      "start_source_line": 4579,
+      "end_source_line": 4809
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 22,
-      "start_source_line": 4808,
+      "start_source_line": 4810,
       "end_source_line": 5052
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 23,
       "start_source_line": 5053,
-      "end_source_line": 5276
+      "end_source_line": 5281
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 24,
-      "start_source_line": 5277,
-      "end_source_line": 5506
+      "start_source_line": 5282,
+      "end_source_line": 5509
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 25,
-      "start_source_line": 5507,
-      "end_source_line": 5721
+      "start_source_line": 5510,
+      "end_source_line": 5723
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 26,
-      "start_source_line": 5722,
-      "end_source_line": 5936
+      "start_source_line": 5724,
+      "end_source_line": 5937
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 27,
-      "start_source_line": 5937,
+      "start_source_line": 5938,
       "end_source_line": 6155
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 28,
       "start_source_line": 6156,
-      "end_source_line": 6360
+      "end_source_line": 6364
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 29,
-      "start_source_line": 6361,
-      "end_source_line": 6597
+      "start_source_line": 6365,
+      "end_source_line": 6601
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 30,
-      "start_source_line": 6598,
-      "end_source_line": 6826
+      "start_source_line": 6602,
+      "end_source_line": 6830
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 31,
-      "start_source_line": 6827,
-      "end_source_line": 7054
+      "start_source_line": 6831,
+      "end_source_line": 7058
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 32,
-      "start_source_line": 7055,
-      "end_source_line": 7313
+      "start_source_line": 7059,
+      "end_source_line": 7318
     },
     {
-      "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+      "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
       "ordinal": 33,
-      "start_source_line": 7314,
-      "end_source_line": 7488
+      "start_source_line": 7319,
+      "end_source_line": 7471
     }
   ],
   "region_receipts": [
     {
       "key": {
-        "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+        "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
         "ordinal": 1,
         "start_source_line": 1,
         "end_source_line": 233
@@ -654,7 +654,7 @@
     },
     {
       "key": {
-        "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+        "input_blob": "ba50f7e54c17f0a204b3c1e44a0d6f23051f14d4",
         "ordinal": 2,
         "start_source_line": 234,
         "end_source_line": 460
