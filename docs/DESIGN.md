@@ -898,8 +898,8 @@ normative:
 | `verification.final_movement` | when finalized: required iff not waived, forbidden if waived | — | §2 rule 12 |
 | `parts.<id>.capabilities` | required | — | non-empty, duplicate-free |
 | `parts.<id>.read_only` | optional | `false` | — |
-| `movements[].needs` | optional | `[]` | DAG; ids must exist |
-| `movements[].grants` | optional | `[]` | ⊆ part capabilities |
+| `movements[].needs` | optional | `[]` | §2 rule 4 |
+| `movements[].grants` | optional | `[]` | §2 rule 3 |
 | `movements[].inputs` / `.outputs` | optional | `[]` | §2 rules 4, 15 |
 | `movements[].phase` | optional | **absent** (non-draft) | only `draft` |
 | `movements[].may_propose` | optional | `false`; `true` for the draft interview movement | — |
