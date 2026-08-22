@@ -78,6 +78,12 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 			SourceSHA256:  "916f5c3dab897c61d2ee77cf013c6ec3a246cc5bc6e985c08838b23836420e4b",
 			DecisionsHash: "e3d994f50c4373b72b5dd00a7be093fe23216bd86106161d91e6ae39b366c09d",
 		},
+		2: {
+			DecisionCount: 138,
+			AnchorCount:   104,
+			SourceSHA256:  "c259e9f46d95b8b6d355813810e7fcc868a0e4a431bc5cecf299c094b85e5406",
+			DecisionsHash: "6bfef272a4b68a9fcaa7c91e5e4e055d3f47582e54973ea6e93d1eef6010a814",
+		},
 	}
 	if err := validateStagingReviewProgress(regions, registry, reviewedOrdinals); err != nil {
 		t.Fatal(err)
@@ -85,11 +91,19 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 	if err := validateConfirmedPacketPins(registry, reviewedOrdinals); err != nil {
 		t.Fatal(err)
 	}
-	if len(regions) < 2 {
+	if len(regions) <= len(reviewedOrdinals) {
 		t.Fatal("review-progress mutation requires an unreviewed region")
 	}
 
-	regionTwoStart := len(regionBytes(regions[0]))
+	var unreviewedRegion Region
+	unreviewedRegionStart := 0
+	for _, region := range regions {
+		if _, admitted := reviewedOrdinals[region.Key.Ordinal]; !admitted {
+			unreviewedRegion = region
+			break
+		}
+		unreviewedRegionStart += len(regionBytes(region))
+	}
 	mutations := []struct {
 		name   string
 		mutate func(*testing.T, *Registry)
@@ -98,20 +112,19 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 		{
 			name: "receipt for unreviewed ordinal",
 			mutate: func(_ *testing.T, got *Registry) {
-				region := regions[1]
 				got.Receipts = append(got.Receipts, RegionReceipt{
-					Key: region.Key,
+					Key: unreviewedRegion.Key,
 					Review: &ReviewReceipt{
-						SourceSHA256: SourceDigest(region.Lines),
+						SourceSHA256: SourceDigest(unreviewedRegion.Lines),
 						Decisions: []Classification{{
-							StartByte: regionTwoStart,
-							EndByte:   regionTwoStart + len(regionBytes(region)),
+							StartByte: unreviewedRegionStart,
+							EndByte:   unreviewedRegionStart + len(regionBytes(unreviewedRegion)),
 							Kind:      ClassificationNonNormative,
 						}},
 					},
 				})
 			},
-			want: "packet 2 has a receipt but is not admitted",
+			want: fmt.Sprintf("packet %d has a receipt but is not admitted", unreviewedRegion.Key.Ordinal),
 		},
 		{
 			name: "reviewed ordinal receipt absent",
@@ -163,76 +176,85 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 
 	decisionMutations := []struct {
 		name         string
-		mutate       func(*testing.T, *Registry)
-		existingWant string
+		mutate       func(*testing.T, *Registry, int)
+		existingWant func(int) string
 		pinWant      string
 	}{
 		{
 			name: "decision end byte moved by one",
-			mutate: func(t *testing.T, got *Registry) {
-				review := packetReview(t, got, 1)
+			mutate: func(t *testing.T, got *Registry, ordinal int) {
+				review := packetReview(t, got, ordinal)
 				review.Decisions[0].EndByte++
 			},
 			pinWant: "decisions digest",
 		},
 		{
 			name: "decision kind flipped",
-			mutate: func(t *testing.T, got *Registry) {
-				review := packetReview(t, got, 1)
+			mutate: func(t *testing.T, got *Registry, ordinal int) {
+				review := packetReview(t, got, ordinal)
 				for index := range review.Decisions {
 					if review.Decisions[index].Kind == ClassificationAnchor {
 						review.Decisions[index].Kind = ClassificationNonNormative
 						return
 					}
 				}
-				t.Fatal("packet 1 anchor decision not found")
+				t.Fatalf("packet %d anchor decision not found", ordinal)
 			},
-			existingWant: "non-normative classification carries marker ID",
+			existingWant: func(int) string { return "non-normative classification carries marker ID" },
 			pinWant:      "anchor count",
 		},
 		{
 			name: "decision marker ID renamed",
-			mutate: func(t *testing.T, got *Registry) {
-				review := packetReview(t, got, 1)
+			mutate: func(t *testing.T, got *Registry, ordinal int) {
+				review := packetReview(t, got, ordinal)
 				for index := range review.Decisions {
 					if review.Decisions[index].Kind == ClassificationAnchor {
 						review.Decisions[index].MarkerID += ".renamed"
 						return
 					}
 				}
-				t.Fatal("packet 1 anchor decision not found")
+				t.Fatalf("packet %d anchor decision not found", ordinal)
 			},
 			pinWant: "decisions digest",
 		},
 		{
 			name: "decision removed",
-			mutate: func(t *testing.T, got *Registry) {
-				review := packetReview(t, got, 1)
+			mutate: func(t *testing.T, got *Registry, ordinal int) {
+				review := packetReview(t, got, ordinal)
 				review.Decisions = append(review.Decisions[:0], review.Decisions[1:]...)
 			},
-			existingWant: "packet 1 is locked as reviewed but is pending",
-			pinWant:      "decision count",
+			existingWant: func(ordinal int) string {
+				return fmt.Sprintf("packet %d is locked as reviewed but is pending", ordinal)
+			},
+			pinWant: "decision count",
 		},
 	}
 	for _, mutation := range decisionMutations {
 		t.Run(mutation.name, func(t *testing.T) {
-			got := cloneRegistry(registry)
-			mutation.mutate(t, &got)
-			existingErr := ValidateRegistry(documentPath, document, commandBlob, regions, got)
-			if existingErr == nil {
-				existingErr = validateStagingReviewProgress(regions, got, reviewedOrdinals)
-			}
-			if mutation.existingWant == "" {
-				if existingErr != nil {
-					t.Fatalf("existing registry validation rejected mutation: %v", existingErr)
-				}
-			} else if existingErr == nil || !strings.Contains(existingErr.Error(), mutation.existingWant) {
-				t.Fatalf("existing registry validation error = %v, want %q", existingErr, mutation.existingWant)
-			}
+			for ordinal := range reviewedOrdinals {
+				t.Run(fmt.Sprintf("packet %d", ordinal), func(t *testing.T) {
+					got := cloneRegistry(registry)
+					mutation.mutate(t, &got, ordinal)
+					existingErr := ValidateRegistry(documentPath, document, commandBlob, regions, got)
+					if existingErr == nil {
+						existingErr = validateStagingReviewProgress(regions, got, reviewedOrdinals)
+					}
+					if mutation.existingWant == nil {
+						if existingErr != nil {
+							t.Fatalf("existing registry validation rejected mutation: %v", existingErr)
+						}
+					} else {
+						existingWant := mutation.existingWant(ordinal)
+						if existingErr == nil || !strings.Contains(existingErr.Error(), existingWant) {
+							t.Fatalf("existing registry validation error = %v, want %q", existingErr, existingWant)
+						}
+					}
 
-			pinErr := validateConfirmedPacketPins(got, reviewedOrdinals)
-			if pinErr == nil || !strings.Contains(pinErr.Error(), mutation.pinWant) {
-				t.Fatalf("confirmed-packet pin error = %v, want %q", pinErr, mutation.pinWant)
+					pinErr := validateConfirmedPacketPins(got, reviewedOrdinals)
+					if pinErr == nil || !strings.Contains(pinErr.Error(), mutation.pinWant) {
+						t.Fatalf("confirmed-packet pin error = %v, want %q", pinErr, mutation.pinWant)
+					}
+				})
 			}
 		})
 	}

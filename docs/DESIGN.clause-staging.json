@@ -651,6 +651,813 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "c6e37d32ee4480026de3831d14c4808e2255d5f1",
+        "ordinal": 2,
+        "start_source_line": 234,
+        "end_source_line": 460
+      },
+      "review_receipt": {
+        "source_sha256": "c259e9f46d95b8b6d355813810e7fcc868a0e4a431bc5cecf299c094b85e5406",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 13989,
+            "end_source_byte": 14214,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 14216,
+            "end_source_byte": 14373,
+            "kind": "anchor",
+            "marker_id": "score-declared-ids.grammar"
+          },
+          {
+            "start_source_byte": 14374,
+            "end_source_byte": 14424,
+            "kind": "anchor",
+            "marker_id": "score-declared-ids.rejection"
+          },
+          {
+            "start_source_byte": 14425,
+            "end_source_byte": 14538,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 14539,
+            "end_source_byte": 14691,
+            "kind": "anchor",
+            "marker_id": "run-attempt-ids.format"
+          },
+          {
+            "start_source_byte": 14692,
+            "end_source_byte": 14756,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 14757,
+            "end_source_byte": 14804,
+            "kind": "anchor",
+            "marker_id": "run-attempt-ids.opacity"
+          },
+          {
+            "start_source_byte": 14805,
+            "end_source_byte": 15063,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 15064,
+            "end_source_byte": 15273,
+            "kind": "anchor",
+            "marker_id": "run-id.ordering-use"
+          },
+          {
+            "start_source_byte": 15276,
+            "end_source_byte": 15335,
+            "kind": "anchor",
+            "marker_id": "run-id.allocation-order"
+          },
+          {
+            "start_source_byte": 15336,
+            "end_source_byte": 15429,
+            "kind": "anchor",
+            "marker_id": "run-existence.authority"
+          },
+          {
+            "start_source_byte": 15430,
+            "end_source_byte": 15481,
+            "kind": "anchor",
+            "marker_id": "pre-run-paths.classification"
+          },
+          {
+            "start_source_byte": 15482,
+            "end_source_byte": 15697,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 15699,
+            "end_source_byte": 15760,
+            "kind": "anchor",
+            "marker_id": "run-deletion.availability"
+          },
+          {
+            "start_source_byte": 15761,
+            "end_source_byte": 15813,
+            "kind": "anchor",
+            "marker_id": "run-data.retention"
+          },
+          {
+            "start_source_byte": 15814,
+            "end_source_byte": 15838,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 15839,
+            "end_source_byte": 15967,
+            "kind": "anchor",
+            "marker_id": "run-pruning.active-refusal"
+          },
+          {
+            "start_source_byte": 15968,
+            "end_source_byte": 16064,
+            "kind": "anchor",
+            "marker_id": "run-pruning.unapplied-discard"
+          },
+          {
+            "start_source_byte": 16066,
+            "end_source_byte": 16153,
+            "kind": "anchor",
+            "marker_id": "journal.lifecycle-authority"
+          },
+          {
+            "start_source_byte": 16154,
+            "end_source_byte": 16224,
+            "kind": "anchor",
+            "marker_id": "manifest.rebuildability"
+          },
+          {
+            "start_source_byte": 16225,
+            "end_source_byte": 16325,
+            "kind": "anchor",
+            "marker_id": "run-contents.authority"
+          },
+          {
+            "start_source_byte": 16326,
+            "end_source_byte": 16387,
+            "kind": "anchor",
+            "marker_id": "manifest.recovery-rebuild"
+          },
+          {
+            "start_source_byte": 16388,
+            "end_source_byte": 16592,
+            "kind": "anchor",
+            "marker_id": "run-state.projection-source"
+          },
+          {
+            "start_source_byte": 16593,
+            "end_source_byte": 16665,
+            "kind": "anchor",
+            "marker_id": "run-projections.mutability"
+          },
+          {
+            "start_source_byte": 16667,
+            "end_source_byte": 16936,
+            "kind": "anchor",
+            "marker_id": "rename.durability"
+          },
+          {
+            "start_source_byte": 16937,
+            "end_source_byte": 17148,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 17150,
+            "end_source_byte": 17288,
+            "kind": "anchor",
+            "marker_id": "journal-events.sync-declaration"
+          },
+          {
+            "start_source_byte": 17289,
+            "end_source_byte": 17394,
+            "kind": "anchor",
+            "marker_id": "journal.durability"
+          },
+          {
+            "start_source_byte": 17395,
+            "end_source_byte": 17445,
+            "kind": "anchor",
+            "marker_id": "log-progress.sync"
+          },
+          {
+            "start_source_byte": 17447,
+            "end_source_byte": 17543,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 17544,
+            "end_source_byte": 17657,
+            "kind": "anchor",
+            "marker_id": "failed-journal-fsync.page-cache-classification"
+          },
+          {
+            "start_source_byte": 17658,
+            "end_source_byte": 17734,
+            "kind": "anchor",
+            "marker_id": "failed-journal-fsync.continuation"
+          },
+          {
+            "start_source_byte": 17735,
+            "end_source_byte": 17769,
+            "kind": "anchor",
+            "marker_id": "failed-journal-fsync.run-preservation"
+          },
+          {
+            "start_source_byte": 17770,
+            "end_source_byte": 17919,
+            "kind": "anchor",
+            "marker_id": "failed-journal-fsync.observation"
+          },
+          {
+            "start_source_byte": 17920,
+            "end_source_byte": 18119,
+            "kind": "anchor",
+            "marker_id": "failed-journal-fsync.unknown-outcome"
+          },
+          {
+            "start_source_byte": 18121,
+            "end_source_byte": 18197,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 18199,
+            "end_source_byte": 18296,
+            "kind": "anchor",
+            "marker_id": "torn-tail.repair"
+          },
+          {
+            "start_source_byte": 18297,
+            "end_source_byte": 18375,
+            "kind": "anchor",
+            "marker_id": "torn-tail.recording"
+          },
+          {
+            "start_source_byte": 18376,
+            "end_source_byte": 18486,
+            "kind": "anchor",
+            "marker_id": "journal-corruption.recovery"
+          },
+          {
+            "start_source_byte": 18487,
+            "end_source_byte": 18652,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 18653,
+            "end_source_byte": 18840,
+            "kind": "anchor",
+            "marker_id": "torn-tail.audit-loss"
+          },
+          {
+            "start_source_byte": 18841,
+            "end_source_byte": 19189,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 19191,
+            "end_source_byte": 19259,
+            "kind": "anchor",
+            "marker_id": "logical-output-ids.identity"
+          },
+          {
+            "start_source_byte": 19260,
+            "end_source_byte": 19355,
+            "kind": "anchor",
+            "marker_id": "artifact-instances.identity"
+          },
+          {
+            "start_source_byte": 19356,
+            "end_source_byte": 19576,
+            "kind": "anchor",
+            "marker_id": "artifact-instance-id.format"
+          },
+          {
+            "start_source_byte": 19577,
+            "end_source_byte": 19910,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 19911,
+            "end_source_byte": 19972,
+            "kind": "anchor",
+            "marker_id": "artifact-emissions.cardinality"
+          },
+          {
+            "start_source_byte": 19973,
+            "end_source_byte": 20126,
+            "kind": "anchor",
+            "marker_id": "duplicate-artifact-notifications.disposition"
+          },
+          {
+            "start_source_byte": 20127,
+            "end_source_byte": 20211,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 20212,
+            "end_source_byte": 20286,
+            "kind": "anchor",
+            "marker_id": "artifact-instances.references"
+          },
+          {
+            "start_source_byte": 20287,
+            "end_source_byte": 20409,
+            "kind": "anchor",
+            "marker_id": "logical-inputs.resolution"
+          },
+          {
+            "start_source_byte": 20410,
+            "end_source_byte": 20488,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 20490,
+            "end_source_byte": 20559,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 20561,
+            "end_source_byte": 21120,
+            "kind": "anchor",
+            "marker_id": "announced-artifacts.immutability"
+          },
+          {
+            "start_source_byte": 21121,
+            "end_source_byte": 21202,
+            "kind": "anchor",
+            "marker_id": "artifact-copy.defense"
+          },
+          {
+            "start_source_byte": 21204,
+            "end_source_byte": 21504,
+            "kind": "anchor",
+            "marker_id": "artifact-recording.order"
+          },
+          {
+            "start_source_byte": 21505,
+            "end_source_byte": 21708,
+            "kind": "anchor",
+            "marker_id": "artifact-notifications.validation"
+          },
+          {
+            "start_source_byte": 21709,
+            "end_source_byte": 21778,
+            "kind": "anchor",
+            "marker_id": "orphan-artifacts.quarantine"
+          },
+          {
+            "start_source_byte": 21779,
+            "end_source_byte": 21849,
+            "kind": "anchor",
+            "marker_id": "missing-artifacts.recovery"
+          },
+          {
+            "start_source_byte": 21851,
+            "end_source_byte": 21928,
+            "kind": "anchor",
+            "marker_id": "resolved-cast.authority"
+          },
+          {
+            "start_source_byte": 21929,
+            "end_source_byte": 21965,
+            "kind": "anchor",
+            "marker_id": "run-started.resolved-cast-hash"
+          },
+          {
+            "start_source_byte": 21966,
+            "end_source_byte": 22160,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 22161,
+            "end_source_byte": 22216,
+            "kind": "anchor",
+            "marker_id": "resolved-cast.persistence"
+          },
+          {
+            "start_source_byte": 22217,
+            "end_source_byte": 22293,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 22294,
+            "end_source_byte": 22412,
+            "kind": "anchor",
+            "marker_id": "missing-resolved-cast.recovery"
+          },
+          {
+            "start_source_byte": 22413,
+            "end_source_byte": 22465,
+            "kind": "anchor",
+            "marker_id": "orphan-resolved-cast.quarantine"
+          },
+          {
+            "start_source_byte": 22467,
+            "end_source_byte": 22546,
+            "kind": "anchor",
+            "marker_id": "routed-proposal-record.durability"
+          },
+          {
+            "start_source_byte": 22547,
+            "end_source_byte": 22636,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 22637,
+            "end_source_byte": 22945,
+            "kind": "anchor",
+            "marker_id": "proposal-record.publication"
+          },
+          {
+            "start_source_byte": 22946,
+            "end_source_byte": 23044,
+            "kind": "anchor",
+            "marker_id": "proposal-record.first-reference"
+          },
+          {
+            "start_source_byte": 23045,
+            "end_source_byte": 23172,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 23173,
+            "end_source_byte": 23391,
+            "kind": "anchor",
+            "marker_id": "proposal-publication-lock.interval"
+          },
+          {
+            "start_source_byte": 23392,
+            "end_source_byte": 23538,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 23539,
+            "end_source_byte": 23576,
+            "kind": "anchor",
+            "marker_id": "proposal-publication.resume-wait"
+          },
+          {
+            "start_source_byte": 23577,
+            "end_source_byte": 23675,
+            "kind": "anchor",
+            "marker_id": "live-proposal-record.orphan-classification"
+          },
+          {
+            "start_source_byte": 23676,
+            "end_source_byte": 23793,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 23794,
+            "end_source_byte": 24102,
+            "kind": "anchor",
+            "marker_id": "orphan-proposal-record.quarantine"
+          },
+          {
+            "start_source_byte": 24103,
+            "end_source_byte": 24202,
+            "kind": "anchor",
+            "marker_id": "proposal-route-descriptor.authority"
+          },
+          {
+            "start_source_byte": 24205,
+            "end_source_byte": 24310,
+            "kind": "anchor",
+            "marker_id": "proposal-route.recovery-completion"
+          },
+          {
+            "start_source_byte": 24311,
+            "end_source_byte": 24542,
+            "kind": "anchor",
+            "marker_id": "missing-proposal-record.recovery"
+          },
+          {
+            "start_source_byte": 24543,
+            "end_source_byte": 24620,
+            "kind": "anchor",
+            "marker_id": "proposal-route.events"
+          },
+          {
+            "start_source_byte": 24621,
+            "end_source_byte": 24741,
+            "kind": "anchor",
+            "marker_id": "missing-decision-request.recovery"
+          },
+          {
+            "start_source_byte": 24742,
+            "end_source_byte": 24824,
+            "kind": "anchor",
+            "marker_id": "routed-human.authority"
+          },
+          {
+            "start_source_byte": 24825,
+            "end_source_byte": 24848,
+            "kind": "anchor",
+            "marker_id": "proposal-records.immutability"
+          },
+          {
+            "start_source_byte": 24849,
+            "end_source_byte": 24961,
+            "kind": "anchor",
+            "marker_id": "proposal-records.retention"
+          },
+          {
+            "start_source_byte": 24963,
+            "end_source_byte": 25064,
+            "kind": "anchor",
+            "marker_id": "change-set-ref.publication-order"
+          },
+          {
+            "start_source_byte": 25065,
+            "end_source_byte": 25137,
+            "kind": "anchor",
+            "marker_id": "orphan-change-set-refs.recovery"
+          },
+          {
+            "start_source_byte": 25138,
+            "end_source_byte": 25205,
+            "kind": "anchor",
+            "marker_id": "missing-change-set-refs.recovery"
+          },
+          {
+            "start_source_byte": 25206,
+            "end_source_byte": 25249,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 25251,
+            "end_source_byte": 25471,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 25472,
+            "end_source_byte": 25675,
+            "kind": "anchor",
+            "marker_id": "score-hash.semantic"
+          },
+          {
+            "start_source_byte": 25676,
+            "end_source_byte": 25823,
+            "kind": "anchor",
+            "marker_id": "score-file-hash.raw"
+          },
+          {
+            "start_source_byte": 25825,
+            "end_source_byte": 26171,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 26173,
+            "end_source_byte": 26307,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 26309,
+            "end_source_byte": 26389,
+            "kind": "anchor",
+            "marker_id": "score-snapshots.creation"
+          },
+          {
+            "start_source_byte": 26390,
+            "end_source_byte": 26513,
+            "kind": "anchor",
+            "marker_id": "score-snapshots.hashes"
+          },
+          {
+            "start_source_byte": 26514,
+            "end_source_byte": 26634,
+            "kind": "anchor",
+            "marker_id": "root-score.automatic-writes"
+          },
+          {
+            "start_source_byte": 26635,
+            "end_source_byte": 26719,
+            "kind": "anchor",
+            "marker_id": "promote-score.source"
+          },
+          {
+            "start_source_byte": 26720,
+            "end_source_byte": 26859,
+            "kind": "anchor",
+            "marker_id": "promote-score.root-conflict"
+          },
+          {
+            "start_source_byte": 26860,
+            "end_source_byte": 26944,
+            "kind": "anchor",
+            "marker_id": "resume-score.source"
+          },
+          {
+            "start_source_byte": 26947,
+            "end_source_byte": 27133,
+            "kind": "anchor",
+            "marker_id": "root-snapshot-divergence.recovery"
+          },
+          {
+            "start_source_byte": 27134,
+            "end_source_byte": 27208,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 27209,
+            "end_source_byte": 27321,
+            "kind": "anchor",
+            "marker_id": "root-snapshot-divergence.remediation"
+          },
+          {
+            "start_source_byte": 27322,
+            "end_source_byte": 27390,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 27391,
+            "end_source_byte": 27450,
+            "kind": "anchor",
+            "marker_id": "manifest.score-source"
+          },
+          {
+            "start_source_byte": 27452,
+            "end_source_byte": 27533,
+            "kind": "anchor",
+            "marker_id": "cast-layers.precedence"
+          },
+          {
+            "start_source_byte": 27534,
+            "end_source_byte": 27623,
+            "kind": "anchor",
+            "marker_id": "cast-files.discovery"
+          },
+          {
+            "start_source_byte": 27624,
+            "end_source_byte": 27650,
+            "kind": "anchor",
+            "marker_id": "cast-files.optionality"
+          },
+          {
+            "start_source_byte": 27651,
+            "end_source_byte": 27712,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 27713,
+            "end_source_byte": 27758,
+            "kind": "anchor",
+            "marker_id": "factory-cast.availability"
+          },
+          {
+            "start_source_byte": 27759,
+            "end_source_byte": 27896,
+            "kind": "anchor",
+            "marker_id": "factory-cast.addition"
+          },
+          {
+            "start_source_byte": 27897,
+            "end_source_byte": 27964,
+            "kind": "anchor",
+            "marker_id": "cast-merge.depth"
+          },
+          {
+            "start_source_byte": 27966,
+            "end_source_byte": 28032,
+            "kind": "anchor",
+            "marker_id": "performer-bindings.merge"
+          },
+          {
+            "start_source_byte": 28033,
+            "end_source_byte": 28088,
+            "kind": "anchor",
+            "marker_id": "part-bindings.merge"
+          },
+          {
+            "start_source_byte": 28089,
+            "end_source_byte": 28152,
+            "kind": "anchor",
+            "marker_id": "fallbacks.merge"
+          },
+          {
+            "start_source_byte": 28153,
+            "end_source_byte": 28200,
+            "kind": "anchor",
+            "marker_id": "cast-tombstones.availability"
+          },
+          {
+            "start_source_byte": 28201,
+            "end_source_byte": 28360,
+            "kind": "anchor",
+            "marker_id": "adapter-discovery.scope"
+          },
+          {
+            "start_source_byte": 28362,
+            "end_source_byte": 28472,
+            "kind": "anchor",
+            "marker_id": "manifest.part-binding"
+          },
+          {
+            "start_source_byte": 28473,
+            "end_source_byte": 28604,
+            "kind": "anchor",
+            "marker_id": "adapter-version.observation"
+          },
+          {
+            "start_source_byte": 28605,
+            "end_source_byte": 28886,
+            "kind": "anchor",
+            "marker_id": "manifest.attempt-binding"
+          },
+          {
+            "start_source_byte": 28887,
+            "end_source_byte": 28998,
+            "kind": "anchor",
+            "marker_id": "attempt-record.authority"
+          },
+          {
+            "start_source_byte": 29000,
+            "end_source_byte": 29041,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 29043,
+            "end_source_byte": 29161,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 29163,
+            "end_source_byte": 29195,
+            "kind": "anchor",
+            "marker_id": "score.version-field"
+          },
+          {
+            "start_source_byte": 29196,
+            "end_source_byte": 29238,
+            "kind": "anchor",
+            "marker_id": "score-revision.mutation"
+          },
+          {
+            "start_source_byte": 29239,
+            "end_source_byte": 29328,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 29329,
+            "end_source_byte": 29368,
+            "kind": "anchor",
+            "marker_id": "goal.finalized-intent"
+          },
+          {
+            "start_source_byte": 29369,
+            "end_source_byte": 29410,
+            "kind": "anchor",
+            "marker_id": "goal.language"
+          },
+          {
+            "start_source_byte": 29411,
+            "end_source_byte": 29463,
+            "kind": "anchor",
+            "marker_id": "context.content"
+          },
+          {
+            "start_source_byte": 29464,
+            "end_source_byte": 29574,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 29575,
+            "end_source_byte": 29668,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 29669,
+            "end_source_byte": 29706,
+            "kind": "anchor",
+            "marker_id": "open-questions.draft-gate"
+          },
+          {
+            "start_source_byte": 29707,
+            "end_source_byte": 29768,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 29769,
+            "end_source_byte": 29825,
+            "kind": "anchor",
+            "marker_id": "open-question-waiver.encoding"
+          },
+          {
+            "start_source_byte": 29826,
+            "end_source_byte": 29881,
+            "kind": "anchor",
+            "marker_id": "open-question-waiver.retention"
+          },
+          {
+            "start_source_byte": 29882,
+            "end_source_byte": 29971,
+            "kind": "anchor",
+            "marker_id": "verification-fields.separation"
+          },
+          {
+            "start_source_byte": 29972,
+            "end_source_byte": 30075,
+            "kind": "anchor",
+            "marker_id": "verification-intent.values"
+          },
+          {
+            "start_source_byte": 30076,
+            "end_source_byte": 30132,
+            "kind": "anchor",
+            "marker_id": "verification-intent.meaning"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
