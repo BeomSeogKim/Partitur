@@ -807,8 +807,7 @@ assigned to a later rule.
    score itself has to say what counts as done. An explicitly declared `artifact`
    criterion does count. (Keyed on the movement's grant, not the part's capability —
    a write-capable part may still play read-only movements.)
-   This is a per-movement **floor**. For the ship judgment's candidate scope, see §8's “The `apply`
-   judgment”.
+   For the ship judgment's candidate scope, see §8's “The `apply` judgment”.
 3. `grants` ⊆ the part's `capabilities`. A `read_only` part can never receive
    `repo_write`. Read-only-ness is never inferred from instruction text or output names.
    (`policy` scopes *where* an authority applies — `allowed_paths`, `side_effects` — and
@@ -853,8 +852,8 @@ assigned to a later rule.
     typed `findings` output; `require ∋ approved` ⇒ it declares `human_gate: always`.
 12. **Final-movement closure** — `apply_gate.waived` ⇒ `verification.final_movement` must
     be omitted; otherwise it must be declared, must not hold `repo_write`, must
-    transitively depend on every non-draft movement via `needs`, must have no downstream
-    movement, and no non-draft movement may sit outside its dependency closure.
+    transitively depend on every non-draft movement via `needs`, and must have no downstream
+    movement.
 13. Every numeric value at a **schema-controlled path** is an integer in the canonical safe range
     (Appendix A). Numeric values below `extensions.<adapter-id>` are opaque and instead follow
     A.1's full finite-binary64 ingress rule; applying the schema range to them would collapse the

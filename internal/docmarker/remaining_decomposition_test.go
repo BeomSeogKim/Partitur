@@ -161,7 +161,7 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 					"**The final verification movement** (`verification.final_movement`, required unless the gate\nis waived) is the run's **terminal sink**",
 				},
 				26: {
-					"transitively depend on every non-draft movement via `needs`, must have no downstream\n    movement",
+					"transitively depend on every non-draft movement via `needs`, and must have no downstream\n    movement",
 				},
 				27: {
 					"otherwise it must be declared, must not hold `repo_write`, must\n    transitively depend",
