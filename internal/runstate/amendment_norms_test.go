@@ -29,8 +29,8 @@ func TestClaimedImpactOptionalityIsSpecified(t *testing.T) {
 	contents := strings.Join(strings.Fields(strings.Join(lines, "\n")), " ")
 
 	for _, clause := range []string{
-		"- `claimed_impact` is an optional scope claim; §9 checks containment only when it is present.",
-		"- `claimed_impact` has the same shape as `actual_impact` and is an optional scope claim (§9).",
+		"- For `claimed_impact` optionality and containment, see §9's “Admissibility pipeline”.",
+		"- For `claimed_impact`'s shape, see §9's “`actual_impact`”; for its optionality, see §9's “Admissibility pipeline”, step 7.",
 		"7. **Impact computation and claim containment** — when `claimed_impact` is present, a claim narrower than the actual impact on any component rejects with `claim_narrower`; when it is absent, no containment check applies. The optional claim is a proposer-supplied scope assertion, not authority over the core-computed `actual_impact`.",
 	} {
 		if count := strings.Count(contents, clause); count != 1 {
