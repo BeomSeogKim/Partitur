@@ -61,6 +61,7 @@ func TestConfirmedReceiptsMergeWithoutDuplicateAnchors(t *testing.T) {
 		secondOrd int
 	}{
 		{"adapter-transport.framing", 5, 6},
+		{"validation-probe.per-adapter-once", 6, 7},
 	}
 	for _, want := range continuations {
 		var tailEnd, headStart int
