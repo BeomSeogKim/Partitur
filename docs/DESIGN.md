@@ -1830,16 +1830,12 @@ Two channels with different rules, which v0.2 keeps strictly apart:
 | Channel | Destination | In the journal? |
 |---|---|---|
 | Raw `stderr` | `attempts/<id>/stderr`, sanitized | **Never** |
-| Protocol `log` / `progress` events | mirrored | Yes, as **non-authoritative observations** (Appendix B `authority` column) — sanitized and bounded |
-
-So "diagnostics never enter the journal" means the raw stream. Typed, sanitized, bounded
-protocol events are journaled deliberately, because a later GUI needs them; they carry no
-authority and no projection ever reads them.
+| Protocol `log` / `progress` events | mirrored | Yes — sanitized and bounded; for authority and projection use, see Appendix B's “Authority”. |
 
 **Execution spawn is gated, so identity is recorded before any execution adapter code runs.** This
-contract applies to run-scoped adapter and criterion launches, not to the standalone validation
-probe defined above. The core cannot record an execution adapter's session id before it exists, and
-cannot record it after without leaving a window in which a crash strands an unrecorded process. The
+contract applies to run-scoped adapter and criterion launches. For validation-probe launching, see
+§4's “Validation probing”. The core cannot record an execution adapter's session id before it exists,
+and cannot record it after without leaving a window in which a crash strands an unrecorded process. The
 spike settled the ordering: the core starts a **trusted launch trampoline** as a new POSIX session
 leader; while the trampoline blocks on an **inherited gate**, the core records and fsyncs its PID,
 session id, and process-start identity in `attempt.started`; only then does it release the gate, and
@@ -1852,21 +1848,22 @@ and has no worktree mutation path before the gate opens**, and it never opens un
 already durable. The claim is deliberately not "it holds no authority" — the process still has the
 ambient OS permissions of whoever launched it. What it lacks is any code that would use them.
 
-`pid == session_id` is validated at handoff, since the trampoline is the session leader. PGID is not
-persisted: §4 enumerates the recorded session and discovers its current process groups at sweep time.
+`pid == session_id` is validated at handoff, since the trampoline is the session leader. For the
+recorded adapter-process fields, see Appendix B.2's “`attempt.started` field clauses”. At sweep time,
+§4 enumerates the recorded session and discovers its current process groups.
 
 The handoff contract, since recovery depends on reading it (Appendix C.2):
 
 - Both files live under the attempt's **staging** root (`.partitur/work/…`, §1), never under
   authoritative run state.
 - **Keyed per launch, not per attempt** — `<attempt_id>/<launch_id>`. The reason is *successive*
-  launches, not concurrent ones: criteria run sequentially and short-circuit (§7), so nothing races,
+  launches, not concurrent ones. For acceptance execution order and short-circuiting, see §7's
+  “Acceptance runner and CLI v0.2”. Therefore nothing races,
   but one attempt performs many launches — the adapter, then one trampoline per external criterion,
   plus retries — and a per-attempt key would let a **stale handoff from an earlier launch** be
   mistaken for the current one.
-- The trampoline **publishes its identity, fsyncs it, then blocks** on the gate. The core reads the
-  published identity, records it in the journal, fsyncs that, and only then releases the gate. So a
-  published identity always precedes a released gate.
+- The trampoline **publishes its identity, fsyncs it, then blocks** on the gate. A published identity
+  therefore always precedes a released gate.
 - Both carry a **nonce created with the launch**, and a file whose nonce does not match is stale and is
   ignored rather than trusted.
 - Exact shapes, since recovery parses them: `<launch_id>/identity.json` carries
@@ -1884,9 +1881,7 @@ The handoff contract, since recovery depends on reading it (Appendix C.2):
   and still contains no adapter code.
 
   So the property recovery may rely on is precisely **"marker free ⇒ no *released mutator* survives"** —
-  not "no launch process survives", which the pre-marker window makes false. The weaker statement is the
-  one that matters: an unreleased trampoline holds no adapter or criterion code and will exit on gate
-  EOF without executing any.
+  not "no launch process survives", which the pre-marker window makes false.
 - A held marker with no matching readable identity is **stabilized before it is classified**. A
   multithreaded process can have a leader already observable as gone while another thread still
   retains the shared file table and therefore the inherited marker lock. The first held sample is
@@ -1897,8 +1892,9 @@ The handoff contract, since recovery depends on reading it (Appendix C.2):
   derived from the core's outer termination grace below, not from the spike harness: both bounds
   allow local process teardown to settle before the core may safely advance, and a trampoline that
   cannot yet be named and signalled receives the same pre-force allowance as a named session. This
-  is a conservative policy ceiling, not a kernel timing guarantee. The 15000 ms probe deadline and
-  first-party kit's 10000 ms grace do not apply: no probe RPC or adapter body exists in this window.
+  is a conservative policy ceiling, not a kernel timing guarantee. For the probe-completion deadline,
+  see §4's “Validation probing”; for the first-party adapter kit's internal grace, see §4's “Process
+  supervision”. Neither applies: no probe RPC or adapter body exists in this window.
   The spike's 3000 ms timeout and 5 ms polling cadence remain test parameters and define no
   production behaviour.
 
@@ -1909,8 +1905,8 @@ The handoff contract, since recovery depends on reading it (Appendix C.2):
   continues stabilization. At the deadline recovery takes one final observation in the same order.
   Still held with no identity halts `spawn_handoff_unverifiable`. Any malformed matching identity or
   unexpected identity-read, marker-open, or lock error halts that reason immediately rather than
-  consuming the deadline. This one procedure applies to adapter and external-criterion trampolines:
-  both inherit the same marker and publish identity in the same order.
+  consuming the deadline. Adapter and external-criterion trampolines both inherit the same marker and
+  publish identity in the same order.
 - These are coordination files, not journal identity: the journal's copy is authoritative and the files
   are removed with the run's staging root.
 
@@ -1926,7 +1922,7 @@ conformance. The first-party adapter kit's 10000 ms internal grace satisfies tha
 Ownership is established by **session**, which the core can do at spawn time even though it
 cannot enumerate descendants that do not exist yet:
 
-1. The core starts each adapter as a **new POSIX session leader** (`setsid`).
+1. For session-leader creation, see §4's “Execution spawn is gated”.
 2. A conforming adapter may put the vendor in its own **process group**, but MUST NOT create —
    or permit a vendor descendant to create — another **session**.
 3. On outer termination the core enumerates processes, selects the adapter's session by SID,
@@ -1944,22 +1940,19 @@ daemonized and lost its ancestry relationship. So:
   separate process group — the sweep leaves zero survivors on macOS and Linux.
 - Against a descendant that deliberately escapes its session, it does not. That is not a gap to
   patch with another process-group tweak: it is the trust boundary this section already states.
-  Adapters are trusted executables running with the user's privileges, so **an adapter that
-  deliberately escapes supervision is malicious adapter behaviour, which is explicitly outside
-  the core's security boundary.** Rule 2 above is therefore an adapter *conformance* requirement.
+  For adapter trust and malicious behaviour, see §4's “Adapter process environment”. Rule 2 above is
+  therefore an adapter *conformance* requirement.
 - Where an absolute ownership set is available it should be used: Linux **cgroup v2**, when
-  Partitur has permission to create one. macOS has no unprivileged equivalent, so an absolute
-  guarantee there would need a separately designed privileged containment backend — out of scope
-  for v0.2 (§10).
+  Partitur has permission to create one. For macOS absolute descendant ownership, see §10's “Out of
+  scope for v0.2”.
 - **Unverifiable state fails closed for that execution.** If process enumeration or start-identity
   verification is unavailable — sandbox policy, cross-user restriction, a read that errors — the
   core reports the sweep as *incomplete* and follows the consuming boundary's prescribed failure
-  or halt rather than claiming zero survivors. On the run execute-completion path defined above,
-  that is the `sweep_unverifiable` halt: the §6 interval stays open and no response-derived attempt
-  transition is appended; Appendix C retries the sweep before it closes that interval or
-  synthesizes a failure. Conformance cleanup being the design's ceiling is one thing; asserting a
-  clean result from state the core could not read would be another, and it is the assertion that
-  would be dangerous.
+  or halt rather than claiming zero survivors. On the run execute-completion path, for the halt and
+  interval disposition, see §4's “Run execute completion”. Appendix C retries the sweep before it
+  closes that interval or synthesizes a failure. Conformance cleanup being the design's ceiling is one
+  thing; asserting a clean result from state the core could not read would be another, and it is the
+  assertion that would be dangerous.
 
 ## 5. Workspace model v0.2
 
@@ -2020,7 +2013,8 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   "Without duplication" means skipping a change set whose `change_set_id` has already been
   applied in this composition — **content identity, not commit ancestry**, since
   checkpoint commits are storage artifacts whose topology may carry unrelated history.
-  READY-movement scheduling likewise follows declaration order.
+  For READY-movement scheduling, see Appendix C.4's “Between-unit continuation and branch
+  expansion”.
 
   A successful fan-in records its own `movement_composition_dependency_hash`
   (`partitur/movement-composition`, A.4) alongside the composed base. The candidate-level hash
@@ -2029,45 +2023,39 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   composition environment — would be invisible to the executed-dependency check (§9).
   A movement may have `needs` while receiving zero contributing change sets — for example, when
   every dependency is read-only. In that case `T` remains the run base tree and **no merge
-  executes**. Its required `movement_composition_dependency_hash` uses A.4's
-  `composition_mode: identity` projection: the empty contributor list is recorded as a fact, and
-  no `composition_environment_hash` is fabricated for a subprocess that never ran.
+  executes**. For the required movement-composition dependency projection, see Appendix A.4's
+  “Domain registry”.
 
   A merge conflict yields exactly one outcome, and it is **terminal, not a wait**: the core
-  records `composition.conflicted` with the conflicting contributors and the conflicted paths
-  as **evidence only**, then fails the affected movement — or, for candidate composition, the
-  run — through the ordinary `movement.failed` / `run.failed` path with reason
-  `composition_unresolvable`, so the conflict never bypasses the normal lifecycle and recovery
-  cascade. It never merges silently and never picks a side.
+  records `composition.conflicted` as **evidence only**. For its event fields and scope-specific
+  terminal event, see Appendix B.3's “Evidence”. The conflict never bypasses the normal lifecycle
+  and recovery cascade. It never merges silently and never picks a side.
   Interactive resolution of tree conflicts is future scope — a `WAITING_HUMAN` here would
   be a wait with no decision to answer and no resolution event, so v0.2 fails deterministically
-  instead. Changes from failed, cancelled, or superseded attempts are never candidates.
+  instead. For candidate change-set membership, see §8's “One application candidate per run”.
 
-  **A composition execution failure takes the same shape and a different reason.** The term is
-  deliberately not "infrastructure failure": §3.1's Infrastructure class partitions **attempt**-failure
-  kinds, and composition runs between attempts with no performer and no fallback chain, so that class
-  cannot apply to it.
+  **A composition execution failure takes the same shape and a different reason.** For the boundary
+  of §3.1's Infrastructure class, see §3.1's “Outside the oracle”.
 
   It is defined by its **outcome, not by a list of ways to reach it**: the core ran the composition
   and **obtained no verdict** — neither a result tree nor a conflict. The core records
-  `composition.failed` as **evidence only**, then fails the affected movement — or, for candidate
-  composition, the run — with reason `composition_failed`.
+  `composition.failed` as **evidence only**. For its scope-specific terminal event, see Appendix
+  B.3's “Evidence”.
 
   **The outcome alone does not select this reason, because other rules reach it too.** The live
   selection is an ordered test, and its order is **C.1's, not a second one** — a live core and a
   recovering one must not classify the same durable state differently. **C.1 governs**: if this test
   and C.1 ever disagree, C.1 is right and this is the defect:
 
-  1. **A core-controlled interruption inherits its own authority.** Cancellation and supersession
-     terminating a driver owner under §6's owner-termination rule, and an exhausted budget stopping
-     the composition, are owned by §6's oracle, §6's commit table and §6's budget path. Where a
-     **durable** control request already governs, its precedence decides even if the core had not yet
-     signalled: a spontaneous Git failure under a durable `cancel.requested` does not outrank the
-     cancellation. C.1 places control above the integrity halts below it, so this test does too.
-  2. **An integrity condition halts and classifies nothing.** A change-set ref named by an event but
-     missing or hash-mismatched is `missing_changeset_ref` (§1), and a halt never appends to a journal
-     whose integrity is in question (B.7). That the same condition also prevents populating the
-     temporary repository does not make it a composition failure.
+  1. **A core-controlled interruption inherits its own authority.** For cancellation and
+     supersession control, see §6's “The control channel”; for composition budget exhaustion, see
+     §6's “Budget accounting”. For recovery ordering, see Appendix C.1's “Run-level
+     precedence”.
+  2. **An integrity condition halts and classifies nothing.** For a change-set ref
+     named by an event that is missing or hash-mismatched and its matching halt reason, see Appendix
+     C.1's “Run-level precedence” and Appendix D's “Recovery halts”. For halt journal behavior, see
+     Appendix B.7's “Recovery-halt conditions are not events”. Preventing repository population
+     does not turn the halt into a composition failure.
   3. **Otherwise**, an observed no-verdict outcome is `composition_failed`, and Appendix D closes its
      causes over exactly that.
 
