@@ -135,9 +135,9 @@ func TestMutationRemainingFenceDecomposition(t *testing.T) {
 			target: "TestSurveyFenceDecomposition/owned-git-refs",
 		},
 		{
-			name:   "may propose dropped causal carrier",
-			before: "- Any later amendment consequently invalidates the attempt.\n",
-			after:  "<!-- mutation: may-propose causal carrier dropped -->\n",
+			name:   "may propose relocated carrier dropped",
+			before: "- `partitur.score-base` is the reserved input for proposal-capable movements.\n",
+			after:  "<!-- mutation: may-propose relocated carrier dropped -->\n",
 			pkg:    "./internal/docmarker",
 			target: "TestSurveyFenceDecomposition/may-propose",
 		},
