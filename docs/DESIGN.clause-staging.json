@@ -5629,6 +5629,972 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "a2a08498bea7f50034436f54bdedb573d7b74e1e",
+        "ordinal": 8,
+        "start_source_line": 1598,
+        "end_source_line": 1831
+      },
+      "review_receipt": {
+        "source_sha256": "a980dba9f5ff9016c67465362c1b7129120a1dab946546303b5a2cde711adc0c",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 97314,
+            "end_source_byte": 97439,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 97440,
+            "end_source_byte": 97480,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 97481,
+            "end_source_byte": 97569,
+            "kind": "anchor",
+            "marker_id": "non-blocking-proposal.handled-on-arrival"
+          },
+          {
+            "start_source_byte": 97570,
+            "end_source_byte": 97601,
+            "kind": "anchor",
+            "marker_id": "non-blocking-proposal.under-state-lock"
+          },
+          {
+            "start_source_byte": 97602,
+            "end_source_byte": 97680,
+            "kind": "anchor",
+            "marker_id": "non-blocking-proposal.before-completion"
+          },
+          {
+            "start_source_byte": 97681,
+            "end_source_byte": 97730,
+            "kind": "anchor",
+            "marker_id": "non-blocking-proposal.notification-not-authority"
+          },
+          {
+            "start_source_byte": 97733,
+            "end_source_byte": 97755,
+            "kind": "anchor",
+            "marker_id": "non-blocking-proposal.pipeline-first"
+          },
+          {
+            "start_source_byte": 97756,
+            "end_source_byte": 97818,
+            "kind": "anchor",
+            "marker_id": "non-blocking-proposal.disposition-is-first-fact"
+          },
+          {
+            "start_source_byte": 97820,
+            "end_source_byte": 97866,
+            "kind": "anchor",
+            "marker_id": "non-blocking-rejection.event"
+          },
+          {
+            "start_source_byte": 97867,
+            "end_source_byte": 98026,
+            "kind": "anchor",
+            "marker_id": "non-blocking-rejection.attempt-unaffected"
+          },
+          {
+            "start_source_byte": 98027,
+            "end_source_byte": 98111,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 98112,
+            "end_source_byte": 98185,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 98187,
+            "end_source_byte": 98354,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 98355,
+            "end_source_byte": 98397,
+            "kind": "anchor",
+            "marker_id": "non-blocking-proposal.wire-order"
+          },
+          {
+            "start_source_byte": 98398,
+            "end_source_byte": 98506,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 98507,
+            "end_source_byte": 98575,
+            "kind": "anchor",
+            "marker_id": "notification.no-independent-fact"
+          },
+          {
+            "start_source_byte": 98576,
+            "end_source_byte": 98640,
+            "kind": "anchor",
+            "marker_id": "resolution.eligibility-not-launch"
+          },
+          {
+            "start_source_byte": 98641,
+            "end_source_byte": 98716,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 98717,
+            "end_source_byte": 98760,
+            "kind": "anchor",
+            "marker_id": "decision-kinds.distinct-resolution"
+          },
+          {
+            "start_source_byte": 98761,
+            "end_source_byte": 98832,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 98833,
+            "end_source_byte": 98902,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 98904,
+            "end_source_byte": 99026,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 99027,
+            "end_source_byte": 99088,
+            "kind": "anchor",
+            "marker_id": "resume-reason.revision-dependent"
+          },
+          {
+            "start_source_byte": 99090,
+            "end_source_byte": 99163,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 99164,
+            "end_source_byte": 99301,
+            "kind": "anchor",
+            "marker_id": "resume-reason.no-revision-change"
+          },
+          {
+            "start_source_byte": 99302,
+            "end_source_byte": 99419,
+            "kind": "anchor",
+            "marker_id": "resume-reason.revision-restart"
+          },
+          {
+            "start_source_byte": 99420,
+            "end_source_byte": 99594,
+            "kind": "anchor",
+            "marker_id": "resume-reason.finalization"
+          },
+          {
+            "start_source_byte": 99595,
+            "end_source_byte": 99873,
+            "kind": "anchor",
+            "marker_id": "resume-reason.amendment-rejected"
+          },
+          {
+            "start_source_byte": 99875,
+            "end_source_byte": 99959,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 99960,
+            "end_source_byte": 100041,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 100042,
+            "end_source_byte": 100115,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.may-precede-request"
+          },
+          {
+            "start_source_byte": 100116,
+            "end_source_byte": 100257,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 100258,
+            "end_source_byte": 100352,
+            "kind": "anchor",
+            "marker_id": "derived-decision-id.match"
+          },
+          {
+            "start_source_byte": 100354,
+            "end_source_byte": 100499,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.typed-rejection"
+          },
+          {
+            "start_source_byte": 100501,
+            "end_source_byte": 100786,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 100788,
+            "end_source_byte": 100930,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 100932,
+            "end_source_byte": 101064,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.unconditional-delivery"
+          },
+          {
+            "start_source_byte": 101066,
+            "end_source_byte": 101188,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 101189,
+            "end_source_byte": 101293,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 101294,
+            "end_source_byte": 101422,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.delivery-timing"
+          },
+          {
+            "start_source_byte": 101423,
+            "end_source_byte": 101493,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 101495,
+            "end_source_byte": 101533,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 101534,
+            "end_source_byte": 101646,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.membership"
+          },
+          {
+            "start_source_byte": 101647,
+            "end_source_byte": 101865,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 101868,
+            "end_source_byte": 102027,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 102029,
+            "end_source_byte": 102051,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.bounded"
+          },
+          {
+            "start_source_byte": 102052,
+            "end_source_byte": 102103,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 102104,
+            "end_source_byte": 102196,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.deterministic-bytes"
+          },
+          {
+            "start_source_byte": 102198,
+            "end_source_byte": 102239,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.order"
+          },
+          {
+            "start_source_byte": 102240,
+            "end_source_byte": 102396,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.hashed-order"
+          },
+          {
+            "start_source_byte": 102397,
+            "end_source_byte": 102588,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.truncation-rule"
+          },
+          {
+            "start_source_byte": 102590,
+            "end_source_byte": 102737,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 102738,
+            "end_source_byte": 102819,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.truncation-recorded"
+          },
+          {
+            "start_source_byte": 102820,
+            "end_source_byte": 102861,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.journal-retention"
+          },
+          {
+            "start_source_byte": 102862,
+            "end_source_byte": 102929,
+            "kind": "anchor",
+            "marker_id": "resolved-decisions.hint-not-a-carrier"
+          },
+          {
+            "start_source_byte": 102930,
+            "end_source_byte": 102994,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 102996,
+            "end_source_byte": 103031,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 103032,
+            "end_source_byte": 103102,
+            "kind": "anchor",
+            "marker_id": "core-grants.policy-ceiling"
+          },
+          {
+            "start_source_byte": 103103,
+            "end_source_byte": 103184,
+            "kind": "anchor",
+            "marker_id": "protocol.no-state-mutation-or-chaining"
+          },
+          {
+            "start_source_byte": 103185,
+            "end_source_byte": 103296,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 103297,
+            "end_source_byte": 103362,
+            "kind": "anchor",
+            "marker_id": "adapter.no-direct-file-mutation"
+          },
+          {
+            "start_source_byte": 103363,
+            "end_source_byte": 103388,
+            "kind": "anchor",
+            "marker_id": "adapter.no-adapter-invocation"
+          },
+          {
+            "start_source_byte": 103389,
+            "end_source_byte": 103457,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 103458,
+            "end_source_byte": 103532,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 103533,
+            "end_source_byte": 103606,
+            "kind": "anchor",
+            "marker_id": "protocol-limits.not-physical"
+          },
+          {
+            "start_source_byte": 103608,
+            "end_source_byte": 103675,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 103676,
+            "end_source_byte": 103766,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 103767,
+            "end_source_byte": 103911,
+            "kind": "anchor",
+            "marker_id": "enforcement.source-of-confinement"
+          },
+          {
+            "start_source_byte": 103912,
+            "end_source_byte": 103991,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 103992,
+            "end_source_byte": 104058,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 104059,
+            "end_source_byte": 104174,
+            "kind": "anchor",
+            "marker_id": "grants-network.data-plane-scope"
+          },
+          {
+            "start_source_byte": 104175,
+            "end_source_byte": 104272,
+            "kind": "anchor",
+            "marker_id": "grants-network.control-plane-exempt"
+          },
+          {
+            "start_source_byte": 104274,
+            "end_source_byte": 104304,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 104305,
+            "end_source_byte": 104456,
+            "kind": "anchor",
+            "marker_id": "fail-closed.dimension-per-authority"
+          },
+          {
+            "start_source_byte": 104457,
+            "end_source_byte": 104533,
+            "kind": "anchor",
+            "marker_id": "fail-closed.observation-requires-start"
+          },
+          {
+            "start_source_byte": 104534,
+            "end_source_byte": 104673,
+            "kind": "anchor",
+            "marker_id": "fail-closed.all-rows-satisfied"
+          },
+          {
+            "start_source_byte": 104675,
+            "end_source_byte": 104730,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 104731,
+            "end_source_byte": 104773,
+            "kind": "anchor",
+            "marker_id": "fail-closed.repo-write-withheld"
+          },
+          {
+            "start_source_byte": 104774,
+            "end_source_byte": 104830,
+            "kind": "anchor",
+            "marker_id": "fail-closed.repo-write-scoped"
+          },
+          {
+            "start_source_byte": 104831,
+            "end_source_byte": 104874,
+            "kind": "anchor",
+            "marker_id": "fail-closed.repo-read-withheld"
+          },
+          {
+            "start_source_byte": 104875,
+            "end_source_byte": 104930,
+            "kind": "anchor",
+            "marker_id": "fail-closed.repo-read-scoped"
+          },
+          {
+            "start_source_byte": 104931,
+            "end_source_byte": 104971,
+            "kind": "anchor",
+            "marker_id": "fail-closed.shell-withheld"
+          },
+          {
+            "start_source_byte": 104972,
+            "end_source_byte": 105016,
+            "kind": "anchor",
+            "marker_id": "fail-closed.network-withheld"
+          },
+          {
+            "start_source_byte": 105018,
+            "end_source_byte": 105050,
+            "kind": "anchor",
+            "marker_id": "fail-closed.unsatisfied-row"
+          },
+          {
+            "start_source_byte": 105051,
+            "end_source_byte": 105228,
+            "kind": "anchor",
+            "marker_id": "fail-closed.advisory-path"
+          },
+          {
+            "start_source_byte": 105229,
+            "end_source_byte": 105294,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 105295,
+            "end_source_byte": 105354,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 105355,
+            "end_source_byte": 105411,
+            "kind": "anchor",
+            "marker_id": "probe-sources.require-cast-resolution"
+          },
+          {
+            "start_source_byte": 105413,
+            "end_source_byte": 105442,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 105443,
+            "end_source_byte": 105586,
+            "kind": "anchor",
+            "marker_id": "reserved-inputs.delivery-mechanism"
+          },
+          {
+            "start_source_byte": 105587,
+            "end_source_byte": 105647,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 105648,
+            "end_source_byte": 105667,
+            "kind": "anchor",
+            "marker_id": "reserved-inputs.read-only"
+          },
+          {
+            "start_source_byte": 105668,
+            "end_source_byte": 105694,
+            "kind": "anchor",
+            "marker_id": "reserved-inputs.outside-worktree"
+          },
+          {
+            "start_source_byte": 105695,
+            "end_source_byte": 105731,
+            "kind": "anchor",
+            "marker_id": "reserved-inputs.not-score-declared"
+          },
+          {
+            "start_source_byte": 105733,
+            "end_source_byte": 105888,
+            "kind": "anchor",
+            "marker_id": "reserved-inputs.hash-meaning"
+          },
+          {
+            "start_source_byte": 105889,
+            "end_source_byte": 105929,
+            "kind": "anchor",
+            "marker_id": "reserved-inputs.no-semantic-hash"
+          },
+          {
+            "start_source_byte": 105930,
+            "end_source_byte": 106014,
+            "kind": "anchor",
+            "marker_id": "reserved-inputs.semantic-identity-placement"
+          },
+          {
+            "start_source_byte": 106016,
+            "end_source_byte": 106150,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 106152,
+            "end_source_byte": 106229,
+            "kind": "anchor",
+            "marker_id": "score-base.purpose"
+          },
+          {
+            "start_source_byte": 106230,
+            "end_source_byte": 106318,
+            "kind": "anchor",
+            "marker_id": "score-base.delivery-condition"
+          },
+          {
+            "start_source_byte": 106319,
+            "end_source_byte": 106397,
+            "kind": "anchor",
+            "marker_id": "score-base.base-revision-equality"
+          },
+          {
+            "start_source_byte": 106398,
+            "end_source_byte": 106468,
+            "kind": "anchor",
+            "marker_id": "score-base.base-hash-equality"
+          },
+          {
+            "start_source_byte": 106469,
+            "end_source_byte": 106558,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 106559,
+            "end_source_byte": 106648,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 106649,
+            "end_source_byte": 106726,
+            "kind": "anchor",
+            "marker_id": "score-base.score-content"
+          },
+          {
+            "start_source_byte": 106727,
+            "end_source_byte": 106796,
+            "kind": "anchor",
+            "marker_id": "subject-tree.purpose"
+          },
+          {
+            "start_source_byte": 106797,
+            "end_source_byte": 106896,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 106897,
+            "end_source_byte": 106983,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 106984,
+            "end_source_byte": 107064,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 107065,
+            "end_source_byte": 107154,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 107156,
+            "end_source_byte": 107386,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 107388,
+            "end_source_byte": 107696,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 107698,
+            "end_source_byte": 107932,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 107934,
+            "end_source_byte": 108038,
+            "kind": "anchor",
+            "marker_id": "subject-tree.publication-window"
+          },
+          {
+            "start_source_byte": 108039,
+            "end_source_byte": 108150,
+            "kind": "anchor",
+            "marker_id": "subject-tree.publication-path"
+          },
+          {
+            "start_source_byte": 108151,
+            "end_source_byte": 108222,
+            "kind": "anchor",
+            "marker_id": "subject-tree.jcs-encoding"
+          },
+          {
+            "start_source_byte": 108223,
+            "end_source_byte": 108347,
+            "kind": "anchor",
+            "marker_id": "subject-tree.object-fields"
+          },
+          {
+            "start_source_byte": 108348,
+            "end_source_byte": 108451,
+            "kind": "anchor",
+            "marker_id": "subject-tree.rubric-entries"
+          },
+          {
+            "start_source_byte": 108452,
+            "end_source_byte": 108472,
+            "kind": "anchor",
+            "marker_id": "subject-tree.rubric-order"
+          },
+          {
+            "start_source_byte": 108473,
+            "end_source_byte": 108506,
+            "kind": "anchor",
+            "marker_id": "subject-tree.fsync-before-rename"
+          },
+          {
+            "start_source_byte": 108507,
+            "end_source_byte": 108548,
+            "kind": "anchor",
+            "marker_id": "subject-tree.read-only"
+          },
+          {
+            "start_source_byte": 108549,
+            "end_source_byte": 108606,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 108607,
+            "end_source_byte": 108693,
+            "kind": "anchor",
+            "marker_id": "subject-tree.instance-id"
+          },
+          {
+            "start_source_byte": 108694,
+            "end_source_byte": 108765,
+            "kind": "anchor",
+            "marker_id": "subject-tree.instance-reuse"
+          },
+          {
+            "start_source_byte": 108766,
+            "end_source_byte": 108790,
+            "kind": "anchor",
+            "marker_id": "subject-tree.raw-byte-reuse"
+          },
+          {
+            "start_source_byte": 108791,
+            "end_source_byte": 108857,
+            "kind": "anchor",
+            "marker_id": "subject-tree.publication-before-attempt-started"
+          },
+          {
+            "start_source_byte": 108858,
+            "end_source_byte": 108932,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 108934,
+            "end_source_byte": 109049,
+            "kind": "anchor",
+            "marker_id": "attempt-started.review-subject-input"
+          },
+          {
+            "start_source_byte": 109050,
+            "end_source_byte": 109176,
+            "kind": "anchor",
+            "marker_id": "subject-tree.location-derivation"
+          },
+          {
+            "start_source_byte": 109177,
+            "end_source_byte": 109238,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 109239,
+            "end_source_byte": 109313,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 109314,
+            "end_source_byte": 109514,
+            "kind": "anchor",
+            "marker_id": "subject-tree-cleanup.timing"
+          },
+          {
+            "start_source_byte": 109515,
+            "end_source_byte": 109583,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 109584,
+            "end_source_byte": 109650,
+            "kind": "anchor",
+            "marker_id": "subject-tree-cleanup.exclusive-branch"
+          },
+          {
+            "start_source_byte": 109651,
+            "end_source_byte": 109707,
+            "kind": "anchor",
+            "marker_id": "subject-tree-cleanup.once-only"
+          },
+          {
+            "start_source_byte": 109708,
+            "end_source_byte": 109833,
+            "kind": "anchor",
+            "marker_id": "subject-tree-cleanup.terminal-reuse"
+          },
+          {
+            "start_source_byte": 109834,
+            "end_source_byte": 109950,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 109951,
+            "end_source_byte": 109992,
+            "kind": "anchor",
+            "marker_id": "subject-tree.no-regeneration"
+          },
+          {
+            "start_source_byte": 109993,
+            "end_source_byte": 110067,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 110069,
+            "end_source_byte": 110206,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 110208,
+            "end_source_byte": 110261,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 110262,
+            "end_source_byte": 110360,
+            "kind": "anchor",
+            "marker_id": "result-envelope.not-on-wire"
+          },
+          {
+            "start_source_byte": 110361,
+            "end_source_byte": 110460,
+            "kind": "anchor",
+            "marker_id": "result-envelope.conformance-surface"
+          },
+          {
+            "start_source_byte": 110462,
+            "end_source_byte": 110597,
+            "kind": "anchor",
+            "marker_id": "result-envelope.file-contract"
+          },
+          {
+            "start_source_byte": 110598,
+            "end_source_byte": 110700,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 110701,
+            "end_source_byte": 110768,
+            "kind": "anchor",
+            "marker_id": "result-envelope.shape"
+          },
+          {
+            "start_source_byte": 110769,
+            "end_source_byte": 110837,
+            "kind": "anchor",
+            "marker_id": "result-envelope.members-present"
+          },
+          {
+            "start_source_byte": 110838,
+            "end_source_byte": 110867,
+            "kind": "anchor",
+            "marker_id": "result-envelope.proposal-nullable"
+          },
+          {
+            "start_source_byte": 110868,
+            "end_source_byte": 110941,
+            "kind": "anchor",
+            "marker_id": "result-envelope.arrays-present"
+          },
+          {
+            "start_source_byte": 110942,
+            "end_source_byte": 110973,
+            "kind": "anchor",
+            "marker_id": "result-envelope.summary-string"
+          },
+          {
+            "start_source_byte": 110974,
+            "end_source_byte": 111050,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 111051,
+            "end_source_byte": 111065,
+            "kind": "anchor",
+            "marker_id": "result-envelope.size-cap"
+          },
+          {
+            "start_source_byte": 111066,
+            "end_source_byte": 111260,
+            "kind": "anchor",
+            "marker_id": "result-envelope.artifact-path"
+          },
+          {
+            "start_source_byte": 111261,
+            "end_source_byte": 111353,
+            "kind": "anchor",
+            "marker_id": "result-envelope.id-uniqueness"
+          },
+          {
+            "start_source_byte": 111354,
+            "end_source_byte": 111383,
+            "kind": "anchor",
+            "marker_id": "result-envelope.question-text"
+          },
+          {
+            "start_source_byte": 111384,
+            "end_source_byte": 111463,
+            "kind": "anchor",
+            "marker_id": "result-envelope.proposal-shape"
+          },
+          {
+            "start_source_byte": 111464,
+            "end_source_byte": 111529,
+            "kind": "anchor",
+            "marker_id": "result-envelope.regular-file"
+          },
+          {
+            "start_source_byte": 111530,
+            "end_source_byte": 111638,
+            "kind": "anchor",
+            "marker_id": "result-envelope.kit-no-declaration-check"
+          },
+          {
+            "start_source_byte": 111639,
+            "end_source_byte": 111721,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 111722,
+            "end_source_byte": 111778,
+            "kind": "anchor",
+            "marker_id": "result-envelope.empty-is-completed"
+          },
+          {
+            "start_source_byte": 111779,
+            "end_source_byte": 111826,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 111827,
+            "end_source_byte": 111902,
+            "kind": "anchor",
+            "marker_id": "result-envelope.missing-is-task-failed"
+          },
+          {
+            "start_source_byte": 111903,
+            "end_source_byte": 111961,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 111963,
+            "end_source_byte": 111987,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 111988,
+            "end_source_byte": 112158,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 112159,
+            "end_source_byte": 112206,
+            "kind": "anchor",
+            "marker_id": "diagnostics-privacy.bounded-buffer"
+          },
+          {
+            "start_source_byte": 112207,
+            "end_source_byte": 112258,
+            "kind": "anchor",
+            "marker_id": "diagnostics-privacy.sanitisation"
+          },
+          {
+            "start_source_byte": 112259,
+            "end_source_byte": 112311,
+            "kind": "anchor",
+            "marker_id": "diagnostics-privacy.pre-persistence"
+          },
+          {
+            "start_source_byte": 112313,
+            "end_source_byte": 112380,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 112382,
+            "end_source_byte": 112440,
+            "kind": "non-normative"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
