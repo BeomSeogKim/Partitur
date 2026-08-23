@@ -1368,13 +1368,13 @@ The probe-completion deadline is **15000 integer milliseconds per distinct adapt
 process start, request write, response read, stdin close, and the adapter's clean exit. It is a
 policy ceiling derived from the first-party clean-probe path: 10000 ms for the vendor-CLI probe
 plus 5000 ms reserved for adapter startup, JSON-RPC framing, clean shutdown, and scheduling.
-Termination costs are not part of this deadline; they begin only after it expires. Durations are
-compared as integer milliseconds, consistent with §6.
+Termination costs are not part of this deadline; they begin only after it expires. For duration
+comparison, see §6's “Budget accounting”.
 
-A successful probe is not complete at the response frame. The core closes the adapter's stdin,
-which is the clean-EOF signal above, and requires the adapter to exit zero within the remaining
-probe-completion deadline. A nonzero exit before or after a response is a probe failure. After the
-leader exits, the core verifies the recorded session empty; a successful response and zero leader
+A successful probe is not complete at the response frame. For clean-EOF and zero-exit behavior, see
+§4's “Frozen wire rules”; the exit must occur within the remaining probe-completion deadline. A
+nonzero exit before or after a response is a probe failure. After the leader exits, the core
+verifies the recorded session empty; a successful response and zero leader
 status do not excuse a surviving descendant. Thus the success and timeout paths converge on the
 same verified-empty boundary rather than making process exit a proxy for session cleanup.
 
@@ -1386,36 +1386,34 @@ probe-completion deadline expires; or cleanup cannot verify that the adapter ses
 When an adapter has no valid probe result, `validate` reports that adapter-level failure and
 suppresses derivative capability and enforcement diagnostics for every performer using it:
 those predicates have no observed input and manufacturing their outcomes would not be fail-closed.
-Other adapters are still probed and their independent diagnostics are still reported.
 
 Model availability is **not** a `validate` predicate in v0.2: the command does not compare a cast's
 model with `probe.capabilities.models`, and `model_unavailable` remains an attempt failure. Adding
 that check requires a separate rule to settle id-versus-alias matching and whether a mismatch is
 fail-closed or advisory; the probe-failure suppression rule above does not create it implicitly.
 
-On timeout the core closes stdin, sends `SIGTERM` to the adapter session, waits the core's outer
-termination grace, then repeatedly sends `SIGKILL` and re-enumerates until the session is verified
-empty. Probe stderr is diagnostics only: it is buffered to at most 65536 bytes, sanitized before
-rendering, and never written to run storage.
+On timeout the core closes stdin. For session termination and verified-empty cleanup, see §4's
+“Process supervision”. For probe stderr's protocol role, see §4's “Frozen wire rules”. Probe stderr
+is buffered to at most 65536 bytes, sanitized before rendering, and never written to run storage.
 
-The completion deadline and outer grace run serially on the timeout path: the bounded waits before
-the first `SIGKILL` total **45000 ms per distinct adapter** (15000 ms completion plus 30000 ms
-grace). A serial implementation probing two wedged adapters may spend 90000 ms before both reach
-that point; parallel probing may reduce wall-clock time but does not change either per-adapter
+The bounded waits before the first `SIGKILL` total **45000 ms per distinct adapter** (15000 ms
+completion plus 30000 ms grace). A serial implementation probing two wedged adapters may spend
+90000 ms before both reach that point; parallel probing may reduce wall-clock time but does not
+change either per-adapter
 bound. The verified-empty sweep after the first `SIGKILL` is additional and has no fixed deadline,
 because returning while a session remains observable would falsely claim cleanup.
 
-The core starts a validation probe as a new POSIX session leader and keeps its identity in memory
-for the controlled-exit sweep above. It does **not** use the durable execution-launch gate: a probe
-has no attempt, receives no `execute` request, worktree, output directory, grants, or run state, and
-cannot be recovered from an attempt journal. If the core itself dies, closing its stdin pipe invokes
-the frozen EOF contract above: a conforming adapter cancels in-flight work, drains, and exits zero
-after clean EOF, or exits nonzero after a partial frame. A non-conforming adapter or a descendant
-that deliberately escapes its session remains outside the containment boundary below.
+For validation-probe session leadership, see §4's “Process supervision”. The core keeps the
+identity in memory for the controlled-exit sweep above. It does **not** use the durable
+execution-launch gate: a probe has no attempt, receives no `execute` request, worktree, output
+directory, grants, or run state, and
+cannot be recovered from an attempt journal. If the core itself dies, see §4's “Frozen wire rules”
+for adapter-stdin EOF behavior. For escaped descendants and the containment boundary, see §4's
+“Process supervision”.
 
-The core creates no run, attempt, journal, manifest, or resolved-cast file during validation and
-mutates no repository state. Any score, cast, adapter-environment, capability, or enforcement
-diagnostic makes `partitur validate` exit 3; usage errors remain exit 1.
+The core creates no attempt, manifest, or resolved-cast file during validation. For the run,
+journal, and repository-state guarantees and the exit codes, see §7's “`partitur validate`
+precondition matrix” and “Exit codes”.
 
 Validation output is deterministic and grouped in dependency order: **score → cast →
 adapter-environment → capability → enforcement**. Score and cast diagnostics retain the ordering
@@ -1432,9 +1430,9 @@ cast checks, adapter selection and probing, capability checks, and enforcement c
 cast-resolution failure suppresses all derivative probing, capability, and enforcement output.
 A missing binding suppresses only the affected part: adapters reachable through other valid
 binding chains are still probed and evaluated. An unprobeable adapter suppresses capability and
-enforcement output only for performers using that adapter, as specified above; other adapters and
-performers continue. A capability diagnostic does not suppress an independently evaluable
-enforcement result.
+enforcement output only for performers using that adapter; other adapters and performers
+continue. A capability diagnostic does not suppress an independently evaluable enforcement
+result.
 
 An unmet enforcement dimension for a performer whose resolved cast entry has
 `allow_advisory_enforcement: false` is an enforcement diagnostic and therefore exits 3. For a
@@ -1446,28 +1444,25 @@ axis, and no other finding may use it without a specification change.
 
 **Run-attempt probing.** `partitur run` does not perform or reuse a run-level validation preflight.
 Validation is a separate, optional command surface; its observation cannot truthfully describe an
-adapter process launched later, and its failure has a CLI contract of its own (§7). Instead, every
-attempt observes the peer that will execute it: after `performer.selected` creates the attempt, the
-core opens the §6 `adapter` execution interval, launches the attempt's one adapter process through
-the durable gate, appends and fsyncs `attempt.started`, releases the gate, and calls `probe` on that
-process **before** `execute`.
+adapter process launched later, and its failure has a CLI contract of its own (§7). Instead, after
+`performer.selected` creates the attempt, the core opens the §6 `adapter` execution interval,
+launches the adapter through the durable gate, appends and fsyncs `attempt.started`, and releases the
+gate. For subsequent per-attempt process reuse and RPC order, see §4's “Process model and framing”.
 
-The run probe uses the validation probe's **15000 ms probe-completion deadline**, response
-validation rules, bounded and sanitized stderr handling, probe-failure suppression rule, and
-**30000 ms outer termination grace plus verified-empty sweep by reference**; those rules are not
-redeclared for execution. For a run probe the completion deadline covers trampoline start, durable
-handoff, gate release, request write, and the complete response; for a denied admission it also
+For run-probe completion, response validation, stderr handling, suppression, termination, and
+cleanup, see §4's “Validation probing” and “Process supervision”. For a run probe the completion
+deadline covers trampoline start, durable handoff, gate release, request write, and the complete
+response; for a denied admission it also
 covers the clean exit below. The standalone-probe successful shutdown step does not apply to an
-`execute` admission: the core keeps this same process open for `execute`. A denied admission has no
-next RPC, so it uses that referenced clean-EOF/zero-exit completion rule; on any failure that
-requires forced shutdown, the referenced close-stdin, `SIGTERM`, `SIGKILL`, and verified-empty
-ladder applies unchanged. The probe deadline is a ceiling, not extra budget: §6's active-wall-clock
-exhaustion can terminate the adapter interval sooner.
+`execute` admission; for execution process reuse, see §4's “Process model and framing”. For denied-
+admission completion and forced shutdown, see §4's “Validation probing”. The probe deadline is a
+ceiling, not extra budget: §6's active-wall-clock exhaustion can terminate the adapter interval
+sooner.
 
 The suppression rule is the same fact boundary in a different surface: without a valid probe
 result the core manufactures no capability, enforcement, feature, or adapter-version observation.
-It records an `attempt.failed` instead, with the failure classified under Appendix D, and sends no
-`execute`. A valid result must name the selected adapter id and advertise every capability required
+It records an `attempt.failed` instead, with the failure classified under Appendix D. A valid result
+must name the selected adapter id and advertise every capability required
 by the selected part. The core evaluates capability coverage and the fail-closed/advisory predicate.
 Missing required capability is
 `attempt.failed {kind: adapter_unavailable, reason: capability_unavailable}` and therefore may
@@ -1478,7 +1473,7 @@ request's A.5 hash is computed, may the core append and fsync `adapter.probed`.
 
 Only a durable `adapter.probed` authorizes the core to send `execute` on that same process. A denied
 probe closes and verifies the adapter session under the referenced probe rules, then follows its
-separately specified failure path; no execute request is sent. A higher-priority shutdown failure
+separately specified failure path. A higher-priority shutdown failure
 supersedes that intended failure under Appendix D's classification priority. Recovery therefore
 distinguishes a missing durable observation from an observed peer that had already been authorized
 for execution, without manufacturing probe facts.
@@ -1487,11 +1482,9 @@ There is therefore no new pre-run diagnostic or exit category: a run probe failu
 attempt history, §3.1 decides whether a fallback follows, and an exhausted path reaches the existing
 movement/run failure sequence and exit 4 (§7).
 
-**Run execute completion.** A complete `execute` response is a protocol completeness marker, not
-yet a durable attempt transition. The core reuses the validation probe's clean-EOF, zero-exit, and
-verified-empty completion boundary above **by reference**: after receiving and validating the
-response, it closes adapter stdin, requires a zero adapter exit, and verifies the recorded gated
-session empty. If forced termination is required, the same §4 outer grace and session sweep apply.
+**Run execute completion.** For execute-response completeness, transition timing, and cleanup, see
+§4's “Frozen wire rules”, Appendix B.2's “Remaining B.2 field clauses”, and §4's “Validation
+probing”.
 The validation probe's **15000 ms completion deadline does not carry over**: a run already has an
 open §6 `adapter` interval, and the remaining run budget plus cancellation or supersession bounds
 that interval.
@@ -1505,8 +1498,8 @@ complete execute response (all event notifications already precede it)
 → the response-derived B.2 transition
 ```
 
-For `outcome: completed`, that final transition is `performer.completed`; the other outcomes use
-the existing one-to-one mapping in B.2. `normal` describes the living opener's ordinary interval
+For execute-outcome transitions, see Appendix B.2's “Remaining B.2 field clauses”. `normal`
+describes the living opener's ordinary interval
 close, not success: an otherwise valid response followed by a nonzero or unobtainable adapter exit
 is discarded, the session is swept, the interval is closed `normal`/`measured`, and the attempt
 fails as `attempt.failed {kind: adapter_unavailable, disposition}` with no sub-reason, through
@@ -1533,13 +1526,12 @@ after its in-memory session identity reaches the same empty boundary.
 **Event-notification field clauses.** Each clause below constrains the named field in the five
 adjacent, coherent notification specimens.
 
-- `artifact.path` must be inside `output_dir`.
 - The core immediately copies the file announced by an `artifact` notification.
-- The copy is stored under `runs/<id>/artifacts/`.
 - §1's atomicity rules govern that copy.
-- Only the immutable artifact copy is treated as recorded.
-- `proposal.amendment` is the structured amendment in §2's format.
-- The core validates a notified proposal.
+- For artifact path containment, storage, and recording authority, see §1's “Repository-layout
+  clauses” and “Artifact recording atomicity”.
+- For `proposal.amendment`, see §2's “Amendment format v0.2”.
+- For notified-proposal validation, see §9's “Admissibility pipeline”.
 - `proposal.id` is stable within the attempt.
 - The blocking handshake below governs `question` notifications.
 
@@ -1564,12 +1556,11 @@ proposal { id, amendment,
 question { id, question }
 ```
 
-Code changes are never communicated as `artifact` events — the core itself captures them
-from the worktree as a `change_set` (§5), and `change_set` outputs never appear in
-`brief.outputs`. Draft movements may not emit `artifact` at all.
+For change-set capture and delivery, see §5's “`kind: change_set` is a core-synthesized logical
+output, never an artifact”. For draft semantic-output admissibility, see §2's “DRAFT phase contract”.
 
-**Blocking handshake for questions and proposals.** v0.2 has no daemon, so nothing waits
-in memory for a human:
+**Blocking handshake for questions and proposals.** For the absence of a daemon, see §0's “Ground
+rules inherited from the concept”.
 
 - An adapter that needs answers emits `question`(s) (or a `proposal` it cannot proceed
   without, marked `requires_decision: true`), returns `outcome: waiting_human` with
@@ -1577,41 +1568,30 @@ in memory for a human:
   emitted question plus precisely those proposals with `requires_decision: true`. A missing id, an
   unknown id, or `outcome: completed` after emitting a blocking event is a `protocol_error`
   (`blocking_set_mismatch`) — otherwise a peer could strand a question the core would never surface,
-  or block on an id nothing raised. A blocking proposal's `id` is a valid member of
-  `pending_decision_ids`, alongside question ids. The attempt ends `BLOCKED` (a terminal
-  attempt state — no process stays alive).
-- **The blocked result is recorded by one fsynced event, and every request has exactly one durable
-  source.** `attempt.blocked` carries the complete set of raised decisions *with their content* —
-  question text, proposal ids, types, and blocking flags. A question's `decision.requested` derives
-  from that recorded `raised` entry. A proposal's request derives only from
-  `amendment.routed_human`, which owns the routing facts §1 requires. Recording question requests
+  or block on an id nothing raised. For the waiting-human attempt transition, see Appendix B.2's
+  “Remaining B.2 field clauses”.
+- For `attempt.blocked` synchronization and payload, see Appendix B.2's “Attempt lifecycle and
+  performer selection” and “Remaining B.2 field clauses”. For decision-request source authority,
+  see Appendix B.4's “Decisions”. Recording question requests
   as independent appends first would mean a crash after the first question lost the second one's
   text, while deriving a proposal request from both events would give it competing authorities.
 
-  A blocking proposal that passes §9 steps 1–9 is a route: before the one `attempt.blocked` append,
-  the core writes its immutable record and freezes the route descriptor in that proposal's `raised`
-  entry. It then appends `amendment.routed_human` from that descriptor, in raised order, and the
-  ordinary routed-to-request rule follows. The descriptor is **not** a second request source:
-  `amendment.routed_human` remains the sole authority for `decision.requested`. It is instead the
-  durable source-to-route cut: if a crash lands after `attempt.blocked` and before the route,
+  For blocking-proposal admission and routing, see §9's “Admissibility pipeline”. Before the one
+  `attempt.blocked` append, the core writes its immutable record and freezes the route descriptor in
+  that proposal's `raised` entry. It then appends `amendment.routed_human` from that descriptor, in
+  raised order, and the ordinary routed-to-request rule follows. The descriptor is the durable
+  source-to-route cut: if a crash lands after `attempt.blocked` and before the route,
   `RC-RESUME-049` verifies the named record and appends the exact frozen route; only then can
   `RC-RESUME-037` append the request. A proposal rejected at steps 1–9 appends its amendment terminal
   with the derived `decision_id` before `attempt.blocked` and has no route descriptor. Thus no
   blocked attempt is left with a decision that no terminal can close, and no recovery has to
   evaluate or silently rebase a notification.
-- An unresolved blocking decision projects the movement and the run to `WAITING_HUMAN` (§6) — a
-  projection of the outstanding decision, not a separately appended state event.
-- **Emitted ids are attempt-scoped, so neither `decision_id` nor `proposal_id` is the emitted
-  id.** The adapter kit guarantees question and proposal ids are unique only *within* an attempt,
-  so two attempts of the same movement may legitimately both emit `q-1` — or both emit `p-1`. The
-  core therefore derives **both** core ids collision-safely from `(attempt_id, emitted_id)` and
-  carries the emitted id as provenance:
-
-  The derivation and the allocation rules for both are in **A.4.3**, which covers every origin.
-
-  **Ids with no emitted id are core-allocated**, since there is nothing to derive from. A.4.3 owns
-  the complete rule for every origin — derived and allocated alike — so that two implementations
-  cannot produce different identifiers for the same event.
+- For unresolved blocking-decision projection, see §6's “`WAITING_HUMAN` is a projection, and it
+  has a defined exit”.
+- Adapter-emitted question and proposal ids are unique only *within* an attempt and are carried as
+  provenance, so two attempts of the same movement may legitimately both emit `q-1` — or both emit
+  `p-1`. For the corresponding core identifiers, see Appendix A.4.3's “Scoped identifiers —
+  derived, but not content identities”.
 
   Nothing — no journal key, no CLI argument, no projection — may key on a raw emitted id.
   Amendment events are keyed by `proposal_id` (Appendix B), so without this two attempts each

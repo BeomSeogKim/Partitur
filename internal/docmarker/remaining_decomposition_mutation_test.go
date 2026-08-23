@@ -247,9 +247,9 @@ func TestMutationRemainingFenceDecomposition(t *testing.T) {
 			target: "TestRemainingFenceDecomposition/adapter-methods",
 		},
 		{
-			name:   "event notifications dropped carrier",
-			before: "- Only the immutable artifact copy is treated as recorded.\n",
-			after:  "<!-- mutation: event-notifications carrier dropped -->\n",
+			name:   "event notifications dropped relocated carrier",
+			before: "**Amendment format v0.2.** A `proposal` carries:\n",
+			after:  "<!-- mutation: event-notifications relocated carrier dropped -->\n",
 			pkg:    "./internal/docmarker",
 			target: "TestRemainingFenceDecomposition/event-notifications",
 		},

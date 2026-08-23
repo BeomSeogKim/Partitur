@@ -94,7 +94,7 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 				},
 				23: {
 					"The core immediately copies the file announced by an `artifact` notification.",
-					"Only the immutable artifact copy is treated as recorded.",
+					"**Artifact recording atomicity.** Recording an artifact follows a fixed order:",
 				},
 				24: {
 					"TMPDIR=<attempt staging directory>/tmp\n  TMP=<attempt staging directory>/tmp\n  TEMP=<attempt staging directory>/tmp",
@@ -218,7 +218,7 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 				30: {
 					"returns `outcome: waiting_human` with\n  `pending_decision_ids`, and exits.",
 					"it must equal every\n  emitted question plus precisely those proposals with `requires_decision: true`.",
-					"The attempt ends `BLOCKED` (a terminal\n  attempt state — no process stays alive).",
+					"Adapter outcome `waiting_human` maps to terminal `attempt.blocked`, taking the attempt from\n  `RUNNING` to `BLOCKED`.",
 				},
 			},
 			specimens: []remainingSpecimenExpectation{
@@ -230,10 +230,16 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 		{
 			name:               "event-notifications",
 			start:              "**Event-notification field clauses.**",
-			end:                "Code changes are never communicated as `artifact` events",
+			end:                "For change-set capture and delivery",
 			carrierMarker:      "**Event-notification field clauses.**",
-			carrierHash:        "469c5e4b65987886f5ee1a0a39dda289db045ad4c27a887897adfc5ce40ef98a",
-			carrierAssignments: []int{5, 1, 2, 1},
+			carrierHash:        "a68bbea0d659cbe84c9cddd65d8765cd7b4e68c1953f72e749085cbc4616721f",
+			referenceCount:     3,
+			carrierAssignments: []int{2, 0, 1, 1},
+			relocatedCarriers: map[int][]string{
+				2: {
+					"**Amendment format v0.2.** A `proposal` carries:",
+				},
+			},
 			specimens: []remainingSpecimenExpectation{
 				{language: "text", prefix: "log {", hash: "da6b056b719b96a35d46bdcdf085db33189b705ba6b29d4487983e262e5c03b3"},
 				{language: "text", prefix: "progress {", hash: "eed2e976cc47077f22e1f5fe72bd464e57f0652fd59bc9c0026a97394d2c3e81"},
