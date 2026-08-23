@@ -1146,12 +1146,13 @@ outside the core's security boundary.
 `probe` and then `execute` on that same process. Validation uses one standalone process per distinct
 adapter as specified below. Transport is JSON-RPC 2.0 messages
 as **UTF-8 JSON Lines**, one per line, directional: **requests travel on the adapter's stdin;
-responses and event notifications travel on its stdout.** Newlines inside values are escaped;
-control frames have a fixed size cap — large content travels as artifact files, never inline.
-`stderr` is diagnostics only: execution captures it to the attempt directory, while validation
-keeps only the bounded sanitized diagnostic defined below. The adapter must keep reading stdin
-during `execute` so a `cancel` request can be received; after a grace timeout the core terminates
-the process, and force-kills after a further timeout. No daemon in v0.2.
+responses and event notifications travel on its stdout.** Newlines inside values are escaped.
+For frame size, large-content transport, and stderr's protocol role, see §4's “Frozen wire rules”.
+For execution stderr persistence, see §4's “Diagnostics privacy”; for validation-probe stderr
+handling, see §4's “Validation probing”. The adapter must keep reading stdin during `execute` so a
+`cancel` request can be received; after a grace timeout the core terminates the process, and
+force-kills after a further timeout. For the absence of a daemon, see §0's “Ground rules
+inherited from the concept”.
 
 **Frozen wire rules.** These are normative for both sides, and "frozen" means "the contract
 will not change" — **not** "every line already exists". Implementation status:
@@ -1197,8 +1198,6 @@ will not change" — **not** "every line already exists". Implementation status:
   reformatted, never renumbered.
 - **One concurrent `execute` per adapter process.** A second `execute` while one is in
   flight is `-32000`.
-- **`cancel` is idempotent** and always acknowledged, including after the target has already
-  finished — the core may legitimately race a cancel against completion.
 - **Events precede the response.** Every `event` notification for an `execute` is emitted
   before that call's response; no event is emitted afterwards. This is what lets the core
   treat the response as a completeness marker.
@@ -1250,15 +1249,14 @@ adjacent, coherent wire-form specimens.
 - `execute.request.brief` is the score projection for this part.
 - `execute.request.brief` carries the intent, constraints, and invariants the part needs under the
   concept.
-- `execute.request.brief.context` is omitted entirely when the score omits context (§2 defaults).
-- `execute.request.brief.context` is never sent as an empty string in place of omission.
+- For `execute.request.brief.context` optionality and omission semantics, see §2's “Defaults,
+  optionality, and ranges” table.
 - `execute.request.brief.verification_expectation` is user intent.
 - The core forwards `execute.request.brief.verification_expectation` to relevant parts.
 - Acceptance, never the adapter, judges whether the verification expectation was met.
 - `execute.request.brief.global_invariants` is a deterministic core-computed projection.
 - That projection is computed from the goal, finalized resolutions, and policy.
 - `execute.request.brief.global_invariants` is not a separate score field.
-- The core, not the adapter, computes `execute.request.brief.global_invariants`.
 - `execute.request.brief.outputs` contains this movement's declared outputs.
 - Only artifact ids in `execute.request.brief.outputs` may be emitted by the attempt.
 - `execute.request.inputs[].instance_id` is delivered, not merely hashed.
@@ -1271,25 +1269,19 @@ adjacent, coherent wire-form specimens.
 - `execute.request.feedback[].path` is inside the attempt's readable area.
 - `execute.request.feedback[].hash` is the SHA-256 of the raw bytes.
 - The feedback hash makes tampering detectable.
-- `execute.request.feedback` is read-only.
-- Feedback is never applied to the base.
+- For feedback immutability and base isolation, see §7's “Failure feedback”.
 - `execute.request.resolved_decisions` is a tagged union.
 - Every `execute.request.resolved_decisions` entry carries `kind`.
 - The blocking handshake below defines the closed resolved-decision variants.
-- `execute.request.workdir` is the attempt worktree (§5).
-- `execute.request.output_dir` is the artifact area (§5).
-- `execute.request.output_dir` is always writable.
-- `execute.request.budget.remaining_ms` is the remaining budget at attempt start.
-- `execute.request.budget.remaining_ms` is an integer number of milliseconds.
+- For `execute.request.workdir` and `execute.request.output_dir`, see §5's “Git worktrees”.
+- For attempt-start budget delivery, see §6's “Budget accounting”.
+- For request-budget units and comparison semantics, see §6's “Budget accounting”.
 - The wire budget field is not `active_wall_clock_min`.
-- The score declares the cap in minutes, but the remainder is tracked and compared in milliseconds
-  (§6).
 - A minutes-only wire field could not carry the remainder losslessly.
 - `execute.request.extensions`, when present, contains only the namespace matching this adapter's id.
 - `execute.result.failure` is present when `outcome` is `failed`.
-- `execute.result.pending_decision_ids` is present when `outcome` is `waiting_human`.
-- An attempt may raise several questions.
-- A waiting-human attempt blocks on every id in `execute.result.pending_decision_ids`.
+- For waiting-human results and their complete blocking set, see §4's “Blocking handshake for
+  questions and proposals”.
 - `execute.result` reports only the transport-level outcome.
 - The adapter never judges success.
 - The core runs acceptance.

@@ -192,14 +192,34 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			},
 		},
 		{
-			name:          "adapter-methods",
-			start:         "**Adapter-method field clauses.**",
-			end:           "**Validation probing.**",
-			carrierMarker: "**Adapter-method field clauses.**",
-			carrierHash:   "63d368bbac94db68bf91f9d4e241b92f394bde40a77471dc5f2680f119ece6fb",
+			name:           "adapter-methods",
+			start:          "**Adapter-method field clauses.**",
+			end:            "**Validation probing.**",
+			carrierMarker:  "**Adapter-method field clauses.**",
+			carrierHash:    "6b026743bb12d09c9cca538df0bcfb70339bd5d2d9d95ac3f1a04e91d79fbb26",
+			referenceCount: 6,
 			carrierAssignments: []int{
-				7, 3, 1, 1, 1, 2, 1, 1, 1, 2, 2, 1, 4, 1, 1, 3, 1, 1, 1, 2, 2,
-				2, 2, 1, 1, 2, 5, 1, 1, 3, 3,
+				7, 3, 1, 1, 1, 2, 1, 1, 1, 0, 2, 1, 3, 1, 1, 3, 1, 1, 1, 2, 2,
+				0, 2, 1, 0, 0, 2, 1, 1, 0, 3,
+			},
+			relocatedCarriers: map[int][]string{
+				10: {
+					"| `context` | optional | **absent** — omitted from the canonical projection, from `brief`, and from A.5 alike, never sent as `\"\"` | — |",
+				},
+				22: {
+					"Feedback is read-only diagnosis; rejected changes are never applied\nto the base.",
+				},
+				25: {
+					"Each attempt gets a fresh worktree built from the **approved results of its dependency\n  movements** (the clean base)",
+				},
+				26: {
+					"plus an always-writable `output_dir` at\n  `.partitur/work/<run-id>/<attempt-id>/output/`",
+				},
+				30: {
+					"returns `outcome: waiting_human` with\n  `pending_decision_ids`, and exits.",
+					"it must equal every\n  emitted question plus precisely those proposals with `requires_decision: true`.",
+					"The attempt ends `BLOCKED` (a terminal\n  attempt state — no process stays alive).",
+				},
 			},
 			specimens: []remainingSpecimenExpectation{
 				{language: "text", prefix: "probe() -> {\n", hash: "6b3a469e2260c0ff61eba49c64e199045008154f49aa6dca160e8dc3c59ac2bb"},
