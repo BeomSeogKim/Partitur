@@ -17,7 +17,9 @@ type surveyBlockExpectation struct {
 	language           string
 	prefix             string
 	carrierHash        string
+	referenceCount     int
 	carrierAssignments []int
+	relocatedCarriers  map[int][]string
 	specimenHash       string
 }
 
@@ -37,7 +39,16 @@ func TestSurveyFenceDecomposition(t *testing.T) {
 		{
 			name: "may-propose", start: "**`may_propose` example field clauses.**", end: "**A non-blocking proposal is advisory and expires.**",
 			language: "yaml", prefix: "  - id: design\n",
-			carrierHash: "09854c7647594a37c96794aebb17d58abfbe246eab1768fb3c8436c6b5239ac6", carrierAssignments: []int{4}, specimenHash: "02d654450406cd0e82578185b026d6330d94fe24eebcea126a203e0f91c09ec5",
+			carrierHash: "518d17d5754614377913fedd1e1d8fb6d45da3384b3f81d7b45b0f24ea94c3cc", referenceCount: 4, carrierAssignments: []int{0},
+			relocatedCarriers: map[int][]string{
+				1: {
+					"| `movements[].may_propose` | optional | `false`; `true` for the draft interview movement | — |",
+					"`partitur.score-base` is the reserved input for proposal-capable movements.",
+					"A `may_propose` attempt receives the complete score base",
+					"8. **Executed-dependency feasibility**",
+				},
+			},
+			specimenHash: "02d654450406cd0e82578185b026d6330d94fe24eebcea126a203e0f91c09ec5",
 		},
 		{
 			name: "inapplicable-state", start: "**`INAPPLICABLE` state clauses.**", end: "Plus two **per-run projections on separate axes**",
@@ -83,11 +94,29 @@ func TestSurveyFenceDecomposition(t *testing.T) {
 			if got := sha256Text(carrierText); got != block.carrierHash {
 				t.Fatalf("carrier bytes hash = %s, want %s", got, block.carrierHash)
 			}
-			carriers := markdownBullets(carrierText)
+			var carriers []string
+			references := 0
+			for _, bullet := range markdownBullets(carrierText) {
+				if strings.HasPrefix(bullet, "- For ") {
+					references++
+					continue
+				}
+				carriers = append(carriers, bullet)
+			}
+			if references != block.referenceCount {
+				t.Fatalf("reference-only bullets = %d, want %d", references, block.referenceCount)
+			}
 			assigned := 0
 			for index, count := range block.carrierAssignments {
-				if count <= 0 || assigned+count > len(carriers) {
+				if count < 0 || assigned+count > len(carriers) {
 					t.Fatalf("original annotation run %d has invalid carrier assignment %d", index+1, count)
+				}
+				relocated := block.relocatedCarriers[index+1]
+				if count == 0 && len(relocated) == 0 {
+					t.Fatalf("original annotation run %d has neither a local nor relocated carrier", index+1)
+				}
+				for _, carrier := range relocated {
+					requireOccurrence(t, string(contents), carrier, 1)
 				}
 				assigned += count
 			}
@@ -114,8 +143,8 @@ func TestSurveyFenceDecomposition(t *testing.T) {
 					t.Fatalf("specimen is not one safe YAML document: %v", err)
 				}
 			}
-			t.Logf("%s decomposition: %d original annotation runs, %d prose carriers, 1 independently copyable top-level payload, 0 comment markers",
-				block.name, len(originals), len(carriers))
+			t.Logf("%s decomposition: %d original annotation runs, %d prose carriers, %d relocated carrier groups, %d reference-only bullets, 1 independently copyable top-level payload, 0 comment markers",
+				block.name, len(originals), len(carriers), len(block.relocatedCarriers), references)
 		})
 	}
 }

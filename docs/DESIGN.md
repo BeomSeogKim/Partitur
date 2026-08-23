@@ -902,18 +902,18 @@ normative:
 | `movements[].inputs` / `.outputs` | optional | `[]` | §2 rules 4, 15 |
 | `movements[].phase` | optional | **absent** (non-draft) | only `draft` |
 | `movements[].may_propose` | optional | `false`; `true` for the draft interview movement | — |
-| `movements[].acceptance` | optional | `{hard: [], review: [], human_gate: "never"}` | `human_gate` defaults to **`never`** — the permissive-looking default is safe because §2 rule 2 independently forces a write movement to declare a hard criterion or `always` |
+| `movements[].acceptance` | optional | `{hard: [], review: [], human_gate: "never"}` | §2 rule 2 |
 | `acceptance.hard[].timeout_min` | optional | **absent** — the effective timeout is then the remaining budget alone (§7) | integer ≥ 1 |
 | `acceptance.hard[].expected_hash` | optional | absent | `sha256:<hex>` |
-| `policy.allowed_paths` | optional | `[]` | no duplicates; empty means no path authority (A.5) |
+| `policy.allowed_paths` | optional | `[]` | §2 rule 10; for an empty list, see A.5 |
 | `policy.side_effects` | optional | `[]` | must be `[]` in v0.2 |
 | `policy.budget.active_wall_clock_min` | required | — | integer ≥ 1 |
 | `policy.budget.retries_per_movement` | optional | `0` | integer ≥ 0 |
 | `policy.amendment.auto` | optional | `"off"` | either `off` or `envelope` |
 
 **No field is nullable.** An absent optional field and an explicitly-`null` one are not the same:
-`null` is a type error, and an omitted field takes the default above. Where the default is "absent",
-the field does not appear in the projection at all rather than appearing as `null` (A.1).
+`null` is a type error, and an omitted field takes the default above. For projection of fields whose
+default is "absent", see Appendix A.1's “Omitted vs explicit defaults”.
 
 For the cast: `performers.<id>.adapter` and `.model` are required; `allow_advisory_enforcement`
 defaults to `false`; `extensions` defaults to absent; `bindings.<part>.performer` is required and
@@ -921,19 +921,19 @@ defaults to `false`; `extensions` defaults to absent; `bindings.<part>.performer
 a fallback chain must be duplicate-free and must not contain its own primary.
 
 **Amendment-proposal authority.** A performer can only propose an amendment if it has been
-given the base score to patch, and receiving the base score has a cost: the score becomes
-part of that attempt's execution dependencies, so **any** later amendment invalidates the
-attempt (§9). If every movement received it, no amendment could ever be approved mid-run
-after any movement succeeded — the envelope would be dead on arrival.
+given the base score to patch. For the score base's execution-dependency effect, see Appendix A.5's
+“The execution-dependency projection”. For amendment invalidation, see §9's “Executed-dependency
+feasibility”. If every movement received it, no amendment could ever be approved mid-run after any
+movement succeeded — the envelope would be dead on arrival.
 
 Proposal authority is therefore opt-in per movement:
 
 **`may_propose` example field clauses.**
 
-- `may_propose` defaults to `false`.
-- `may_propose: true` makes the movement receive the reserved `partitur.score-base` input (§4).
-- The movement's execution dependency includes that score base.
-- Any later amendment consequently invalidates the attempt.
+- For `may_propose`'s default, see §2's “Defaults, optionality, and ranges” table.
+- For the reserved score-base input, see §4's “Reserved-input field clauses”.
+- For its execution dependency, see Appendix A.5's “The execution-dependency projection”.
+- For amendment invalidation, see §9's “Executed-dependency feasibility”.
 
 ```yaml
   - id: design
@@ -941,12 +941,11 @@ Proposal authority is therefore opt-in per movement:
     may_propose: true
 ```
 
-**A non-blocking proposal is advisory and expires.** Because a `may_propose` attempt's dependency
-includes the whole score (A.5), the moment that movement succeeds its own proposal becomes
-unapprovable — approving it would change a succeeded movement's dependency hash (§9). That is safe,
-but it is worth stating rather than leaving as a surprise: a non-blocking proposal is useful only
-while its movement is still running, and beyond that window it is a suggestion for the *next* run. A
-performer that needs its proposal to land must mark it `requires_decision: true` and block on it.
+**A non-blocking proposal is advisory and expires.** For amendment feasibility after the proposing
+movement succeeds, see §9's “Executed-dependency feasibility”. That outcome is safe, but it is worth
+stating rather than leaving as a surprise: a non-blocking proposal is useful only while its movement
+is still running, and beyond that window it is a suggestion for the *next* run. For a proposal that must land
+before execution continues, see §4's “Blocking handshake for questions and proposals”.
 
 It is permitted on **any** movement, write-capable included. A proposal carries no mutation
 authority of its own — approval is a separate human or envelope decision that supersedes the
@@ -954,8 +953,8 @@ active attempt anyway — so barring write movements would only silence the perf
 likely to discover a score defect while implementing against it. The cost is the invalidation
 above, and the score author decides whether to pay it.
 
-The draft interview movement carries it implicitly, since proposing is its entire purpose,
-and draft-phase amendments always route to a human anyway.
+For the draft interview's implicit value, see §2's “Defaults, optionality, and ranges” table.
+For draft-phase amendment routing, see §9's “Admissibility pipeline”.
 
 The field governs **adapter-originated** proposals only: a movement without it receives no
 `partitur.score-base`, and a `proposal` event from such an attempt is a `protocol_error`
@@ -989,9 +988,9 @@ bindings:
 > manifest records which constraints were advisory per attempt — or bind write movements to
 > a performer whose enforcement covers the movement's grants.
 
-**Requirements for a future factory cast.** Enforcement is reported by the adapter's `probe` and
-recorded per attempt (§1, §4); a factory cast must neither supply nor override it. Within enforcement
-posture, any factory cast that ships decides only where it opts into advisory execution:
+**Requirements for a future factory cast.** For adapter enforcement reports, see §4's “Environment
+enforcement — the trust boundary stated honestly”. For per-attempt enforcement recording, see §1's
+“Cast layering”. The factory cast's enforcement posture is specified by the requirement below:
 
 > A factory cast MUST NOT duplicate or override adapter enforcement reports. It may opt into advisory
 > execution only through dedicated performer entries, **never globally**. Parts intended to remain
@@ -1006,24 +1005,22 @@ and fallback chain for a **part**, while `grants` are declared per **movement**,
 several movements with different grants. An advisory-enabled entry can therefore allow an unmet
 enforcement dimension to proceed in any movement in which that entry is selected, including a
 movement holding no `repo_write`; the exact advisory dimensions remain movement- and attempt-specific
-under §4. Distinct entries are necessary but not sufficient: a part remains strict only when its
-primary and every fallback are strict entries.
+under §4. Distinct entries are necessary but not sufficient. For a strict part's primary and fallback
+entries, see §3's “Requirements for a future factory cast”.
 
-Whether a started adapter session is denied before `execute` or proceeds with recorded advisory
-dimensions is governed solely by §4's per-movement predicate. Both outcomes are legitimate; a
-future factory cast must not authorize the second through a global opt-in.
+For pre-`execute` denial and advisory admission, see §4's “The fail-closed predicate”. Both outcomes
+are legitimate. For factory-cast advisory opt-in, see §3's “Requirements for a future factory cast”.
 
 *Non-normative observation, 2026-07-26.* Of the first-party adapters, `codex` reports only
 `read_only` and `network_grants` as `true`, and `claude` reports none of the five. That is why the
 rule above constrains any factory cast that later ships rather than describing one that exists; the
 observation is not a claim this document freezes, and the probe governs.
 
-- `partitur validate` checks every bound performer's probed capabilities against the
-  part's `capabilities`, and the adapter's enforcement against the movement's grants
-  (see §4, trust boundary).
-- `allow_advisory_enforcement` defaults to `false`, applies per performer (including
-  independently to each fallback performer), and when `true` the manifest records
-  individually which constraints were advisory for which attempt.
+- `partitur validate` checks every bound performer's probed capabilities against the part's
+  `capabilities`. For enforcement checks, see §4's “The fail-closed predicate”.
+- `allow_advisory_enforcement` applies per performer, including independently to each fallback
+  performer. For manifest recording of advisory constraints, see §4's “Environment enforcement —
+  the trust boundary stated honestly”.
 
 **Retry and fallback semantics.** `retries_per_movement` is the movement's **quality-retry budget**,
 a per-movement total shared across the fallback chain — a fallback performer does not receive a fresh
@@ -1034,8 +1031,9 @@ one. Infrastructure failures advance the fallback chain instead of consuming it.
 Normative, and the **single** statement of how a failure selects what happens next. Appendix C
 references this rule and restates no part of it; a second copy would be a second chance to disagree.
 
-It has **two arms, and merging them is the defect it exists to prevent**: one runs before the failure
-event is recorded and may read the budget, the other runs after it is durable and may not.
+It has **two arms, and merging them is the defect it exists to prevent**. For classification before
+the failure append, see §3.1's “Arm 1 — classify”. For realization after durability, see §3.1's
+“Arm 2 — realize”.
 
 **Arm 1 — classify, before the failure event is appended.**
 
@@ -1058,10 +1056,10 @@ reason. A `grant_denied` that coincides with an exhausted budget stays `grant_de
 specific cause, it is true independently of the budget, and reporting `budget_exhausted` there would
 hide a policy violation behind an accounting one.
 
-`remaining_time == 0` therefore starts no new attempt of any kind, while `remaining_retries == 0`
-forbids only new *quality-retry* attempts. `protocol_error` triggers neither
-retry nor fallback in v0.2 (uniform rule; a cast-level opt-in may come later), and quality failures
-never trigger fallback: a different model is not the fix for a failed test; amendments and humans are.
+For zero remaining time and retry-cap exhaustion, see the table above. `protocol_error` triggers
+neither retry nor fallback in v0.2 (uniform rule; a cast-level opt-in may come later). For
+quality-failure disposition, see the Quality row above. A different model is not the fix for a failed
+test; amendments and humans are.
 
 The result is written into the failure event's `disposition` (B.0) **atomically with the failure**. A
 failure charges only when it authorizes another attempt — otherwise `retries_consumed` could exceed
@@ -1081,7 +1079,8 @@ deterministic target resolution, not a fresh judgement.
 | `RC-DISPOSITION-002` | `fallback` | one new attempt with the immediate next unvisited fallback; the chain never revisits an earlier performer |
 | `RC-DISPOSITION-003` | `none` | `movement.failed` carrying the recorded `terminal_reason` verbatim |
 
-Every retry and fallback starts from the same clean base and the same input artifact instances.
+For retry and fallback clean-base construction, see §5's worktree clause. Every retry and fallback
+receives the same input artifact instances.
 For `quality_retry` and `fallback`, “one new attempt” first establishes a pending successor whose
 performer and reason are fixed by this arm; the between-unit scheduler makes that choice durable as
 `performer.selected` and only then may launch it. Recovery selecting the pending successor does not
@@ -1091,11 +1090,14 @@ charging or deciding again. For `none`, the durable realization is the `movement
 the table.
 
 **Outside the oracle.** These paths never reach it, because none of them is an attempt failure:
-blocking review findings set `review_outcome` and open the human gate (§7, §8); a rejected human gate
-terminalizes through `movement.failed {human_gate_rejected}` directly (B.1); user cancellation
-terminalizes the run (§6); **composition conflicts and composition execution failures run between
-attempts and terminalize their own scope (§5)**; and revision-triggered restarts (§9) and decision
-resumes (§4) are not failures at all.
+
+- Blocking review findings — for `review_outcome` and the human gate, see §7's findings clause.
+- Rejected human gates — for terminalization, see §8's human-gate rejection clause.
+- User cancellation — for run terminalization, see §6's “Cancellation is run-scoped”.
+- Composition conflicts — for scope-specific terminalization, see §5's conflict clause.
+- Composition execution failures — for scope-specific terminalization, see §5's
+  composition-failure clause.
+- Revision-triggered restarts and decision resumes are not failures at all (§9, §4).
 
 Restarts and resumes are limited **only by the remaining active wall-clock budget**, and a decision
 resume additionally preserves the blocked attempt's performer and its position in the fallback
@@ -1113,10 +1115,8 @@ total attempts = initial
 ## 4. Adapter protocol v2
 
 **Packaging.** An adapter is an executable found on `PATH` under the exact name
-`partitur-adapter-<id>`. v0.2 has no core-side adapter-path override. An adapter is explicitly
-enabled only when the resolved cast references its id; the core resolves those exact names on
-demand and never scans `PATH` for candidate adapters. v0.2 supports macOS and Linux; Windows is
-out of scope.
+`partitur-adapter-<id>`. v0.2 has no core-side adapter-path override. For adapter enablement and
+resolution scope, see §1's “Cast layering”. v0.2 supports macOS and Linux; Windows is out of scope.
 
 **Adapter process environment.** For validation and execution, the core takes one snapshot of the
 environment inherited by the Partitur process, resolves the exact adapter executable using `PATH`
@@ -1130,8 +1130,9 @@ For an execution launch, the trusted trampoline receives all Partitur launch-con
 including the already-resolved adapter path, handoff location, `launch_id`, and nonce — through its
 argv, and receives the gate as an inherited file descriptor, never through the environment. It
 consumes and closes the gate before `exec`, replaces its argv with the adapter's protocol argv, and
-`exec`s the already-resolved adapter in place with the unchanged environment. The marker descriptor
-survives that `exec` only to hold the lifetime lock required below. Thus the adapter does not receive
+uses the already-resolved adapter with the unchanged environment. For the in-place gated `exec`, see
+§4's “Execution spawn is gated”. The marker descriptor survives the resulting process replacement
+only to hold the lifetime lock required below. Thus the adapter does not receive
 launch-control parameters through either its environment or its argv; its request data travels only
 through the protocol.
 
