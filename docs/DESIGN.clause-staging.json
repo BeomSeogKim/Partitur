@@ -7716,6 +7716,944 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "e2007d1fce2ee362fdbc4a05435b63450173634b",
+        "ordinal": 10,
+        "start_source_line": 2061,
+        "end_source_line": 2293
+      },
+      "review_receipt": {
+        "source_sha256": "3430ea5bbfc9cc661b46dc528b8e82a3ad9ce65dcb6347a4d6ab7237b54e0d84",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 128816,
+            "end_source_byte": 128846,
+            "kind": "anchor",
+            "marker_id": "composition-failure.causes-closed-by-appendix-d"
+          },
+          {
+            "start_source_byte": 128850,
+            "end_source_byte": 128951,
+            "kind": "anchor",
+            "marker_id": "composition-failure.crash-not-live-observed"
+          },
+          {
+            "start_source_byte": 128952,
+            "end_source_byte": 129001,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 129005,
+            "end_source_byte": 129051,
+            "kind": "anchor",
+            "marker_id": "composition-failure.terminal-no-retry"
+          },
+          {
+            "start_source_byte": 129052,
+            "end_source_byte": 129414,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 129418,
+            "end_source_byte": 129526,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 129527,
+            "end_source_byte": 129592,
+            "kind": "anchor",
+            "marker_id": "composition-failure.proves-nothing-about-mergeability"
+          },
+          {
+            "start_source_byte": 129593,
+            "end_source_byte": 129874,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 129878,
+            "end_source_byte": 129925,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.exact-sequence"
+          },
+          {
+            "start_source_byte": 129926,
+            "end_source_byte": 129966,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 129967,
+            "end_source_byte": 130031,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.one-per-contributor"
+          },
+          {
+            "start_source_byte": 130032,
+            "end_source_byte": 130109,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 130110,
+            "end_source_byte": 130165,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.argv-env-same-invocation"
+          },
+          {
+            "start_source_byte": 130166,
+            "end_source_byte": 130205,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.argv-env-share-order"
+          },
+          {
+            "start_source_byte": 130206,
+            "end_source_byte": 130257,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.non-bare-repository"
+          },
+          {
+            "start_source_byte": 130258,
+            "end_source_byte": 130301,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.system-and-global-config-isolated"
+          },
+          {
+            "start_source_byte": 130305,
+            "end_source_byte": 130356,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 130357,
+            "end_source_byte": 130477,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 130478,
+            "end_source_byte": 130550,
+            "kind": "anchor",
+            "marker_id": "git-bound.merge-tree-ten-minutes"
+          },
+          {
+            "start_source_byte": 130551,
+            "end_source_byte": 130749,
+            "kind": "anchor",
+            "marker_id": "git-bound.other-invocations-two-minutes"
+          },
+          {
+            "start_source_byte": 130750,
+            "end_source_byte": 130854,
+            "kind": "anchor",
+            "marker_id": "git-bound.per-invocation-not-aggregate"
+          },
+          {
+            "start_source_byte": 130858,
+            "end_source_byte": 131017,
+            "kind": "anchor",
+            "marker_id": "git-bound.effective-bound-under-active-interval"
+          },
+          {
+            "start_source_byte": 131018,
+            "end_source_byte": 131085,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 131086,
+            "end_source_byte": 131181,
+            "kind": "anchor",
+            "marker_id": "git-bound.outside-interval-uses-named-bound"
+          },
+          {
+            "start_source_byte": 131182,
+            "end_source_byte": 131233,
+            "kind": "anchor",
+            "marker_id": "git-bound.outside-interval-no-movement-budget"
+          },
+          {
+            "start_source_byte": 131234,
+            "end_source_byte": 131375,
+            "kind": "anchor",
+            "marker_id": "git-bound.budget-bound-expiry-is-budget-exhausted"
+          },
+          {
+            "start_source_byte": 131376,
+            "end_source_byte": 131451,
+            "kind": "anchor",
+            "marker_id": "git-bound.git-bound-expiry-is-git-unverifiable"
+          },
+          {
+            "start_source_byte": 131452,
+            "end_source_byte": 131477,
+            "kind": "anchor",
+            "marker_id": "git-bound.expiry-stops-the-child"
+          },
+          {
+            "start_source_byte": 131478,
+            "end_source_byte": 131746,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 131750,
+            "end_source_byte": 131909,
+            "kind": "anchor",
+            "marker_id": "composition-env.operator-config-cannot-inject"
+          },
+          {
+            "start_source_byte": 131910,
+            "end_source_byte": 132013,
+            "kind": "anchor",
+            "marker_id": "composition-env.allowlist-is-identity-input"
+          },
+          {
+            "start_source_byte": 132015,
+            "end_source_byte": 132318,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 132320,
+            "end_source_byte": 132383,
+            "kind": "anchor",
+            "marker_id": "merge-tree-exit.zero-is-result-tree"
+          },
+          {
+            "start_source_byte": 132386,
+            "end_source_byte": 132437,
+            "kind": "anchor",
+            "marker_id": "merge-tree-exit.one-first-field-is-conflict-tree"
+          },
+          {
+            "start_source_byte": 132438,
+            "end_source_byte": 132477,
+            "kind": "anchor",
+            "marker_id": "merge-tree-exit.one-rest-are-conflicted-paths"
+          },
+          {
+            "start_source_byte": 132478,
+            "end_source_byte": 132550,
+            "kind": "anchor",
+            "marker_id": "merge-tree-exit.nul-delimiting-required"
+          },
+          {
+            "start_source_byte": 132553,
+            "end_source_byte": 132624,
+            "kind": "anchor",
+            "marker_id": "merge-tree-exit.other-is-execution-failure"
+          },
+          {
+            "start_source_byte": 132625,
+            "end_source_byte": 132670,
+            "kind": "anchor",
+            "marker_id": "merge-tree-exit.never-reported-as-conflict"
+          },
+          {
+            "start_source_byte": 132674,
+            "end_source_byte": 132822,
+            "kind": "anchor",
+            "marker_id": "git-bound.expiry-is-not-an-exit"
+          },
+          {
+            "start_source_byte": 132823,
+            "end_source_byte": 132910,
+            "kind": "anchor",
+            "marker_id": "git-bound.expiry-not-composition-failed"
+          },
+          {
+            "start_source_byte": 132911,
+            "end_source_byte": 133050,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 133051,
+            "end_source_byte": 133099,
+            "kind": "anchor",
+            "marker_id": "git-bound.enforcement-mechanism-unfixed"
+          },
+          {
+            "start_source_byte": 133103,
+            "end_source_byte": 133186,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 133187,
+            "end_source_byte": 133300,
+            "kind": "anchor",
+            "marker_id": "composition-env.allowlist-membership"
+          },
+          {
+            "start_source_byte": 133301,
+            "end_source_byte": 133434,
+            "kind": "anchor",
+            "marker_id": "composition-env.does-not-inherit-shared-variables"
+          },
+          {
+            "start_source_byte": 133435,
+            "end_source_byte": 133571,
+            "kind": "anchor",
+            "marker_id": "composition-env.no-project-hook-from-empty-template"
+          },
+          {
+            "start_source_byte": 133572,
+            "end_source_byte": 133752,
+            "kind": "anchor",
+            "marker_id": "composition-env.alignment-requires-revision"
+          },
+          {
+            "start_source_byte": 133756,
+            "end_source_byte": 133879,
+            "kind": "anchor",
+            "marker_id": "composition-env.attr-source-is-ours-tree"
+          },
+          {
+            "start_source_byte": 133880,
+            "end_source_byte": 133988,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 133989,
+            "end_source_byte": 134120,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.read-tree-insufficient"
+          },
+          {
+            "start_source_byte": 134122,
+            "end_source_byte": 134204,
+            "kind": "anchor",
+            "marker_id": "composition-invocation.git-floor"
+          },
+          {
+            "start_source_byte": 134208,
+            "end_source_byte": 134297,
+            "kind": "anchor",
+            "marker_id": "merge-driver.external-drivers-rejected-at-runtime"
+          },
+          {
+            "start_source_byte": 134298,
+            "end_source_byte": 134583,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 134585,
+            "end_source_byte": 135056,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 135058,
+            "end_source_byte": 135120,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 135124,
+            "end_source_byte": 135191,
+            "kind": "anchor",
+            "marker_id": "merge-driver.never-reads-live-config"
+          },
+          {
+            "start_source_byte": 135192,
+            "end_source_byte": 135229,
+            "kind": "anchor",
+            "marker_id": "merge-driver.repository-core-created"
+          },
+          {
+            "start_source_byte": 135230,
+            "end_source_byte": 135238,
+            "kind": "anchor",
+            "marker_id": "merge-driver.repository-non-bare"
+          },
+          {
+            "start_source_byte": 135239,
+            "end_source_byte": 135259,
+            "kind": "anchor",
+            "marker_id": "merge-driver.repository-temporary"
+          },
+          {
+            "start_source_byte": 135260,
+            "end_source_byte": 135289,
+            "kind": "anchor",
+            "marker_id": "merge-driver.local-config-core-owned"
+          },
+          {
+            "start_source_byte": 135290,
+            "end_source_byte": 135336,
+            "kind": "anchor",
+            "marker_id": "merge-driver.only-needed-objects-populated"
+          },
+          {
+            "start_source_byte": 135337,
+            "end_source_byte": 135453,
+            "kind": "anchor",
+            "marker_id": "merge-driver.config-surfaces-are-cores"
+          },
+          {
+            "start_source_byte": 135454,
+            "end_source_byte": 135522,
+            "kind": "anchor",
+            "marker_id": "merge-driver.merge-default-forced"
+          },
+          {
+            "start_source_byte": 135525,
+            "end_source_byte": 135599,
+            "kind": "anchor",
+            "marker_id": "merge-driver.check-attr-path-union"
+          },
+          {
+            "start_source_byte": 135600,
+            "end_source_byte": 135665,
+            "kind": "anchor",
+            "marker_id": "merge-driver.check-attr-invocation"
+          },
+          {
+            "start_source_byte": 135666,
+            "end_source_byte": 135763,
+            "kind": "anchor",
+            "marker_id": "merge-driver.permitted-attribute-values"
+          },
+          {
+            "start_source_byte": 135764,
+            "end_source_byte": 135819,
+            "kind": "anchor",
+            "marker_id": "merge-driver.unsupported-value-rejected-before-merge"
+          },
+          {
+            "start_source_byte": 135820,
+            "end_source_byte": 135900,
+            "kind": "anchor",
+            "marker_id": "merge-driver.merge-runs-against-immutable-config"
+          },
+          {
+            "start_source_byte": 135902,
+            "end_source_byte": 136314,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 136318,
+            "end_source_byte": 136397,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 136398,
+            "end_source_byte": 136632,
+            "kind": "anchor",
+            "marker_id": "composition-dependency.recorded-inputs"
+          },
+          {
+            "start_source_byte": 136633,
+            "end_source_byte": 136755,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 136756,
+            "end_source_byte": 136860,
+            "kind": "anchor",
+            "marker_id": "read-only-verification.applies-without-repo-write"
+          },
+          {
+            "start_source_byte": 136861,
+            "end_source_byte": 136918,
+            "kind": "anchor",
+            "marker_id": "read-only-verification.after-execute-completion"
+          },
+          {
+            "start_source_byte": 136919,
+            "end_source_byte": 136952,
+            "kind": "anchor",
+            "marker_id": "read-only-verification.worktree-unchanged"
+          },
+          {
+            "start_source_byte": 136953,
+            "end_source_byte": 137050,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 137051,
+            "end_source_byte": 137230,
+            "kind": "anchor",
+            "marker_id": "read-only-verification.invariant-membership"
+          },
+          {
+            "start_source_byte": 137233,
+            "end_source_byte": 137269,
+            "kind": "anchor",
+            "marker_id": "read-only-verification.violation-is-grant-denied"
+          },
+          {
+            "start_source_byte": 137270,
+            "end_source_byte": 137311,
+            "kind": "anchor",
+            "marker_id": "read-only-verification.violation-immediately-terminal"
+          },
+          {
+            "start_source_byte": 137312,
+            "end_source_byte": 137438,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 137439,
+            "end_source_byte": 137575,
+            "kind": "anchor",
+            "marker_id": "change-set-recording.exactly-one-per-successful-writer-including-noop"
+          },
+          {
+            "start_source_byte": 137576,
+            "end_source_byte": 137833,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 137834,
+            "end_source_byte": 137984,
+            "kind": "anchor",
+            "marker_id": "change-set-recording.non-writers-record-none"
+          },
+          {
+            "start_source_byte": 137985,
+            "end_source_byte": 138074,
+            "kind": "anchor",
+            "marker_id": "apply.explicit-command-only"
+          },
+          {
+            "start_source_byte": 138076,
+            "end_source_byte": 138102,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 138104,
+            "end_source_byte": 138150,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 138152,
+            "end_source_byte": 138185,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 138187,
+            "end_source_byte": 138262,
+            "kind": "anchor",
+            "marker_id": "inapplicable.draft-movement-in-finalized-run"
+          },
+          {
+            "start_source_byte": 138263,
+            "end_source_byte": 138311,
+            "kind": "anchor",
+            "marker_id": "inapplicable.never-scheduled"
+          },
+          {
+            "start_source_byte": 138313,
+            "end_source_byte": 138608,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 138610,
+            "end_source_byte": 138660,
+            "kind": "anchor",
+            "marker_id": "run-projections.separate-axes"
+          },
+          {
+            "start_source_byte": 138661,
+            "end_source_byte": 138691,
+            "kind": "anchor",
+            "marker_id": "run-projections.not-lifecycle-states"
+          },
+          {
+            "start_source_byte": 138692,
+            "end_source_byte": 138788,
+            "kind": "anchor",
+            "marker_id": "run-projections.terminal-independent-of-shipping"
+          },
+          {
+            "start_source_byte": 138790,
+            "end_source_byte": 138951,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 138953,
+            "end_source_byte": 139228,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 139229,
+            "end_source_byte": 139292,
+            "kind": "anchor",
+            "marker_id": "verifying.captures-change-set"
+          },
+          {
+            "start_source_byte": 139293,
+            "end_source_byte": 139309,
+            "kind": "anchor",
+            "marker_id": "verifying.runs-acceptance"
+          },
+          {
+            "start_source_byte": 139310,
+            "end_source_byte": 139349,
+            "kind": "anchor",
+            "marker_id": "verifying.decides-required-human-gate"
+          },
+          {
+            "start_source_byte": 139350,
+            "end_source_byte": 139486,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 139487,
+            "end_source_byte": 139531,
+            "kind": "anchor",
+            "marker_id": "blocked.terminal-attempt-state"
+          },
+          {
+            "start_source_byte": 139532,
+            "end_source_byte": 139586,
+            "kind": "anchor",
+            "marker_id": "blocked.means-exited-awaiting-human-decisions"
+          },
+          {
+            "start_source_byte": 139587,
+            "end_source_byte": 139635,
+            "kind": "anchor",
+            "marker_id": "blocked.followup-in-new-attempt"
+          },
+          {
+            "start_source_byte": 139636,
+            "end_source_byte": 139682,
+            "kind": "anchor",
+            "marker_id": "waiting-human.movements-and-runs-only"
+          },
+          {
+            "start_source_byte": 139683,
+            "end_source_byte": 139751,
+            "kind": "anchor",
+            "marker_id": "movement-failure.no-authorized-path"
+          },
+          {
+            "start_source_byte": 139752,
+            "end_source_byte": 139845,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 139846,
+            "end_source_byte": 139893,
+            "kind": "anchor",
+            "marker_id": "superseded.attempt-level-only"
+          },
+          {
+            "start_source_byte": 139894,
+            "end_source_byte": 139968,
+            "kind": "anchor",
+            "marker_id": "superseded.sources-create-new-attempt"
+          },
+          {
+            "start_source_byte": 139969,
+            "end_source_byte": 140066,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 140067,
+            "end_source_byte": 140152,
+            "kind": "anchor",
+            "marker_id": "contested.reaches-waiting-human-through-gate"
+          },
+          {
+            "start_source_byte": 140154,
+            "end_source_byte": 140217,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 140218,
+            "end_source_byte": 140261,
+            "kind": "anchor",
+            "marker_id": "waiting-human.no-state-event"
+          },
+          {
+            "start_source_byte": 140262,
+            "end_source_byte": 140449,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 140451,
+            "end_source_byte": 140565,
+            "kind": "anchor",
+            "marker_id": "waiting-human.entry-predicate"
+          },
+          {
+            "start_source_byte": 140566,
+            "end_source_byte": 140617,
+            "kind": "anchor",
+            "marker_id": "waiting-human.requires-no-terminal-counterpart"
+          },
+          {
+            "start_source_byte": 140618,
+            "end_source_byte": 140641,
+            "kind": "anchor",
+            "marker_id": "waiting-human.requires-blocking-true"
+          },
+          {
+            "start_source_byte": 140642,
+            "end_source_byte": 140703,
+            "kind": "anchor",
+            "marker_id": "waiting-human.requires-raising-attempt-blocked"
+          },
+          {
+            "start_source_byte": 140704,
+            "end_source_byte": 140736,
+            "kind": "anchor",
+            "marker_id": "waiting-human.human-gates-always-blocking"
+          },
+          {
+            "start_source_byte": 140737,
+            "end_source_byte": 141035,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 141036,
+            "end_source_byte": 141089,
+            "kind": "anchor",
+            "marker_id": "waiting-human.blocking-flag-journaled"
+          },
+          {
+            "start_source_byte": 141090,
+            "end_source_byte": 141111,
+            "kind": "anchor",
+            "marker_id": "waiting-human.blocking-flag-not-inferred"
+          },
+          {
+            "start_source_byte": 141112,
+            "end_source_byte": 141176,
+            "kind": "anchor",
+            "marker_id": "waiting-human.exit-on-last-blocking-terminal"
+          },
+          {
+            "start_source_byte": 141177,
+            "end_source_byte": 141309,
+            "kind": "anchor",
+            "marker_id": "waiting-human.terminal-counterpart-forms"
+          },
+          {
+            "start_source_byte": 141310,
+            "end_source_byte": 141322,
+            "kind": "anchor",
+            "marker_id": "waiting-human.exit-projects-movement-running"
+          },
+          {
+            "start_source_byte": 141323,
+            "end_source_byte": 141357,
+            "kind": "anchor",
+            "marker_id": "waiting-human.exit-projects-run-running"
+          },
+          {
+            "start_source_byte": 141358,
+            "end_source_byte": 141440,
+            "kind": "anchor",
+            "marker_id": "waiting-human.exit-permits-immediate-attempt"
+          },
+          {
+            "start_source_byte": 141441,
+            "end_source_byte": 141553,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 141555,
+            "end_source_byte": 141628,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 141629,
+            "end_source_byte": 141690,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 141692,
+            "end_source_byte": 141751,
+            "kind": "anchor",
+            "marker_id": "attempt-identity.unique-within-run"
+          },
+          {
+            "start_source_byte": 141752,
+            "end_source_byte": 141837,
+            "kind": "anchor",
+            "marker_id": "attempt-identity.used-on-wire-journal-and-marks"
+          },
+          {
+            "start_source_byte": 141838,
+            "end_source_byte": 141995,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 141996,
+            "end_source_byte": 142026,
+            "kind": "anchor",
+            "marker_id": "attempt-number.separate-from-attempt-id"
+          },
+          {
+            "start_source_byte": 142027,
+            "end_source_byte": 142047,
+            "kind": "anchor",
+            "marker_id": "attempt-number.per-movement-ordinal"
+          },
+          {
+            "start_source_byte": 142048,
+            "end_source_byte": 142070,
+            "kind": "anchor",
+            "marker_id": "attempt-number.display-only"
+          },
+          {
+            "start_source_byte": 142071,
+            "end_source_byte": 142102,
+            "kind": "anchor",
+            "marker_id": "attempt-identity.never-interchanged"
+          },
+          {
+            "start_source_byte": 142103,
+            "end_source_byte": 142217,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 142219,
+            "end_source_byte": 142449,
+            "kind": "anchor",
+            "marker_id": "budget.active-execution-only"
+          },
+          {
+            "start_source_byte": 142450,
+            "end_source_byte": 142525,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 142526,
+            "end_source_byte": 142610,
+            "kind": "anchor",
+            "marker_id": "budget.execution-phases-consume"
+          },
+          {
+            "start_source_byte": 142611,
+            "end_source_byte": 142800,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 142801,
+            "end_source_byte": 142909,
+            "kind": "anchor",
+            "marker_id": "budget.replay-stable"
+          },
+          {
+            "start_source_byte": 142910,
+            "end_source_byte": 142925,
+            "kind": "anchor",
+            "marker_id": "budget.crash-safe"
+          },
+          {
+            "start_source_byte": 142926,
+            "end_source_byte": 143046,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 143048,
+            "end_source_byte": 143134,
+            "kind": "anchor",
+            "marker_id": "budget.active-time-delimited-by-interval-events"
+          },
+          {
+            "start_source_byte": 143135,
+            "end_source_byte": 143255,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 143256,
+            "end_source_byte": 143344,
+            "kind": "anchor",
+            "marker_id": "budget.monotonic-clock-living-process-only"
+          },
+          {
+            "start_source_byte": 143347,
+            "end_source_byte": 143462,
+            "kind": "anchor",
+            "marker_id": "budget.monotonic-not-comparable-across-restart"
+          },
+          {
+            "start_source_byte": 143463,
+            "end_source_byte": 143506,
+            "kind": "anchor",
+            "marker_id": "budget.monotonic-never-persisted-as-identity"
+          },
+          {
+            "start_source_byte": 143507,
+            "end_source_byte": 143607,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 143608,
+            "end_source_byte": 143676,
+            "kind": "anchor",
+            "marker_id": "budget.persisted-durations-integer-milliseconds"
+          },
+          {
+            "start_source_byte": 143677,
+            "end_source_byte": 143691,
+            "kind": "anchor",
+            "marker_id": "budget.compared-durations-integer-milliseconds"
+          },
+          {
+            "start_source_byte": 143692,
+            "end_source_byte": 143777,
+            "kind": "anchor",
+            "marker_id": "budget.minutes-to-milliseconds-conversion"
+          },
+          {
+            "start_source_byte": 143778,
+            "end_source_byte": 143965,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 143966,
+            "end_source_byte": 144035,
+            "kind": "anchor",
+            "marker_id": "budget.consumption-sums-closed-intervals"
+          },
+          {
+            "start_source_byte": 144036,
+            "end_source_byte": 144111,
+            "kind": "anchor",
+            "marker_id": "budget.open-interval-charged-for-admission"
+          },
+          {
+            "start_source_byte": 144112,
+            "end_source_byte": 144160,
+            "kind": "anchor",
+            "marker_id": "budget.open-interval-uses-current-monotonic-reading"
+          },
+          {
+            "start_source_byte": 144161,
+            "end_source_byte": 144210,
+            "kind": "anchor",
+            "marker_id": "budget.consumed-history-immutable"
+          },
+          {
+            "start_source_byte": 144211,
+            "end_source_byte": 144296,
+            "kind": "anchor",
+            "marker_id": "budget.decrease-time-remainder-formula"
+          },
+          {
+            "start_source_byte": 144297,
+            "end_source_byte": 144367,
+            "kind": "anchor",
+            "marker_id": "budget.decrease-retry-remainder-formula"
+          },
+          {
+            "start_source_byte": 144368,
+            "end_source_byte": 144467,
+            "kind": "anchor",
+            "marker_id": "budget.independent-caps-preserve-unchanged-cap"
+          },
+          {
+            "start_source_byte": 144468,
+            "end_source_byte": 144619,
+            "kind": "anchor",
+            "marker_id": "budget.wall-clock-cannot-substitute"
+          },
+          {
+            "start_source_byte": 144620,
+            "end_source_byte": 144751,
+            "kind": "non-normative"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
