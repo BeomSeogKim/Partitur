@@ -180,7 +180,7 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 				},
 				36: {
 					"`active_wall_clock_min` bounds active execution only — adapter runs,\nacceptance, **composition**, retries, fallbacks, revision restarts, and decision resumes —\nexcluding `WAITING_HUMAN` and stopped time.",
-					"Active time is delimited by paired, fsynced `execution.started` / `execution.stopped`\n  events.",
+					"Active time is delimited by paired `execution.started` / `execution.stopped` events;",
 					"Each attempt receives the remainder at its start (`request.budget`).",
 				},
 				37: {

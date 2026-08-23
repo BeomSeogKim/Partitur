@@ -2066,17 +2066,17 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   **It is terminal and v0.2 does not retry it.** Composition has no performer, so there is no
   fallback chain to advance, and §3.1's classes are defined over attempt failures. A composition
   retry budget would be a second retry policy answering to nothing in §3, and inventing one to cover
-  a transient Git fault is more machinery than the fault justifies. Stated rather than left as an
-  assumed guarantee: a transient failure ends the run, and the operator re-runs.
+  a transient Git fault is more machinery than the fault justifies. The operator re-runs after a
+  transient failure.
 
   The separation from `composition_unresolvable` is the point, and the claim is narrower than
-  "environment": an execution failure proves **no verdict was obtained**, never that the trees are
-  unmergeable. A `driver_rejected` can originate from an in-tree `.gitattributes`, which is content
+  "environment": an execution failure never proves that the trees are unmergeable. A
+  `driver_rejected` can originate from an in-tree `.gitattributes`, which is content
   rather than environment, and it still says nothing about whether the trees compose. Collapsing the
   two reasons would let a machine with a broken Git report a clean repository as unmergeable.
 
   **The exact invocation sequence is normative**, because the composed tree depends on it. A fan-in
-  runs one invocation for each contributing change set in its deterministic composition order; the
+  runs one invocation for each contributing change set; the
   singular command below is invocation *i*, with its current `C` and `T`. `argv[i]` and `env[i]`
   describe that same invocation, and the two sequences share that order. Each invocation runs in a
   **non-bare** repository with system and global Git config isolated:
@@ -2094,16 +2094,14 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   active interval uses its named Git bound and neither consumes nor borrows a movement budget. If
   the active budget is the effective bound — including an equal-bound tie — expiry takes the existing
   `budget_exhausted` path (§6). Only when the Git bound is strictly smaller is expiry
-  `git_unverifiable` (Appendix D): the core stops the
-  child and halts without appending an event, leaving the run at its last durable state. A later
-  explicit `resume` has only that durable state to act on; it must not manufacture a composition
-  verdict from the expired invocation.
+  `git_unverifiable`: the core stops the child. For `git_unverifiable`, see Appendix D's “Recovery
+  halts”; for its halt and journal disposition, see Appendix B.7's “Recovery-halt conditions are not
+  events”. For recovery's no-guess rule, see Appendix C's “Two further rules govern everything
+  below”.
 
-  The Git subprocess environment is an **allowlist, not the inherited environment**: only the
-  variables below are passed, so `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` —
-  which can inject arbitrary config, custom merge drivers included — cannot reach it from the
-  operator's shell. The allowlisted set is part of the composition environment identity, so a change
-  to it is detectable.
+  Operator-shell `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` cannot inject
+  arbitrary configuration or custom merge drivers into composition. The allowlisted set is part of
+  the composition environment identity, so a change to it is detectable.
 
   ```sh
   GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
@@ -2121,10 +2119,9 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
 
   Expiry of the Git bound is **not an exit** — including if child termination happens to yield a
   signal or an implementation-specific exit status. It is therefore not absorbed by “any other
-  exit”, is not `composition_failed`, and produces neither `composition.failed` evidence nor a
-  terminal lifecycle event. `git_unverifiable` is a recovery halt under B.7: it is reported to
-  the operator with exit 5, never journaled. The 2-minute and 10-minute values are contract
-  values; replacing the enforcement mechanism without preserving them changes this specification.
+  exit” and is not `composition_failed`. For `git_unverifiable`'s halt, command-output, and journal
+  disposition, see Appendix B.7's “Recovery-halt conditions are not events”. The enforcement
+  mechanism is not itself fixed.
 
   The composition allowlist is deliberately distinct from the shared Git environment. It contains
   exactly the three `GIT_CONFIG_*` variables shown above plus the per-invocation
@@ -2136,10 +2133,8 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   identity.
 
   `GIT_ATTR_SOURCE=<T>` is required so attributes are read from the composed *ours* tree rather
-  than an unrelated checkout. The repository must be **non-bare** — a bare one fails this
-  invocation outright (`BUG: attr.c: non-INDEX attr direction in a bare repo`) — and it is always
-  the **core-created temporary** repository described below, never the source repository, whose
-  configuration must never be consulted. `git read-tree -m` is **not** sufficient: it provides
+  than an unrelated checkout. A bare repository fails this invocation outright
+  (`BUG: attr.c: non-INDEX attr direction in a bare repo`). `git read-tree -m` is **not** sufficient: it provides
   neither the modern content merge and rename handling nor conflict evidence.
 
   The supported **Git floor is 2.47** until a narrower floor is separately proved.
@@ -2174,30 +2169,26 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
   that report is **early feedback, not the enforcement** — the enforcement is that the value could
   never have been read.
 
-  Because `candidate_id` is a *content* identity (§8), the composition dependency records **more
-  than the Git version**: the exact Git build, object format, ordered merge invocation sequence and strategy
+  For candidate identity, see §8's “Application-candidate identity clauses”. The composition
+  dependency records **more than the Git version**: the exact Git build, object format, ordered merge invocation sequence and strategy
   options, `merge.renormalize`, and every applicable repository merge-config input. Version alone
   is demonstrably insufficient — `merge.renormalize` alone changes the result tree for identical
   inputs.
-- Partial changes from failed, cancelled, or superseded attempts are discarded — they
-  never leak into the next attempt. A fallback performer starts from the same clean
-  base, never from the failed performer's dirty workspace.
 - **Read-only post-hoc verification.** For every movement whose effective grants exclude
   `repo_write`, the core verifies after §4's execute-completion boundary that the worktree is
   unchanged. The adapter session is already verified empty, so the check cannot race a surviving
   descendant. A Git tree comparison alone is insufficient: the check covers tracked content,
   **non-ignored untracked files, symlink targets, and file modes**, plus the protected paths of §2.
-  A violation is `kind: grant_denied`, which §3.1 classes immediately terminal. For the
-  final movement the same check is expressed as `candidate_mismatch` against the recorded
-  candidate `result_tree` (§8).
+  A violation is `kind: grant_denied`, which §3.1 classes immediately terminal. For the final
+  movement's additional result-tree check and failure reason, see §8's “The final verification
+  movement”.
 - **Every successful `repo_write` attempt records exactly one change set**, including a
   **no-op** one where `base_tree == result_tree` — a movement that was authorized to write and
-  chose to change nothing still declared a `change_set` output (§2 rule 15), and that
-  declaration must be satisfied rather than silently vanishing. Movements without `repo_write`
-  record none, so the final verification movement and other read-only movements never produce a
-  provisional change set.
-- Applying the final result to the user's checkout is the explicit `apply` command —
-  never a side effect of a movement finishing (§8).
+  chose to change nothing still declared a `change_set` output (§2 rule 15). For change-set-output
+  satisfaction, see §5's “`kind: change_set` is a core-synthesized logical output, never an
+  artifact”. Movements without `repo_write` record none, so the final verification movement and
+  other read-only movements never produce a provisional change set.
+- Applying the final result to the user's checkout is the explicit `apply` command (§8).
 
 ## 6. Run state model v0.2
 
@@ -2224,24 +2215,21 @@ Application: NOT_APPLIED | APPLYING | APPLIED | FAILED_CLEAN | RECOVERY_REQUIRED
 Promotion:   NOT_PROMOTED | PROMOTING | PROMOTED | RECOVERY_REQUIRED
 ```
 
-- **`VERIFYING` separates vendor completion from attempt success.** The adapter's
-  `outcome: completed` means only that vendor execution ended — the adapter never judges
-  success (§4). After the same section's session cleanup and adapter-interval close, the core
-  records `performer.completed` and the attempt enters `VERIFYING` while the change set is
-  captured, acceptance runs, and any required human gate is decided. `attempt.completed` — and
-  thus `COMPLETED` — is recorded **only** after all of that succeeds. Conflating the two would let a
-  movement look successful on the strength of an adapter's self-report.
+- **`VERIFYING`.** For the adapter result's transport-only meaning, see §4's “Adapter-method field
+  clauses”. For `performer.completed`'s transition and `attempt.completed`'s legal source and effect,
+  see Appendix B.2's “Attempt lifecycle and performer selection”. While the attempt is `VERIFYING`,
+  the change set is captured, acceptance runs, and any required human gate is decided. Conflating
+  adapter completion with attempt success would let a movement look successful on the strength of an
+  adapter's self-report.
 - `BLOCKED` is a **terminal** attempt state: the attempt exited while waiting on human
   decisions; the follow-up work happens in a **new** attempt. Only movements and runs
   use `WAITING_HUMAN`.
-- A movement fails when **no further execution path is authorized** — retries and fallbacks
-  exhausted, budget exhausted, or an immediate terminal cause such as `grant_denied`,
-  `protocol_error`, human-gate rejection, `composition_unresolvable`, or `composition_failed`;
-  `SUPERSEDED` exists only at the attempt level (steer, instruction revision, or an
+- A movement fails when **no further execution path is authorized**. For the closed
+  `movement.failed` reasons, see Appendix D's “`movement.failed` reasons”. `SUPERSEDED` exists only
+  at the attempt level (steer, instruction revision, or an
   approved amendment → new attempt).
-- `CONTESTED` is **not** a state at any level. It is a value of the `review_outcome`
-  projection (§8); a contested movement reaches `WAITING_HUMAN` through its human gate
-  like any other.
+- For `CONTESTED`'s projection and value, see §8's “Three grades, a set and never a ladder”. A
+  contested movement reaches `WAITING_HUMAN` through its human gate like any other.
 
 **`WAITING_HUMAN` is a projection, and it has a defined exit.** There is no
 `movement.waiting_human` event: a separate state event would be a second authority
@@ -2250,45 +2238,45 @@ stuck in a state no decision explains. Instead:
 
 - **Entry** — a movement or run is `WAITING_HUMAN` exactly while it has ≥1 **unresolved blocking
   decision**: a `decision.requested` with no terminal counterpart *and* `blocking: true`, together
-  with `attempt.blocked` where an attempt raised it. Questions, human gates, and finalization are
-  always blocking; an amendment decision is blocking iff the proposal set `requires_decision`
-  (§4). A routed non-blocking proposal therefore waits for a human **without** stopping the run —
-  which is the whole point of a non-blocking proposal, and is why the flag has to be journaled
-  rather than inferred.
+  with `attempt.blocked` where an attempt raised it. Human gates are always blocking. For question
+  and blocking-proposal membership, see §4's “Blocking handshake for questions and proposals”; for
+  amendment and finalization blocking fields, see Appendix B.4's “B.4 field clauses”. For
+  non-blocking proposal disposition, see §4's “Non-blocking proposal disposition”. The distinction
+  is why the flag has to be journaled rather than inferred.
 - **Exit** — when the last blocking decision becomes terminal, whether by
   `decision.resolved`, by `decision.obsoleted`, or by an amendment terminal event that
   resolves its own decision (§9), the movement and run project back to `RUNNING`. A
   subsequent `attempt.started` is therefore legal without any intervening event.
-- A decision that opens a gate but cannot be answered — for example a *rejected* gate —
-  terminalizes through the movement's failure instead, so no decision is left dangling.
+- For a rejected gate's terminalization and decision closure, see §8's “A human gate resolved as
+  reject”.
 
-This is why terminal run events must obsolete every remaining pending decision: otherwise a
-terminal run would still project `WAITING_HUMAN`.
+For terminal-run decision obsoletion, see Appendix B.4's “Decisions”. Otherwise a terminal run would
+still project `WAITING_HUMAN`.
 
-**Attempt identity.** `attempt_id` is an opaque string, unique within the run, and is the
-identifier used on the wire (§4), in journal events, and in every mark binding.
+**Attempt identity.** `attempt_id` is unique within the run and is the identifier used on the wire,
+in journal events, and in every mark binding. For its wire type, see §4's “Methods”; for its journal
+type, see the “Event envelope (`journal.jsonl`, control-grade for a later GUI)” clause below.
 `attempt_number` is a separate per-movement ordinal used only for display. The two are
 never interchanged: v0.1's journal example implied a numeric `attempt_id`, which
 contradicts the protocol's opaque-string requirement.
 
 **Budget accounting.** `active_wall_clock_min` bounds active execution only — adapter runs,
 acceptance, **composition**, retries, fallbacks, revision restarts, and decision resumes —
-excluding `WAITING_HUMAN` and stopped time. The three phases of Appendix D (`adapter`,
-`acceptance`, `composition`) are exactly the phases that consume it; composition counts because
-a large fan-in is real work the run must be able to run out of time during. Because revision
-restarts and decision resumes are bounded by time alone (§3.1), the accounting must be
-**replay-stable** — every projection of the journal yields the same consumption — and crash-safe.
+excluding `WAITING_HUMAN` and stopped time. For phase membership, see Appendix B.2's “Remaining B.2
+field clauses”. Appendix D's **Execution phases** are exactly the phases that consume active budget;
+composition counts because a large fan-in is real work the run must be able to run out of time
+during. For revision-restart and decision-resume bounds, see §3.1's “Outside the oracle”. The
+accounting must be **replay-stable** — every projection of the journal yields the same consumption — and crash-safe.
 It is deliberately *not* claimed to be exact: an uncertain interval is bounded best-effort, per
 the recovery rule below.
 
-- Active time is delimited by paired, fsynced `execution.started` / `execution.stopped`
-  events. Because v0.2 is sequential, **at most one interval is open at any time**.
+- Active time is delimited by paired `execution.started` / `execution.stopped` events; for their
+  synchronization and interval legality, see Appendix B.2's “Attempt lifecycle and performer
+  selection”.
 - A **monotonic clock is used only within the living process** that opened the interval.
   Monotonic readings are not comparable across a restart — different boot epochs, different
-  process lifetimes — so they are never persisted as an identity. What the journal stores is:
-  `execution.started {wall_start, remaining_at_start}` and
-  `execution.stopped {charged_duration}`, where `charged_duration` is computed by the
-  opening process from its own monotonic clock.
+  process lifetimes — so they are never persisted as an identity. For the persisted
+  execution-interval fields, see Appendix B.2's “Remaining B.2 field clauses”.
 - **Durations are integer milliseconds everywhere they are persisted or compared**, even though the
   score declares `active_wall_clock_min` in minutes (`min × 60000`). A floating or
   loosely-rounded "minutes" value would let replay and admission disagree on whether the budget is
@@ -2300,10 +2288,10 @@ the recovery rule below.
   `remaining_time = max(0, new_time_cap − consumed)` and
   `remaining_retries = max(0, new_retry_cap − retries_consumed)` — two independent caps, so a
   budget amendment that changes only one leaves the other untouched.
-- **Whenever an interval is closed by a process other than the one that opened it**, the monotonic
-  reference is unavailable — that process's clock is meaningless here, or it is gone entirely — and
-  wall-clock cannot substitute for it, because clocks jump: NTP steps, suspend/resume, and manual
-  changes all make a wall gap an unreliable upper bound. The situations below qualify, and all use
+- **Whenever an interval is closed by a process other than the one that opened it**, wall-clock
+  cannot substitute for the opener's monotonic reading, because clocks jump: NTP steps,
+  suspend/resume, and manual changes all make a wall gap an unreliable upper bound. The situations
+  below qualify, and all use
   the same rule rather than inventing one each:
 
   | Situation | `reason` | Closed by |
