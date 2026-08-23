@@ -324,7 +324,7 @@ func TestCommandOriginProposalPublicationIntervalIsSpecified(t *testing.T) {
 func TestReviewSubjectInputRecoveryCleanupTimingIsSpecified(t *testing.T) {
 	contents := strings.Join(recoveryDesignLines(t), "\n")
 
-	const clause = "`RC-RESUME-035` removes an unreferenced pre-`attempt.started` copy only after journal replay has\nreached an `owner = clear` selection cut, and before that cut's selected continuation. A stale or\norphan lease first takes its own cleanup and re-evaluates; a verified live owner yields, and an\nunverifiable owner halts, without this review-subject-input cleanup. On an eligible `resume`, this\ncleanup runs exactly once. Terminal cleanup uses this same recovery step after any lease cleanup\nand performs no independent review-subject-input sweep."
+	const clause = "`RC-RESUME-035` removes an unreferenced pre-`attempt.started` copy only after journal replay has\nreached an `owner = clear` selection cut, and before that cut's selected continuation. For lease\nprecedence, see Appendix C.1's “Run-level precedence”; none of those branches performs this\nreview-subject-input cleanup. On an eligible `resume`, this\ncleanup runs exactly once. Terminal cleanup uses this same recovery step after any lease cleanup\nand performs no independent review-subject-input sweep."
 	if count := strings.Count(contents, clause); count != 1 {
 		t.Fatalf("review-subject-input recovery cleanup timing clause count=%d, want 1: %q", count, clause)
 	}

@@ -1605,40 +1605,33 @@ rules inherited from the concept”.
   1. a rejection appends `amendment.rejected`; this does not fail or block the attempt, so a later
      successful adapter result still records `performer.completed` and follows its ordinary
      lifecycle;
-  2. a human route first writes and flushes the immutable proposal record, then appends
-     `amendment.routed_human`; or
-  3. an auto approval enters §6's durable-consequence closure and, only if the re-established
-     outcome remains approval, completes §6's prepare, quiesce, and shared commit transaction.
+  2. For human-route record publication, see §1's “Routed-proposal records”; or
+  3. For auto-approval execution, see §6's “Auto-approver hand-off”.
 
   Thus a sole non-blocking proposal is never lost merely because its adapter completes rather than
   blocks, and it does not acquire a second `attempt.blocked` source. Notifications are handled in
-  wire order. Once one establishes a pending prepare, §6's mutation barrier and control drain own
-  subsequent response-derived output; a notification not yet made durable has no independent
-  journal fact.
-- **Resolution makes execution eligible; it never launches it.** The two decision kinds
-  resolve differently and neither starts an adapter:
-  - A *question* resolves through `decision.resolved`.
-  - An *amendment* (including a blocking `proposal`) resolves through its own amendment
-    terminal event — `amendment.approved`, `amendment.human_rejected`, or a decision-time
-    `amendment.rejected`. **No `decision.resolved` is ever appended on an amendment path**
-    (§9).
+  wire order. For response handling while a prepare is pending, see §6's “A pending prepare is a
+  mutation barrier”. A notification not yet made durable has no independent journal fact.
+- **Resolution makes execution eligible; it never launches it.** For decision-command launch
+  authority, see §7's “Command authority”. The two decision kinds resolve differently:
+  - For question-resolution events, see Appendix B.4's “Decisions”.
+  - For amendment-decision closure, see §9's “Journal taxonomy”.
 
-  When the last blocking decision is resolved or obsoleted, the movement and run project
-  back to `RUNNING`, and the resume reason depends on whether the revision moved:
+  For the last-blocking-decision projection, see §6's “`WAITING_HUMAN` is a projection, and it has a
+  defined exit”. The resume reason then depends on whether the revision moved:
 
   | Resolution | Reason | Effect on the blocked attempt |
   |---|---|---|
-  | No revision change (questions answered) | `decision_resume` | It stays terminal `BLOCKED` history — a terminal attempt is never superseded |
-  | Approved amendment, revision changed | `revision_restart` | Also supersedes every **nonterminal** attempt (§9); the `BLOCKED` one is already terminal and stays history |
-  | Finalization approved | — | Completes the draft movement (§2); **no new attempt is launched** |
-  | **Amendment rejected** — at admissibility, by the human, or at decision-time re-validation | `decision_resume` | No revision change, so this behaves exactly like an answered question: the blocked attempt stays history and a new attempt continues on the **same** revision |
+  | No revision change (questions answered) | `decision_resume` | For terminal `BLOCKED` history, see §6's “Run state model v0.2”. |
+  | Approved amendment, revision changed | `revision_restart` | For supersession, see §9's “Approval effects”. |
+  | Finalization approved | — | For completion and launch authority, see §2's “Finalization is an amendment, not a bare flag flip” and §7's “Command authority”. |
+  | **Amendment rejected** — at admissibility, by the human, or at decision-time re-validation | `decision_resume` | No revision change. For terminal `BLOCKED` history and its follow-up attempt, see §6's “Run state model v0.2”. The successor uses the **same** revision. |
 
-  **A rejected blocking proposal must still close its pending decision**, or the attempt would wait
-  on an id nothing can ever resolve. All three amendment terminals therefore carry the
-  `decision_id` and terminally resolve it in projection (§9) — including
-  `amendment.rejected`, which may fire *before* any `decision.requested` exists. In that case the
-  `decision_id` is the one derived from `(attempt_id, emitted_id)` (A.4.3), so it matches the id the
-  attempt is blocked on whether or not a decision was ever opened.
+  For rejected blocking-proposal decision closure, see §9's “Journal taxonomy”; without that
+  closure, the attempt would wait on an id nothing can ever resolve. `amendment.rejected` may fire
+  *before* any `decision.requested` exists. In that case, for the adapter-derived `decision_id`, see
+  Appendix A.4.3's “Scoped identifiers — derived, but not content identities”. That id matches the
+  one the attempt is blocked on whether or not a decision was ever opened.
 
   The next attempt learns the outcome through `resolved_decisions`, which carries a typed entry for
   a rejection rather than only for an answer:
@@ -1654,15 +1647,17 @@ rules inherited from the concept”.
   A performer that proposed an amendment and had it refused therefore knows that it was refused and
   why, instead of re-proposing it blindly.
 
-  Protocol 2 delivers each retained resolution in this tagged form unconditionally.
+  Protocol 2 delivers each retained resolution unconditionally; for its tagged form, see §4's
+  “Adapter-method field clauses”.
 
-  Whenever resolution returns the movement to `RUNNING`, a live driver continues into a new
-  attempt — `performer.selected`, `attempt.started`, then `adapter.probed`, as for every executing
-  attempt — and only then passes the resolutions in `resolved_decisions` (plus a compatible
-  `session_hint`); if no driver holds the lease, a later `resume` does it (§7 command authority).
+  For the last-blocking-decision projection, see §6's “`WAITING_HUMAN` is a projection, and it has a
+  defined exit”. For attempt materialization order, see Appendix B.2's “Attempt lifecycle and
+  performer selection”. Only after that materialization does the core pass the resolutions in
+  `resolved_decisions` (plus a compatible `session_hint`). For live-versus-resume authority, see
+  §7's “Command authority”.
 
   **Which resolutions, and how many.** A new attempt receives every decision resolved **for its own
-  movement, in this run, on the current revision**, ordered by resolving `seq`. Not just the last
+  movement, in this run, on the current revision**. Not just the last
   blocked attempt's — a movement can block more than once and later attempts need the earlier answers
   — and not the whole run's, since another movement's answers are not this movement's context.
   Revision-scoping falls out of §9: an approved amendment obsoletes old-revision decisions, so they
@@ -1678,25 +1673,23 @@ rules inherited from the concept”.
 
   Truncation therefore removes the oldest answers, which a performer is least likely to still need,
   and the retained suffix stays in `seq` order. The omission is recorded
-  (`adapter.probed.truncated_resolutions`) and reported. Truncation drops the *oldest* answers, which are the ones a performer is least likely
-  to still need, and the journal keeps all of them regardless. A session hint must never be relied on
-  to carry what was dropped — hints are an optimization and never required state (§4).
+  (`adapter.probed.truncated_resolutions`) and reported. The journal keeps all of them regardless. A
+  session hint must never be relied on to carry what was dropped; for hint authority, see §4's
+  “Session hints and privacy”.
 
 **Core protocol and state limits.** The core never requests wider grants than the
-score's `policy` allows; run state lives outside the attempt workspace and the protocol
-provides no direct state-mutation or adapter-chaining operation. A conforming adapter
-must not modify score, cast, or run state files directly, judge success, or invoke other
-adapters. Since adapters are trusted executables running with the user's privileges,
-**malicious adapter behavior is outside the core's security boundary** — the limits
-above are protocol conformance rules, not physical guarantees.
+score's `policy` allows, and the protocol provides no direct state-mutation or adapter-chaining
+operation. For authoritative-state isolation, see §1's “Authoritative state and writable staging
+are separate roots”. A conforming adapter must not modify score or cast files directly or invoke
+other adapters. For success authority, see §4's “Adapter-method field clauses”. For malicious-
+adapter scope, see §4's “Adapter process environment”. The limits above are protocol conformance
+rules, not physical guarantees.
 
 **Environment enforcement — the trust boundary stated honestly.** A JSON-RPC field
 cannot physically stop a `shell: true` process from touching other paths. Real
 filesystem/network confinement comes from the OS sandbox or the vendor agent's own
-enforcement, which is why `probe` reports `enforcement`. If an adapter cannot enforce a
-constraint a movement's grants require, the core **fails closed** — unless the resolved
-cast sets `allow_advisory_enforcement: true` for that performer, in which case the run
-proceeds and the manifest records, per attempt, which constraints were advisory.
+enforcement, which is why `probe` reports `enforcement`. For strict and advisory disposition, see
+§4's “The fail-closed predicate”. For per-attempt manifest recording, see §1's “Cast layering”.
 `grants.network` governs the agent's data-plane access — tools, spawned commands, web
 search, MCP and similar — never the vendor's own control-plane connection to its model
 provider, which is always permitted.
@@ -1718,9 +1711,9 @@ grants is satisfied:
 
 An unsatisfied row fails closed, or — with `allow_advisory_enforcement: true` for that
 performer — proceeds with the exact unmet dimensions recorded for that attempt and
-surfaced by `validate` and `status`. `validate` evaluates this predicate against its standalone
-probes; `run` evaluates it against the selected attempt's gated peer. That is why either surface
-requires cast resolution and probing (§7).
+surfaced by `validate` and `status`. For validation probe sources, see §4's “Validation probing”.
+For run probe sources, see §4's “Run-attempt probing”. Both surfaces require cast resolution and
+probing (§7).
 
 **Reserved input artifacts.** Two contracts the performer cannot reconstruct on its own
 are delivered through the existing `inputs` mechanism rather than as new wire fields, so
@@ -1739,12 +1732,12 @@ coherent reserved-input specimens.
 - `partitur.score-base` is supplied to every movement whose `may_propose` is true (§2).
 - `partitur.score-base.base_revision` must equal a proposal's `base_revision`.
 - `partitur.score-base.base_hash` must equal a proposal's `base_hash`.
-- `partitur.score-base.base_hash` is the semantic `partitur/score` identity from Appendix A.
+- For `partitur.score-base.base_hash` identity, see Appendix A.4's “Domain registry”.
 - Binding the proposal to `partitur.score-base.base_hash` makes it stale-checkable (§9).
 - `partitur.score-base.score` is the canonical JSON score at `base_revision`.
 - `partitur.subject-tree` is the reserved input for review movements.
-- `partitur.subject-tree` is supplied to every movement that declares a review criterion.
-- `partitur.subject-tree.subject_tree` is the core-observed tree.
+- For `partitur.subject-tree` eligibility and delivery, see §4's “Review-subject publication”.
+- For `partitur.subject-tree.subject_tree` authority, see §7's “Review criteria”.
 - A review performer cannot compute `partitur.subject-tree.subject_tree` itself.
 - In particular, a review performer with no shell cannot compute the subject tree itself.
 
@@ -1770,13 +1763,9 @@ file content:
     rubrics: [{ id, required_coverage: true }] }
 ```
 
-**Review-subject publication.** Rule 7 (§2) makes every review performer a non-writer, so its
-subject is fixed before execution: it is exactly the movement base from which the core builds that
-reviewer's worktree. That means a reviewer of contributing writer results receives the deterministic
-composed base (§5), not the run base merely because the reviewer itself is read-only; the final
-reviewer receives the recorded candidate tree (§8). This is also the `subject_tree` that §7 later
-binds at `acceptance.started` and against which the findings artifact is compared. A reviewer never
-receives a writer's post-execution tree in v0.2.
+**Review-subject publication.** For review-performer write authority and self-review exclusion, see
+§2's “Rules enforced by `partitur validate` (the score compiler)”. For review-subject selection, see
+§7's “Subject binding”.
 
 During attempt materialization, after that base is pinned and before the adapter trampoline is
 launched, the core writes this input at
@@ -1784,43 +1773,40 @@ launched, the core writes this input at
 are the **A.1 JCS encoding**, with no trailing newline, of the shown object: the literal `schema`
 and `findings_schema`, the movement base's object-format-qualified `subject_tree`, and one
 `{id, required_coverage: true}` entry for every rubric of the movement's sole review criterion,
-sorted by rubric id. The file is written temp → file fsync → rename → directory fsync, then made
-read-only to the performer. Its delivered `instance_id` is
+sorted by rubric id. The file is fsynced before rename and then made read-only to the performer; for
+rename durability, see §1's “Rename durability”. Its delivered `instance_id` is
 `partitur.subject-tree@<movement-id>@<score-revision>`; all retries and fallbacks on that movement
 revision reuse that instance and its exact raw bytes. The core may append `attempt.started` only
 after this publication, so the later execute brief can never cite an undurable subject-input hash.
 
 `attempt.started` records `review_subject_input: {instance_id, hash}` iff the movement declares a
 review criterion. The location is derived from that event envelope and its score revision; the
-adapter receives the same `instance_id`, path, and raw SHA-256 in `inputs`. The input remains
-core-owned and retained with the run — terminal staging cleanup never removes it. During recovery,
+adapter receives the same `instance_id` and path. For the input hash, see §4's “Reserved input
+artifacts”. For retention of the core-owned input, see §1's “Run data retention”. During recovery,
 `RC-RESUME-035` removes an unreferenced pre-`attempt.started` copy only after journal replay has
-reached an `owner = clear` selection cut, and before that cut's selected continuation. A stale or
-orphan lease first takes its own cleanup and re-evaluates; a verified live owner yields, and an
-unverifiable owner halts, without this review-subject-input cleanup. On an eligible `resume`, this
+reached an `owner = clear` selection cut, and before that cut's selected continuation. For lease
+precedence, see Appendix C.1's “Run-level precedence”; none of those branches performs this
+review-subject-input cleanup. On an eligible `resume`, this
 cleanup runs exactly once. Terminal cleanup uses this same recovery step after any lease cleanup
-and performs no independent review-subject-input sweep. Once an `attempt.started` names it,
-`RC-RESUME-010` verifies the derived file against the recorded raw hash and halts
-`missing_artifact_file` on absence or mismatch. Recovery never regenerates a named input: the raw
-bytes that crossed the adapter boundary are evidence, not a cache.
+and performs no independent review-subject-input sweep. For verification and halt after an
+`attempt.started` names the input, see Appendix C.1's “Run-level precedence”.
+Recovery never regenerates a named input: the raw bytes that crossed the adapter boundary are
+evidence, not a cache.
 
-The reserved `partitur.` prefix is unusable as a score-declared output id by construction
-(§1 identifier grammar), so these inputs cannot be spoofed. The core-observed subject tree
-is always authoritative; a findings artifact's own claim is compared against it and never
-trusted in its place (§8).
+For reserved-id spoofing prevention, see §1's “Identifier grammar”. For findings subject authority,
+see §7's “Review criteria”.
 
 **Result envelope v1 (adapter-internal, normative).** The kit-level contract between an
 adapter and its vendor process is not part of the JSON-RPC wire, but it is a conformance
 surface every adapter shares, so it is specified rather than left implicit:
 
 - The adapter instructs its vendor to write exactly one strict JSON file named
-  `partitur-result.json` in `output_dir` before exiting. The name is reserved: it can never
-  itself be a declared artifact.
+  `partitur-result.json` in `output_dir` before exiting. For why `partitur-result.json` cannot be a
+  declared artifact id, see §1's “Identifier grammar”.
 - Shape: `{ version: 1, artifacts, questions, proposal, summary }`. All four payload members
   must be **present**; absent is malformed. Only `proposal` may be `null` — `artifacts` and
-  `questions` must be present arrays (possibly empty) and `summary` a present string. Strict
-  decoding: unknown fields, duplicate keys, and invalid UTF-8 are all rejected, through the same
-  parser as the wire. Maximum 1 MiB.
+  `questions` must be present arrays (possibly empty) and `summary` a present string. For strict
+  decoding and parser sharing, see §4's “Frozen wire rules”. Maximum 1 MiB.
 - `artifacts[].path` is a **non-empty relative** path containing no `..` segment, which must
   still resolve inside `output_dir` **after symlink resolution**, and must name a **regular
   file**. Ids across `artifacts`, `questions`, and `proposal` are all non-empty and mutually
@@ -1828,8 +1814,8 @@ surface every adapter shares, so it is specified rather than left implicit:
 - Question text is non-blank; `proposal` is `null` or an object
   `{id, amendment, requires_decision: bool}`. The envelope file itself must be a regular file,
   not a symlink.
-- Whether an artifact id was *declared* is checked by the **core** at the event boundary, not
-  by the kit while parsing — the kit does not know the score.
+- The kit does not know the score, so it does not check whether an artifact id was declared while
+  parsing. For the core's event-boundary check, see §1's “Artifact recording atomicity”.
 - A **valid envelope with empty outputs is `completed`** — producing nothing is a legitimate
   result. A **missing or invalid envelope is `task_failed`**, never `protocol_error`: the
   adapter spoke correctly, the vendor did not deliver.
