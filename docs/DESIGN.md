@@ -1838,9 +1838,10 @@ contract applies to run-scoped adapter and criterion launches. For validation-pr
 and cannot record it after without leaving a window in which a crash strands an unrecorded process. The
 spike settled the ordering: the core starts a **trusted launch trampoline** as a new POSIX session
 leader; while the trampoline blocks on an **inherited gate**, the core records and fsyncs its PID,
-session id, and process-start identity in `attempt.started`; only then does it release the gate, and
-the trampoline `exec`s the adapter **in place**. EOF on the gate before release makes the trampoline
-exit **without executing adapter code at all**.
+session id, and process-start identity in the launch's event — `attempt.started` for an adapter launch
+or `criterion.started` for a criterion launch — before releasing the gate; the trampoline then `exec`s
+the launched command **in place**. EOF on the gate before release makes the trampoline exit **without
+executing adapter or criterion code at all**.
 
 That is what closes the dangerous ambiguity rather than merely narrowing it, stated as narrowly as it
 was measured: an unrecorded *trampoline* may briefly survive a crash, but it **contains no adapter code
@@ -1859,8 +1860,8 @@ The handoff contract, since recovery depends on reading it (Appendix C.2):
 - **Keyed per launch, not per attempt** — `<attempt_id>/<launch_id>`. The reason is *successive*
   launches, not concurrent ones. For acceptance execution order and short-circuiting, see §7's
   “Acceptance runner and CLI v0.2”. Therefore nothing races,
-  but one attempt performs many launches — the adapter, then one trampoline per external criterion,
-  plus retries — and a per-attempt key would let a **stale handoff from an earlier launch** be
+  but one attempt performs many launches — the adapter, then one trampoline per external criterion —
+  and a per-attempt key would let a **stale handoff from an earlier launch** be
   mistaken for the current one.
 - The trampoline **publishes its identity, fsyncs it, then blocks** on the gate. A published identity
   therefore always precedes a released gate.
@@ -1910,8 +1911,8 @@ The handoff contract, since recovery depends on reading it (Appendix C.2):
 - These are coordination files, not journal identity: the journal's copy is authoritative and the files
   are removed with the run's staging root.
 
-**Process supervision.** The adapter and the vendor process it spawns are separate process
-groups, so hard-killing a wedged adapter can orphan the vendor group. Termination is layered:
+**Process supervision.** Hard-killing a wedged adapter can orphan a vendor process that it placed in
+a separate process group. Termination is layered:
 the adapter MUST handle `SIGTERM` by terminating its vendor process group before exiting, and the
 core's outer termination grace is **30000 integer milliseconds**. A conforming adapter MUST keep
 its own `SIGTERM`→`SIGKILL` grace strictly below 30000 ms. The direction is intentional: `probe()`
@@ -2010,8 +2011,8 @@ Write attempts never modify the user's checkout directly. v0.2 uses **Git worktr
       T := three_way_merge(base = C.base_tree, ours = T, theirs = C.result_tree)
   ```
 
-  "Without duplication" means skipping a change set whose `change_set_id` has already been
-  applied in this composition — **content identity, not commit ancestry**, since
+  Composition skips a change set whose `change_set_id` has already been applied in that
+  composition — **content identity, not commit ancestry**, since
   checkpoint commits are storage artifacts whose topology may carry unrelated history.
   For READY-movement scheduling, see Appendix C.4's “Between-unit continuation and branch
   expansion”.
