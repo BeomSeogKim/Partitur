@@ -70,7 +70,7 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 				},
 				14: {
 					"`runs/<run-id>/inputs/<movement-id>/revision-<score-revision>/subject-tree.json`.",
-					"read-only to the performer. Its delivered `instance_id` is",
+					"The file is fsynced before rename and then made read-only to the performer; for\nrename durability, see §1's “Rename durability”. Its delivered `instance_id` is",
 					"all retries and fallbacks on that movement\nrevision reuse that instance and its exact raw bytes.",
 				},
 				15: {
@@ -253,8 +253,15 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			start:              "**Reserved-input field clauses.**",
 			end:                "**Review-subject publication.**",
 			carrierMarker:      "**Reserved-input field clauses.**",
-			carrierHash:        "f0d93a7a46f87def6910c76a1a8bb94d24768cf84dba5c4ef8af98425f77a313",
-			carrierAssignments: []int{1, 1, 1, 3, 1, 1, 1, 3},
+			carrierHash:        "ede5de419510cecb787823db9883a86d74a29c77af1051006ea9107e24324af8",
+			referenceCount:     3,
+			carrierAssignments: []int{1, 1, 1, 2, 1, 1, 0, 2},
+			relocatedCarriers: map[int][]string{
+				7: {
+					"`attempt.started` records `review_subject_input: {instance_id, hash}` iff the movement declares a\nreview criterion.",
+					"The location is derived from that event envelope and its score revision; the\nadapter receives the same `instance_id` and path.",
+				},
+			},
 			specimens: []remainingSpecimenExpectation{
 				{language: "text", prefix: "artifact_id: partitur.score-base\n", hash: "f7020681f700501152537c9a2fa4ae499ed51a40f44a1e35627c045bb52a608f"},
 				{language: "text", prefix: "artifact_id: partitur.subject-tree\n", hash: "e0c33bb7d4e547a49fb27e6962288b5dc1a57c6137dedf0c6a31dacd1e5bd7a5"},
