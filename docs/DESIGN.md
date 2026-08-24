@@ -2331,11 +2331,9 @@ the recovery rule below.
   other closer uses `clamped`, as does the one opener the table above names. That is what makes the
   charge a deterministic function of recorded state in every case.
 - An `adapter` interval that reaches `execute` closes ordinarily at §4's run execute-completion
-  boundary, not when the response or adapter leader first exits. The opening driver keeps it open
-  through the verified-empty session sweep, then appends one measured
-  `execution.stopped {reason: normal}` before the response-derived attempt event. Appendix C owns
-  the corresponding crash close and performs the sweep first. This ordering charges a same-session
-  survivor until it is gone and leaves no second close for recovery to charge again.
+  boundary, not when the response or adapter leader first exits. Appendix C owns the corresponding
+  crash close. This ordering charges a same-session survivor until it is gone and leaves no second
+  close for recovery to charge again.
 - Each attempt receives the remainder at its start (`request.budget`).
 - **Exhaustion mid-flight has an explicit terminal path.** If the budget runs out while an
   adapter or an acceptance command is running, the attempt must be terminalized before the
@@ -2357,11 +2355,10 @@ the recovery rule below.
   is the more specific of the two and because a tie resolved the other way would end a run on an
   ambiguity. What the rule fixes is the *classification*, so two implementations cannot disagree
   about which evidence the failure records. It does **not** make the attempt retryable at the tie:
-  §3.1's first arm reads `remaining_time == 0` and selects `none` with
-  `terminal_reason: budget_exhausted`. Both paths end the movement; they differ in what they record,
-  and an `acceptance.failed {criterion_errored}` is the truer account of what happened. Only exhaustion of
-  the *run's remaining budget* takes the budget path, which §3.1 classes immediately terminal —
-  there is nothing left to fund a retry.
+  §3.1's oracle already fixes what a zero remaining budget selects. Both paths end the movement;
+  they differ in what they record, and an `acceptance.failed {criterion_errored}` is the truer
+  account of what happened. Only exhaustion of the *run's remaining budget* takes the budget path,
+  which §3.1 classes immediately terminal — there is nothing left to fund a retry.
 
   **Composition exhaustion needs no attempt event**, because fan-in and candidate composition
   run *between* attempts, not inside one (§5, §8) — there is no live attempt to terminalize:
@@ -2416,11 +2413,12 @@ share a mechanism:
   | Both present and consistent | Verify the owner per above |
 
   **Fencing is a compare-and-swap on every *driver-authorized* mutation, not a one-time act.**
-  The scope matters: `answer`, gate and amendment approvals, `amend`, `cancel`, `apply`, and
-  `promote-score` legitimately mutate state **without** holding the lease (§7 command authority),
-  so a universal lease check would forbid the commands the design depends on. What requires the
-  CAS is exactly the set of mutations that constitute execution — attempt lifecycle, evidence,
-  change sets, acceptance, candidate materialization, budget intervals.
+  The scope matters: amendment approvals, `amend`, `cancel`, `apply`, and `promote-score`
+  legitimately mutate state **without** holding the lease, as §7's decision-resolution transaction
+  separately provides for `answer` and human-gate `approve`, so a universal lease check would forbid
+  the commands the design depends on. What requires the CAS is exactly the set of mutations that
+  constitute execution — attempt lifecycle, evidence, change sets, acceptance, candidate
+  materialization, budget intervals.
 
   For those, while holding the repository state lock, the core checks: the run is nonterminal, the
   authority epoch and token match the durable authority record, and the PID and start identity
@@ -2449,11 +2447,6 @@ share a mechanism:
   AND the recorded PID and process-start identity still match
   ```
 
-  Note where each conjunct is read from, since this is the one place the two files could be confused:
-  the **epoch** comes from the journal projection (`authority.json` is only its checkpoint), and the
-  **token** comes from `driver.lease` and nowhere else. `authority.json` is never consulted for the
-  token, and never authoritative for the epoch.
-
   **Fencing and terminalization are one transition, under the canceller's authority.** A *canceller*
   is a role, not a fixed process: it is whichever actor completes the already-durable
   `cancel.requested` — the responsive driver, the cancelling command when no driver remains or after
@@ -2472,8 +2465,8 @@ share a mechanism:
 A run is *active* while nonterminal (`RUNNING` or `WAITING_HUMAN`). v0.2 allows one active
 run per repository: `partitur run` refuses to start while one exists (resume or cancel it
 first). Commands whose grammar includes a run-id operand address an existing run by its explicit
-id or by selecting the unique active run; `answer` and human-gate `approve` select that active run
-through their decision-id rule (§7). The nonterminal journal state is the logical guard; the lease
+id or by selecting the unique active run; §7 owns the decision-id form that `answer` and
+human-gate `approve` take instead. The nonterminal journal state is the logical guard; the lease
 guards concurrent *drivers* of the same run.
 
 **Live between-unit continuation.** A live driver may advance ordinary between-unit work only
@@ -2488,13 +2481,11 @@ every scheduler step.
 
 At such a cut, and only when that projection has no current-head, non-superseded in-flight attempt,
 the driver advances **exactly one** between-unit selection step. The shared selector applies only
-C.4's lifecycle choices in their stated order: budget exhaustion, materialization of an already
-durable pending successor, declaration-order readiness, start, fan-in, and initial selection,
-candidate composition, and waived completion. It selects the corresponding durable effect required
-by §3.1, §5, §8, and Appendix B; it does not select an `RC-RESUME-*` row or any recovery action.
-The driver executes the selected effect itself and reprojects the resulting durable journal state
-before selecting again. Thus live and recovery share one selection procedure but have separate
-executors; `run` does not enter Appendix C.
+C.4's lifecycle choices, in the order C.4 states. It selects the corresponding durable effect
+required by §3.1, §5, §8, and Appendix B; it does not select an `RC-RESUME-*` row or any recovery
+action. The driver executes the selected effect itself and reprojects the resulting durable journal
+state before selecting again. Thus live and recovery share one selection procedure but have
+separate executors; `run` does not enter Appendix C.
 
 The control channel and a pending prepare take the precedence already specified below; ordinary
 live continuation yields to them. With `remaining_time == 0`, it starts no new unit of work; recovery
@@ -2506,11 +2497,11 @@ resume` continues from that outcome under Appendix C.
 An attempt-scoped cancel would leave the movement `RUNNING` with no selection reason for what
 comes next — not a retry, not a fallback, not a restart — so v0.2 does not offer one. The
 protocol-level `cancel` (§4) still targets the current attempt, because that is the process
-that must stop; the *authority* is the run-scoped request. `run.cancelled` atomically projects
-every nonterminal movement and attempt to `CANCELLED` (Appendix B), and it is appended by whichever
-canceller the control channel below selects — the live driver that observed the request, or
-`partitur cancel` itself where no valid lease owner remains. No branch leaves a cancelled run
-active until someone happens to `resume`. Recovery is therefore only needed for a crash
+that must stop; the *authority* is the run-scoped request. Appendix B owns what `run.cancelled`
+projects; what this section fixes is who appends it — whichever canceller the control channel below
+selects: the live driver that observed the request, or `partitur cancel` itself where no valid
+lease owner remains. No branch leaves a cancelled run active until someone happens to `resume`.
+Recovery is therefore only needed for a crash
 between the request and its terminalization.
 
 **The control channel.** With no daemon, nothing waits in memory, so out-of-band

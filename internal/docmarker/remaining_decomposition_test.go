@@ -80,7 +80,6 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 				17: {
 					"`runs/<run-id>/authority.json` is a\n  fsynced checkpoint of that projection, not its authority.",
 					"It lives in `driver.lease` and in the owner's memory only.",
-					"`authority.json` is never consulted for the\n  token, and never authoritative for the epoch.",
 				},
 				18: {
 					"**Diagnostics privacy.** Vendor and adapter `stderr` may contain a session id the adapter",
