@@ -9334,6 +9334,609 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "f93427a709bfee7f8f6325edac4d51f61930dcdd",
+        "ordinal": 12,
+        "start_source_line": 2528,
+        "end_source_line": 2754
+      },
+      "review_receipt": {
+        "source_sha256": "cf98d572017c536ecbe5ad4bfa187ca44ca25626fb871ff9172a96ec34aa0e80",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 161078,
+            "end_source_byte": 161257,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-step-d-fence"
+          },
+          {
+            "start_source_byte": 161261,
+            "end_source_byte": 161341,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-step-e-append-run-cancelled"
+          },
+          {
+            "start_source_byte": 161345,
+            "end_source_byte": 161387,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-step-f-remove-lease"
+          },
+          {
+            "start_source_byte": 161392,
+            "end_source_byte": 161495,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 161500,
+            "end_source_byte": 162176,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 162181,
+            "end_source_byte": 162245,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 162250,
+            "end_source_byte": 162647,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-c-and-d-independent-predicates"
+          },
+          {
+            "start_source_byte": 162652,
+            "end_source_byte": 162698,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-d-rejects-liveness-predicate"
+          },
+          {
+            "start_source_byte": 162699,
+            "end_source_byte": 163054,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 163055,
+            "end_source_byte": 163258,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-d-predicate-durable-idempotent"
+          },
+          {
+            "start_source_byte": 163263,
+            "end_source_byte": 163319,
+            "kind": "anchor",
+            "marker_id": "cancellation.advanced-epoch-authoritative-once-journaled"
+          },
+          {
+            "start_source_byte": 163320,
+            "end_source_byte": 163592,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 163597,
+            "end_source_byte": 163776,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-is-single-source-referenced-not-restated"
+          },
+          {
+            "start_source_byte": 163777,
+            "end_source_byte": 164087,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 164091,
+            "end_source_byte": 164257,
+            "kind": "anchor",
+            "marker_id": "supersession.durable-request-is-the-prepare"
+          },
+          {
+            "start_source_byte": 164258,
+            "end_source_byte": 164391,
+            "kind": "anchor",
+            "marker_id": "cancellation.wake-is-best-effort-not-mechanism-of-record"
+          },
+          {
+            "start_source_byte": 164392,
+            "end_source_byte": 164579,
+            "kind": "anchor",
+            "marker_id": "cancellation.watch-continuous-for-lease-duration"
+          },
+          {
+            "start_source_byte": 164583,
+            "end_source_byte": 164699,
+            "kind": "anchor",
+            "marker_id": "cancellation.watch-is-continuous-not-checkpoint"
+          },
+          {
+            "start_source_byte": 164700,
+            "end_source_byte": 165037,
+            "kind": "anchor",
+            "marker_id": "cancellation.watch-observes-decision-state-too"
+          },
+          {
+            "start_source_byte": 165038,
+            "end_source_byte": 165163,
+            "kind": "anchor",
+            "marker_id": "cancellation.watch-guarantees-detection-not-the-wake"
+          },
+          {
+            "start_source_byte": 165168,
+            "end_source_byte": 165502,
+            "kind": "anchor",
+            "marker_id": "cancellation.watch-scope-prevents-false-wedged-detection"
+          },
+          {
+            "start_source_byte": 165503,
+            "end_source_byte": 165699,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 165704,
+            "end_source_byte": 165849,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 165850,
+            "end_source_byte": 165926,
+            "kind": "anchor",
+            "marker_id": "cancellation.detection-latency-bound-covers-both-append-kinds"
+          },
+          {
+            "start_source_byte": 165927,
+            "end_source_byte": 166001,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 166002,
+            "end_source_byte": 166225,
+            "kind": "anchor",
+            "marker_id": "cancellation.driver-issues-protocol-cancel-if-execute-in-flight"
+          },
+          {
+            "start_source_byte": 166226,
+            "end_source_byte": 166378,
+            "kind": "anchor",
+            "marker_id": "cancellation.no-protocol-cancel-when-no-execute-in-flight"
+          },
+          {
+            "start_source_byte": 166379,
+            "end_source_byte": 166498,
+            "kind": "anchor",
+            "marker_id": "cancellation.driver-applies-termination-grace-and-sweep"
+          },
+          {
+            "start_source_byte": 166499,
+            "end_source_byte": 166576,
+            "kind": "anchor",
+            "marker_id": "cancellation.driver-becomes-canceller-executes-oracle"
+          },
+          {
+            "start_source_byte": 166581,
+            "end_source_byte": 166867,
+            "kind": "anchor",
+            "marker_id": "cancellation.no-response-derived-outcome-after-observing-request"
+          },
+          {
+            "start_source_byte": 166868,
+            "end_source_byte": 167050,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 167051,
+            "end_source_byte": 167221,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 167225,
+            "end_source_byte": 167356,
+            "kind": "anchor",
+            "marker_id": "cancellation.response-completeness-marker-not-authoritative-here"
+          },
+          {
+            "start_source_byte": 167357,
+            "end_source_byte": 167582,
+            "kind": "anchor",
+            "marker_id": "cancellation.run-cancelled-is-single-producer-of-terminal-projection"
+          },
+          {
+            "start_source_byte": 167583,
+            "end_source_byte": 167789,
+            "kind": "anchor",
+            "marker_id": "cancellation.blessed-race-grants-adapter-not-core-obligation"
+          },
+          {
+            "start_source_byte": 167790,
+            "end_source_byte": 167955,
+            "kind": "anchor",
+            "marker_id": "cancellation.no-response-outcome-rule-covers-every-outcome"
+          },
+          {
+            "start_source_byte": 167956,
+            "end_source_byte": 168094,
+            "kind": "anchor",
+            "marker_id": "cancellation.evidence-appended-independent-of-response"
+          },
+          {
+            "start_source_byte": 168099,
+            "end_source_byte": 168277,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 168278,
+            "end_source_byte": 168604,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 168605,
+            "end_source_byte": 168823,
+            "kind": "anchor",
+            "marker_id": "cancellation.no-response-outcome-extends-to-responsive-adapter"
+          },
+          {
+            "start_source_byte": 168824,
+            "end_source_byte": 168962,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 168967,
+            "end_source_byte": 169206,
+            "kind": "anchor",
+            "marker_id": "cancellation.drain-leaves-oracle-conditionals-unmodified"
+          },
+          {
+            "start_source_byte": 169207,
+            "end_source_byte": 169296,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 169297,
+            "end_source_byte": 169402,
+            "kind": "anchor",
+            "marker_id": "cancellation.drain-satisfies-d-so-run-cancelled-carries-fenced-epoch"
+          },
+          {
+            "start_source_byte": 169406,
+            "end_source_byte": 169538,
+            "kind": "anchor",
+            "marker_id": "cancellation.drain-journal-matches-recovery-crash-before-e"
+          },
+          {
+            "start_source_byte": 169539,
+            "end_source_byte": 169760,
+            "kind": "anchor",
+            "marker_id": "cancellation.drain-crash-adds-no-new-recovery-case"
+          },
+          {
+            "start_source_byte": 169761,
+            "end_source_byte": 169892,
+            "kind": "anchor",
+            "marker_id": "cancellation.no-driver-alive-partitur-cancel-completes"
+          },
+          {
+            "start_source_byte": 169893,
+            "end_source_byte": 169967,
+            "kind": "anchor",
+            "marker_id": "cancellation.resume-on-already-terminal-launches-nothing"
+          },
+          {
+            "start_source_byte": 169968,
+            "end_source_byte": 170119,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 170120,
+            "end_source_byte": 170206,
+            "kind": "anchor",
+            "marker_id": "cancellation.wedged-owner-reverified-after-deadline"
+          },
+          {
+            "start_source_byte": 170207,
+            "end_source_byte": 170392,
+            "kind": "anchor",
+            "marker_id": "cancellation.wedged-owner-termination-target-is-lease-owner-only"
+          },
+          {
+            "start_source_byte": 170393,
+            "end_source_byte": 170493,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 170494,
+            "end_source_byte": 170588,
+            "kind": "anchor",
+            "marker_id": "cancellation.wedged-owner-recheck-immediately-before-each-signal"
+          },
+          {
+            "start_source_byte": 170589,
+            "end_source_byte": 170724,
+            "kind": "anchor",
+            "marker_id": "cancellation.wedged-owner-halts-if-unverifiable"
+          },
+          {
+            "start_source_byte": 170729,
+            "end_source_byte": 170928,
+            "kind": "anchor",
+            "marker_id": "cancellation.driver-own-session-never-a-sweep-target"
+          },
+          {
+            "start_source_byte": 170929,
+            "end_source_byte": 171006,
+            "kind": "anchor",
+            "marker_id": "cancellation.supervisable-descendants-are-recorded-sessions"
+          },
+          {
+            "start_source_byte": 171007,
+            "end_source_byte": 171180,
+            "kind": "anchor",
+            "marker_id": "cancellation.step-6-defers-session-sweep-to-oracle-a"
+          },
+          {
+            "start_source_byte": 171181,
+            "end_source_byte": 171320,
+            "kind": "anchor",
+            "marker_id": "cancellation.session-sweep-not-substitute-for-owner-reverification"
+          },
+          {
+            "start_source_byte": 171321,
+            "end_source_byte": 171465,
+            "kind": "anchor",
+            "marker_id": "cancellation.unrecorded-launch-outside-target-set"
+          },
+          {
+            "start_source_byte": 171470,
+            "end_source_byte": 171563,
+            "kind": "anchor",
+            "marker_id": "cancellation.wedged-canceller-executes-oracle-with-d"
+          },
+          {
+            "start_source_byte": 171568,
+            "end_source_byte": 171708,
+            "kind": "anchor",
+            "marker_id": "cancellation.ack-deadline-is-latency-not-correctness"
+          },
+          {
+            "start_source_byte": 171709,
+            "end_source_byte": 171867,
+            "kind": "anchor",
+            "marker_id": "cancellation.ack-expiry-yields-same-journal"
+          },
+          {
+            "start_source_byte": 171868,
+            "end_source_byte": 172073,
+            "kind": "anchor",
+            "marker_id": "cancellation.completed-during-wait-takes-terminal-row-first"
+          },
+          {
+            "start_source_byte": 172074,
+            "end_source_byte": 172196,
+            "kind": "anchor",
+            "marker_id": "cancellation.flock-released-on-terminated-driver-exit"
+          },
+          {
+            "start_source_byte": 172197,
+            "end_source_byte": 172381,
+            "kind": "anchor",
+            "marker_id": "cancellation.ack-deadline-should-exceed-outer-grace"
+          },
+          {
+            "start_source_byte": 172386,
+            "end_source_byte": 172644,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 172649,
+            "end_source_byte": 172831,
+            "kind": "anchor",
+            "marker_id": "cancellation.interval-close-is-its-own-append"
+          },
+          {
+            "start_source_byte": 172832,
+            "end_source_byte": 172978,
+            "kind": "anchor",
+            "marker_id": "cancellation.two-appends-one-transition-recovery-completes-pair"
+          },
+          {
+            "start_source_byte": 172981,
+            "end_source_byte": 173285,
+            "kind": "anchor",
+            "marker_id": "supersession.reuses-cancellation-branches"
+          },
+          {
+            "start_source_byte": 173287,
+            "end_source_byte": 173366,
+            "kind": "anchor",
+            "marker_id": "supersession.driver-disposition-settled-before-approval"
+          },
+          {
+            "start_source_byte": 173367,
+            "end_source_byte": 173444,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 173445,
+            "end_source_byte": 173641,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 173642,
+            "end_source_byte": 173891,
+            "kind": "anchor",
+            "marker_id": "supersession.ack-is-lease-move-not-append"
+          },
+          {
+            "start_source_byte": 173893,
+            "end_source_byte": 174084,
+            "kind": "anchor",
+            "marker_id": "supersession.prepare-appended-and-fsynced-before-head-change"
+          },
+          {
+            "start_source_byte": 174085,
+            "end_source_byte": 174327,
+            "kind": "anchor",
+            "marker_id": "supersession.quiesce-ack-acceptance-conditions"
+          },
+          {
+            "start_source_byte": 174328,
+            "end_source_byte": 174454,
+            "kind": "anchor",
+            "marker_id": "supersession.approver-revalidates-then-appends-once"
+          },
+          {
+            "start_source_byte": 174455,
+            "end_source_byte": 174559,
+            "kind": "anchor",
+            "marker_id": "supersession.timeout-fences-and-carries-epoch-in-approval"
+          },
+          {
+            "start_source_byte": 174561,
+            "end_source_byte": 174815,
+            "kind": "anchor",
+            "marker_id": "supersession.no-second-fencing-event"
+          },
+          {
+            "start_source_byte": 174817,
+            "end_source_byte": 174936,
+            "kind": "anchor",
+            "marker_id": "supersession.driver-and-approver-are-roles-not-processes"
+          },
+          {
+            "start_source_byte": 174937,
+            "end_source_byte": 175071,
+            "kind": "anchor",
+            "marker_id": "supersession.auto-approval-performs-steps-1-and-2"
+          },
+          {
+            "start_source_byte": 175072,
+            "end_source_byte": 175256,
+            "kind": "anchor",
+            "marker_id": "supersession.after-lease-move-must-invoke-commit-table"
+          },
+          {
+            "start_source_byte": 175257,
+            "end_source_byte": 175378,
+            "kind": "anchor",
+            "marker_id": "supersession.matching-sidecar-row-not-wait-row"
+          },
+          {
+            "start_source_byte": 175379,
+            "end_source_byte": 175526,
+            "kind": "anchor",
+            "marker_id": "supersession.ordinary-path-completes-without-resume"
+          },
+          {
+            "start_source_byte": 175527,
+            "end_source_byte": 175661,
+            "kind": "anchor",
+            "marker_id": "supersession.crash-after-lease-move-leaves-prepare-for-recovery"
+          },
+          {
+            "start_source_byte": 175662,
+            "end_source_byte": 175771,
+            "kind": "anchor",
+            "marker_id": "supersession.never-commit-while-holding-authority-or-lock"
+          },
+          {
+            "start_source_byte": 175773,
+            "end_source_byte": 175933,
+            "kind": "anchor",
+            "marker_id": "supersession.matching-sidecar-approval-leaves-no-lease"
+          },
+          {
+            "start_source_byte": 175934,
+            "end_source_byte": 176029,
+            "kind": "anchor",
+            "marker_id": "supersession.voluntary-drain-carries-no-fenced-epoch"
+          },
+          {
+            "start_source_byte": 176030,
+            "end_source_byte": 176133,
+            "kind": "anchor",
+            "marker_id": "supersession.revision-restart-is-eligible-continuation"
+          },
+          {
+            "start_source_byte": 176134,
+            "end_source_byte": 176253,
+            "kind": "anchor",
+            "marker_id": "supersession.continuation-owner-determined-by-live-episode"
+          },
+          {
+            "start_source_byte": 176255,
+            "end_source_byte": 176421,
+            "kind": "anchor",
+            "marker_id": "supersession.live-episode-does-not-return-waiting-human"
+          },
+          {
+            "start_source_byte": 176422,
+            "end_source_byte": 176679,
+            "kind": "anchor",
+            "marker_id": "supersession.live-episode-acquires-fresh-lease-and-materializes"
+          },
+          {
+            "start_source_byte": 176680,
+            "end_source_byte": 176732,
+            "kind": "anchor",
+            "marker_id": "supersession.live-episode-returns-run-outcome"
+          },
+          {
+            "start_source_byte": 176733,
+            "end_source_byte": 176932,
+            "kind": "anchor",
+            "marker_id": "supersession.failed-acquisition-returns-interrupted-result"
+          },
+          {
+            "start_source_byte": 176933,
+            "end_source_byte": 177131,
+            "kind": "anchor",
+            "marker_id": "supersession.command-invocation-never-a-live-episode"
+          },
+          {
+            "start_source_byte": 177134,
+            "end_source_byte": 177192,
+            "kind": "anchor",
+            "marker_id": "supersession.command-returns-after-commit"
+          },
+          {
+            "start_source_byte": 177193,
+            "end_source_byte": 177356,
+            "kind": "anchor",
+            "marker_id": "supersession.no-live-episode-defers-to-resume"
+          },
+          {
+            "start_source_byte": 177358,
+            "end_source_byte": 177590,
+            "kind": "anchor",
+            "marker_id": "supersession.c1-converts-c4-only-materializes"
+          },
+          {
+            "start_source_byte": 177591,
+            "end_source_byte": 177753,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 177755,
+            "end_source_byte": 177994,
+            "kind": "anchor",
+            "marker_id": "supersession.post-commit-acquisition-is-fresh-not-reclaim"
+          },
+          {
+            "start_source_byte": 177995,
+            "end_source_byte": 178082,
+            "kind": "anchor",
+            "marker_id": "supersession.wedged-owner-takes-fenced-row"
+          },
+          {
+            "start_source_byte": 178083,
+            "end_source_byte": 178306,
+            "kind": "anchor",
+            "marker_id": "supersession.crash-dispositions-around-commit"
+          },
+          {
+            "start_source_byte": 178307,
+            "end_source_byte": 178554,
+            "kind": "non-normative"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
