@@ -8654,6 +8654,686 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "981f808ab219613181ae678e6c35d5e1055a674b",
+        "ordinal": 11,
+        "start_source_line": 2294,
+        "end_source_line": 2527
+      },
+      "review_receipt": {
+        "source_sha256": "b7f7cf66ed3643db387756a79468f720e4f7672afef52600c0dc1609eeb47d44",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 144753,
+            "end_source_byte": 144827,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 144831,
+            "end_source_byte": 144883,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 144886,
+            "end_source_byte": 144988,
+            "kind": "anchor",
+            "marker_id": "budget.clamped-close-recovered"
+          },
+          {
+            "start_source_byte": 144991,
+            "end_source_byte": 145089,
+            "kind": "anchor",
+            "marker_id": "budget.clamped-close-cancelled"
+          },
+          {
+            "start_source_byte": 145092,
+            "end_source_byte": 145209,
+            "kind": "anchor",
+            "marker_id": "budget.clamped-close-superseded"
+          },
+          {
+            "start_source_byte": 145212,
+            "end_source_byte": 145356,
+            "kind": "anchor",
+            "marker_id": "budget.clamped-close-responsive-cancel"
+          },
+          {
+            "start_source_byte": 145359,
+            "end_source_byte": 145494,
+            "kind": "anchor",
+            "marker_id": "budget.clamped-close-responsive-quiesce"
+          },
+          {
+            "start_source_byte": 145498,
+            "end_source_byte": 145785,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 145786,
+            "end_source_byte": 146006,
+            "kind": "anchor",
+            "marker_id": "budget.superseded-close-single-shape"
+          },
+          {
+            "start_source_byte": 146007,
+            "end_source_byte": 146122,
+            "kind": "anchor",
+            "marker_id": "budget.cancelled-close-single-shape"
+          },
+          {
+            "start_source_byte": 146123,
+            "end_source_byte": 146408,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 146412,
+            "end_source_byte": 146448,
+            "kind": "anchor",
+            "marker_id": "budget.control-close-charging-clamped"
+          },
+          {
+            "start_source_byte": 146452,
+            "end_source_byte": 146548,
+            "kind": "anchor",
+            "marker_id": "budget.clamped-charge-formula"
+          },
+          {
+            "start_source_byte": 146552,
+            "end_source_byte": 146757,
+            "kind": "anchor",
+            "marker_id": "budget.clamped-close-samples-and-records"
+          },
+          {
+            "start_source_byte": 146758,
+            "end_source_byte": 146872,
+            "kind": "anchor",
+            "marker_id": "budget.recorded-charge-never-recomputed"
+          },
+          {
+            "start_source_byte": 146873,
+            "end_source_byte": 147177,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 147181,
+            "end_source_byte": 147355,
+            "kind": "anchor",
+            "marker_id": "budget.measured-requires-opener"
+          },
+          {
+            "start_source_byte": 147356,
+            "end_source_byte": 147445,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 147446,
+            "end_source_byte": 147656,
+            "kind": "anchor",
+            "marker_id": "budget.adapter-interval-closes-at-execute-boundary"
+          },
+          {
+            "start_source_byte": 147657,
+            "end_source_byte": 147778,
+            "kind": "anchor",
+            "marker_id": "budget.survivor-charged-once-until-gone"
+          },
+          {
+            "start_source_byte": 147779,
+            "end_source_byte": 147849,
+            "kind": "anchor",
+            "marker_id": "budget.attempt-receives-remainder"
+          },
+          {
+            "start_source_byte": 147850,
+            "end_source_byte": 148051,
+            "kind": "anchor",
+            "marker_id": "budget.exhaustion-terminalizes-attempt-first"
+          },
+          {
+            "start_source_byte": 148052,
+            "end_source_byte": 148261,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 148265,
+            "end_source_byte": 148569,
+            "kind": "anchor",
+            "marker_id": "budget.exhaustion-terminal-chain"
+          },
+          {
+            "start_source_byte": 148573,
+            "end_source_byte": 148745,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 148746,
+            "end_source_byte": 148864,
+            "kind": "anchor",
+            "marker_id": "budget.criterion-timeout-wins-the-tie"
+          },
+          {
+            "start_source_byte": 148865,
+            "end_source_byte": 149117,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 149118,
+            "end_source_byte": 149241,
+            "kind": "anchor",
+            "marker_id": "budget.tie-not-retryable"
+          },
+          {
+            "start_source_byte": 149242,
+            "end_source_byte": 149393,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 149394,
+            "end_source_byte": 149550,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 149554,
+            "end_source_byte": 149742,
+            "kind": "anchor",
+            "marker_id": "budget.composition-exhaustion-needs-no-attempt-event"
+          },
+          {
+            "start_source_byte": 149745,
+            "end_source_byte": 149942,
+            "kind": "anchor",
+            "marker_id": "budget.fan-in-exhaustion-chain"
+          },
+          {
+            "start_source_byte": 149943,
+            "end_source_byte": 150196,
+            "kind": "anchor",
+            "marker_id": "budget.candidate-composition-fails-run-directly"
+          },
+          {
+            "start_source_byte": 150200,
+            "end_source_byte": 150548,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 150550,
+            "end_source_byte": 150656,
+            "kind": "anchor",
+            "marker_id": "state-lock.separate-from-lease"
+          },
+          {
+            "start_source_byte": 150658,
+            "end_source_byte": 150794,
+            "kind": "anchor",
+            "marker_id": "state-lock.guards-state-mutations"
+          },
+          {
+            "start_source_byte": 150795,
+            "end_source_byte": 150934,
+            "kind": "anchor",
+            "marker_id": "state-lock.bounded-hold"
+          },
+          {
+            "start_source_byte": 150935,
+            "end_source_byte": 151024,
+            "kind": "anchor",
+            "marker_id": "state-lock.never-across-external-wait"
+          },
+          {
+            "start_source_byte": 151025,
+            "end_source_byte": 151190,
+            "kind": "anchor",
+            "marker_id": "driver-lease.held-for-execution-episode"
+          },
+          {
+            "start_source_byte": 151191,
+            "end_source_byte": 151460,
+            "kind": "anchor",
+            "marker_id": "driver-lease.owner-identity-fields"
+          },
+          {
+            "start_source_byte": 151464,
+            "end_source_byte": 151513,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 151517,
+            "end_source_byte": 151550,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 151553,
+            "end_source_byte": 151859,
+            "kind": "anchor",
+            "marker_id": "driver-lease.process-start-identity-linux"
+          },
+          {
+            "start_source_byte": 151862,
+            "end_source_byte": 151955,
+            "kind": "anchor",
+            "marker_id": "driver-lease.process-start-identity-macos"
+          },
+          {
+            "start_source_byte": 151959,
+            "end_source_byte": 152016,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 152017,
+            "end_source_byte": 152142,
+            "kind": "anchor",
+            "marker_id": "driver-lease.unreadable-identity-is-unverifiable"
+          },
+          {
+            "start_source_byte": 152146,
+            "end_source_byte": 152221,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 152222,
+            "end_source_byte": 152363,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 152364,
+            "end_source_byte": 152564,
+            "kind": "anchor",
+            "marker_id": "driver-lease.adapter-session-identity-persisted"
+          },
+          {
+            "start_source_byte": 152565,
+            "end_source_byte": 152678,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 152682,
+            "end_source_byte": 152718,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 152719,
+            "end_source_byte": 152802,
+            "kind": "anchor",
+            "marker_id": "driver-lease.authority-precedes-lease"
+          },
+          {
+            "start_source_byte": 152803,
+            "end_source_byte": 152815,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 152819,
+            "end_source_byte": 152852,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 152855,
+            "end_source_byte": 153002,
+            "kind": "anchor",
+            "marker_id": "driver-lease.recovery-authority-without-lease"
+          },
+          {
+            "start_source_byte": 153005,
+            "end_source_byte": 153224,
+            "kind": "anchor",
+            "marker_id": "driver-lease.recovery-orphan-lease"
+          },
+          {
+            "start_source_byte": 153227,
+            "end_source_byte": 153287,
+            "kind": "anchor",
+            "marker_id": "driver-lease.recovery-both-present"
+          },
+          {
+            "start_source_byte": 153291,
+            "end_source_byte": 153383,
+            "kind": "anchor",
+            "marker_id": "driver-lease.fencing-is-per-mutation-cas"
+          },
+          {
+            "start_source_byte": 153386,
+            "end_source_byte": 153634,
+            "kind": "anchor",
+            "marker_id": "driver-lease.commands-mutate-without-lease"
+          },
+          {
+            "start_source_byte": 153635,
+            "end_source_byte": 153712,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 153713,
+            "end_source_byte": 153899,
+            "kind": "anchor",
+            "marker_id": "driver-lease.cas-scope-is-execution-mutations"
+          },
+          {
+            "start_source_byte": 153903,
+            "end_source_byte": 153971,
+            "kind": "anchor",
+            "marker_id": "driver-lease.cas-under-state-lock"
+          },
+          {
+            "start_source_byte": 153972,
+            "end_source_byte": 153995,
+            "kind": "anchor",
+            "marker_id": "driver-lease.cas-run-nonterminal"
+          },
+          {
+            "start_source_byte": 153996,
+            "end_source_byte": 154063,
+            "kind": "anchor",
+            "marker_id": "driver-lease.cas-epoch-and-token-match"
+          },
+          {
+            "start_source_byte": 154064,
+            "end_source_byte": 154109,
+            "kind": "anchor",
+            "marker_id": "driver-lease.cas-process-identity-matches"
+          },
+          {
+            "start_source_byte": 154110,
+            "end_source_byte": 154201,
+            "kind": "anchor",
+            "marker_id": "driver-lease.non-driver-authorizes-against-lifecycle"
+          },
+          {
+            "start_source_byte": 154205,
+            "end_source_byte": 154252,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 154253,
+            "end_source_byte": 154419,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 154420,
+            "end_source_byte": 154646,
+            "kind": "anchor",
+            "marker_id": "authority-checkpoint.epoch-journaled-as-projection"
+          },
+          {
+            "start_source_byte": 154647,
+            "end_source_byte": 154742,
+            "kind": "anchor",
+            "marker_id": "authority-checkpoint.file-is-not-authority"
+          },
+          {
+            "start_source_byte": 154746,
+            "end_source_byte": 154952,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 154953,
+            "end_source_byte": 155011,
+            "kind": "anchor",
+            "marker_id": "driver-lease.token-never-journaled"
+          },
+          {
+            "start_source_byte": 155015,
+            "end_source_byte": 155108,
+            "kind": "anchor",
+            "marker_id": "driver-lease.cas-requires-matching-lease"
+          },
+          {
+            "start_source_byte": 155109,
+            "end_source_byte": 155217,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 155221,
+            "end_source_byte": 155457,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 155461,
+            "end_source_byte": 155545,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 155546,
+            "end_source_byte": 155793,
+            "kind": "anchor",
+            "marker_id": "cancellation.canceller-is-a-role"
+          },
+          {
+            "start_source_byte": 155794,
+            "end_source_byte": 156032,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 156033,
+            "end_source_byte": 156207,
+            "kind": "anchor",
+            "marker_id": "cancellation.lock-held-across-b-to-f"
+          },
+          {
+            "start_source_byte": 156208,
+            "end_source_byte": 156291,
+            "kind": "anchor",
+            "marker_id": "cancellation.no-fenced-nonterminal-state"
+          },
+          {
+            "start_source_byte": 156295,
+            "end_source_byte": 156590,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 156592,
+            "end_source_byte": 156659,
+            "kind": "anchor",
+            "marker_id": "run-state.active-means-nonterminal"
+          },
+          {
+            "start_source_byte": 156660,
+            "end_source_byte": 156780,
+            "kind": "anchor",
+            "marker_id": "run-state.one-active-run-per-repository"
+          },
+          {
+            "start_source_byte": 156781,
+            "end_source_byte": 156994,
+            "kind": "anchor",
+            "marker_id": "run-state.run-id-operand-selection"
+          },
+          {
+            "start_source_byte": 156995,
+            "end_source_byte": 157101,
+            "kind": "anchor",
+            "marker_id": "run-state.journal-guards-run-lease-guards-drivers"
+          },
+          {
+            "start_source_byte": 157103,
+            "end_source_byte": 157202,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-gate"
+          },
+          {
+            "start_source_byte": 157203,
+            "end_source_byte": 157226,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-run-nonterminal"
+          },
+          {
+            "start_source_byte": 157227,
+            "end_source_byte": 157277,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-holds-authority-and-lease"
+          },
+          {
+            "start_source_byte": 157278,
+            "end_source_byte": 157399,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-effect-boundary-completed"
+          },
+          {
+            "start_source_byte": 157400,
+            "end_source_byte": 157469,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-sessions-verified-empty"
+          },
+          {
+            "start_source_byte": 157470,
+            "end_source_byte": 157523,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-intervals-closed"
+          },
+          {
+            "start_source_byte": 157524,
+            "end_source_byte": 157569,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-change-sets-durable"
+          },
+          {
+            "start_source_byte": 157570,
+            "end_source_byte": 157678,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-reprojects-before-selecting"
+          },
+          {
+            "start_source_byte": 157679,
+            "end_source_byte": 157913,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 157915,
+            "end_source_byte": 158079,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-one-step-per-cut"
+          },
+          {
+            "start_source_byte": 158080,
+            "end_source_byte": 158162,
+            "kind": "anchor",
+            "marker_id": "run-execute.shared-selector-applies-c4-only"
+          },
+          {
+            "start_source_byte": 158163,
+            "end_source_byte": 158315,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-selector-excludes-recovery-actions"
+          },
+          {
+            "start_source_byte": 158316,
+            "end_source_byte": 158437,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-driver-executes-and-reprojects"
+          },
+          {
+            "start_source_byte": 158438,
+            "end_source_byte": 158552,
+            "kind": "anchor",
+            "marker_id": "run-execute.shared-selector-separate-executors"
+          },
+          {
+            "start_source_byte": 158554,
+            "end_source_byte": 158683,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-yields-to-control"
+          },
+          {
+            "start_source_byte": 158684,
+            "end_source_byte": 158800,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-stops-at-zero-budget"
+          },
+          {
+            "start_source_byte": 158801,
+            "end_source_byte": 158991,
+            "kind": "anchor",
+            "marker_id": "run-execute.live-continuation-unsafe-takes-interruption"
+          },
+          {
+            "start_source_byte": 158993,
+            "end_source_byte": 159083,
+            "kind": "anchor",
+            "marker_id": "cancellation.run-scoped"
+          },
+          {
+            "start_source_byte": 159084,
+            "end_source_byte": 159267,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 159268,
+            "end_source_byte": 159423,
+            "kind": "anchor",
+            "marker_id": "cancellation.protocol-cancel-targets-attempt"
+          },
+          {
+            "start_source_byte": 159424,
+            "end_source_byte": 159678,
+            "kind": "anchor",
+            "marker_id": "cancellation.who-appends-run-cancelled"
+          },
+          {
+            "start_source_byte": 159679,
+            "end_source_byte": 159753,
+            "kind": "anchor",
+            "marker_id": "cancellation.no-branch-defers-terminalization"
+          },
+          {
+            "start_source_byte": 159754,
+            "end_source_byte": 159844,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 159846,
+            "end_source_byte": 160090,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 160092,
+            "end_source_byte": 160278,
+            "kind": "anchor",
+            "marker_id": "cancellation.control-event-appended-under-state-lock"
+          },
+          {
+            "start_source_byte": 160282,
+            "end_source_byte": 160339,
+            "kind": "anchor",
+            "marker_id": "cancellation.steps-happen-in-order"
+          },
+          {
+            "start_source_byte": 160340,
+            "end_source_byte": 160424,
+            "kind": "anchor",
+            "marker_id": "cancellation.approval-abandoned-lifts-barrier"
+          },
+          {
+            "start_source_byte": 160425,
+            "end_source_byte": 160501,
+            "kind": "anchor",
+            "marker_id": "cancellation.barrier-work-completes-before-lift"
+          },
+          {
+            "start_source_byte": 160502,
+            "end_source_byte": 160618,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 160623,
+            "end_source_byte": 160741,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-step-a-sweep"
+          },
+          {
+            "start_source_byte": 160745,
+            "end_source_byte": 160954,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-step-b-abandon-prepare"
+          },
+          {
+            "start_source_byte": 160958,
+            "end_source_byte": 161075,
+            "kind": "anchor",
+            "marker_id": "cancellation.oracle-step-c-close-interval"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
