@@ -2554,15 +2554,15 @@ durable path that reaches a live driver at any point in its work:
    one — so gating the close on fencing would let `run.cancelled` be appended with an interval still
    open, and the budget projection would then read a run that never stopped consuming.
 
-   **(d)'s predicate is the surviving lease, not the owner's liveness.** "The owner was live and must be
+   **`(d)`'s predicate rejects a liveness test.** "The owner was live and must be
    fenced" is not replayable: after `(d)` advances the epoch and crashes, recovery observes a *verifiably
    dead* owner, so a liveness-based predicate is false, `(d)` is skipped, and `(e)` appends without the
    `fenced_epoch` that was already advanced — the fence is lost exactly as it would have been the other
-   way. Keying it on **a lease still matching `observed_authority_epoch`** makes it durable and
-   idempotent: advancing to `observed + 1` twice yields the same epoch, and `(f)` removing that lease is
-   what finally makes the predicate false.
+   way. `(d)`'s actual predicate makes this durable and idempotent instead: advancing to
+   `observed + 1` twice yields the same epoch, and `(f)` removing that lease is what finally
+   makes the predicate false.
 
-   **(f) comes after (e), not inside (d).** The advanced epoch is authoritative only once journaled, and
+   The advanced epoch is authoritative only once journaled, and
    removing the lease is what makes the old incarnation unable to act. Removing it first would destroy
    the very state `(d)`'s predicate reads. Journaling first and cleaning after makes the stale lease a
    consequence of a durable fact rather than its precondition.
@@ -2587,8 +2587,7 @@ durable path that reaches a live driver at any point in its work:
    path. A decision-resolution wake may prompt an immediate read, but the journal watch is
    the mechanism that guarantees detection.
 
-   The watch spans the driver's whole tenure rather than only a pending adapter `execute`, and the
-   reason is step 6 rather than the adapter. A driver blocked on a long external criterion or on
+   A driver blocked on a long external criterion or on
    composition is as unable to poll as one blocked on `execute`, so a watch scoped to adapter
    execution would leave those phases with no acknowledgement path — and step 6 would then read a
    perfectly healthy driver as a wedged owner and terminate it once the deadline passed. Appendix
@@ -2605,8 +2604,7 @@ durable path that reaches a live driver at any point in its work:
    moment between them — there is no protocol `cancel` to issue and nothing to await. Either way it
    then applies the outer termination grace and process-tree sweep (§4) to every session it
    recorded. It then acts as
-   the canceller and executes the cancellation oracle itself, authorized by run lifecycle rather
-   than by its lease.
+   the canceller and executes the cancellation oracle itself.
 
    **The response is awaited, not obeyed.** From the moment the driver observes the durable
    `cancel.requested` — not from the moment it writes the protocol frame — it
@@ -2639,13 +2637,14 @@ durable path that reaches a live driver at any point in its work:
    the execution interval, so `(c)` is evaluated on its own predicate exactly as anywhere else, and
    it leaves `(a)`'s verified-empty sweep an idempotent no-op. That is the oracle's conditionals
    being evaluated, not a second cancellation sequence. The driver's matching lease makes `(d)`
-   true, and because `(f)` follows `(e)`, the resulting `run.cancelled` carries `fenced_epoch`.
+   true, so the resulting `run.cancelled` carries `fenced_epoch`.
    Thus the live journal is the same one produced when recovery re-enters the oracle after the
    driver dies immediately before `(e)`. No new recovery case or artifact follows: in that crash
    `RC-RESUME-006` re-enters from `(a)` and reproduces the same fenced epoch; after `(e)` and before
    `(f)`, `RC-RESUME-002` wins and retries the residual cleanup.
-5. If no driver is alive, the cancelling command itself completes the terminalization; a
-   later `resume` observes an already-terminal run and launches nothing.
+5. Where no driver is alive, `partitur cancel` completes the terminalization itself, as the
+   control channel already fixes above; a later `resume` observes an already-terminal run and
+   launches nothing.
 6. **A live but wedged owner** — lease verified, yet the driver never acknowledges the journal —
    is the case a responsive/dead dichotomy misses. After a bounded acknowledgement deadline the
    canceller re-verifies the lease owner. Its termination target is **only the recorded lease-owner
@@ -2665,8 +2664,7 @@ durable path that reaches a live driver at any point in its work:
    the residual §4 already admits: an unrecorded trampoline may briefly survive, but it has no
    adapter or criterion code and no worktree-mutation path before its gate is released.
 
-   The canceller then **executes the cancellation oracle** with its conditional phase (d) taken,
-   authorized by run lifecycle rather than by the lease.
+   The canceller then **executes the cancellation oracle** with its conditional phase (d) taken.
 
    The acknowledgement deadline is a latency and ownership parameter, not a correctness one: a
    legitimate `(a)` sweep has no fixed deadline. Its expiry merely moves responsibility to the
@@ -2688,11 +2686,6 @@ durable path that reaches a live driver at any point in its work:
    projection. Two appends inside one lock-held transition is still one transition: recovery
    completes the pair idempotently if a crash lands between them.
 
-   It must be one transition, not a sequence. Fencing first and appending afterwards cannot work:
-   once the epoch is bumped, neither the canceller nor the fenced driver holds driver authority,
-   so a subsequent append would fail its own check. The invariant this preserves: **the run is
-   never declared cancelled while the old execution authority could still mutate it, and never
-   left fenced without being terminal.**
 
 **Supersession uses the same branches, including the wedged one.** An approved revision must
 supersede every nonterminal attempt (§9), and the driver holding that attempt can be wedged exactly
