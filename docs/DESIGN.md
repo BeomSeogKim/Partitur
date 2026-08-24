@@ -2649,10 +2649,10 @@ durable path that reaches a live driver at any point in its work:
    is the case a responsive/dead dichotomy misses. After a bounded acknowledgement deadline the
    canceller re-verifies the lease owner. Its termination target is **only the recorded lease-owner
    PID with its recorded process-start identity**: §4 contributes its discipline here, not its
-   adapter-session enumeration. The canceller re-checks that identity immediately before each
-   signal, sends `SIGTERM`, waits §4's outer termination grace, then repeatedly sends `SIGKILL` and
-   re-observes until that owner is verifiably gone — **halting `owner_unverifiable` if a required
-   re-verification fails**, since a process that cannot be named cannot be terminated.
+   adapter-session enumeration. §4's outer-termination signal sequence runs against that one
+   target until it is verifiably gone, with §4's per-signal identity recheck tightened here to
+   **immediately before** each signal — **halting `owner_unverifiable` if a required re-verification
+   fails**, since a process that cannot be named cannot be terminated.
 
    The driver's own session is never a sweep target: the core did not create it, so it is not an
    ownership set the core established, and it routinely contains processes the core has no claim
@@ -2679,11 +2679,10 @@ durable path that reaches a live driver at any point in its work:
    the epoch before closing the interval — which is precisely the kind of second normative sequence that
    leaves an implementation free to pick either.
 
-   The interval closure is its own append rather than a field of `run.cancelled` because budget
-   consumption is projected from paired `execution.started` / `execution.stopped` events and
-   nothing else; a charge hidden inside a cancellation payload would be invisible to that
-   projection. Two appends inside one lock-held transition is still one transition: recovery
-   completes the pair idempotently if a crash lands between them.
+   The interval closure is its own append rather than a field of `run.cancelled`: a charge hidden
+   inside a cancellation payload would be invisible to the budget projection §6 fixes. Two appends
+   inside one lock-held transition is still one transition: recovery completes the pair
+   idempotently if a crash lands between them.
 
 
 **Supersession uses the same branches, including the wedged one.** An approved revision must
