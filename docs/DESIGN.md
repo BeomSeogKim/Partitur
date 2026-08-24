@@ -2361,7 +2361,13 @@ the recovery rule below.
   which §3.1 classes immediately terminal — there is nothing left to fund a retry.
 
   **Composition exhaustion needs no attempt event**, because fan-in and candidate composition
-  run *between* attempts, not inside one (§5, §8) — there is no live attempt to terminalize:
+  run *between* attempts, not inside one (§5, §8) — there is no live attempt to terminalize.
+  A movement fan-in that exhausts the budget stops composition and appends
+  `execution.stopped {budget_exhausted}`, then `movement.failed {budget_exhausted}`, then
+  `run.failed {budget_exhausted}`. Candidate composition that exhausts the budget stops
+  composition and appends `execution.stopped {budget_exhausted}`, then
+  `run.failed {budget_exhausted}` directly — it is run-scoped by definition, so it fails the
+  run with no movement in between.
 
   ```text
   movement fan-in:          stop composition → execution.stopped {budget_exhausted}
@@ -2369,9 +2375,6 @@ the recovery rule below.
   candidate composition:    stop composition → execution.stopped {budget_exhausted}
                             → run.failed {budget_exhausted}
   ```
-
-  Candidate composition is run-scoped by definition, so it fails the run directly with no
-  movement in between.
 
 **Active-run exclusivity and the two locks.** These are different concerns and must not
 share a mechanism:
@@ -2515,12 +2518,26 @@ durable path that reaches a live driver at any point in its work:
    done before it is appended, or a crash immediately after its fsync leaves the barrier lifted with
    the immutable revision path still occupied.
 
+   - **(a)** Sweep every recorded adapter and criterion session to verified empty; an
+     unverifiable sweep halts here.
+   - **(b)** If a prepare is pending, quarantine the prewritten snapshot, remove the plan and
+     sidecar, then append `amendment.approval_abandoned {reason: cancelled}` — this is where
+     the barrier lifts.
+   - **(c)** If any execution interval is open, append
+     `execution.stopped {reason: cancelled, charging: clamped}`.
+   - **(d)** If a lease matching `observed_authority_epoch` still exists, advance the
+     authority epoch to `observed + 1` and revoke the token — but do not remove the lease yet.
+   - **(e)** Append `run.cancelled`, carrying `fenced_epoch` iff `(d)` advanced it.
+   - **(f)** Only now remove the stale lease.
+
+   For compact reference, the following specimen is illustrative, not a second statement of
+   the oracle:
+
    ```text
    (a) sweep every recorded adapter and criterion session to verified empty
-       └ sweep_unverifiable → halt
    (b) if a prepare is pending:
          quarantine the prewritten snapshot, remove the plan and sidecar,
-         then append amendment.approval_abandoned {reason: cancelled}   # barrier lifts here
+         then append amendment.approval_abandoned {reason: cancelled}
    (c) if ANY execution interval is open:
          append execution.stopped {reason: cancelled, charging: clamped}
    (d) if a lease matching observed_authority_epoch still exists:
