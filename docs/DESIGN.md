@@ -2660,9 +2660,8 @@ durable path that reaches a live driver at any point in its work:
    not sweep those sessions itself; the cancellation oracle's `(a)`, which follows the owner
    termination immediately, applies §4's session mechanism to them. Thus a successful session
    sweep still says nothing about the owner's identity, and is not a substitute for the owner
-   re-verification. A launch whose identity is not yet recorded is outside this target set. That is
-   the residual §4 already admits: an unrecorded trampoline may briefly survive, but it has no
-   adapter or criterion code and no worktree-mutation path before its gate is released.
+   re-verification. A launch whose identity is not yet recorded is outside this target
+   set — the same residual §4 already admits for an unrecorded trampoline.
 
    The canceller then **executes the cancellation oracle** with its conditional phase (d) taken.
 
