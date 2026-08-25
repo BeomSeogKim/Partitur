@@ -11405,6 +11405,807 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "adbeace3f2fd8ca4a29d52e1fdfb77721ba33ccc",
+        "ordinal": 15,
+        "start_source_line": 3209,
+        "end_source_line": 3440
+      },
+      "review_receipt": {
+        "source_sha256": "30c471510d85adf6be2259914e08b9a2a2ebd74d639deac36a058727ee7714c3",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 213298,
+            "end_source_byte": 213490,
+            "kind": "anchor",
+            "marker_id": "decision-target.forecloses-historical-decision"
+          },
+          {
+            "start_source_byte": 213491,
+            "end_source_byte": 213607,
+            "kind": "anchor",
+            "marker_id": "decision-target.amendment-forms-keep-their-transaction"
+          },
+          {
+            "start_source_byte": 213609,
+            "end_source_byte": 213928,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.checks-under-the-state-lock"
+          },
+          {
+            "start_source_byte": 213929,
+            "end_source_byte": 214034,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.exactly-one-append-before-release"
+          },
+          {
+            "start_source_byte": 214035,
+            "end_source_byte": 214259,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.no-driver-lease-required"
+          },
+          {
+            "start_source_byte": 214260,
+            "end_source_byte": 214321,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.no-second-lock-or-lease-observation"
+          },
+          {
+            "start_source_byte": 214323,
+            "end_source_byte": 214683,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.refusal-conditions"
+          },
+          {
+            "start_source_byte": 214684,
+            "end_source_byte": 214991,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 214993,
+            "end_source_byte": 215123,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.best-effort-wake-after-release"
+          },
+          {
+            "start_source_byte": 215124,
+            "end_source_byte": 215313,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.wake-neither-required-nor-awaited"
+          },
+          {
+            "start_source_byte": 215314,
+            "end_source_byte": 215475,
+            "kind": "anchor",
+            "marker_id": "decision-transaction.returns-after-recording"
+          },
+          {
+            "start_source_byte": 215477,
+            "end_source_byte": 215490,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 215492,
+            "end_source_byte": 215676,
+            "kind": "anchor",
+            "marker_id": "cli.init"
+          },
+          {
+            "start_source_byte": 215677,
+            "end_source_byte": 215717,
+            "kind": "anchor",
+            "marker_id": "cli.init-never-overwrites-a-score"
+          },
+          {
+            "start_source_byte": 215718,
+            "end_source_byte": 215854,
+            "kind": "anchor",
+            "marker_id": "cli.validate"
+          },
+          {
+            "start_source_byte": 215855,
+            "end_source_byte": 215963,
+            "kind": "anchor",
+            "marker_id": "cli.run"
+          },
+          {
+            "start_source_byte": 215964,
+            "end_source_byte": 216051,
+            "kind": "anchor",
+            "marker_id": "cli.status"
+          },
+          {
+            "start_source_byte": 216052,
+            "end_source_byte": 216098,
+            "kind": "anchor",
+            "marker_id": "cli.logs"
+          },
+          {
+            "start_source_byte": 216099,
+            "end_source_byte": 216145,
+            "kind": "anchor",
+            "marker_id": "cli.answer"
+          },
+          {
+            "start_source_byte": 216146,
+            "end_source_byte": 216223,
+            "kind": "anchor",
+            "marker_id": "cli.approve"
+          },
+          {
+            "start_source_byte": 216224,
+            "end_source_byte": 216278,
+            "kind": "anchor",
+            "marker_id": "cli.amend"
+          },
+          {
+            "start_source_byte": 216279,
+            "end_source_byte": 216356,
+            "kind": "anchor",
+            "marker_id": "cli.cancel"
+          },
+          {
+            "start_source_byte": 216357,
+            "end_source_byte": 216399,
+            "kind": "anchor",
+            "marker_id": "cli.no-attempt-scoped-cancel"
+          },
+          {
+            "start_source_byte": 216400,
+            "end_source_byte": 216522,
+            "kind": "anchor",
+            "marker_id": "cli.resume"
+          },
+          {
+            "start_source_byte": 216523,
+            "end_source_byte": 216586,
+            "kind": "anchor",
+            "marker_id": "cli.apply"
+          },
+          {
+            "start_source_byte": 216587,
+            "end_source_byte": 216673,
+            "kind": "anchor",
+            "marker_id": "cli.apply-recover-states"
+          },
+          {
+            "start_source_byte": 216674,
+            "end_source_byte": 216753,
+            "kind": "anchor",
+            "marker_id": "cli.promote-score"
+          },
+          {
+            "start_source_byte": 216754,
+            "end_source_byte": 216849,
+            "kind": "anchor",
+            "marker_id": "cli.promote-score-recover-states"
+          },
+          {
+            "start_source_byte": 216850,
+            "end_source_byte": 216928,
+            "kind": "anchor",
+            "marker_id": "cli.version"
+          },
+          {
+            "start_source_byte": 216930,
+            "end_source_byte": 216969,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 216971,
+            "end_source_byte": 217061,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.heading-form"
+          },
+          {
+            "start_source_byte": 217062,
+            "end_source_byte": 217255,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.applies-after-operand-grammar"
+          },
+          {
+            "start_source_byte": 217256,
+            "end_source_byte": 217368,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.semantic-operand-check-belongs"
+          },
+          {
+            "start_source_byte": 217370,
+            "end_source_byte": 217546,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.catalog-id-form"
+          },
+          {
+            "start_source_byte": 217547,
+            "end_source_byte": 217616,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.catalog-id-is-unique"
+          },
+          {
+            "start_source_byte": 217617,
+            "end_source_byte": 217715,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.row-shape"
+          },
+          {
+            "start_source_byte": 217716,
+            "end_source_byte": 217834,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.precondition-column-completeness"
+          },
+          {
+            "start_source_byte": 217835,
+            "end_source_byte": 218045,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.rows-exclusive-and-exhaustive"
+          },
+          {
+            "start_source_byte": 218046,
+            "end_source_byte": 218173,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.cells-reference-rather-than-restate"
+          },
+          {
+            "start_source_byte": 218175,
+            "end_source_byte": 218360,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.result-cell-shape"
+          },
+          {
+            "start_source_byte": 218361,
+            "end_source_byte": 218463,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.result-may-reference-its-owner"
+          },
+          {
+            "start_source_byte": 218464,
+            "end_source_byte": 218607,
+            "kind": "anchor",
+            "marker_id": "matrix-grammar.exit-7-is-not-a-result"
+          },
+          {
+            "start_source_byte": 218609,
+            "end_source_byte": 218648,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 218650,
+            "end_source_byte": 218738,
+            "kind": "anchor",
+            "marker_id": "init-matrix.required-ignore-bytes"
+          },
+          {
+            "start_source_byte": 218739,
+            "end_source_byte": 218849,
+            "kind": "anchor",
+            "marker_id": "init-matrix.ignore-byte-order-and-closure"
+          },
+          {
+            "start_source_byte": 218850,
+            "end_source_byte": 218890,
+            "kind": "anchor",
+            "marker_id": "init-matrix.byte-for-byte-comparison"
+          },
+          {
+            "start_source_byte": 218892,
+            "end_source_byte": 218959,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 218960,
+            "end_source_byte": 219149,
+            "kind": "anchor",
+            "marker_id": "init-matrix.missing-parent-implies-absent-child"
+          },
+          {
+            "start_source_byte": 219150,
+            "end_source_byte": 219245,
+            "kind": "anchor",
+            "marker_id": "init-matrix.preserves-existing-score-bytes"
+          },
+          {
+            "start_source_byte": 219246,
+            "end_source_byte": 219433,
+            "kind": "anchor",
+            "marker_id": "init-matrix.create-score-means-minimal-draft"
+          },
+          {
+            "start_source_byte": 219435,
+            "end_source_byte": 219516,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 219517,
+            "end_source_byte": 219538,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 219539,
+            "end_source_byte": 219657,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-001"
+          },
+          {
+            "start_source_byte": 219658,
+            "end_source_byte": 219784,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-002"
+          },
+          {
+            "start_source_byte": 219785,
+            "end_source_byte": 219882,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-003"
+          },
+          {
+            "start_source_byte": 219883,
+            "end_source_byte": 219988,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-004"
+          },
+          {
+            "start_source_byte": 219989,
+            "end_source_byte": 220083,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-005"
+          },
+          {
+            "start_source_byte": 220084,
+            "end_source_byte": 220180,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-006"
+          },
+          {
+            "start_source_byte": 220181,
+            "end_source_byte": 220345,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-007"
+          },
+          {
+            "start_source_byte": 220346,
+            "end_source_byte": 220501,
+            "kind": "anchor",
+            "marker_id": "init-matrix.INIT-008"
+          },
+          {
+            "start_source_byte": 220503,
+            "end_source_byte": 220545,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 220547,
+            "end_source_byte": 220624,
+            "kind": "anchor",
+            "marker_id": "version-matrix.evaluates-no-precondition"
+          },
+          {
+            "start_source_byte": 220625,
+            "end_source_byte": 220729,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 220731,
+            "end_source_byte": 220777,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 220778,
+            "end_source_byte": 220791,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 220792,
+            "end_source_byte": 220878,
+            "kind": "anchor",
+            "marker_id": "version-matrix.VERSION-001"
+          },
+          {
+            "start_source_byte": 220880,
+            "end_source_byte": 220913,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 220914,
+            "end_source_byte": 221128,
+            "kind": "anchor",
+            "marker_id": "anchoring.invocation-directory-is-the-repo"
+          },
+          {
+            "start_source_byte": 221129,
+            "end_source_byte": 221291,
+            "kind": "anchor",
+            "marker_id": "anchoring.no-upward-discovery"
+          },
+          {
+            "start_source_byte": 221292,
+            "end_source_byte": 221504,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 221505,
+            "end_source_byte": 221576,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 221578,
+            "end_source_byte": 221643,
+            "kind": "anchor",
+            "marker_id": "anchoring.project-relative-paths-resolve-from-the-anchor"
+          },
+          {
+            "start_source_byte": 221644,
+            "end_source_byte": 221806,
+            "kind": "anchor",
+            "marker_id": "anchoring.operand-relative-paths-resolve-from-the-anchor"
+          },
+          {
+            "start_source_byte": 221807,
+            "end_source_byte": 222028,
+            "kind": "anchor",
+            "marker_id": "anchoring.outside-inputs-keep-their-own-rules"
+          },
+          {
+            "start_source_byte": 222030,
+            "end_source_byte": 222105,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 222106,
+            "end_source_byte": 222275,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 222276,
+            "end_source_byte": 222418,
+            "kind": "anchor",
+            "marker_id": "anchoring.section-preconditions-still-apply"
+          },
+          {
+            "start_source_byte": 222419,
+            "end_source_byte": 222631,
+            "kind": "anchor",
+            "marker_id": "anchoring.worktree-root-is-the-anchor"
+          },
+          {
+            "start_source_byte": 222633,
+            "end_source_byte": 222753,
+            "kind": "anchor",
+            "marker_id": "recover-form.refused-outside-its-two-states"
+          },
+          {
+            "start_source_byte": 222754,
+            "end_source_byte": 222837,
+            "kind": "anchor",
+            "marker_id": "ship-order.apply-before-promote-score"
+          },
+          {
+            "start_source_byte": 222839,
+            "end_source_byte": 222864,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 222865,
+            "end_source_byte": 222961,
+            "kind": "anchor",
+            "marker_id": "operands.surface-is-closed"
+          },
+          {
+            "start_source_byte": 222963,
+            "end_source_byte": 222998,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 223000,
+            "end_source_byte": 223113,
+            "kind": "anchor",
+            "marker_id": "operands.override-only-for-a-human-gate-approve"
+          },
+          {
+            "start_source_byte": 223114,
+            "end_source_byte": 223176,
+            "kind": "anchor",
+            "marker_id": "operands.reject-reason-only-for-human-gate"
+          },
+          {
+            "start_source_byte": 223177,
+            "end_source_byte": 223275,
+            "kind": "anchor",
+            "marker_id": "operands.amendment-rejection-requires-a-reason"
+          },
+          {
+            "start_source_byte": 223276,
+            "end_source_byte": 223361,
+            "kind": "anchor",
+            "marker_id": "operands.amend-patch-accepts-rfc-6902"
+          },
+          {
+            "start_source_byte": 223363,
+            "end_source_byte": 224180,
+            "kind": "anchor",
+            "marker_id": "operands.grammar"
+          },
+          {
+            "start_source_byte": 224182,
+            "end_source_byte": 224334,
+            "kind": "anchor",
+            "marker_id": "operands.non-interactive"
+          },
+          {
+            "start_source_byte": 224335,
+            "end_source_byte": 224435,
+            "kind": "anchor",
+            "marker_id": "operands.run-takes-no-run-id"
+          },
+          {
+            "start_source_byte": 224436,
+            "end_source_byte": 224576,
+            "kind": "anchor",
+            "marker_id": "operands.omitted-run-id-errors-unless-unique"
+          },
+          {
+            "start_source_byte": 224577,
+            "end_source_byte": 224651,
+            "kind": "anchor",
+            "marker_id": "operands.apply-and-promote-score-require-a-run-id"
+          },
+          {
+            "start_source_byte": 224652,
+            "end_source_byte": 224793,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 224794,
+            "end_source_byte": 225036,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 225037,
+            "end_source_byte": 225130,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 225131,
+            "end_source_byte": 225265,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 225266,
+            "end_source_byte": 225399,
+            "kind": "anchor",
+            "marker_id": "operands.approve-or-reject-is-mandatory"
+          },
+          {
+            "start_source_byte": 225400,
+            "end_source_byte": 225644,
+            "kind": "anchor",
+            "marker_id": "operands.human-gate-reason-forms"
+          },
+          {
+            "start_source_byte": 225645,
+            "end_source_byte": 225685,
+            "kind": "anchor",
+            "marker_id": "operands.override-invalid-with-reject"
+          },
+          {
+            "start_source_byte": 225686,
+            "end_source_byte": 225831,
+            "kind": "anchor",
+            "marker_id": "operands.amendment-rejection-reason-and-no-override"
+          },
+          {
+            "start_source_byte": 225832,
+            "end_source_byte": 225924,
+            "kind": "anchor",
+            "marker_id": "operands.repeated-override-is-a-usage-error"
+          },
+          {
+            "start_source_byte": 225926,
+            "end_source_byte": 225967,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 225969,
+            "end_source_byte": 226102,
+            "kind": "anchor",
+            "marker_id": "answer-matrix.answer-source"
+          },
+          {
+            "start_source_byte": 226103,
+            "end_source_byte": 226238,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 226239,
+            "end_source_byte": 226349,
+            "kind": "anchor",
+            "marker_id": "answer-matrix.partitions-are-disjoint"
+          },
+          {
+            "start_source_byte": 226350,
+            "end_source_byte": 226471,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 226472,
+            "end_source_byte": 226570,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 226572,
+            "end_source_byte": 226661,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 226662,
+            "end_source_byte": 226683,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 226684,
+            "end_source_byte": 226820,
+            "kind": "anchor",
+            "marker_id": "answer-matrix.ANSWER-001"
+          },
+          {
+            "start_source_byte": 226821,
+            "end_source_byte": 226999,
+            "kind": "anchor",
+            "marker_id": "answer-matrix.ANSWER-002"
+          },
+          {
+            "start_source_byte": 227000,
+            "end_source_byte": 227141,
+            "kind": "anchor",
+            "marker_id": "answer-matrix.ANSWER-003"
+          },
+          {
+            "start_source_byte": 227142,
+            "end_source_byte": 227402,
+            "kind": "anchor",
+            "marker_id": "answer-matrix.ANSWER-004"
+          },
+          {
+            "start_source_byte": 227403,
+            "end_source_byte": 227704,
+            "kind": "anchor",
+            "marker_id": "answer-matrix.ANSWER-005"
+          },
+          {
+            "start_source_byte": 227706,
+            "end_source_byte": 227748,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 227750,
+            "end_source_byte": 227979,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.human-gate-separate-from-amendment"
+          },
+          {
+            "start_source_byte": 227980,
+            "end_source_byte": 228099,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 228100,
+            "end_source_byte": 228250,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.no-routed-outcome-row"
+          },
+          {
+            "start_source_byte": 228251,
+            "end_source_byte": 228315,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 228317,
+            "end_source_byte": 228420,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 228421,
+            "end_source_byte": 228442,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 228443,
+            "end_source_byte": 228642,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-001"
+          },
+          {
+            "start_source_byte": 228643,
+            "end_source_byte": 228788,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-002"
+          },
+          {
+            "start_source_byte": 228789,
+            "end_source_byte": 228988,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-003"
+          },
+          {
+            "start_source_byte": 228989,
+            "end_source_byte": 229220,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-004"
+          },
+          {
+            "start_source_byte": 229221,
+            "end_source_byte": 229396,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-005"
+          },
+          {
+            "start_source_byte": 229397,
+            "end_source_byte": 229651,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-006"
+          },
+          {
+            "start_source_byte": 229652,
+            "end_source_byte": 229842,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-007"
+          },
+          {
+            "start_source_byte": 229843,
+            "end_source_byte": 230083,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-008"
+          },
+          {
+            "start_source_byte": 230084,
+            "end_source_byte": 230352,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-009"
+          },
+          {
+            "start_source_byte": 230353,
+            "end_source_byte": 230638,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-010"
+          },
+          {
+            "start_source_byte": 230639,
+            "end_source_byte": 230839,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-011"
+          },
+          {
+            "start_source_byte": 230840,
+            "end_source_byte": 231043,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-012"
+          },
+          {
+            "start_source_byte": 231044,
+            "end_source_byte": 231331,
+            "kind": "anchor",
+            "marker_id": "approve-matrix.APPROVE-013"
+          },
+          {
+            "start_source_byte": 231333,
+            "end_source_byte": 231374,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 231375,
+            "end_source_byte": 231487,
+            "kind": "anchor",
+            "marker_id": "status.observes-journal-and-pinned-snapshot"
+          },
+          {
+            "start_source_byte": 231488,
+            "end_source_byte": 231524,
+            "kind": "anchor",
+            "marker_id": "status.takes-neither-lease-nor-lock"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
