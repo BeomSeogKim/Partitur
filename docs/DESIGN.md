@@ -3555,8 +3555,8 @@ authoritative `recovery.state: RECOVERY_REQUIRED` and cause while `status` remai
 
 An unparseable final line is reported as `journal.integrity: TAIL_UNPARSEABLE`, with its would-be
 sequence and discarded byte count, but does **not** manufacture `recovery.state: RECOVERY_REQUIRED`.
-Appendix C classifies that tail as safe automatic repair: a later `resume` truncates it, appends
-`journal.tail_truncated`, and re-evaluates without operator intervention. A subsequent status then
+Appendix C classifies that tail as safe automatic repair: a later `resume` applies §1's “Torn
+tails” rule and re-evaluates without operator intervention. A subsequent status then
 reports the normal post-repair projection. An unparseable line anywhere before the final line is
 different corruption: no projection can be built.
 
@@ -3624,7 +3624,7 @@ diagnostic exits 3. Neither case creates a run or writes stdout.
 
 Once `run.started` is fsynced, `run` attempts to write the allocated UUIDv7 as exactly one UTF-8
 line `<run-id>\n` to stdout, with no label or surrounding whitespace. It never attempts that write
-before the durability receipt: §1 makes a pre-event directory orphan state, not a run. A successful
+before the durability receipt (§1). A successful
 write occurs exactly once even when the run later fails, recovery halts, or this invocation is
 operationally interrupted, so a caller then has the handle for `status` and `logs` once durable run
 state exists.
