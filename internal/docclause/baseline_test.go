@@ -162,6 +162,12 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 			SourceSHA256:  "30c471510d85adf6be2259914e08b9a2a2ebd74d639deac36a058727ee7714c3",
 			DecisionsHash: "6c686bc4644e5fad6fbd5f44cc4fc0a04699fca19fd003cfd4536a25d82793b8",
 		},
+		16: {
+			DecisionCount: 111,
+			AnchorCount:   88,
+			SourceSHA256:  "36ef053fe452f3b20620be58b6ce26e56ef8b8f9e1bc7c02a056b609b1b54962",
+			DecisionsHash: "00d3dbb2beef36caba523b0d786a16d4d54ecf8893711b91ab2f12407eec273c",
+		},
 	}
 	if err := validateStagingReviewProgress(regions, registry, reviewedOrdinals); err != nil {
 		t.Fatal(err)
