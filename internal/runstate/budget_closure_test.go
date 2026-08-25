@@ -94,7 +94,14 @@ func TestPrepareACKControlDrainReferencesControlChannel(t *testing.T) {
 
 	for _, clause := range []string{
 		"This ACK applies step 4's process-control and response-suppression drain **by reference**, substituting the durable `amendment.approval_prepared` for `cancel.requested` as the request and supersession for cancellation as the terminal intent.",
-		"The substitution begins at the observation boundary: from the moment the driver observes the durable prepare — not from the moment it writes a protocol frame — it records no response-derived attempt outcome.",
+		// The packet 13 restatement repair narrowed this clause. It used to write out the
+		// observation boundary and the no-response-derived-outcome consequence, both of which
+		// the cancellation drain it applies "by reference" already owns as
+		// `cancellation.no-response-derived-outcome-after-observing-request`. This lock exists
+		// to hold that the ACK names that boundary rather than inventing its own, so it pins
+		// the reference instead. It is a `Contains` check: it catches the clause being dropped
+		// or reworded, and does not catch the consequence being re-derived alongside it.
+		"It takes effect at the observation boundary that rule fixes, with the durable prepare standing in `cancel.requested`'s place.",
 		"This is the drain only; the ACK does not execute the cancellation oracle.",
 		"`amendment.approved` is the single producer of the affected attempts' `attempt.superseded` projection (B.5), so the response remains only a completeness marker.",
 	} {

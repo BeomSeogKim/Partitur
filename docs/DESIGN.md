@@ -2759,9 +2759,9 @@ step list:
 - **The snapshot and the complete approval payload are written *before* the prepare.** Recording only
   a semantic hash would be unrecoverable: `amendment.approved` also needs `new_snapshot_file_hash`, the
   typed delta, `actual_impact`, obsoleted decision ids, candidate binding, and finalization state — and
-  an **auto** proposal has no durable proposal record to rebuild them from. So the snapshot file is
-  written and fsynced first, the full planned approval payload is persisted beside it as
-  `prepares/<prepare-id>.json`, and the prepare event references both by raw hash. Recovery then
+  an **auto** proposal has no durable proposal record to rebuild them from. Step 1
+  therefore persists both before the prepare rather than leaving them
+  recomputable. Recovery then
   *replays* a plan rather than recomputing one.
 - **Durable consequences close before a prepare can exist.** Under the state lock, a command that
   has reached approval intent first closes every already-determined, non-supersedable consequence
@@ -2798,13 +2798,13 @@ The procedure:
 1. **Plan and prepare.** Under the state lock, having closed the durable-consequence barrier above
    and re-established approval intent (§9 policy, not merely admissibility): write and fsync the new
    snapshot; write and fsync `prepares/<prepare-id>.json` carrying the complete approval payload;
-   then append and fsync
-   `amendment.approval_prepared` referencing both, with `quiesce_silence_limit_ms: 60000`. At most one
+   then make §6's prepare append, which here references both files by raw hash and carries
+   `quiesce_silence_limit_ms: 60000`. At most one
    prepare may be pending per run. This is a **repair**, not an extension: §9's repair/extension test
    permits it because it grants no user capability, while §6's existing commit table had a
    "deadline passed" row whose predicate was undefined. The fixed silence limit makes that existing
    handoff evaluable; it does not add a command, a worker, or approval authority. Release
-   the lock — the driver cannot acknowledge while it is held.
+   the lock, for the reason §6's lease-move rule gives.
 2. **Quiesce or expire.** On first observing the durable prepare, the driver appends and fsyncs
    `amendment.quiesce_observed {prepare_id, sweep_round: 1}`. It appends and fsyncs the next receipt
    after every completed sweep round, and begins a new round often enough that no two durable receipts
@@ -2818,29 +2818,28 @@ The procedure:
    exists, a further receipt is refused with the same
    `prepare_pending` refusal as every other non-drain mutation.
 
-   The driver then sweeps its adapter session **and every recorded criterion launch** to verified empty
-   (§4), closes its execution interval, and stops every driver-authorized writer. It then **briefly takes the state lock**, revalidates that this exact
-   prepare is still pending, that **no `cancel.requested` is present**, and that its lease still
-   matches, renames `driver.lease` to
-   `driver.quiesced.<prepare_id>`, fsyncs the directory, and releases.
+   The driver then performs §6's accepted-ACK actions, sweeping **every recorded criterion launch** as
+   well as its adapter session (§4). It **briefly takes the state lock** to make the lease move a
+   compare-and-swap, additionally revalidating that **no `cancel.requested` is present**, and fsyncs
+   the directory before releasing.
 
    The lock is required and the rename alone is not sufficient: POSIX rename is atomic but it is not a
    compare-and-swap — it cannot mean "rename only if the contents still hold this epoch and token".
    Without the brief lock, cancellation or reclamation races the check-to-rename interval. The
-   approver still does not hold the lock while *waiting*, which is what the deadlock required.
+   approver's lock discipline here is §6's lease-move rule, unchanged.
 
    **Control drain.** This ACK applies step 4's process-control and response-suppression drain
    **by reference**, substituting the durable `amendment.approval_prepared` for
-   `cancel.requested` as the request and supersession for cancellation as the terminal intent. The
-   substitution begins at the observation boundary: from the moment the driver observes the durable
-   prepare — not from the moment it writes a protocol frame — it records no response-derived attempt
-   outcome. This is the drain only; the ACK does not execute the cancellation oracle.
+   `cancel.requested` as the request and supersession for cancellation as the terminal intent. It
+   takes effect at the observation boundary that rule fixes, with the durable prepare standing in
+   `cancel.requested`'s place. This is the drain only; the ACK does not execute the cancellation
+   oracle.
    `amendment.approved` is the single producer of the affected attempts' `attempt.superseded`
    projection (B.5), so the response remains only a completeness marker.
 3. **Commit.** Re-acquire the lock and revalidate — in this order, so cancellation outranks approval
-   exactly as it does in recovery (Appendix C.1): **`cancel.requested` absent**; the prepare still
-   pending; the prewritten snapshot present with its recorded raw *and* semantic hashes and bound to the
-   plan; the base head unchanged; and then the sidecar, verifiably-gone owner, or silence expiry. A
+   exactly as it does in recovery (Appendix C.1): **`cancel.requested` absent**; §6's prepare-pending
+   check; the prewritten snapshot present with its recorded raw *and* semantic hashes and bound to the
+   plan; §6's base-head check; and then the sidecar, verifiably-gone owner, or silence expiry. A
    `resume` replays the latest durable receipt and does **not** reset, defer, or otherwise refresh the
    silence interval merely because recovery started.
 
@@ -2848,11 +2847,11 @@ The procedure:
    |---|---|
    | `cancel.requested` present | **Do not approve.** Hand off to the cancellation oracle **from step (a)** with (b) taken — not from (c). Restating (b) here and skipping (a) would let a cancellation arriving after quiesce silence expiry terminalize the run without ever sweeping its sessions, which is the one thing (a) exists to prevent |
    | Snapshot missing, or either hash mismatched, or not bound to the plan | Halt `missing_snapshot_file` — the approval names bytes that no longer exist |
-   | Quiesced sidecar present and matching | append `amendment.approved` **once** from the persisted plan, `fenced_epoch` omitted |
-   | Silence limit expired, lease still present and matching, owner **unverifiable** | Halt `owner_unverifiable`. The row below applies step 6's owner-termination rule before fencing, and that cannot be done to a process recovery cannot name. A successful **session** sweep does not make the **owner** verifiable — the adapter and criterion sessions and the driver's own identity are separate things, and sweeping the first says nothing about the second. C.1's halt does not cover this case, because a live approver never passes through C.1 |
-   | Silence limit expired, lease still present and matching | Sweep every recorded adapter and criterion session to verified empty. Then **re-verify the owner immediately before terminating it** — the row above was evaluated before the sweep, and the sweep takes time, so the verification that selected this row may be stale by now (§4 requires the same recheck before each signal). Halt `owner_unverifiable` if that inspection fails; if the owner has become **verifiably gone**, skip termination and take the next row's action instead, the sweep already being done. Only an owner still verified as the matching live one is terminated under step 6's owner-termination rule. Then close its open interval with `execution.stopped {reason: superseded, charging: clamped}`, advance the epoch and revoke the token, append `amendment.approved` with that `fenced_epoch` — **and only then** remove the now-stale lease, since the journaled epoch advance is what makes it stale |
-   | No sidecar, lease present, owner **verifiably gone** | the driver died mid-drain. Sweep as above, then treat exactly as the fenced case: advance the epoch, append with `fenced_epoch`, clean the lease. No silence wait is needed — a dead owner will not acknowledge |
-   | No sidecar, lease present and matching, owner **not verifiably gone**, silence limit not yet expired | **Wait.** This is the table's only non-terminal row: release the state lock and observe until a sidecar appears, `cancel.requested` lands, the owner becomes verifiably gone, or the latest durable receipt (or the prepare before its first receipt) becomes silent for `quiesce_silence_limit_ms` — then re-enter this table from the top. The driver is mid-drain and entitled to finish, and holding the lock while waiting is the deadlock step 2 exists to avoid. The predicate is *not verifiably gone* rather than *verified live* so an **unverifiable** owner also waits: waiting mutates nothing. If it is still unverifiable when silence expires, the halt row above catches it — not the fence row, which would terminate a process it cannot name. Recovery reaching this state takes the same posture instead of inventing a verdict, though C.1's scoped `owner_unverifiable` halt usually resolves it first. Together with the expired rows, this leaves every reachable state selecting exactly one action; without this row the state selects no action at all, which E.4 forbids |
+   | Quiesced sidecar present and matching | the voluntary-drain approval §6 fixes above, appended from the persisted plan |
+   | Silence limit expired, lease still present and matching, owner **unverifiable** | Halt `owner_unverifiable`. The row below applies step 6's owner-termination rule before fencing, and that cannot be done to a process recovery cannot name — §6 already settles that a session sweep is no substitute for owner re-verification. C.1's halt does not cover this case, because a live approver never passes through C.1 |
+   | Silence limit expired, lease still present and matching | Run the oracle's `(a)` sweep, **then** re-verify the owner immediately before terminating it. That order is this row's, not the cancellation branch's, because the row above was evaluated before the sweep, the sweep takes time, and the verification that selected this row may be stale by now. If that inspection fails, §6's `owner_unverifiable` halt applies; if the owner has become **verifiably gone**, skip termination and take the next row's action instead, the sweep already being done. A still-matching live owner is terminated and closed out in the superseded shape §6 fixes, with `amendment.approved` in place of `run.cancelled` |
+   | No sidecar, lease present, owner **verifiably gone** | the driver died mid-drain. Sweep as above, then take the fenced case's action. No silence wait is needed — a dead owner will not acknowledge |
+   | No sidecar, lease present and matching, owner **not verifiably gone**, silence limit not yet expired | **Wait.** This is the table's only non-terminal row: release the state lock and observe until a sidecar appears, `cancel.requested` lands, the owner becomes verifiably gone, or step 2's silence deadline expires — then re-enter this table from the top. The driver is mid-drain and entitled to finish, and the lock is released for the reason §6's lease-move rule gives. The predicate is *not verifiably gone* rather than *verified live* so an **unverifiable** owner also waits: waiting mutates nothing. If it is still unverifiable when silence expires, the halt row above catches it — not the fence row, which would terminate a process it cannot name. Recovery reaching this state takes the same posture instead of inventing a verdict, though C.1's scoped `owner_unverifiable` halt usually resolves it first. Together with the expired rows, this leaves every reachable state selecting exactly one action; without this row the state selects no action at all, which E.4 forbids |
    | No lease and no sidecar at all | nothing to quiesce: append `amendment.approved`, `fenced_epoch` omitted, no silence wait |
 
    **A lease present but *not* matching `observed_authority_epoch` is unreachable here, and that is a
@@ -2894,11 +2893,10 @@ proves that a plan and a prepare are the same operation rather than two that mer
 
 The run stays nonterminal throughout: supersession fences an *incarnation*, not the run, so a new
 driver acquires authority at the incremented epoch via `authority.granted` and continues on the new
-revision. Cancellation differs only in that its fence and its terminalization coincide.
+revision. Cancellation leaves no incarnation, and §6's fenced-but-nonterminal rule governs it.
 
-The journal is the authority; the signal only reduces latency. Because supersession and
-cancellation share every branch, this is one general control channel rather than a cancel-only
-feature.
+This is therefore one general control channel rather than a cancel-only feature, by the
+branch-sharing rule above and nothing further.
 
 Event envelope (`journal.jsonl`, control-grade for a later GUI):
 
@@ -2910,7 +2908,7 @@ Event envelope (`journal.jsonl`, control-grade for a later GUI):
 ```
 
 - `movement_id`, `part_id`, `attempt_id` are optional — run-level events omit them.
-- `attempt_id` is an opaque string, never the ordinal.
+- `attempt_id` carries the identity fixed by “Attempt identity” above, never `attempt_number`.
 - `causation_id` references another event's `event_id` and names the **source authority** for
   a derived or recovery-synthesized event. It is the idempotency key only where Appendix B
   says so — one source event can legitimately derive several distinct events, so it is not
@@ -2964,17 +2962,14 @@ and every criterion event repeats it. Its subject is determined by the attempt's
   §5 post-hoc verification boundary. It contains every tracked worktree entry, every
   non-ignored untracked entry, and every protected path present in the worktree even when that
   path is ignored; symlink targets and modes are preserved. It omits only ignored,
-  non-protected content that the full invariant permits. The core creates
-  `refs/partitur/runs/<run-id>/attempts/<attempt-id>/subject`, pointing at a commit wrapping that
-  tree, before appending `acceptance.started`. §1 retains that ref for the run; v0.2 therefore has
-  no earlier removal point.
+  non-protected content that the full invariant permits. The core creates §1's per-attempt subject
+  ref, wrapping that tree in a commit, before appending `acceptance.started`. §1 retains that ref
+  for the run; v0.2 therefore has no earlier removal point.
 - For an attempt without `repo_write`, it is the tree from which the core built that attempt's
   worktree: its movement base. For an ordinary movement with one or more contributing writer
-  dependencies, §5 pins that composed base at
-  `refs/partitur/runs/<run-id>/movements/<movement-id>/base`; with no contributing writer, the
-  movement base is the run base pinned at `refs/partitur/runs/<run-id>/base`. The final
-  verification movement's build-from tree is the recorded candidate `result_tree` (§8), pinned at
-  `refs/partitur/runs/<run-id>/candidate`. The distinction is by attempt kind: a reader never
+  dependencies that base is the composed one; with no contributing writer it is the run base. The
+  final verification movement's build-from tree is the recorded candidate `result_tree` (§8). §1
+  owns which owned ref pins each of the three. The distinction is by attempt kind: a reader never
   creates a per-attempt subject ref.
 
 The run base is pre-attempt, a change set is the shippable delta and cannot carry harness
