@@ -2988,17 +2988,16 @@ though it remains in the journal as history.
 
 **Hard criteria** (core-executed, machine evidence):
 
-- `run: [argv...]` — executed as an argv array (no shell interpretation) inside the
-  attempt worktree with the candidate changes present. Exit 0 passes. Per-criterion
-  `timeout_min` is optional; the effective timeout is
-  `min(criterion timeout, remaining active budget)`. Output is captured by the §7
+- `run: [argv...]` — an argv command run under the invocation shape fixed below, with the
+  candidate changes present. Exit 0 passes. Per-criterion
+  `timeout_min` is optional; its effect on the timeout is fixed there too. Output is captured by the §7
   bounded-streaming rule into the attempt directory; the event records its path and any
   truncation, never output bytes. A failing criterion records
   `acceptance.failed` — it is the core's judgment, never the adapter's `task_failed`.
-  If an acceptance command mutates the worktree — measured by the **full invariant**: tracked
-  content, non-ignored untracked files, symlink targets, file modes, and protected-path
-  integrity — the criterion fails with `acceptance_mutated_workspace` (ignored caches and
-  outputs are permitted). The change set that was verified must be the change set that ships.
+  If an acceptance command mutates the worktree — measured against the attempt's `subject_tree`
+  exactly as defined above, membership and omissions alike — the criterion fails with
+  `acceptance_mutated_workspace`. The change set that was verified must be the
+  change set that ships.
 - `artifact` — the declared output was emitted, its `kind` matches, and its recorded hash
   matches the immutable instance (manifest integrity). An optional `expected_hash` is
   allowed for pre-known content. A declared output never emitted fails here.
@@ -3009,8 +3008,8 @@ though it remains in the journal as history.
 
   - Reserved id `partitur.artifact.<logical_output_id>` — in the core namespace, hence outside
     the score's identifier grammar (§1), so it can never collide with a declared criterion.
-  - `kind: change_set` outputs are excluded: they are core-synthesized (§5) and satisfied by
-    `change_set.recorded`.
+  - `kind: change_set` outputs are excluded: they are core-synthesized (§5), and §5 already
+    fixes what satisfies their declaration.
   - **Replacement is keyed by the referenced output, not by criterion id.** An explicitly
     declared `artifact` criterion referencing the same output suppresses the generated check
     for it — that is how an `expected_hash` is supplied.
@@ -3020,16 +3019,15 @@ though it remains in the journal as history.
     acceptance specification and cannot silently alter what a mark proved.
 
   **Declared vs generated is the line that matters.** A generated check proves the performer
-  *delivered*, never that the work is *correct*, so it can never on its own earn a mark:
-  §2 rule 2, VERIFIED, and the `require ∋ verified` achievability rule all require the score
-  to **declare** a hard criterion. An explicitly declared `artifact` criterion is a declared
-  hard criterion and does count — the score chose it. Without this distinction, any write
+  *delivered*, never that the work is *correct*, so it can never on its own earn a mark: the
+  declaration floors §2 states — rule 2, VERIFIED, and the `require ∋ verified` achievability
+  rule — are what a generated check cannot satisfy, and §2 also settles how an explicitly
+  declared `artifact` criterion counts against them. Without this distinction, any write
   movement declaring an output would auto-satisfy its verification floor and could be marked
   VERIFIED because a file exists, which is the overstatement V-001 forbids.
 
-**Every external criterion command is launched through the gated session-leader trampoline** (§4).
-`criterion.started` records the trampoline's PID, session id, and process-start identity before the
-gate is released; the trampoline then `exec`s the criterion in place. Criterion commands and their
+**Every external criterion command is launched under §4's execution spawn gate**, whose contract
+already names criterion launches. Criterion commands and their
 descendants MUST NOT create another POSIX session — the same conformance requirement §4 places on
 adapters, and for the same reason: a session escape leaves a process recovery cannot name.
 
@@ -3088,13 +3086,11 @@ outside Partitur's control.
 - **Advisory only:** filesystem and network restrictions. The core neither claims nor
   attempts physical confinement of an acceptance command.
 - **Post-hoc detection is the control, and its reach is limited.** After the command runs, the
-  core compares the worktree across tracked content, **non-ignored untracked files, symlink
-  targets, and file modes**; divergence fails the criterion `acceptance_mutated_workspace`
-  (ignored caches and outputs permitted), and protected paths (§2) are checked exactly as for
-  a change set. This is what enforces "the change set that was verified is the change set that
-  ships". It **cannot** detect network effects, writes outside the worktree, or mutation of
-  shared Git refs and run state — those are guarded by isolation and integrity/CAS checks
-  (§1), not by this comparison.
+  core compares the worktree against the attempt's `subject_tree`; divergence fails the criterion
+  `acceptance_mutated_workspace`, and protected paths (§2) are checked exactly as for
+  a change set. It **cannot** detect network effects or writes outside the worktree, and §1
+  already fixes both why shared Git refs and run state are beyond any candidate check and what
+  guards them instead.
 
 A criterion that cannot be spawned, times out, or whose runner crashes yields `ERROR`, not
 `FAIL` — the criterion produced no verdict.
@@ -3111,14 +3107,14 @@ visible in `status`, so flakiness is surfaced rather than laundered.
 **Review criteria** (typed model evidence — never machine verification):
 
 - `acceptance.review` requires that the referenced `findings` artifact instance exists and
-  is well-formed. In v0.2 that is the movement's sole review criterion (compiler rule 7,
-  §2), bound to exactly that one instance; its coverage and blockers are not unioned with any
+  is well-formed. Compiler rule 7 (§2) leaves the movement at most one, and acceptance binds to
+  exactly that one instance; its coverage and blockers are not unioned with any
   other criterion. The rubric and the core-observed subject tree are forwarded to the performer
   via the reserved `partitur.subject-tree` input (§4). The core validates subject binding,
   rubric completeness, and schema — **never truth**.
 - **Review-execution lift gate.** An implementation that lifts the current refusal of review
-  criteria MUST atomically make compiler rule 7 reject both a second review criterion and a
-  `repo_write` movement declaring one, make acceptance admit exactly zero or one **review**
+  criteria MUST atomically preserve both of compiler rule 7's rejections, make acceptance admit
+  exactly zero or one **review**
   criterion — hard criteria and core-generated checks are unaffected — and
   add fixtures for a read-only reviewer of a contributed base and both rejected shapes. Final-
   movement rule 12 is not a substitute for this enforcement: it constrains only the apply-gate
@@ -3148,9 +3144,8 @@ visible in `status`, so flakiness is surfaced rather than laundered.
 
 - **Strict findings decoding and fields.** A findings artifact is exactly one UTF-8 JSON
   object. The strict decoder rejects invalid UTF-8, trailing content, unknown fields, and a
-  duplicate JSON object key at **any** nesting depth. The top-level required fields are
-  `schema`, `subject_tree`, `coverage`, and `findings`; `provenance` is optional. The only
-  fields of `provenance`, when it is present, are its three optional members shown above. This
+  duplicate JSON object key at **any** nesting depth. Required and optional membership is the
+  shape shown above, and nothing beyond it. This
   is a closed v=1 schema: a compatible additive field requires a new findings schema version,
   rather than being silently ignored.
 - **Coverage and finding values.** `coverage` is a set keyed by rubric: it contains each rubric
@@ -3183,10 +3178,8 @@ mistake blind.
 
 **Recovery.** Acceptance is interruptible at every step, so its resumption is governed by
 **Appendix C.3**, under the run- and attempt-level precedence of C.1 and C.2, evaluated top-down with the first matching row
-winning. It is fail-closed: before resuming any criterion the core re-verifies the worktree against the
-**full invariant** — equality to the attempt-kind-specific `subject_tree` defined above, including
-tracked content, non-ignored untracked files, symlink targets, modes, and protected-path integrity
-— and on any mismatch records
+winning. It is fail-closed: C.3's own re-verification of the worktree runs before any criterion
+resumes, and on any mismatch records
 `acceptance.failed {reason: recovery_subject_mismatch}`.
 
 **Command authority.** Exactly one process drives attempts. The distinction is between
@@ -3200,7 +3193,7 @@ state, but only two ever start an adapter:
 | `answer` | records `decision.resolved` only | no |
 | `approve` (gate) | records the gate `decision.resolved`; the resulting completion or failure follows the Appendix C event sequence (`attempt.completed` then `movement.succeeded`, or `movement.failed`) — approval does not manufacture one atomic completion event | no |
 | `approve` / `amend` (amendment) | may atomically write a snapshot and supersede attempts (§9) | no |
-| `cancel` | appends the durable run-scoped cancel request, and acts as canceller to complete terminalization once no valid lease owner remains — because none did, or because it terminated a wedged one (§6) | no |
+| `cancel` | §6's cancellation request and canceller role | no |
 | `apply`, `promote-score` | own transactions (§8) | no |
 | `run`, `resume` | full | **yes** — acquires the driver lease |
 
