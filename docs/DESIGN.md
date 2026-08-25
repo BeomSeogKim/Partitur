@@ -3254,7 +3254,7 @@ not after continuation; if there is no live owner, a later `resume` performs tha
   when §6 authorizes it.
 - `partitur apply` applies the candidate to the checkout (§8).
 - `partitur apply --recover` is permitted only from `APPLYING` or `RECOVERY_REQUIRED`.
-- `partitur promote-score` copies a run revision to `partitur.yaml` (§1, §8).
+- `partitur promote-score` performs the root-score promotion §1 defines (§8).
 - `partitur promote-score --recover` is permitted only from `PROMOTING` or `RECOVERY_REQUIRED`.
 - `partitur version` prints the core version and reads or writes no run state.
 
@@ -3376,7 +3376,7 @@ partitur version
 Every command is **non-interactive**: a missing operand is an error, never a prompt, so the CLI is
 scriptable and a GUI can use the same commands (§0). `partitur run` accepts no run-id operand or
 option: §1's core allocation is the only creation path. For commands whose syntax includes
-`[<run-id>]`, omitting it selects the unique active run and errors if there is not exactly one.
+`[<run-id>]`, omitting it takes §6's unique-active-run selector, and errors if there is not exactly one.
 `apply` and `promote-score` deliberately differ: each requires `<run-id>`. Their shipping
 preconditions address a terminal `SUCCEEDED` run, whereas an omitted generic run id selects the
 unique active nonterminal run. Successful terminal runs accumulate because v0.2 retains run
@@ -3384,7 +3384,7 @@ directories and defines no run-deletion command (§1), so a unique succeeded-run
 fail after a second success; selecting the most recent one would create a new policy. The
 mandatory id therefore keeps both normal and `--recover` forms targeted at one exact run.
 `answer` and the human-gate form of `approve` instead select that same unique active run through
-their decision-resolution rule above; their decision ids are run-unique rather than global.
+their decision-resolution rule above.
 `--approve`/`--reject` is mandatory rather than defaulted, because defaulting either direction on a
 human gate would be indefensible. For a `human_gate` decision, `--reason` is valid only with
 `--reject`, where it becomes `reason`, or with one or more `--override` options, where it becomes
