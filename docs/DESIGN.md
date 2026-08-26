@@ -3765,7 +3765,7 @@ same reason it is not one for `resume`: the caller who repeats `cancel` after an
 invocation is racing whichever canceller finished first, and reporting the run's durable outcome
 closes that race idempotently. 2.1b makes the race ordinary rather than rare, because `cancel` now
 waits on a live driver and can be interrupted while waiting. The mapping is therefore `resume`'s:
-`SUCCEEDED` returns 0, `FAILED` or `CANCELLED` returns 4. A `SUCCEEDED` run reports 0 even though
+A `SUCCEEDED` run reports 0 even though
 nothing was cancelled — the code reports the run's durable outcome, not whether this invocation
 caused it, and `status --json` remains the surface that says which outcome it was.
 
@@ -3864,9 +3864,8 @@ counts toward anything that asks for VERIFIED or APPROVED.
 
 - **VERIFIED** — the attempt has `acceptance.evaluation_completed`, the movement
   **declares** ≥1 `hard` criterion, and every hard check — declared *and* core-generated —
-  is `PASS`. Zero *declared* hard criteria can never yield VERIFIED: core-generated
-  integrity checks close the "declared but never emitted" hole (§7) but can never by
-  themselves earn a mark, or a movement would be VERIFIED because a file exists.
+  is `PASS`. Core-generated checks never supply that declaration floor (§7), or a
+  movement would be VERIFIED because a file exists.
 - **APPROVED** — a `decision.resolved` with `decision_type: human_gate` approves this
   movement, carrying `gate_id`, movement/attempt/`score_revision`, the exact `subject_tree`,
   the approval scope, and any overridden finding instance ids. Whenever
