@@ -12206,6 +12206,662 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "4728941d789610163e46f2c8ff49f88152644ad5",
+        "ordinal": 16,
+        "start_source_line": 3441,
+        "end_source_line": 3665
+      },
+      "review_receipt": {
+        "source_sha256": "36ef053fe452f3b20620be58b6ce26e56ef8b8f9e1bc7c02a056b609b1b54962",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 231524,
+            "end_source_byte": 231646,
+            "kind": "anchor",
+            "marker_id": "status.takes-neither-lease-nor-lock"
+          },
+          {
+            "start_source_byte": 231647,
+            "end_source_byte": 231726,
+            "kind": "anchor",
+            "marker_id": "status.no-torn-tail-repair"
+          },
+          {
+            "start_source_byte": 231727,
+            "end_source_byte": 231862,
+            "kind": "anchor",
+            "marker_id": "status.projection-shared-with-resume-and-apply"
+          },
+          {
+            "start_source_byte": 231863,
+            "end_source_byte": 232139,
+            "kind": "anchor",
+            "marker_id": "status.never-guesses-state"
+          },
+          {
+            "start_source_byte": 232141,
+            "end_source_byte": 232237,
+            "kind": "anchor",
+            "marker_id": "status-json.exactly-one-document"
+          },
+          {
+            "start_source_byte": 232238,
+            "end_source_byte": 232312,
+            "kind": "anchor",
+            "marker_id": "status-json.schema-literal"
+          },
+          {
+            "start_source_byte": 232313,
+            "end_source_byte": 232504,
+            "kind": "anchor",
+            "marker_id": "status-json.v1-compatibility"
+          },
+          {
+            "start_source_byte": 232505,
+            "end_source_byte": 232544,
+            "kind": "anchor",
+            "marker_id": "status-json.arrays-present-when-empty"
+          },
+          {
+            "start_source_byte": 232545,
+            "end_source_byte": 232695,
+            "kind": "anchor",
+            "marker_id": "status-json.ordering"
+          },
+          {
+            "start_source_byte": 232696,
+            "end_source_byte": 232748,
+            "kind": "anchor",
+            "marker_id": "status-json.candidate-null-until-recorded"
+          },
+          {
+            "start_source_byte": 232749,
+            "end_source_byte": 232899,
+            "kind": "anchor",
+            "marker_id": "status-json.complete-shape-is-not-closed-object"
+          },
+          {
+            "start_source_byte": 232900,
+            "end_source_byte": 232926,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 232928,
+            "end_source_byte": 234125,
+            "kind": "anchor",
+            "marker_id": "status-json.shape"
+          },
+          {
+            "start_source_byte": 234127,
+            "end_source_byte": 234273,
+            "kind": "anchor",
+            "marker_id": "status-json.criteria-is-the-full-set"
+          },
+          {
+            "start_source_byte": 234274,
+            "end_source_byte": 234391,
+            "kind": "anchor",
+            "marker_id": "status-json.verified-mark-fields"
+          },
+          {
+            "start_source_byte": 234392,
+            "end_source_byte": 234586,
+            "kind": "anchor",
+            "marker_id": "status-json.reviewed-and-approved-mark-fields"
+          },
+          {
+            "start_source_byte": 234587,
+            "end_source_byte": 234836,
+            "kind": "anchor",
+            "marker_id": "status-json.findings-instance-is-singular"
+          },
+          {
+            "start_source_byte": 234837,
+            "end_source_byte": 234927,
+            "kind": "anchor",
+            "marker_id": "status-json.inapplicable-fields-omitted"
+          },
+          {
+            "start_source_byte": 234928,
+            "end_source_byte": 235131,
+            "kind": "anchor",
+            "marker_id": "status-json.enforcement-advisories"
+          },
+          {
+            "start_source_byte": 235133,
+            "end_source_byte": 235427,
+            "kind": "anchor",
+            "marker_id": "status-text.renders-the-same-projection"
+          },
+          {
+            "start_source_byte": 235428,
+            "end_source_byte": 235699,
+            "kind": "anchor",
+            "marker_id": "status-text.mark-line-is-never-bare"
+          },
+          {
+            "start_source_byte": 235700,
+            "end_source_byte": 235832,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 235834,
+            "end_source_byte": 235873,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 235874,
+            "end_source_byte": 235943,
+            "kind": "anchor",
+            "marker_id": "logs.observes-the-authoritative-journal"
+          },
+          {
+            "start_source_byte": 235944,
+            "end_source_byte": 236102,
+            "kind": "anchor",
+            "marker_id": "logs.takes-neither-lease-nor-lock"
+          },
+          {
+            "start_source_byte": 236103,
+            "end_source_byte": 236281,
+            "kind": "anchor",
+            "marker_id": "logs.reuses-status-selection-and-replay"
+          },
+          {
+            "start_source_byte": 236282,
+            "end_source_byte": 236489,
+            "kind": "anchor",
+            "marker_id": "logs.stream-is-log-and-progress-only"
+          },
+          {
+            "start_source_byte": 236491,
+            "end_source_byte": 236604,
+            "kind": "anchor",
+            "marker_id": "logs-jsonl.one-object-per-observation"
+          },
+          {
+            "start_source_byte": 236605,
+            "end_source_byte": 236757,
+            "kind": "anchor",
+            "marker_id": "logs-jsonl.schema-literal-and-normalized-envelope"
+          },
+          {
+            "start_source_byte": 236758,
+            "end_source_byte": 236889,
+            "kind": "anchor",
+            "marker_id": "logs-jsonl.v1-compatibility"
+          },
+          {
+            "start_source_byte": 236890,
+            "end_source_byte": 237047,
+            "kind": "anchor",
+            "marker_id": "logs-jsonl.required-fields"
+          },
+          {
+            "start_source_byte": 237048,
+            "end_source_byte": 237181,
+            "kind": "anchor",
+            "marker_id": "logs-jsonl.field-meanings"
+          },
+          {
+            "start_source_byte": 237182,
+            "end_source_byte": 237321,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 237323,
+            "end_source_byte": 237486,
+            "kind": "anchor",
+            "marker_id": "logs-text.one-line-per-observation"
+          },
+          {
+            "start_source_byte": 237487,
+            "end_source_byte": 237599,
+            "kind": "anchor",
+            "marker_id": "logs-text.labels-imply-no-state-transition"
+          },
+          {
+            "start_source_byte": 237600,
+            "end_source_byte": 237766,
+            "kind": "anchor",
+            "marker_id": "logs-text.no-filtering-flag"
+          },
+          {
+            "start_source_byte": 237768,
+            "end_source_byte": 237889,
+            "kind": "anchor",
+            "marker_id": "logs-follow.history-then-wait"
+          },
+          {
+            "start_source_byte": 237890,
+            "end_source_byte": 238114,
+            "kind": "anchor",
+            "marker_id": "logs-follow.stops-on-terminal-lifecycle"
+          },
+          {
+            "start_source_byte": 238115,
+            "end_source_byte": 238289,
+            "kind": "anchor",
+            "marker_id": "logs-follow.continues-until-terminal-or-sigint"
+          },
+          {
+            "start_source_byte": 238290,
+            "end_source_byte": 238338,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 238339,
+            "end_source_byte": 238465,
+            "kind": "anchor",
+            "marker_id": "logs.torn-tail-emits-the-valid-prefix-only"
+          },
+          {
+            "start_source_byte": 238466,
+            "end_source_byte": 238629,
+            "kind": "anchor",
+            "marker_id": "logs.terminal-prefix-still-ends-the-command"
+          },
+          {
+            "start_source_byte": 238630,
+            "end_source_byte": 238737,
+            "kind": "anchor",
+            "marker_id": "logs.corruption-before-the-final-line"
+          },
+          {
+            "start_source_byte": 238739,
+            "end_source_byte": 238763,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 238764,
+            "end_source_byte": 238854,
+            "kind": "anchor",
+            "marker_id": "status-exit.exits-on-observation-success"
+          },
+          {
+            "start_source_byte": 238855,
+            "end_source_byte": 239072,
+            "kind": "anchor",
+            "marker_id": "status-exit.zero-for-any-reported-projection"
+          },
+          {
+            "start_source_byte": 239073,
+            "end_source_byte": 239248,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 239249,
+            "end_source_byte": 239423,
+            "kind": "anchor",
+            "marker_id": "status-exit.recovery-required-is-retained"
+          },
+          {
+            "start_source_byte": 239425,
+            "end_source_byte": 239623,
+            "kind": "anchor",
+            "marker_id": "status-exit.tail-unparseable-is-not-recovery-required"
+          },
+          {
+            "start_source_byte": 239624,
+            "end_source_byte": 239782,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 239783,
+            "end_source_byte": 239850,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 239851,
+            "end_source_byte": 239954,
+            "kind": "anchor",
+            "marker_id": "status-exit.corruption-before-final-line-blocks-projection"
+          },
+          {
+            "start_source_byte": 239956,
+            "end_source_byte": 240307,
+            "kind": "anchor",
+            "marker_id": "status-exit.mapping-is-exhaustive"
+          },
+          {
+            "start_source_byte": 240308,
+            "end_source_byte": 240411,
+            "kind": "anchor",
+            "marker_id": "status-exit.never-3-4-6-7"
+          },
+          {
+            "start_source_byte": 240413,
+            "end_source_byte": 240852,
+            "kind": "anchor",
+            "marker_id": "logs-exit.mapping-is-exhaustive"
+          },
+          {
+            "start_source_byte": 240853,
+            "end_source_byte": 240954,
+            "kind": "anchor",
+            "marker_id": "logs-exit.never-3-4-6-7"
+          },
+          {
+            "start_source_byte": 240956,
+            "end_source_byte": 240997,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 240999,
+            "end_source_byte": 241084,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 241085,
+            "end_source_byte": 241240,
+            "kind": "anchor",
+            "marker_id": "status-matrix.selection-produces-a-report-or-one-class"
+          },
+          {
+            "start_source_byte": 241241,
+            "end_source_byte": 241376,
+            "kind": "anchor",
+            "marker_id": "status-matrix.produced-report-alternatives"
+          },
+          {
+            "start_source_byte": 241377,
+            "end_source_byte": 241452,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 241453,
+            "end_source_byte": 241643,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 241645,
+            "end_source_byte": 241714,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 241715,
+            "end_source_byte": 241732,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 241733,
+            "end_source_byte": 241923,
+            "kind": "anchor",
+            "marker_id": "status-matrix.STATUS-001"
+          },
+          {
+            "start_source_byte": 241924,
+            "end_source_byte": 242049,
+            "kind": "anchor",
+            "marker_id": "status-matrix.STATUS-002"
+          },
+          {
+            "start_source_byte": 242050,
+            "end_source_byte": 242190,
+            "kind": "anchor",
+            "marker_id": "status-matrix.STATUS-003"
+          },
+          {
+            "start_source_byte": 242191,
+            "end_source_byte": 242357,
+            "kind": "anchor",
+            "marker_id": "status-matrix.STATUS-004"
+          },
+          {
+            "start_source_byte": 242358,
+            "end_source_byte": 242535,
+            "kind": "anchor",
+            "marker_id": "status-matrix.STATUS-005"
+          },
+          {
+            "start_source_byte": 242537,
+            "end_source_byte": 242576,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 242578,
+            "end_source_byte": 242780,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 242781,
+            "end_source_byte": 242909,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.stream-read-produces-or-selects-one-class"
+          },
+          {
+            "start_source_byte": 242910,
+            "end_source_byte": 243075,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.produced-stream-alternatives"
+          },
+          {
+            "start_source_byte": 243076,
+            "end_source_byte": 243156,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 243157,
+            "end_source_byte": 243304,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.follow-without-terminal-has-no-result-row"
+          },
+          {
+            "start_source_byte": 243306,
+            "end_source_byte": 243371,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 243372,
+            "end_source_byte": 243389,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 243390,
+            "end_source_byte": 243633,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.LOGS-001"
+          },
+          {
+            "start_source_byte": 243634,
+            "end_source_byte": 243755,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.LOGS-002"
+          },
+          {
+            "start_source_byte": 243756,
+            "end_source_byte": 243892,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.LOGS-003"
+          },
+          {
+            "start_source_byte": 243893,
+            "end_source_byte": 244050,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.LOGS-004"
+          },
+          {
+            "start_source_byte": 244051,
+            "end_source_byte": 244226,
+            "kind": "anchor",
+            "marker_id": "logs-matrix.LOGS-005"
+          },
+          {
+            "start_source_byte": 244228,
+            "end_source_byte": 244347,
+            "kind": "anchor",
+            "marker_id": "output-failure.closed-pipe-ends-successfully"
+          },
+          {
+            "start_source_byte": 244348,
+            "end_source_byte": 244461,
+            "kind": "anchor",
+            "marker_id": "output-failure.other-write-failure-is-a-refusal"
+          },
+          {
+            "start_source_byte": 244463,
+            "end_source_byte": 244501,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 244502,
+            "end_source_byte": 244711,
+            "kind": "anchor",
+            "marker_id": "run-preconditions.reuses-validate-rules"
+          },
+          {
+            "start_source_byte": 244712,
+            "end_source_byte": 244884,
+            "kind": "anchor",
+            "marker_id": "run-preconditions.no-adapter-preflight"
+          },
+          {
+            "start_source_byte": 244885,
+            "end_source_byte": 244956,
+            "kind": "anchor",
+            "marker_id": "run-preconditions.git-and-clean-source-are-section-5"
+          },
+          {
+            "start_source_byte": 244957,
+            "end_source_byte": 245104,
+            "kind": "anchor",
+            "marker_id": "run-preconditions.exit-codes-before-run-started"
+          },
+          {
+            "start_source_byte": 245106,
+            "end_source_byte": 245272,
+            "kind": "anchor",
+            "marker_id": "run-id-write.form"
+          },
+          {
+            "start_source_byte": 245273,
+            "end_source_byte": 245338,
+            "kind": "anchor",
+            "marker_id": "run-id-write.not-before-the-durability-receipt"
+          },
+          {
+            "start_source_byte": 245339,
+            "end_source_byte": 245560,
+            "kind": "anchor",
+            "marker_id": "run-id-write.succeeds-exactly-once"
+          },
+          {
+            "start_source_byte": 245562,
+            "end_source_byte": 245620,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 245621,
+            "end_source_byte": 245730,
+            "kind": "anchor",
+            "marker_id": "run-id-write.no-authority-until-the-write-succeeds"
+          },
+          {
+            "start_source_byte": 245731,
+            "end_source_byte": 245956,
+            "kind": "anchor",
+            "marker_id": "run-id-write.failure-stops-before-authority"
+          },
+          {
+            "start_source_byte": 245957,
+            "end_source_byte": 246056,
+            "kind": "anchor",
+            "marker_id": "run-id-write.failure-is-not-retried-or-redirected"
+          },
+          {
+            "start_source_byte": 246057,
+            "end_source_byte": 246297,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 246299,
+            "end_source_byte": 246333,
+            "kind": "anchor",
+            "marker_id": "stdout.silent-after-the-id-line"
+          },
+          {
+            "start_source_byte": 246334,
+            "end_source_byte": 246545,
+            "kind": "anchor",
+            "marker_id": "stderr.core-generated-diagnostics-only"
+          },
+          {
+            "start_source_byte": 246546,
+            "end_source_byte": 246713,
+            "kind": "anchor",
+            "marker_id": "stderr.terminal-run-diagnostic"
+          },
+          {
+            "start_source_byte": 246714,
+            "end_source_byte": 246793,
+            "kind": "anchor",
+            "marker_id": "stderr.recovery-halt-diagnostic"
+          },
+          {
+            "start_source_byte": 246794,
+            "end_source_byte": 247068,
+            "kind": "anchor",
+            "marker_id": "stderr.operational-interruption-diagnostic"
+          },
+          {
+            "start_source_byte": 247069,
+            "end_source_byte": 247246,
+            "kind": "anchor",
+            "marker_id": "stderr.no-summary-for-success-or-waiting"
+          },
+          {
+            "start_source_byte": 247248,
+            "end_source_byte": 247484,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.is-an-invocation-outcome"
+          },
+          {
+            "start_source_byte": 247485,
+            "end_source_byte": 247588,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.leaves-the-last-durable-projection"
+          },
+          {
+            "start_source_byte": 247589,
+            "end_source_byte": 247807,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.cleanup-is-still-required"
+          },
+          {
+            "start_source_byte": 247808,
+            "end_source_byte": 247989,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.unremovable-lease-is-a-dead-owner"
+          },
+          {
+            "start_source_byte": 247991,
+            "end_source_byte": 248052,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.resume-is-the-sole-continuation"
+          },
+          {
+            "start_source_byte": 248053,
+            "end_source_byte": 248195,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.resume-applies-appendix-c"
+          },
+          {
+            "start_source_byte": 248196,
+            "end_source_byte": 248367,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.run-never-self-recovers"
+          },
+          {
+            "start_source_byte": 248368,
+            "end_source_byte": 248469,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.an-interrupted-resume-recurses"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
