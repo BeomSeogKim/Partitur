@@ -12862,6 +12862,907 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "75f2eea51c69fd7cce41f2239b3a3bcb5c55580a",
+        "ordinal": 17,
+        "start_source_line": 3666,
+        "end_source_line": 3896
+      },
+      "review_receipt": {
+        "source_sha256": "496be404f45024a99ec3a4c87b5de7d0c8977615130290ec7200fef6f4b81514",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 248469,
+            "end_source_byte": 248641,
+            "kind": "anchor",
+            "marker_id": "operational-interruption.an-interrupted-resume-recurses"
+          },
+          {
+            "start_source_byte": 248643,
+            "end_source_byte": 248681,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 248683,
+            "end_source_byte": 248735,
+            "kind": "anchor",
+            "marker_id": "run-matrix.owns-preparation-and-live-transaction"
+          },
+          {
+            "start_source_byte": 248736,
+            "end_source_byte": 248776,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 248777,
+            "end_source_byte": 248871,
+            "kind": "anchor",
+            "marker_id": "run-matrix.appendix-c-owns-later-recovery-only"
+          },
+          {
+            "start_source_byte": 248872,
+            "end_source_byte": 249036,
+            "kind": "anchor",
+            "marker_id": "run-matrix.pre-start-states-are-disjoint"
+          },
+          {
+            "start_source_byte": 249037,
+            "end_source_byte": 249177,
+            "kind": "anchor",
+            "marker_id": "run-matrix.id-write-ordering"
+          },
+          {
+            "start_source_byte": 249178,
+            "end_source_byte": 249307,
+            "kind": "anchor",
+            "marker_id": "run-matrix.live-outcome-excludes-pre-start"
+          },
+          {
+            "start_source_byte": 249308,
+            "end_source_byte": 249416,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 249417,
+            "end_source_byte": 249481,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 249482,
+            "end_source_byte": 249623,
+            "kind": "anchor",
+            "marker_id": "run-matrix.grammar-failure-is-not-a-row"
+          },
+          {
+            "start_source_byte": 249625,
+            "end_source_byte": 249701,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 249702,
+            "end_source_byte": 249723,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 249724,
+            "end_source_byte": 249915,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-001"
+          },
+          {
+            "start_source_byte": 249916,
+            "end_source_byte": 250127,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-002"
+          },
+          {
+            "start_source_byte": 250128,
+            "end_source_byte": 250319,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-003"
+          },
+          {
+            "start_source_byte": 250320,
+            "end_source_byte": 250544,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-004"
+          },
+          {
+            "start_source_byte": 250545,
+            "end_source_byte": 250852,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-005"
+          },
+          {
+            "start_source_byte": 250853,
+            "end_source_byte": 251109,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-006"
+          },
+          {
+            "start_source_byte": 251110,
+            "end_source_byte": 251397,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-007"
+          },
+          {
+            "start_source_byte": 251398,
+            "end_source_byte": 251675,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-008"
+          },
+          {
+            "start_source_byte": 251676,
+            "end_source_byte": 251974,
+            "kind": "anchor",
+            "marker_id": "run-matrix.RUN-009"
+          },
+          {
+            "start_source_byte": 251976,
+            "end_source_byte": 252116,
+            "kind": "anchor",
+            "marker_id": "run-output.no-json-or-progress-surface"
+          },
+          {
+            "start_source_byte": 252117,
+            "end_source_byte": 252339,
+            "kind": "anchor",
+            "marker_id": "run-output.notifications-remain-journal-observations"
+          },
+          {
+            "start_source_byte": 252340,
+            "end_source_byte": 252419,
+            "kind": "anchor",
+            "marker_id": "run-output.id-is-a-correlation-handle"
+          },
+          {
+            "start_source_byte": 252421,
+            "end_source_byte": 252462,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 252463,
+            "end_source_byte": 252710,
+            "kind": "anchor",
+            "marker_id": "resume.authority-from-journal-and-run-snapshot"
+          },
+          {
+            "start_source_byte": 252711,
+            "end_source_byte": 252993,
+            "kind": "anchor",
+            "marker_id": "resume.never-recompiles-current-root"
+          },
+          {
+            "start_source_byte": 252994,
+            "end_source_byte": 253143,
+            "kind": "anchor",
+            "marker_id": "resume.reads-root-only-for-the-halt-condition"
+          },
+          {
+            "start_source_byte": 253144,
+            "end_source_byte": 253324,
+            "kind": "anchor",
+            "marker_id": "resume.attempt-time-resolution-still-applies"
+          },
+          {
+            "start_source_byte": 253326,
+            "end_source_byte": 253376,
+            "kind": "anchor",
+            "marker_id": "resume.stdout-is-empty"
+          },
+          {
+            "start_source_byte": 253377,
+            "end_source_byte": 253511,
+            "kind": "anchor",
+            "marker_id": "resume.structured-surfaces-are-status-and-logs"
+          },
+          {
+            "start_source_byte": 253512,
+            "end_source_byte": 253642,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 253643,
+            "end_source_byte": 253781,
+            "kind": "anchor",
+            "marker_id": "resume.halt-diagnostic"
+          },
+          {
+            "start_source_byte": 253782,
+            "end_source_byte": 254061,
+            "kind": "anchor",
+            "marker_id": "resume.halt-is-not-a-persistent-status-result"
+          },
+          {
+            "start_source_byte": 254063,
+            "end_source_byte": 254104,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 254106,
+            "end_source_byte": 254234,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 254235,
+            "end_source_byte": 254416,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 254417,
+            "end_source_byte": 254558,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.action-reaches-an-outcome-or-is-interrupted"
+          },
+          {
+            "start_source_byte": 254559,
+            "end_source_byte": 254705,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.rc-resume-046-is-a-refusal"
+          },
+          {
+            "start_source_byte": 254706,
+            "end_source_byte": 254880,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.halt-before-or-after-a-prefix-is-one-result"
+          },
+          {
+            "start_source_byte": 254881,
+            "end_source_byte": 254938,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 254939,
+            "end_source_byte": 255003,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 255005,
+            "end_source_byte": 255087,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 255088,
+            "end_source_byte": 255105,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 255106,
+            "end_source_byte": 255240,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-001"
+          },
+          {
+            "start_source_byte": 255241,
+            "end_source_byte": 255396,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-002"
+          },
+          {
+            "start_source_byte": 255397,
+            "end_source_byte": 255591,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-003"
+          },
+          {
+            "start_source_byte": 255592,
+            "end_source_byte": 255791,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-004"
+          },
+          {
+            "start_source_byte": 255792,
+            "end_source_byte": 256033,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-005"
+          },
+          {
+            "start_source_byte": 256034,
+            "end_source_byte": 256302,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-006"
+          },
+          {
+            "start_source_byte": 256303,
+            "end_source_byte": 256556,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-007"
+          },
+          {
+            "start_source_byte": 256557,
+            "end_source_byte": 256788,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-008"
+          },
+          {
+            "start_source_byte": 256789,
+            "end_source_byte": 257061,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.RESUME-009"
+          },
+          {
+            "start_source_byte": 257063,
+            "end_source_byte": 257137,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.terminal-run-is-not-a-wrong-state-refusal"
+          },
+          {
+            "start_source_byte": 257138,
+            "end_source_byte": 257362,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.idempotent-terminal-closes-the-race"
+          },
+          {
+            "start_source_byte": 257364,
+            "end_source_byte": 257567,
+            "kind": "anchor",
+            "marker_id": "resume-matrix.yield-to-a-verified-live-owner"
+          },
+          {
+            "start_source_byte": 257568,
+            "end_source_byte": 257748,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 257750,
+            "end_source_byte": 257791,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 257792,
+            "end_source_byte": 257974,
+            "kind": "anchor",
+            "marker_id": "cancel.records-then-waits-for-the-terminal-event"
+          },
+          {
+            "start_source_byte": 257975,
+            "end_source_byte": 258096,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 258097,
+            "end_source_byte": 258269,
+            "kind": "anchor",
+            "marker_id": "cancel.live-owner-is-yielded-to-not-refused"
+          },
+          {
+            "start_source_byte": 258270,
+            "end_source_byte": 258375,
+            "kind": "anchor",
+            "marker_id": "cancel.only-interruption-returns-6"
+          },
+          {
+            "start_source_byte": 258377,
+            "end_source_byte": 258823,
+            "kind": "anchor",
+            "marker_id": "cancel.terminal-run-is-not-a-wrong-state-refusal"
+          },
+          {
+            "start_source_byte": 258824,
+            "end_source_byte": 258860,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 258861,
+            "end_source_byte": 259081,
+            "kind": "anchor",
+            "marker_id": "cancel.succeeded-reports-zero-for-the-durable-outcome"
+          },
+          {
+            "start_source_byte": 259083,
+            "end_source_byte": 259124,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 259126,
+            "end_source_byte": 259312,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 259313,
+            "end_source_byte": 259461,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 259462,
+            "end_source_byte": 259696,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.rc-resume-046-is-an-intermediate-wait"
+          },
+          {
+            "start_source_byte": 259697,
+            "end_source_byte": 259782,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.terminal-run-appends-nothing"
+          },
+          {
+            "start_source_byte": 259783,
+            "end_source_byte": 259879,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.accepted-request-is-the-first-delta"
+          },
+          {
+            "start_source_byte": 259880,
+            "end_source_byte": 259969,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 259970,
+            "end_source_byte": 260034,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 260036,
+            "end_source_byte": 260130,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 260131,
+            "end_source_byte": 260148,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 260149,
+            "end_source_byte": 260283,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-001"
+          },
+          {
+            "start_source_byte": 260284,
+            "end_source_byte": 260451,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-002"
+          },
+          {
+            "start_source_byte": 260452,
+            "end_source_byte": 260648,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-003"
+          },
+          {
+            "start_source_byte": 260649,
+            "end_source_byte": 260911,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-004"
+          },
+          {
+            "start_source_byte": 260912,
+            "end_source_byte": 261199,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-005"
+          },
+          {
+            "start_source_byte": 261200,
+            "end_source_byte": 261605,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-006"
+          },
+          {
+            "start_source_byte": 261606,
+            "end_source_byte": 261903,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-007"
+          },
+          {
+            "start_source_byte": 261904,
+            "end_source_byte": 262281,
+            "kind": "anchor",
+            "marker_id": "cancel-matrix.CANCEL-008"
+          },
+          {
+            "start_source_byte": 262283,
+            "end_source_byte": 262326,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 262328,
+            "end_source_byte": 262390,
+            "kind": "anchor",
+            "marker_id": "validate-matrix.acquisition-precedes-interpretation"
+          },
+          {
+            "start_source_byte": 262391,
+            "end_source_byte": 262557,
+            "kind": "anchor",
+            "marker_id": "validate-matrix.acquisition-outcomes-are-disjoint"
+          },
+          {
+            "start_source_byte": 262558,
+            "end_source_byte": 262775,
+            "kind": "anchor",
+            "marker_id": "validate-matrix.complete-output-partition"
+          },
+          {
+            "start_source_byte": 262776,
+            "end_source_byte": 262882,
+            "kind": "anchor",
+            "marker_id": "validate-matrix.missing-optional-layer-is-success"
+          },
+          {
+            "start_source_byte": 262883,
+            "end_source_byte": 263067,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 263069,
+            "end_source_byte": 263141,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 263142,
+            "end_source_byte": 263159,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 263160,
+            "end_source_byte": 263333,
+            "kind": "anchor",
+            "marker_id": "validate-matrix.VALIDATE-001"
+          },
+          {
+            "start_source_byte": 263334,
+            "end_source_byte": 263518,
+            "kind": "anchor",
+            "marker_id": "validate-matrix.VALIDATE-002"
+          },
+          {
+            "start_source_byte": 263519,
+            "end_source_byte": 263707,
+            "kind": "anchor",
+            "marker_id": "validate-matrix.VALIDATE-003"
+          },
+          {
+            "start_source_byte": 263709,
+            "end_source_byte": 263750,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 263752,
+            "end_source_byte": 263793,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.answers-applicability-only"
+          },
+          {
+            "start_source_byte": 263794,
+            "end_source_byte": 263928,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.applicable-means-reaches-a-required-append"
+          },
+          {
+            "start_source_byte": 263929,
+            "end_source_byte": 264064,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 264065,
+            "end_source_byte": 264165,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.owner-column-meaning"
+          },
+          {
+            "start_source_byte": 264167,
+            "end_source_byte": 264242,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 264243,
+            "end_source_byte": 264260,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 264261,
+            "end_source_byte": 264333,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.init"
+          },
+          {
+            "start_source_byte": 264334,
+            "end_source_byte": 264413,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.validate"
+          },
+          {
+            "start_source_byte": 264414,
+            "end_source_byte": 264470,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.run"
+          },
+          {
+            "start_source_byte": 264471,
+            "end_source_byte": 264550,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.status"
+          },
+          {
+            "start_source_byte": 264551,
+            "end_source_byte": 264626,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.logs"
+          },
+          {
+            "start_source_byte": 264627,
+            "end_source_byte": 264696,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.answer"
+          },
+          {
+            "start_source_byte": 264697,
+            "end_source_byte": 264786,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.approve"
+          },
+          {
+            "start_source_byte": 264787,
+            "end_source_byte": 264845,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.amend"
+          },
+          {
+            "start_source_byte": 264846,
+            "end_source_byte": 264908,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.cancel"
+          },
+          {
+            "start_source_byte": 264909,
+            "end_source_byte": 264986,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.resume"
+          },
+          {
+            "start_source_byte": 264987,
+            "end_source_byte": 265047,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.apply"
+          },
+          {
+            "start_source_byte": 265048,
+            "end_source_byte": 265114,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.promote-score"
+          },
+          {
+            "start_source_byte": 265115,
+            "end_source_byte": 265169,
+            "kind": "anchor",
+            "marker_id": "exit7-registry.version"
+          },
+          {
+            "start_source_byte": 265171,
+            "end_source_byte": 265185,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 265186,
+            "end_source_byte": 265254,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 265256,
+            "end_source_byte": 265274,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 265275,
+            "end_source_byte": 265284,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 265285,
+            "end_source_byte": 265300,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-0"
+          },
+          {
+            "start_source_byte": 265301,
+            "end_source_byte": 265367,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-1"
+          },
+          {
+            "start_source_byte": 265368,
+            "end_source_byte": 265770,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-2"
+          },
+          {
+            "start_source_byte": 265771,
+            "end_source_byte": 265881,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-3"
+          },
+          {
+            "start_source_byte": 265882,
+            "end_source_byte": 266059,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-4"
+          },
+          {
+            "start_source_byte": 266060,
+            "end_source_byte": 266299,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-5"
+          },
+          {
+            "start_source_byte": 266300,
+            "end_source_byte": 266593,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-6"
+          },
+          {
+            "start_source_byte": 266594,
+            "end_source_byte": 266886,
+            "kind": "anchor",
+            "marker_id": "exit-codes.code-7"
+          },
+          {
+            "start_source_byte": 266888,
+            "end_source_byte": 267041,
+            "kind": "anchor",
+            "marker_id": "exit-codes.two-does-not-distinguish-run-from-decision"
+          },
+          {
+            "start_source_byte": 267042,
+            "end_source_byte": 267171,
+            "kind": "anchor",
+            "marker_id": "exit-codes.diagnostic-names-the-refused-precondition"
+          },
+          {
+            "start_source_byte": 267173,
+            "end_source_byte": 267204,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 267206,
+            "end_source_byte": 267286,
+            "kind": "anchor",
+            "marker_id": "verification.marks-and-one-candidate"
+          },
+          {
+            "start_source_byte": 267287,
+            "end_source_byte": 267416,
+            "kind": "anchor",
+            "marker_id": "verification.both-are-journal-projections"
+          },
+          {
+            "start_source_byte": 267417,
+            "end_source_byte": 267621,
+            "kind": "anchor",
+            "marker_id": "verification.transitions-need-a-confirmed-fsync"
+          },
+          {
+            "start_source_byte": 267623,
+            "end_source_byte": 267666,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 267667,
+            "end_source_byte": 267696,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 267697,
+            "end_source_byte": 267770,
+            "kind": "anchor",
+            "marker_id": "grades.reviewed-never-substitutes"
+          },
+          {
+            "start_source_byte": 267772,
+            "end_source_byte": 267786,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 267787,
+            "end_source_byte": 267964,
+            "kind": "anchor",
+            "marker_id": "grades.verified-conditions"
+          },
+          {
+            "start_source_byte": 267965,
+            "end_source_byte": 268086,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 268087,
+            "end_source_byte": 268101,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 268102,
+            "end_source_byte": 268330,
+            "kind": "anchor",
+            "marker_id": "grades.approved-conditions"
+          },
+          {
+            "start_source_byte": 268331,
+            "end_source_byte": 268584,
+            "kind": "anchor",
+            "marker_id": "grades.override-reason-required"
+          },
+          {
+            "start_source_byte": 268585,
+            "end_source_byte": 268664,
+            "kind": "anchor",
+            "marker_id": "grades.approval-never-carries-over"
+          },
+          {
+            "start_source_byte": 268668,
+            "end_source_byte": 268696,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 268697,
+            "end_source_byte": 268777,
+            "kind": "anchor",
+            "marker_id": "override.meaningful-only-on-approval"
+          },
+          {
+            "start_source_byte": 268778,
+            "end_source_byte": 268976,
+            "kind": "anchor",
+            "marker_id": "override.pair-must-be-in-the-blocking-set"
+          },
+          {
+            "start_source_byte": 268977,
+            "end_source_byte": 269109,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 269110,
+            "end_source_byte": 269291,
+            "kind": "anchor",
+            "marker_id": "override.checked-before-append"
+          },
+          {
+            "start_source_byte": 269292,
+            "end_source_byte": 269416,
+            "kind": "anchor",
+            "marker_id": "override.rejection-carries-an-empty-array"
+          },
+          {
+            "start_source_byte": 269417,
+            "end_source_byte": 269431,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 269432,
+            "end_source_byte": 269802,
+            "kind": "anchor",
+            "marker_id": "grades.reviewed-conditions"
+          },
+          {
+            "start_source_byte": 269803,
+            "end_source_byte": 269910,
+            "kind": "anchor",
+            "marker_id": "grades.reviewed-is-a-kind-marker"
+          },
+          {
+            "start_source_byte": 269912,
+            "end_source_byte": 269973,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 269974,
+            "end_source_byte": 270194,
+            "kind": "anchor",
+            "marker_id": "review-outcome.values"
+          },
+          {
+            "start_source_byte": 270195,
+            "end_source_byte": 270305,
+            "kind": "anchor",
+            "marker_id": "review-outcome.overridden-needs-an-approval"
+          },
+          {
+            "start_source_byte": 270306,
+            "end_source_byte": 270469,
+            "kind": "anchor",
+            "marker_id": "review-outcome.v02-blocker-set-is-the-sole-artifact"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
