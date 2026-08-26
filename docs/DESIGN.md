@@ -3971,7 +3971,7 @@ run's transition to `SUCCEEDED`** — one atomic journal transition. There is co
 window in which the final movement has succeeded while the run is still amendable.
 
 After §4's execute-completion boundary the core applies the full read-only post-hoc invariant of
-§5 — tracked content, non-ignored untracked files, symlink targets, modes, protected paths — and
+§5, and
 additionally verifies that the worktree tree equals the recorded candidate `result_tree`.
 `subject_tree` equality alone would miss an untracked file or a mode change that a later step could
 observe. Any mismatch is `candidate_mismatch`, a `grant_denied` sub-reason (Appendix D) — an
