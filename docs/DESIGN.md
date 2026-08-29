@@ -4654,8 +4654,8 @@ no insignificant whitespace, ES6 number serialization.
 - **Unicode.** No normalization is applied; byte-identical input yields byte-identical
   output. Sorting is by UTF-16 code unit per JCS, not by code point.
 - **YAML → JSON mapping.** `yamlsafe` parses one YAML 1.2 representation graph, then rejects —
-  **at its own API boundary, before constructing the JSON AST** — duplicate keys, anchors,
-  aliases, merge-tagged keys, custom tags, and every resolved scalar tag other than `!!str`,
+  **at its own API boundary, before constructing the JSON AST** — §1's excluded YAML
+  constructs, and every resolved scalar tag other than `!!str`,
   `!!bool`, `!!null`, `!!int`, or `!!float`. A quoted or explicitly `!!str`-tagged `<<` is an
   ordinary string key and remains legal. It validates numeric scalars as finite representable
   binary64 values. These are `yamlsafe` decode errors: a general-purpose YAML parser builds its
@@ -4696,7 +4696,7 @@ no insignificant whitespace, ES6 number serialization.
   an exemption.
 
   1. Decode every number to a finite IEEE-754 binary64 value.
-  2. At schema-controlled paths, validate integral and within `[-(2^53 - 1), 2^53 - 1]`
+  2. At schema-controlled paths, validate integral and within the safe range above
      (compiler rule 13).
   3. Leave opaque `extensions` values as finite binary64, fractions and out-of-safe-range
      magnitudes included.
