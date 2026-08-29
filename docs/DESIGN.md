@@ -5179,8 +5179,8 @@ did, which would make the projection depend on when it was replayed:
 
 - Recorded disposition names a successor that is missing → realize it per §3.1's second arm.
 - Recorded disposition is *terminal* → synthesize `movement.failed`, and `run.failed` if that
-  terminalizes the run. This holds even though a terminal failure is **uncharged** (§3.1) — being
-  uncharged is precisely what marks it terminal.
+  terminalizes the run. This holds even though a terminal failure is **uncharged** (§3.1) — B.0's
+  disposition clauses make that the marker.
 
 Each synthesized event is keyed so a repeated recovery is a no-op.
 
@@ -5250,8 +5250,8 @@ disposition: {
 }
 ```
 
-`charged: "none"` with `movement_terminal: true` is what marks a *terminal* failure. Being
-uncharged is the marker — a terminal failure must not consume past its cap (§3.1).
+`charged: "none"` with `movement_terminal: true` is what marks a *terminal* failure — a terminal
+failure must not consume past its cap (§3.1).
 
 **`terminal_reason` exists because `charged: "none"` does not record *why* the classification
 stopped.** Quality with retries remaining but no time left, and quality with time remaining but no
