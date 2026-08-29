@@ -4873,8 +4873,8 @@ with the above — a category error here silently aliases unrelated objects:
 
 | Identity | Form | Note |
 |---|---|---|
-| Artifact instance content | `sha256:<hex>` over raw file bytes (§1) | Not an AST; the bytes are the artifact. |
-| Score **file** content | `sha256:<hex>` over raw file bytes (§1) | `score_file_hash`, for the promotion pre-rename hash check. Deliberately distinct from `partitur/score`. |
+| Artifact instance content | raw file bytes (§1) | Not an AST; the bytes are the artifact. |
+| Score **file** content | raw file bytes (§1) | `score_file_hash` (§1). Deliberately distinct from `partitur/score`. |
 | Git trees and commits | `git-sha1:<hex>` / `git-sha256:<hex>` | **Must** carry the object format. A bare hex string would alias two different objects across a repository-format migration, and the prefix makes the mistake impossible to make silently. |
 
 ### A.4.1 `partitur/criterion-spec`
