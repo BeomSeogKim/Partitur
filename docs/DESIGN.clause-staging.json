@@ -16859,6 +16859,664 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "7b2f6ca5904d8d952345a02c732b4dc9d8eae107",
+        "ordinal": 22,
+        "start_source_line": 4826,
+        "end_source_line": 5055
+      },
+      "review_receipt": {
+        "source_sha256": "ee6b1ef305efcee886c19b229879dc249fda40e53a2ee7ebcda0bd9ebe607c76",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 343929,
+            "end_source_byte": 344104,
+            "kind": "anchor",
+            "marker_id": "composition-identity.subject-has-no-identity-variant"
+          },
+          {
+            "start_source_byte": 344105,
+            "end_source_byte": 344301,
+            "kind": "anchor",
+            "marker_id": "composition-subject.merge-branch-has-nonempty-contributors"
+          },
+          {
+            "start_source_byte": 344302,
+            "end_source_byte": 344509,
+            "kind": "anchor",
+            "marker_id": "composition-subject.spawn-failed-omits-environment"
+          },
+          {
+            "start_source_byte": 344511,
+            "end_source_byte": 344579,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 344581,
+            "end_source_byte": 344646,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.are-run-unique-names"
+          },
+          {
+            "start_source_byte": 344647,
+            "end_source_byte": 344772,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.derive-or-allocate-not-h"
+          },
+          {
+            "start_source_byte": 344774,
+            "end_source_byte": 345085,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.derivation-formulas"
+          },
+          {
+            "start_source_byte": 345087,
+            "end_source_byte": 345140,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.hex-form"
+          },
+          {
+            "start_source_byte": 345141,
+            "end_source_byte": 345287,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 345288,
+            "end_source_byte": 345425,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.not-content-hash-form"
+          },
+          {
+            "start_source_byte": 345427,
+            "end_source_byte": 345455,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 345456,
+            "end_source_byte": 345469,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 345470,
+            "end_source_byte": 345584,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.decision-and-proposal-derivation"
+          },
+          {
+            "start_source_byte": 345585,
+            "end_source_byte": 345698,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.gate-derivation"
+          },
+          {
+            "start_source_byte": 345699,
+            "end_source_byte": 345825,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.decision-allocation-origins"
+          },
+          {
+            "start_source_byte": 345826,
+            "end_source_byte": 345931,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.proposal-allocation-origins"
+          },
+          {
+            "start_source_byte": 345932,
+            "end_source_byte": 346013,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.core-allocation"
+          },
+          {
+            "start_source_byte": 346015,
+            "end_source_byte": 346262,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.outside-content-identity-regime"
+          },
+          {
+            "start_source_byte": 346263,
+            "end_source_byte": 346424,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.not-recomputed-for-comparison"
+          },
+          {
+            "start_source_byte": 346425,
+            "end_source_byte": 346490,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 346492,
+            "end_source_byte": 346544,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 346545,
+            "end_source_byte": 346561,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 346562,
+            "end_source_byte": 346777,
+            "kind": "anchor",
+            "marker_id": "scoped-identifiers.derivation-is-idempotent"
+          },
+          {
+            "start_source_byte": 346779,
+            "end_source_byte": 346986,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 346988,
+            "end_source_byte": 347021,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 347022,
+            "end_source_byte": 347158,
+            "kind": "anchor",
+            "marker_id": "identity-kinds.never-mixed"
+          },
+          {
+            "start_source_byte": 347160,
+            "end_source_byte": 347186,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 347187,
+            "end_source_byte": 347200,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 347201,
+            "end_source_byte": 347295,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 347296,
+            "end_source_byte": 347417,
+            "kind": "anchor",
+            "marker_id": "score-file-identity.distinct-from-score"
+          },
+          {
+            "start_source_byte": 347418,
+            "end_source_byte": 347671,
+            "kind": "anchor",
+            "marker_id": "git-identity.object-format-qualified"
+          },
+          {
+            "start_source_byte": 347673,
+            "end_source_byte": 347708,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 347710,
+            "end_source_byte": 347824,
+            "kind": "anchor",
+            "marker_id": "criterion-spec.is-a-tagged-union"
+          },
+          {
+            "start_source_byte": 347826,
+            "end_source_byte": 348068,
+            "kind": "anchor",
+            "marker_id": "criterion-spec.variant-projections"
+          },
+          {
+            "start_source_byte": 348070,
+            "end_source_byte": 348108,
+            "kind": "anchor",
+            "marker_id": "criterion-spec.kinds-are-closed"
+          },
+          {
+            "start_source_byte": 348109,
+            "end_source_byte": 348208,
+            "kind": "anchor",
+            "marker_id": "criterion-spec.excludes-positional-and-presentational-fields"
+          },
+          {
+            "start_source_byte": 348209,
+            "end_source_byte": 348297,
+            "kind": "anchor",
+            "marker_id": "criterion-spec.core-integrity-is-hard-artifact"
+          },
+          {
+            "start_source_byte": 348299,
+            "end_source_byte": 348335,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 348337,
+            "end_source_byte": 348454,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 348456,
+            "end_source_byte": 348490,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 348492,
+            "end_source_byte": 348645,
+            "kind": "anchor",
+            "marker_id": "acceptance-spec.hard-criterion-order"
+          },
+          {
+            "start_source_byte": 348646,
+            "end_source_byte": 348709,
+            "kind": "anchor",
+            "marker_id": "acceptance-spec.review-criterion-order"
+          },
+          {
+            "start_source_byte": 348710,
+            "end_source_byte": 348765,
+            "kind": "anchor",
+            "marker_id": "acceptance-spec.human-gate-is-explicit"
+          },
+          {
+            "start_source_byte": 348767,
+            "end_source_byte": 348898,
+            "kind": "anchor",
+            "marker_id": "acceptance-spec.projection-shape"
+          },
+          {
+            "start_source_byte": 348900,
+            "end_source_byte": 349086,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 349088,
+            "end_source_byte": 349130,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 349132,
+            "end_source_byte": 349147,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 349148,
+            "end_source_byte": 349255,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.projection-version-gates-fields"
+          },
+          {
+            "start_source_byte": 349256,
+            "end_source_byte": 349298,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 349299,
+            "end_source_byte": 349446,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.field-inclusion-test"
+          },
+          {
+            "start_source_byte": 349448,
+            "end_source_byte": 349529,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.score-and-performer-derived"
+          },
+          {
+            "start_source_byte": 349530,
+            "end_source_byte": 349636,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.extensions-and-serving-adapter"
+          },
+          {
+            "start_source_byte": 349637,
+            "end_source_byte": 349837,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.probed-before-execute"
+          },
+          {
+            "start_source_byte": 349839,
+            "end_source_byte": 349878,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 349880,
+            "end_source_byte": 349951,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.actual-adapter-id"
+          },
+          {
+            "start_source_byte": 349952,
+            "end_source_byte": 350039,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.actual-adapter-not-intended-binding"
+          },
+          {
+            "start_source_byte": 350040,
+            "end_source_byte": 350151,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.fallback-extension-change-detected"
+          },
+          {
+            "start_source_byte": 350152,
+            "end_source_byte": 350185,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.movement-part"
+          },
+          {
+            "start_source_byte": 350186,
+            "end_source_byte": 350230,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.needs-is-a-set"
+          },
+          {
+            "start_source_byte": 350231,
+            "end_source_byte": 350277,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.needs-sorted"
+          },
+          {
+            "start_source_byte": 350278,
+            "end_source_byte": 350325,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.inputs-sorted-by-artifact-id"
+          },
+          {
+            "start_source_byte": 350326,
+            "end_source_byte": 350406,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.input-kind-included"
+          },
+          {
+            "start_source_byte": 350407,
+            "end_source_byte": 350621,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.input-instance-and-content-included"
+          },
+          {
+            "start_source_byte": 350622,
+            "end_source_byte": 350727,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 350728,
+            "end_source_byte": 350777,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.outputs-preserve-declaration-order"
+          },
+          {
+            "start_source_byte": 350778,
+            "end_source_byte": 350865,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 350866,
+            "end_source_byte": 350926,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.declared-grants-included"
+          },
+          {
+            "start_source_byte": 350927,
+            "end_source_byte": 350974,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.grants-sorted"
+          },
+          {
+            "start_source_byte": 350975,
+            "end_source_byte": 351063,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.may-propose-is-effective"
+          },
+          {
+            "start_source_byte": 351064,
+            "end_source_byte": 351163,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.score-base-hash"
+          },
+          {
+            "start_source_byte": 351164,
+            "end_source_byte": 351293,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.score-base-is-semantic"
+          },
+          {
+            "start_source_byte": 351294,
+            "end_source_byte": 351410,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.score-base-required-iff-may-propose"
+          },
+          {
+            "start_source_byte": 351411,
+            "end_source_byte": 351580,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 351581,
+            "end_source_byte": 351729,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 351730,
+            "end_source_byte": 351793,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.acceptance-is-effective-compiled-plan"
+          },
+          {
+            "start_source_byte": 351794,
+            "end_source_byte": 351881,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.base-composition-is-dependency-hash"
+          },
+          {
+            "start_source_byte": 351882,
+            "end_source_byte": 351990,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.base-composition-required-iff-needs"
+          },
+          {
+            "start_source_byte": 351991,
+            "end_source_byte": 352078,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.base-composition-is-clean-base"
+          },
+          {
+            "start_source_byte": 352079,
+            "end_source_byte": 352171,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.empty-base-composition-is-identity"
+          },
+          {
+            "start_source_byte": 352172,
+            "end_source_byte": 352353,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 352354,
+            "end_source_byte": 352403,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.part-capabilities-sorted"
+          },
+          {
+            "start_source_byte": 352404,
+            "end_source_byte": 352454,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.model-is-requested-model"
+          },
+          {
+            "start_source_byte": 352455,
+            "end_source_byte": 352600,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.model-included"
+          },
+          {
+            "start_source_byte": 352601,
+            "end_source_byte": 352671,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.authority-is-effective"
+          },
+          {
+            "start_source_byte": 352672,
+            "end_source_byte": 352745,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 352746,
+            "end_source_byte": 352822,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.authority-paths-sorted"
+          },
+          {
+            "start_source_byte": 352823,
+            "end_source_byte": 352890,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.authority-paths-duplicate-free"
+          },
+          {
+            "start_source_byte": 352891,
+            "end_source_byte": 352945,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.authority-side-effects-sorted"
+          },
+          {
+            "start_source_byte": 352946,
+            "end_source_byte": 352990,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.authority-side-effects-empty-in-v02"
+          },
+          {
+            "start_source_byte": 352991,
+            "end_source_byte": 353032,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.context-omitted-when-absent"
+          },
+          {
+            "start_source_byte": 353033,
+            "end_source_byte": 353097,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.absent-context-is-not-empty-string"
+          },
+          {
+            "start_source_byte": 353098,
+            "end_source_byte": 353161,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.global-invariants-projection"
+          },
+          {
+            "start_source_byte": 353162,
+            "end_source_byte": 353295,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.verification-expectation-intent-included"
+          },
+          {
+            "start_source_byte": 353296,
+            "end_source_byte": 353374,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.resolution-digest"
+          },
+          {
+            "start_source_byte": 353375,
+            "end_source_byte": 353467,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.resolutions-preserve-delivered-order"
+          },
+          {
+            "start_source_byte": 353468,
+            "end_source_byte": 353558,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 353559,
+            "end_source_byte": 353701,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.opposite-answers-differ"
+          },
+          {
+            "start_source_byte": 353702,
+            "end_source_byte": 353865,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.resolutions-are-digests-not-bodies"
+          },
+          {
+            "start_source_byte": 353866,
+            "end_source_byte": 353952,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.feedback-sorted-by-exact-key"
+          },
+          {
+            "start_source_byte": 353953,
+            "end_source_byte": 354042,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 354043,
+            "end_source_byte": 354085,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.feedback-empty-for-first-attempt"
+          },
+          {
+            "start_source_byte": 354086,
+            "end_source_byte": 354213,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.feedback-included"
+          },
+          {
+            "start_source_byte": 354215,
+            "end_source_byte": 355137,
+            "kind": "anchor",
+            "marker_id": "execution-dependency.projection-shape"
+          },
+          {
+            "start_source_byte": 355139,
+            "end_source_byte": 355180,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 355181,
+            "end_source_byte": 355254,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 355256,
+            "end_source_byte": 355423,
+            "kind": "anchor",
+            "marker_id": "effective-authority.grant-intersection"
+          },
+          {
+            "start_source_byte": 355425,
+            "end_source_byte": 355473,
+            "kind": "anchor",
+            "marker_id": "effective-authority.write-does-not-imply-read"
+          },
+          {
+            "start_source_byte": 355474,
+            "end_source_byte": 355606,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 355607,
+            "end_source_byte": 355693,
+            "kind": "anchor",
+            "marker_id": "effective-authority.both-grants-put-pattern-in-both-lists"
+          },
+          {
+            "start_source_byte": 355694,
+            "end_source_byte": 355802,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 355803,
+            "end_source_byte": 355922,
+            "kind": "anchor",
+            "marker_id": "effective-authority.empty-policy-yields-empty-lists"
+          },
+          {
+            "start_source_byte": 355923,
+            "end_source_byte": 356053,
+            "kind": "anchor",
+            "marker_id": "effective-authority.empty-authority-preserved"
+          },
+          {
+            "start_source_byte": 356054,
+            "end_source_byte": 356286,
+            "kind": "anchor",
+            "marker_id": "effective-authority.empty-authority-not-reported"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
