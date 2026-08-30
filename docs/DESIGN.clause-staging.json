@@ -20623,6 +20623,311 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "ordinal": 28,
+        "start_source_line": 6155,
+        "end_source_line": 6375
+      },
+      "review_receipt": {
+        "source_sha256": "d333e0fbdb42bf58d97d6711d7f5baaa2046f5d09ad7b4f7352fc6812c7f960c",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 421394,
+            "end_source_byte": 421669,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.payload-shape"
+          },
+          {
+            "start_source_byte": 421671,
+            "end_source_byte": 422060,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.payload-shape"
+          },
+          {
+            "start_source_byte": 422062,
+            "end_source_byte": 422752,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.payload-shape"
+          },
+          {
+            "start_source_byte": 422754,
+            "end_source_byte": 422884,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-abandoned.payload-shape"
+          },
+          {
+            "start_source_byte": 422886,
+            "end_source_byte": 423246,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.payload-shape"
+          },
+          {
+            "start_source_byte": 423248,
+            "end_source_byte": 423318,
+            "kind": "anchor",
+            "marker_id": "amendment-quiesce-observed.payload-shape"
+          },
+          {
+            "start_source_byte": 423320,
+            "end_source_byte": 423472,
+            "kind": "anchor",
+            "marker_id": "amendment-human-rejected.payload-shape"
+          },
+          {
+            "start_source_byte": 423474,
+            "end_source_byte": 423489,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 423491,
+            "end_source_byte": 423550,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 423551,
+            "end_source_byte": 423572,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 423573,
+            "end_source_byte": 423733,
+            "kind": "anchor",
+            "marker_id": "event-type.apply-started"
+          },
+          {
+            "start_source_byte": 423734,
+            "end_source_byte": 423831,
+            "kind": "anchor",
+            "marker_id": "event-type.apply-completed"
+          },
+          {
+            "start_source_byte": 423832,
+            "end_source_byte": 423937,
+            "kind": "anchor",
+            "marker_id": "event-type.apply-failed"
+          },
+          {
+            "start_source_byte": 423938,
+            "end_source_byte": 424130,
+            "kind": "anchor",
+            "marker_id": "event-type.apply-recovery-required"
+          },
+          {
+            "start_source_byte": 424131,
+            "end_source_byte": 424243,
+            "kind": "anchor",
+            "marker_id": "event-type.apply-recovery-resolved"
+          },
+          {
+            "start_source_byte": 424244,
+            "end_source_byte": 424618,
+            "kind": "anchor",
+            "marker_id": "event-type.score-promotion-started"
+          },
+          {
+            "start_source_byte": 424619,
+            "end_source_byte": 424759,
+            "kind": "anchor",
+            "marker_id": "event-type.score-promoted"
+          },
+          {
+            "start_source_byte": 424760,
+            "end_source_byte": 424864,
+            "kind": "anchor",
+            "marker_id": "event-type.score-promotion-recovery-required"
+          },
+          {
+            "start_source_byte": 424866,
+            "end_source_byte": 424879,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 424880,
+            "end_source_byte": 425055,
+            "kind": "anchor",
+            "marker_id": "shipping.txn-id-resumes-the-same-transaction"
+          },
+          {
+            "start_source_byte": 425057,
+            "end_source_byte": 425079,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 425080,
+            "end_source_byte": 425170,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 425172,
+            "end_source_byte": 425296,
+            "kind": "anchor",
+            "marker_id": "apply-started.before-tree-is-candidate-base-tree"
+          },
+          {
+            "start_source_byte": 425297,
+            "end_source_byte": 425371,
+            "kind": "anchor",
+            "marker_id": "apply-started.result-tree-is-successful-apply-target"
+          },
+          {
+            "start_source_byte": 425372,
+            "end_source_byte": 425454,
+            "kind": "anchor",
+            "marker_id": "apply-started.touched-paths-sorted-and-rollback-complete"
+          },
+          {
+            "start_source_byte": 425455,
+            "end_source_byte": 425540,
+            "kind": "anchor",
+            "marker_id": "apply-started.recovery-is-recorded-before-write"
+          },
+          {
+            "start_source_byte": 425541,
+            "end_source_byte": 425639,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 425640,
+            "end_source_byte": 425706,
+            "kind": "anchor",
+            "marker_id": "shipping.every-b6-event-carries-identity-versions"
+          },
+          {
+            "start_source_byte": 425707,
+            "end_source_byte": 425770,
+            "kind": "anchor",
+            "marker_id": "apply-failed.rollback-verified-is-always-true"
+          },
+          {
+            "start_source_byte": 425771,
+            "end_source_byte": 425837,
+            "kind": "anchor",
+            "marker_id": "apply.failed-clean-means-base-reverified-after-restoration"
+          },
+          {
+            "start_source_byte": 425838,
+            "end_source_byte": 425926,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 425927,
+            "end_source_byte": 426045,
+            "kind": "anchor",
+            "marker_id": "apply-recovery-required.observed-tree-is-locked-application-tree"
+          },
+          {
+            "start_source_byte": 426046,
+            "end_source_byte": 426120,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 426121,
+            "end_source_byte": 426210,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 426211,
+            "end_source_byte": 426321,
+            "kind": "anchor",
+            "marker_id": "score-promotion-started.expected-root-file-hash-is-raw-pre-rename-check"
+          },
+          {
+            "start_source_byte": 426322,
+            "end_source_byte": 426421,
+            "kind": "anchor",
+            "marker_id": "score-promotion-started.target-snapshot-file-hash-is-raw-write-bytes"
+          },
+          {
+            "start_source_byte": 426422,
+            "end_source_byte": 426573,
+            "kind": "anchor",
+            "marker_id": "score-promotion-recovery-required.observed-root-file-hash-for-readable-unmatched-root"
+          },
+          {
+            "start_source_byte": 426574,
+            "end_source_byte": 426742,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 426744,
+            "end_source_byte": 426918,
+            "kind": "anchor",
+            "marker_id": "apply-started.payload-shape"
+          },
+          {
+            "start_source_byte": 426920,
+            "end_source_byte": 427004,
+            "kind": "anchor",
+            "marker_id": "apply-completed.payload-shape"
+          },
+          {
+            "start_source_byte": 427006,
+            "end_source_byte": 427124,
+            "kind": "anchor",
+            "marker_id": "apply-failed.payload-shape"
+          },
+          {
+            "start_source_byte": 427126,
+            "end_source_byte": 427243,
+            "kind": "anchor",
+            "marker_id": "apply-recovery-required.payload-shape"
+          },
+          {
+            "start_source_byte": 427245,
+            "end_source_byte": 427337,
+            "kind": "anchor",
+            "marker_id": "apply-recovery-resolved.payload-shape"
+          },
+          {
+            "start_source_byte": 427339,
+            "end_source_byte": 427495,
+            "kind": "anchor",
+            "marker_id": "score-promotion-started.payload-shape"
+          },
+          {
+            "start_source_byte": 427497,
+            "end_source_byte": 427628,
+            "kind": "anchor",
+            "marker_id": "score-promoted.payload-shape"
+          },
+          {
+            "start_source_byte": 427630,
+            "end_source_byte": 427767,
+            "kind": "anchor",
+            "marker_id": "score-promotion-recovery-required.payload-shape"
+          },
+          {
+            "start_source_byte": 427769,
+            "end_source_byte": 427799,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 427801,
+            "end_source_byte": 427860,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 427861,
+            "end_source_byte": 427882,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 427883,
+            "end_source_byte": 428272,
+            "kind": "anchor",
+            "marker_id": "event-type.authority-granted"
+          },
+          {
+            "start_source_byte": 428273,
+            "end_source_byte": 428635,
+            "kind": "anchor",
+            "marker_id": "event-type.cancel-requested"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
