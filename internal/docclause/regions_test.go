@@ -300,6 +300,10 @@ func cloneRegions(source []Region) []Region {
 
 func cloneRegistry(source Registry) Registry {
 	clone := source
+	if source.Activation != nil {
+		activation := *source.Activation
+		clone.Activation = &activation
+	}
 	clone.RegionUniverse = append([]RegionKey(nil), source.RegionUniverse...)
 	clone.Receipts = append([]RegionReceipt(nil), source.Receipts...)
 	for index := range clone.Receipts {

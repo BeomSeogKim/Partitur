@@ -20,7 +20,12 @@ type confirmedPacketPin struct {
 	DecisionsHash string
 }
 
-func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.T) {
+const (
+	confirmedBaselineMarkedBlob                  = "4bcfdde84a68c0c1ad29da28b8cd52feea3ee2ce"
+	confirmedBaselineOrderedClassificationSHA256 = "805ef089d39dd0f1b43527b1ccee4bf4940d4f21154213cd7fdc7b17d1851360"
+)
+
+func TestDesignStagingLedgerPinsCurrentUniverseAndActivatesBaseline(t *testing.T) {
 	_, current, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve repository path")
@@ -68,8 +73,8 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 	if err := ValidateRegistry(documentPath, document, commandBlob, regions, registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.Activation != nil {
-		t.Fatal("baseline activation must remain absent during staging classification")
+	if err := validateConfirmedActivationPins(registry); err != nil {
+		t.Fatal(err)
 	}
 	if len(regions) == 0 {
 		t.Fatal("generated region universe is empty")
@@ -286,6 +291,73 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 	if pending := Pending(regions, registry); len(pending) != 0 {
 		t.Fatalf("complete staging registry pending = %v, want empty", pending)
 	}
+	marked, err := Materialize(documentPath, document, commandBlob, regions, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateActivation(documentPath, document, marked, commandBlob, regions, registry); err != nil {
+		t.Fatal(err)
+	}
+	// On the accepting path `marked` is what Materialize just produced, so ValidateActivation's
+	// equality against a fresh materialization cannot fail there. The witness below supplies the
+	// only state that isolates it: mutated bytes carrying a blob pin that matches them.
+	activationMutations := []struct {
+		name           string
+		mutate         func(*Registry, *[]byte)
+		pinWant        string
+		activationWant string
+	}{
+		{
+			name: "missing activation",
+			mutate: func(got *Registry, _ *[]byte) {
+				got.Activation = nil
+			},
+			pinWant:        "baseline activation is absent",
+			activationWant: "baseline activation is absent",
+		},
+		{
+			name: "marked bytes with matching blob pin",
+			mutate: func(got *Registry, marked *[]byte) {
+				(*marked)[0] ^= 1
+				got.Activation.MarkedBlob = GitBlobID(*marked)
+			},
+			activationWant: "does not equal materialized",
+		},
+		{
+			name: "marked blob pin",
+			mutate: func(got *Registry, _ *[]byte) {
+				got.Activation.MarkedBlob = strings.Repeat("0", 40)
+			},
+			pinWant:        "baseline marked blob",
+			activationWant: "marked blob",
+		},
+		{
+			name: "ordered classification pin",
+			mutate: func(got *Registry, _ *[]byte) {
+				got.Activation.OrderedClassificationSHA256 = strings.Repeat("0", 64)
+			},
+			pinWant:        "baseline ordered classification SHA-256",
+			activationWant: "ordered classification digest",
+		},
+	}
+	for _, mutation := range activationMutations {
+		t.Run("activation "+mutation.name, func(t *testing.T) {
+			got := cloneRegistry(registry)
+			gotMarked := append([]byte(nil), marked...)
+			mutation.mutate(&got, &gotMarked)
+			if mutation.pinWant != "" {
+				err := validateConfirmedActivationPins(got)
+				if err == nil || !strings.Contains(err.Error(), mutation.pinWant) {
+					t.Fatalf("activation pin error = %v, want %q", err, mutation.pinWant)
+				}
+			}
+			err := ValidateActivation(documentPath, document, gotMarked, commandBlob, regions, got)
+			if err == nil || !strings.Contains(err.Error(), mutation.activationWant) {
+				t.Fatalf("activation error = %v, want %q", err, mutation.activationWant)
+			}
+		})
+	}
+
 	// Every region is reviewed, so a receipt-without-admission and a pending region are no
 	// longer reachable by mutating the registry alone: the witness withholds admission instead.
 	terminalWitnessOrdinal := regions[len(regions)-1].Key.Ordinal
@@ -338,7 +410,6 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 				}
 				got.Receipts = receipts
 				delete(reviewed, terminalWitnessOrdinal)
-				got.Activation = &ActivationPins{}
 			},
 			want: "baseline activation must remain absent while staging regions are pending",
 		},
@@ -485,6 +556,20 @@ func validateStagingReviewProgress(regions []Region, registry Registry, reviewed
 	}
 	if len(pending) != 0 && registry.Activation != nil {
 		return fmt.Errorf("baseline activation must remain absent while staging regions are pending")
+	}
+	return nil
+}
+
+func validateConfirmedActivationPins(registry Registry) error {
+	if registry.Activation == nil {
+		return fmt.Errorf("baseline activation is absent")
+	}
+	if registry.Activation.MarkedBlob != confirmedBaselineMarkedBlob {
+		return fmt.Errorf("baseline marked blob = %q, want %q", registry.Activation.MarkedBlob, confirmedBaselineMarkedBlob)
+	}
+	if registry.Activation.OrderedClassificationSHA256 != confirmedBaselineOrderedClassificationSHA256 {
+		return fmt.Errorf("baseline ordered classification SHA-256 = %q, want %q",
+			registry.Activation.OrderedClassificationSHA256, confirmedBaselineOrderedClassificationSHA256)
 	}
 	return nil
 }
