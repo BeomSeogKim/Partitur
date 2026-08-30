@@ -6388,9 +6388,8 @@ coherent specimen.
 - `authority.granted.owner_start_identity` is a tagged union, not an opaque string.
 - Another implementation must be able to replay the `authority.granted.owner_start_identity`
   comparison.
-- The Linux `authority.granted.owner_start_identity` uses
-  `/proc/sys/kernel/random/boot_id` and `/proc/<pid>/stat` field 22 (§6).
-- The Darwin `authority.granted.owner_start_identity` uses `PROC_PIDTBSDINFO` (§6).
+- The Linux `authority.granted.owner_start_identity` is §6's Linux start identity.
+- The Darwin `authority.granted.owner_start_identity` is §6's Darwin start identity.
 - `authority.granted.reclaimed_from_epoch` is present when this grant reclaimed a stale lease.
 - `authority.granted` deliberately omits the incarnation token.
 - Journaling the incarnation token would let any journal reader forge authority (§6).
@@ -6591,8 +6590,8 @@ would charge the wrong thing.
 **Recovery case:** `RC-RESUME-001`.
 
 The exception matters, because closing it here would record the wrong reason and the wrong order.
-**Cancellation** closes its interval in step (c) of the §6 oracle with `reason: cancelled`, whenever one
-is open and independently of whether (d) fences anything; **supersession** closes it with
+**Cancellation** takes step (c) of the §6 oracle, independently of whether (d) fences
+anything; **supersession** closes it with
 `reason: superseded`. So recovery checks C.1's
 control rows *first* and performs the generic close only for an interval no row claims. The reason is
 not cosmetic: it is how a later reader distinguishes a run that was cancelled from one that merely

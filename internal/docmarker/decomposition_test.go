@@ -279,7 +279,7 @@ func TestAppendixBRemainingDecomposition(t *testing.T) {
 		{
 			name: "B7", start: "## B.7 Control and diagnostics", end: "# Appendix C — Recovery",
 			carrierMarkers:     []string{"**B.7 field clauses.**"},
-			carrierHash:        "ccd531ca37f87c655d03673bdf527b29e97c437bf38d3a8bf213c27189dd8a4a",
+			carrierHash:        "49bec5e32c6976c8c01c639e188ac311e66bd3533294f1a0b9e2ee339e95b1cb",
 			carrierAssignments: []int{2, 2, 1, 1, 1, 2, 3, 1, 2, 1, 1},
 			payloads: []payloadExpectation{
 				{name: "authority.granted", hash: "7693b856070815ea2795f76588b6040dcb1314c6a60eb2f960a55d8c235a5c4d"},
