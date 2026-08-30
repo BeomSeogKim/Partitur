@@ -19486,6 +19486,462 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "3b083e2f50e49c8c1f75ceb4a77bd4130766a4ca",
+        "ordinal": 26,
+        "start_source_line": 5730,
+        "end_source_line": 5945
+      },
+      "review_receipt": {
+        "source_sha256": "ff4b0557f6bcc3f2f96db75bc4702b801a925255382254824696a7e53f5ace4d",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 397161,
+            "end_source_byte": 397274,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.candidate-composition-dependency-hash-domain"
+          },
+          {
+            "start_source_byte": 397275,
+            "end_source_byte": 397432,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.candidate-composition-dependency-hash-tagged-projection"
+          },
+          {
+            "start_source_byte": 397433,
+            "end_source_byte": 397539,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.composition-environment-hash-domain"
+          },
+          {
+            "start_source_byte": 397540,
+            "end_source_byte": 397702,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.composition-environment-hash-branch-condition"
+          },
+          {
+            "start_source_byte": 397703,
+            "end_source_byte": 397814,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 397815,
+            "end_source_byte": 397935,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 397936,
+            "end_source_byte": 398033,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 398034,
+            "end_source_byte": 398131,
+            "kind": "anchor",
+            "marker_id": "acceptance-started.acceptance-spec-hash-is-effective-compiled-plan"
+          },
+          {
+            "start_source_byte": 398132,
+            "end_source_byte": 398230,
+            "kind": "anchor",
+            "marker_id": "acceptance-started.planned-criterion-ids-execution-order"
+          },
+          {
+            "start_source_byte": 398231,
+            "end_source_byte": 398317,
+            "kind": "anchor",
+            "marker_id": "acceptance-started.planned-criterion-ids-drive-recovery"
+          },
+          {
+            "start_source_byte": 398318,
+            "end_source_byte": 398387,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 398388,
+            "end_source_byte": 398507,
+            "kind": "anchor",
+            "marker_id": "criterion-started.criterion-process-iff-external-command-spawned"
+          },
+          {
+            "start_source_byte": 398508,
+            "end_source_byte": 398607,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 398608,
+            "end_source_byte": 398679,
+            "kind": "anchor",
+            "marker_id": "criterion-started.in-process-artifact-and-review-have-no-pid"
+          },
+          {
+            "start_source_byte": 398680,
+            "end_source_byte": 398739,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 398740,
+            "end_source_byte": 398870,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 398871,
+            "end_source_byte": 398979,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 398980,
+            "end_source_byte": 399073,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 399074,
+            "end_source_byte": 399154,
+            "kind": "anchor",
+            "marker_id": "criterion-started.criterion-process-recorded-before-gate-release"
+          },
+          {
+            "start_source_byte": 399155,
+            "end_source_byte": 399318,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 399319,
+            "end_source_byte": 399432,
+            "kind": "anchor",
+            "marker_id": "criterion-started.spawn-failed-iff-external-command-could-not-spawn"
+          },
+          {
+            "start_source_byte": 399433,
+            "end_source_byte": 399511,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 399512,
+            "end_source_byte": 399564,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 399565,
+            "end_source_byte": 399636,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 399637,
+            "end_source_byte": 399697,
+            "kind": "anchor",
+            "marker_id": "criterion-completed.outcome-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 399698,
+            "end_source_byte": 399788,
+            "kind": "anchor",
+            "marker_id": "criterion-completed.exit-code-present-for-spawned-completion"
+          },
+          {
+            "start_source_byte": 399789,
+            "end_source_byte": 399863,
+            "kind": "anchor",
+            "marker_id": "criterion-completed.duration-ms-present-for-observed-completion"
+          },
+          {
+            "start_source_byte": 399864,
+            "end_source_byte": 400000,
+            "kind": "anchor",
+            "marker_id": "criterion-completed.duration-ms-absent-only-for-synthesized-recovery"
+          },
+          {
+            "start_source_byte": 400001,
+            "end_source_byte": 400074,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 400075,
+            "end_source_byte": 400244,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 400245,
+            "end_source_byte": 400339,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 400340,
+            "end_source_byte": 400465,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 400466,
+            "end_source_byte": 400586,
+            "kind": "anchor",
+            "marker_id": "criterion-completed.error-detail-iff-error"
+          },
+          {
+            "start_source_byte": 400587,
+            "end_source_byte": 400644,
+            "kind": "anchor",
+            "marker_id": "acceptance-failed.reason-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 400645,
+            "end_source_byte": 400778,
+            "kind": "anchor",
+            "marker_id": "acceptance-failed.failed-criterion-id-absent-for-non-criterion-reasons"
+          },
+          {
+            "start_source_byte": 400779,
+            "end_source_byte": 400836,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 400837,
+            "end_source_byte": 400944,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 400945,
+            "end_source_byte": 401064,
+            "kind": "anchor",
+            "marker_id": "acceptance-evaluation-completed.criterion-outcomes-planned-order-and-pass"
+          },
+          {
+            "start_source_byte": 401065,
+            "end_source_byte": 401175,
+            "kind": "anchor",
+            "marker_id": "acceptance-evaluation-completed.criterion-outcomes-present-for-grade-derivation"
+          },
+          {
+            "start_source_byte": 401177,
+            "end_source_byte": 401281,
+            "kind": "anchor",
+            "marker_id": "artifact-recorded.payload-shape"
+          },
+          {
+            "start_source_byte": 401283,
+            "end_source_byte": 401398,
+            "kind": "anchor",
+            "marker_id": "change-set-recorded.payload-shape"
+          },
+          {
+            "start_source_byte": 401400,
+            "end_source_byte": 401434,
+            "kind": "anchor",
+            "marker_id": "verification-passed.payload-shape"
+          },
+          {
+            "start_source_byte": 401436,
+            "end_source_byte": 401653,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.payload-shape"
+          },
+          {
+            "start_source_byte": 401655,
+            "end_source_byte": 401881,
+            "kind": "anchor",
+            "marker_id": "composition-failed.payload-shape"
+          },
+          {
+            "start_source_byte": 401883,
+            "end_source_byte": 402153,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.payload-shape"
+          },
+          {
+            "start_source_byte": 402155,
+            "end_source_byte": 402290,
+            "kind": "anchor",
+            "marker_id": "acceptance-started.payload-shape"
+          },
+          {
+            "start_source_byte": 402292,
+            "end_source_byte": 402606,
+            "kind": "anchor",
+            "marker_id": "criterion-started.payload-shape"
+          },
+          {
+            "start_source_byte": 402608,
+            "end_source_byte": 402811,
+            "kind": "anchor",
+            "marker_id": "criterion-completed.payload-shape"
+          },
+          {
+            "start_source_byte": 402813,
+            "end_source_byte": 402910,
+            "kind": "anchor",
+            "marker_id": "acceptance-failed.payload-shape"
+          },
+          {
+            "start_source_byte": 402912,
+            "end_source_byte": 403087,
+            "kind": "anchor",
+            "marker_id": "acceptance-evaluation-completed.payload-shape"
+          },
+          {
+            "start_source_byte": 403089,
+            "end_source_byte": 403105,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 403107,
+            "end_source_byte": 403166,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 403167,
+            "end_source_byte": 403188,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 403189,
+            "end_source_byte": 403723,
+            "kind": "anchor",
+            "marker_id": "event-type.decision-requested"
+          },
+          {
+            "start_source_byte": 403724,
+            "end_source_byte": 403969,
+            "kind": "anchor",
+            "marker_id": "event-type.decision-resolved"
+          },
+          {
+            "start_source_byte": 403970,
+            "end_source_byte": 404285,
+            "kind": "anchor",
+            "marker_id": "event-type.decision-obsoleted"
+          },
+          {
+            "start_source_byte": 404287,
+            "end_source_byte": 404300,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 404302,
+            "end_source_byte": 404324,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 404325,
+            "end_source_byte": 404415,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 404417,
+            "end_source_byte": 404477,
+            "kind": "anchor",
+            "marker_id": "decision-requested.is-a-tagged-union"
+          },
+          {
+            "start_source_byte": 404478,
+            "end_source_byte": 404581,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 404582,
+            "end_source_byte": 404735,
+            "kind": "anchor",
+            "marker_id": "decision-requested.decision-id-derived-from-attempt-and-emitted-id"
+          },
+          {
+            "start_source_byte": 404736,
+            "end_source_byte": 404809,
+            "kind": "anchor",
+            "marker_id": "decision-requested.emitted-id-retains-adapter-provenance"
+          },
+          {
+            "start_source_byte": 404810,
+            "end_source_byte": 404904,
+            "kind": "anchor",
+            "marker_id": "decision-requested.emitted-id-iff-adapter-origin"
+          },
+          {
+            "start_source_byte": 404905,
+            "end_source_byte": 404988,
+            "kind": "anchor",
+            "marker_id": "decision-requested.emitted-id-is-only-attempt-unique"
+          },
+          {
+            "start_source_byte": 404989,
+            "end_source_byte": 405058,
+            "kind": "anchor",
+            "marker_id": "decision-requested.question-is-sanitized"
+          },
+          {
+            "start_source_byte": 405059,
+            "end_source_byte": 405163,
+            "kind": "anchor",
+            "marker_id": "decision-requested.review-outcome-iff-review-evidence"
+          },
+          {
+            "start_source_byte": 405164,
+            "end_source_byte": 405249,
+            "kind": "anchor",
+            "marker_id": "decision-requested.blocking-findings-sorted-and-duplicate-free"
+          },
+          {
+            "start_source_byte": 405250,
+            "end_source_byte": 405362,
+            "kind": "anchor",
+            "marker_id": "decision-requested.always-gate-no-blockers-has-empty-blocking-findings"
+          },
+          {
+            "start_source_byte": 405363,
+            "end_source_byte": 405461,
+            "kind": "anchor",
+            "marker_id": "decision-requested.amendment-blocking-preserves-requires-decision"
+          },
+          {
+            "start_source_byte": 405462,
+            "end_source_byte": 405536,
+            "kind": "anchor",
+            "marker_id": "decision-requested.blocking-controls-attempt-stop"
+          },
+          {
+            "start_source_byte": 405537,
+            "end_source_byte": 405610,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 405611,
+            "end_source_byte": 405699,
+            "kind": "anchor",
+            "marker_id": "decision-requested.finalization-is-draft-phase-and-blocking"
+          },
+          {
+            "start_source_byte": 405700,
+            "end_source_byte": 405740,
+            "kind": "anchor",
+            "marker_id": "decision-resolved.is-a-tagged-union"
+          },
+          {
+            "start_source_byte": 405741,
+            "end_source_byte": 405880,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 405881,
+            "end_source_byte": 405947,
+            "kind": "anchor",
+            "marker_id": "decision-resolved.decision-type-is-question-or-human-gate"
+          },
+          {
+            "start_source_byte": 405948,
+            "end_source_byte": 406118,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 406119,
+            "end_source_byte": 406227,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 406228,
+            "end_source_byte": 406312,
+            "kind": "non-normative"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
