@@ -24788,6 +24788,149 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
+        "ordinal": 33,
+        "start_source_line": 7342,
+        "end_source_line": 7376
+      },
+      "review_receipt": {
+        "source_sha256": "150f0d68abe1c56643fd2bf23e36d1aa22b9353c43a20e547e358e6eec5152af",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 531305,
+            "end_source_byte": 531351,
+            "kind": "anchor",
+            "marker_id": "edge-id.harness-selection-only"
+          },
+          {
+            "start_source_byte": 531353,
+            "end_source_byte": 531428,
+            "kind": "anchor",
+            "marker_id": "implementation.go-types-implement-e1-and-carry-e2-ids"
+          },
+          {
+            "start_source_byte": 531429,
+            "end_source_byte": 531590,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 531591,
+            "end_source_byte": 531674,
+            "kind": "anchor",
+            "marker_id": "implementation-comments.name-edges-and-do-not-paraphrase"
+          },
+          {
+            "start_source_byte": 531675,
+            "end_source_byte": 531714,
+            "kind": "anchor",
+            "marker_id": "edge-id.not-numbered-enum"
+          },
+          {
+            "start_source_byte": 531715,
+            "end_source_byte": 531775,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 531776,
+            "end_source_byte": 531882,
+            "kind": "anchor",
+            "marker_id": "harness.selects-edges-by-id-and-cites-owning-clause"
+          },
+          {
+            "start_source_byte": 531883,
+            "end_source_byte": 531996,
+            "kind": "anchor",
+            "marker_id": "harness.explicit-disposition-for-every-edge"
+          },
+          {
+            "start_source_byte": 531997,
+            "end_source_byte": 532088,
+            "kind": "anchor",
+            "marker_id": "harness.appendix-governs-disagreement"
+          },
+          {
+            "start_source_byte": 532089,
+            "end_source_byte": 532201,
+            "kind": "anchor",
+            "marker_id": "harness.uninjectable-edge-requires-appendix-revision"
+          },
+          {
+            "start_source_byte": 532202,
+            "end_source_byte": 532267,
+            "kind": "anchor",
+            "marker_id": "harness.may-not-reword-or-drop-uninjectable-seam"
+          },
+          {
+            "start_source_byte": 532269,
+            "end_source_byte": 532336,
+            "kind": "anchor",
+            "marker_id": "coverage.branch-expansion-not-inspection"
+          },
+          {
+            "start_source_byte": 532337,
+            "end_source_byte": 532406,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 532407,
+            "end_source_byte": 532436,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 532438,
+            "end_source_byte": 532728,
+            "kind": "anchor",
+            "marker_id": "coverage.expand-every-in-scope-branch"
+          },
+          {
+            "start_source_byte": 532729,
+            "end_source_byte": 532821,
+            "kind": "anchor",
+            "marker_id": "coverage.classifies-receipts-and-critical-ephemeral-points"
+          },
+          {
+            "start_source_byte": 532822,
+            "end_source_byte": 533021,
+            "kind": "anchor",
+            "marker_id": "coverage.reachable-crash-cuts-have-at-least-one-classification"
+          },
+          {
+            "start_source_byte": 533022,
+            "end_source_byte": 533205,
+            "kind": "anchor",
+            "marker_id": "coverage.crash-cut-invariants-may-overlap"
+          },
+          {
+            "start_source_byte": 533206,
+            "end_source_byte": 533294,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 533295,
+            "end_source_byte": 533473,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 533474,
+            "end_source_byte": 533619,
+            "kind": "anchor",
+            "marker_id": "coverage.mechanically-rejects-uncovered-cuts-and-zero-actions"
+          },
+          {
+            "start_source_byte": 533621,
+            "end_source_byte": 533849,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 533850,
+            "end_source_byte": 533993,
+            "kind": "non-normative"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
