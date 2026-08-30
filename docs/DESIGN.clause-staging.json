@@ -1,211 +1,211 @@
 {
   "document_path": "docs/DESIGN.md",
-  "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+  "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
   "nonblank_lines_per_region": 200,
   "region_universe": [
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 1,
       "start_source_line": 1,
       "end_source_line": 233
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 2,
       "start_source_line": 234,
       "end_source_line": 460
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 3,
       "start_source_line": 461,
       "end_source_line": 679
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 4,
       "start_source_line": 680,
       "end_source_line": 902
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 5,
       "start_source_line": 903,
       "end_source_line": 1148
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 6,
       "start_source_line": 1149,
       "end_source_line": 1362
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 7,
       "start_source_line": 1363,
       "end_source_line": 1597
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 8,
       "start_source_line": 1598,
       "end_source_line": 1831
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 9,
       "start_source_line": 1832,
       "end_source_line": 2060
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 10,
       "start_source_line": 2061,
       "end_source_line": 2293
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 11,
       "start_source_line": 2294,
       "end_source_line": 2527
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 12,
       "start_source_line": 2528,
       "end_source_line": 2754
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 13,
       "start_source_line": 2755,
       "end_source_line": 2981
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 14,
       "start_source_line": 2982,
       "end_source_line": 3208
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 15,
       "start_source_line": 3209,
       "end_source_line": 3440
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 16,
       "start_source_line": 3441,
       "end_source_line": 3665
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 17,
       "start_source_line": 3666,
       "end_source_line": 3896
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 18,
       "start_source_line": 3897,
       "end_source_line": 4129
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 19,
       "start_source_line": 4130,
       "end_source_line": 4361
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 20,
       "start_source_line": 4362,
       "end_source_line": 4587
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 21,
       "start_source_line": 4588,
       "end_source_line": 4825
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 22,
       "start_source_line": 4826,
       "end_source_line": 5055
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 23,
       "start_source_line": 5056,
       "end_source_line": 5295
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 24,
       "start_source_line": 5296,
       "end_source_line": 5514
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 25,
       "start_source_line": 5515,
       "end_source_line": 5729
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 26,
       "start_source_line": 5730,
       "end_source_line": 5945
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 27,
       "start_source_line": 5946,
       "end_source_line": 6154
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 28,
       "start_source_line": 6155,
       "end_source_line": 6375
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 29,
       "start_source_line": 6376,
-      "end_source_line": 6608
+      "end_source_line": 6609
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 30,
-      "start_source_line": 6609,
+      "start_source_line": 6610,
       "end_source_line": 6836
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 31,
       "start_source_line": 6837,
       "end_source_line": 7091
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 32,
       "start_source_line": 7092,
       "end_source_line": 7341
     },
     {
-      "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+      "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
       "ordinal": 33,
       "start_source_line": 7342,
-      "end_source_line": 7377
+      "end_source_line": 7376
     }
   ],
   "region_receipts": [
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 1,
         "start_source_line": 1,
         "end_source_line": 233
@@ -654,7 +654,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 2,
         "start_source_line": 234,
         "end_source_line": 460
@@ -1461,7 +1461,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 3,
         "start_source_line": 461,
         "end_source_line": 679
@@ -1968,7 +1968,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 4,
         "start_source_line": 680,
         "end_source_line": 902
@@ -2990,7 +2990,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 5,
         "start_source_line": 903,
         "end_source_line": 1148
@@ -4023,7 +4023,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 6,
         "start_source_line": 1149,
         "end_source_line": 1362
@@ -4797,7 +4797,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 7,
         "start_source_line": 1363,
         "end_source_line": 1597
@@ -5632,7 +5632,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 8,
         "start_source_line": 1598,
         "end_source_line": 1831
@@ -6598,7 +6598,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 9,
         "start_source_line": 1832,
         "end_source_line": 2060
@@ -7719,7 +7719,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 10,
         "start_source_line": 2061,
         "end_source_line": 2293
@@ -8657,7 +8657,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 11,
         "start_source_line": 2294,
         "end_source_line": 2527
@@ -9337,7 +9337,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 12,
         "start_source_line": 2528,
         "end_source_line": 2754
@@ -9940,7 +9940,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 13,
         "start_source_line": 2755,
         "end_source_line": 2981
@@ -10662,7 +10662,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 14,
         "start_source_line": 2982,
         "end_source_line": 3208
@@ -11408,7 +11408,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 15,
         "start_source_line": 3209,
         "end_source_line": 3440
@@ -12209,7 +12209,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 16,
         "start_source_line": 3441,
         "end_source_line": 3665
@@ -12865,7 +12865,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 17,
         "start_source_line": 3666,
         "end_source_line": 3896
@@ -13766,7 +13766,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 18,
         "start_source_line": 3897,
         "end_source_line": 4129
@@ -14519,7 +14519,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 19,
         "start_source_line": 4130,
         "end_source_line": 4361
@@ -15340,7 +15340,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 20,
         "start_source_line": 4362,
         "end_source_line": 4587
@@ -15994,7 +15994,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 21,
         "start_source_line": 4588,
         "end_source_line": 4825
@@ -16862,7 +16862,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 22,
         "start_source_line": 4826,
         "end_source_line": 5055
@@ -17520,7 +17520,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 23,
         "start_source_line": 5056,
         "end_source_line": 5295
@@ -18318,7 +18318,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 24,
         "start_source_line": 5296,
         "end_source_line": 5514
@@ -18859,7 +18859,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 25,
         "start_source_line": 5515,
         "end_source_line": 5729
@@ -19489,7 +19489,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 26,
         "start_source_line": 5730,
         "end_source_line": 5945
@@ -19945,7 +19945,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 27,
         "start_source_line": 5946,
         "end_source_line": 6154
@@ -20626,7 +20626,7 @@
     },
     {
       "key": {
-        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
         "ordinal": 28,
         "start_source_line": 6155,
         "end_source_line": 6375
