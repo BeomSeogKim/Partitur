@@ -218,7 +218,7 @@ func TestAppendixBRemainingDecomposition(t *testing.T) {
 		{
 			name: "B3", start: "## B.3 Evidence", end: "## B.4 Decisions",
 			carrierMarkers:     []string{"**B.3 field clauses.**"},
-			carrierHash:        "5424a1287ddc835ce03f1efbc9c50137082a3e4e3a0e86d7aaeb81dadc82be9d",
+			carrierHash:        "4b559489d713a1bb8582a0a76de21525a4749c38c1881165c9fefaa00b7902d0",
 			carrierAssignments: []int{1, 2, 1, 1, 2, 1, 3, 1, 1, 2, 3, 1, 1, 1, 1, 1, 2, 1, 3, 2, 1, 1, 1, 1, 2, 4, 1, 1, 2, 1, 2, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 3, 1, 2, 1, 1, 1, 2, 2},
 			payloads: []payloadExpectation{
 				{name: "artifact.recorded", hash: "0d682b3501197c4a049cec9fc22e066e25709c6db707e1b99443e38d9d0680df"},
