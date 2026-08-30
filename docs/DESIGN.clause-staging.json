@@ -18315,6 +18315,547 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "71326ccd969aaa8d3cbb1e182bf7bce5dcf8ce35",
+        "ordinal": 24,
+        "start_source_line": 5296,
+        "end_source_line": 5514
+      },
+      "review_receipt": {
+        "source_sha256": "eca0143ea2ab1f72723adb3b064173717bcfc1fde501b309e0a7291e983d6b98",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 371926,
+            "end_source_byte": 371976,
+            "kind": "anchor",
+            "marker_id": "run-succeeded.candidate-composition-dependency-hash-tagged-projection"
+          },
+          {
+            "start_source_byte": 371977,
+            "end_source_byte": 372076,
+            "kind": "anchor",
+            "marker_id": "run-succeeded.candidate-composition-environment-hash-domain"
+          },
+          {
+            "start_source_byte": 372077,
+            "end_source_byte": 372232,
+            "kind": "anchor",
+            "marker_id": "run-succeeded.candidate-composition-environment-hash-branch-condition"
+          },
+          {
+            "start_source_byte": 372233,
+            "end_source_byte": 372303,
+            "kind": "anchor",
+            "marker_id": "run-succeeded.waiver-reason-records-apply-gate"
+          },
+          {
+            "start_source_byte": 372304,
+            "end_source_byte": 372477,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 372478,
+            "end_source_byte": 372528,
+            "kind": "anchor",
+            "marker_id": "run-failed.reason-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 372529,
+            "end_source_byte": 372620,
+            "kind": "anchor",
+            "marker_id": "run-cancelled.cancelled-movement-ids-sorted-and-complete"
+          },
+          {
+            "start_source_byte": 372621,
+            "end_source_byte": 372710,
+            "kind": "anchor",
+            "marker_id": "run-cancelled.cancelled-attempt-ids-sorted-and-complete"
+          },
+          {
+            "start_source_byte": 372711,
+            "end_source_byte": 372822,
+            "kind": "anchor",
+            "marker_id": "run-cancelled.obsoleted-decision-ids-sorted-and-source"
+          },
+          {
+            "start_source_byte": 372823,
+            "end_source_byte": 372919,
+            "kind": "anchor",
+            "marker_id": "run-cancelled.fenced-epoch-present-for-wedged-driver"
+          },
+          {
+            "start_source_byte": 372920,
+            "end_source_byte": 373003,
+            "kind": "anchor",
+            "marker_id": "run-cancelled.fenced-epoch-is-moved-authority-epoch"
+          },
+          {
+            "start_source_byte": 373004,
+            "end_source_byte": 373101,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 373102,
+            "end_source_byte": 373191,
+            "kind": "anchor",
+            "marker_id": "run-cancelled.fencing-and-terminalization-are-one-event"
+          },
+          {
+            "start_source_byte": 373192,
+            "end_source_byte": 373265,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 373266,
+            "end_source_byte": 373341,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 373342,
+            "end_source_byte": 373406,
+            "kind": "anchor",
+            "marker_id": "movement-succeeded.approved-artifact-instance-ids-sorted"
+          },
+          {
+            "start_source_byte": 373407,
+            "end_source_byte": 373519,
+            "kind": "anchor",
+            "marker_id": "movement-succeeded.approved-change-set-id-iff-repo-write"
+          },
+          {
+            "start_source_byte": 373520,
+            "end_source_byte": 373626,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 373627,
+            "end_source_byte": 373762,
+            "kind": "anchor",
+            "marker_id": "movement-succeeded.run-succeeded-is-final-movement-transition"
+          },
+          {
+            "start_source_byte": 373763,
+            "end_source_byte": 373818,
+            "kind": "anchor",
+            "marker_id": "movement-failed.reason-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 373819,
+            "end_source_byte": 373909,
+            "kind": "anchor",
+            "marker_id": "movement-failed.decision-id-iff-human-gate-rejected"
+          },
+          {
+            "start_source_byte": 373910,
+            "end_source_byte": 374001,
+            "kind": "anchor",
+            "marker_id": "movement-failed.subject-tree-iff-human-gate-rejected"
+          },
+          {
+            "start_source_byte": 374002,
+            "end_source_byte": 374107,
+            "kind": "anchor",
+            "marker_id": "movement-failed.run-failed-iff-run-transition"
+          },
+          {
+            "start_source_byte": 374108,
+            "end_source_byte": 374248,
+            "kind": "anchor",
+            "marker_id": "movement-failed.run-failed-only-final-human-gate-rejection"
+          },
+          {
+            "start_source_byte": 374249,
+            "end_source_byte": 374387,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 374388,
+            "end_source_byte": 374440,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 374442,
+            "end_source_byte": 374572,
+            "kind": "anchor",
+            "marker_id": "run-started.payload-shape"
+          },
+          {
+            "start_source_byte": 374574,
+            "end_source_byte": 374874,
+            "kind": "anchor",
+            "marker_id": "run-succeeded.payload-shape"
+          },
+          {
+            "start_source_byte": 374876,
+            "end_source_byte": 374909,
+            "kind": "anchor",
+            "marker_id": "run-failed.payload-shape"
+          },
+          {
+            "start_source_byte": 374911,
+            "end_source_byte": 375077,
+            "kind": "anchor",
+            "marker_id": "run-cancelled.payload-shape"
+          },
+          {
+            "start_source_byte": 375079,
+            "end_source_byte": 375108,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 375110,
+            "end_source_byte": 375141,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 375143,
+            "end_source_byte": 375305,
+            "kind": "anchor",
+            "marker_id": "movement-succeeded.payload-shape"
+          },
+          {
+            "start_source_byte": 375307,
+            "end_source_byte": 375400,
+            "kind": "anchor",
+            "marker_id": "movement-failed.payload-shape"
+          },
+          {
+            "start_source_byte": 375402,
+            "end_source_byte": 375435,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 375437,
+            "end_source_byte": 375485,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 375487,
+            "end_source_byte": 375546,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 375547,
+            "end_source_byte": 375568,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 375569,
+            "end_source_byte": 376190,
+            "kind": "anchor",
+            "marker_id": "event-type.performer-selected"
+          },
+          {
+            "start_source_byte": 376191,
+            "end_source_byte": 376370,
+            "kind": "anchor",
+            "marker_id": "event-type.attempt-started"
+          },
+          {
+            "start_source_byte": 376371,
+            "end_source_byte": 376725,
+            "kind": "anchor",
+            "marker_id": "event-type.adapter-probed"
+          },
+          {
+            "start_source_byte": 376726,
+            "end_source_byte": 377013,
+            "kind": "anchor",
+            "marker_id": "event-type.performer-completed"
+          },
+          {
+            "start_source_byte": 377014,
+            "end_source_byte": 377132,
+            "kind": "anchor",
+            "marker_id": "event-type.attempt-completed"
+          },
+          {
+            "start_source_byte": 377133,
+            "end_source_byte": 377286,
+            "kind": "anchor",
+            "marker_id": "event-type.attempt-blocked"
+          },
+          {
+            "start_source_byte": 377287,
+            "end_source_byte": 377674,
+            "kind": "anchor",
+            "marker_id": "event-type.attempt-failed"
+          },
+          {
+            "start_source_byte": 377675,
+            "end_source_byte": 377843,
+            "kind": "anchor",
+            "marker_id": "event-type.attempt-cancelled"
+          },
+          {
+            "start_source_byte": 377844,
+            "end_source_byte": 377991,
+            "kind": "anchor",
+            "marker_id": "event-type.attempt-superseded"
+          },
+          {
+            "start_source_byte": 377992,
+            "end_source_byte": 378248,
+            "kind": "anchor",
+            "marker_id": "event-type.execution-started"
+          },
+          {
+            "start_source_byte": 378249,
+            "end_source_byte": 378882,
+            "kind": "anchor",
+            "marker_id": "event-type.execution-stopped"
+          },
+          {
+            "start_source_byte": 378884,
+            "end_source_byte": 378897,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 378899,
+            "end_source_byte": 378959,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 378960,
+            "end_source_byte": 379050,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 379052,
+            "end_source_byte": 379194,
+            "kind": "anchor",
+            "marker_id": "performer-selected.reason-is-closed"
+          },
+          {
+            "start_source_byte": 379195,
+            "end_source_byte": 379238,
+            "kind": "anchor",
+            "marker_id": "performer-selected.has-no-budget-field"
+          },
+          {
+            "start_source_byte": 379239,
+            "end_source_byte": 379340,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 379341,
+            "end_source_byte": 379477,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.adapter-version-from-current-gated-peer"
+          },
+          {
+            "start_source_byte": 379478,
+            "end_source_byte": 379536,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.capabilities-are-boolean"
+          },
+          {
+            "start_source_byte": 379537,
+            "end_source_byte": 379642,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.capabilities-exclude-models"
+          },
+          {
+            "start_source_byte": 379643,
+            "end_source_byte": 379710,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.enforcement-from-current-gated-peer"
+          },
+          {
+            "start_source_byte": 379711,
+            "end_source_byte": 379768,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.enforcement-is-boolean"
+          },
+          {
+            "start_source_byte": 379769,
+            "end_source_byte": 379818,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.negotiated-features-sorted"
+          },
+          {
+            "start_source_byte": 379819,
+            "end_source_byte": 379905,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.negotiated-features-empty-in-v02"
+          },
+          {
+            "start_source_byte": 379906,
+            "end_source_byte": 380065,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 380066,
+            "end_source_byte": 380179,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.truncated-resolutions-sorted-and-complete"
+          },
+          {
+            "start_source_byte": 380180,
+            "end_source_byte": 380286,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.delivered-resolutions-ordered-and-present"
+          },
+          {
+            "start_source_byte": 380287,
+            "end_source_byte": 380429,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 380430,
+            "end_source_byte": 380570,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.delivered-feedback-sorted-and-present"
+          },
+          {
+            "start_source_byte": 380571,
+            "end_source_byte": 380698,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 380699,
+            "end_source_byte": 380815,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.advisory-dimensions-sorted-and-recorded"
+          },
+          {
+            "start_source_byte": 380816,
+            "end_source_byte": 380920,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.execution-dependency-hash-is-exact-request-identity"
+          },
+          {
+            "start_source_byte": 380922,
+            "end_source_byte": 381000,
+            "kind": "anchor",
+            "marker_id": "performer-selected.payload-shape"
+          },
+          {
+            "start_source_byte": 381002,
+            "end_source_byte": 381547,
+            "kind": "anchor",
+            "marker_id": "adapter-probed.payload-shape"
+          },
+          {
+            "start_source_byte": 381549,
+            "end_source_byte": 381585,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 381586,
+            "end_source_byte": 381673,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 381675,
+            "end_source_byte": 381746,
+            "kind": "anchor",
+            "marker_id": "attempt-started.attempt-number-is-per-movement-display-ordinal"
+          },
+          {
+            "start_source_byte": 381747,
+            "end_source_byte": 381820,
+            "kind": "anchor",
+            "marker_id": "attempt-started.attempt-number-is-not-attempt-id"
+          },
+          {
+            "start_source_byte": 381821,
+            "end_source_byte": 381910,
+            "kind": "anchor",
+            "marker_id": "attempt-started.adapter-process-recorded-before-gate-release"
+          },
+          {
+            "start_source_byte": 381911,
+            "end_source_byte": 382023,
+            "kind": "anchor",
+            "marker_id": "attempt-started.unrecorded-adapter-process-cannot-execute"
+          },
+          {
+            "start_source_byte": 382024,
+            "end_source_byte": 382116,
+            "kind": "anchor",
+            "marker_id": "attempt-started.adapter-process-session-id-equals-pid"
+          },
+          {
+            "start_source_byte": 382117,
+            "end_source_byte": 382202,
+            "kind": "anchor",
+            "marker_id": "attempt-started.adapter-process-is-session-leader"
+          },
+          {
+            "start_source_byte": 382203,
+            "end_source_byte": 382272,
+            "kind": "anchor",
+            "marker_id": "attempt-started.adapter-process-omits-pgid"
+          },
+          {
+            "start_source_byte": 382273,
+            "end_source_byte": 382359,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 382360,
+            "end_source_byte": 382454,
+            "kind": "anchor",
+            "marker_id": "attempt-started.base-composition-hash-is-dependency-hash"
+          },
+          {
+            "start_source_byte": 382455,
+            "end_source_byte": 382553,
+            "kind": "anchor",
+            "marker_id": "attempt-started.base-composition-hash-iff-dependencies"
+          },
+          {
+            "start_source_byte": 382554,
+            "end_source_byte": 382650,
+            "kind": "anchor",
+            "marker_id": "attempt-started.base-composition-hash-is-journaled"
+          },
+          {
+            "start_source_byte": 382651,
+            "end_source_byte": 382726,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 382727,
+            "end_source_byte": 382815,
+            "kind": "anchor",
+            "marker_id": "attempt-started.zero-contributor-dependencies-use-identity-mode"
+          },
+          {
+            "start_source_byte": 382816,
+            "end_source_byte": 382932,
+            "kind": "anchor",
+            "marker_id": "attempt-started.review-subject-input-iff-review-criterion"
+          },
+          {
+            "start_source_byte": 382933,
+            "end_source_byte": 383072,
+            "kind": "anchor",
+            "marker_id": "attempt-started.review-subject-input-is-raw-byte-commitment"
+          },
+          {
+            "start_source_byte": 383073,
+            "end_source_byte": 383173,
+            "kind": "anchor",
+            "marker_id": "attempt-started.review-subject-input-path-is-derived-and-untrusted"
+          },
+          {
+            "start_source_byte": 383174,
+            "end_source_byte": 383255,
+            "kind": "anchor",
+            "marker_id": "attempt-started.granted-authority-is-wire-grants"
+          },
+          {
+            "start_source_byte": 383257,
+            "end_source_byte": 383420,
+            "kind": "anchor",
+            "marker_id": "attempt-started.payload-shape"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
