@@ -18856,6 +18856,636 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "f85e973078099af5e4a36baaa95751192c90a0ec",
+        "ordinal": 25,
+        "start_source_line": 5515,
+        "end_source_line": 5729
+      },
+      "review_receipt": {
+        "source_sha256": "4bd08b02201cee12af40a61673582b329b85c69090f5c1935a1562bc52b97f93",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 383420,
+            "end_source_byte": 383685,
+            "kind": "anchor",
+            "marker_id": "attempt-started.payload-shape"
+          },
+          {
+            "start_source_byte": 383687,
+            "end_source_byte": 383719,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 383720,
+            "end_source_byte": 383810,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 383812,
+            "end_source_byte": 383885,
+            "kind": "anchor",
+            "marker_id": "performer-completed.appended-only-for-completed-outcome"
+          },
+          {
+            "start_source_byte": 383886,
+            "end_source_byte": 383972,
+            "kind": "anchor",
+            "marker_id": "performer-completed.session-hint-stored-records-retention"
+          },
+          {
+            "start_source_byte": 383973,
+            "end_source_byte": 384043,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 384044,
+            "end_source_byte": 384150,
+            "kind": "anchor",
+            "marker_id": "adapter-outcome.mapping-follows-cleanup-and-interval-close"
+          },
+          {
+            "start_source_byte": 384151,
+            "end_source_byte": 384264,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 384265,
+            "end_source_byte": 384377,
+            "kind": "anchor",
+            "marker_id": "adapter-outcome.completed-maps-to-performer-completed"
+          },
+          {
+            "start_source_byte": 384378,
+            "end_source_byte": 384497,
+            "kind": "anchor",
+            "marker_id": "adapter-outcome.waiting-human-maps-to-attempt-blocked"
+          },
+          {
+            "start_source_byte": 384498,
+            "end_source_byte": 384589,
+            "kind": "anchor",
+            "marker_id": "adapter-outcome.failed-maps-to-attempt-failed"
+          },
+          {
+            "start_source_byte": 384590,
+            "end_source_byte": 384732,
+            "kind": "anchor",
+            "marker_id": "adapter-outcome.cancelled-maps-to-attempt-cancelled"
+          },
+          {
+            "start_source_byte": 384733,
+            "end_source_byte": 384883,
+            "kind": "anchor",
+            "marker_id": "adapter-outcome.cancelled-maps-to-attempt-superseded"
+          },
+          {
+            "start_source_byte": 384884,
+            "end_source_byte": 384980,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 384981,
+            "end_source_byte": 385112,
+            "kind": "anchor",
+            "marker_id": "adapter-outcome.unsolicited-cancel-maps-to-task-failed"
+          },
+          {
+            "start_source_byte": 385113,
+            "end_source_byte": 385232,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 385233,
+            "end_source_byte": 385320,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 385321,
+            "end_source_byte": 385383,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.is-question-request-source"
+          },
+          {
+            "start_source_byte": 385384,
+            "end_source_byte": 385472,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 385473,
+            "end_source_byte": 385543,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 385544,
+            "end_source_byte": 385600,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.raised-preserves-wire-arrival-order"
+          },
+          {
+            "start_source_byte": 385601,
+            "end_source_byte": 385661,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.raised-decision-ids-are-unique"
+          },
+          {
+            "start_source_byte": 385662,
+            "end_source_byte": 385730,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.raised-is-complete-with-content"
+          },
+          {
+            "start_source_byte": 385731,
+            "end_source_byte": 385836,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.route-required-for-passed-blocking-proposal"
+          },
+          {
+            "start_source_byte": 385837,
+            "end_source_byte": 386038,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.route-is-frozen-routed-human-payload"
+          },
+          {
+            "start_source_byte": 386039,
+            "end_source_byte": 386111,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.route-absent-for-step-1-9-rejection"
+          },
+          {
+            "start_source_byte": 386112,
+            "end_source_byte": 386236,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.route-absent-for-nonblocking-proposal"
+          },
+          {
+            "start_source_byte": 386237,
+            "end_source_byte": 386348,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.route-never-authorizes-decision-requested"
+          },
+          {
+            "start_source_byte": 386349,
+            "end_source_byte": 386408,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.has-no-event-identity-versions"
+          },
+          {
+            "start_source_byte": 386409,
+            "end_source_byte": 386570,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.route-identity-versions-are-frozen-evaluation-tuple"
+          },
+          {
+            "start_source_byte": 386571,
+            "end_source_byte": 386622,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.pending-decision-ids-sorted"
+          },
+          {
+            "start_source_byte": 386623,
+            "end_source_byte": 386730,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.pending-decision-ids-equal-blocking-raised-ids"
+          },
+          {
+            "start_source_byte": 386731,
+            "end_source_byte": 386832,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 386833,
+            "end_source_byte": 386949,
+            "kind": "anchor",
+            "marker_id": "attempt-failed.kind-is-adapter-or-budget-exhausted"
+          },
+          {
+            "start_source_byte": 386950,
+            "end_source_byte": 387093,
+            "kind": "anchor",
+            "marker_id": "attempt-failed.reason-is-optional-subreason"
+          },
+          {
+            "start_source_byte": 387094,
+            "end_source_byte": 387143,
+            "kind": "anchor",
+            "marker_id": "attempt-failed.detail-is-sanitized"
+          },
+          {
+            "start_source_byte": 387144,
+            "end_source_byte": 387228,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 387229,
+            "end_source_byte": 387280,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 387281,
+            "end_source_byte": 387338,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 387339,
+            "end_source_byte": 387442,
+            "kind": "anchor",
+            "marker_id": "execution-started.interval-id-is-unique-per-interval"
+          },
+          {
+            "start_source_byte": 387443,
+            "end_source_byte": 387516,
+            "kind": "anchor",
+            "marker_id": "execution-started.phase-is-closed-set"
+          },
+          {
+            "start_source_byte": 387517,
+            "end_source_byte": 387596,
+            "kind": "anchor",
+            "marker_id": "execution-started.wall-start-is-rfc3339-milliseconds-utc"
+          },
+          {
+            "start_source_byte": 387597,
+            "end_source_byte": 387704,
+            "kind": "anchor",
+            "marker_id": "execution-started.remaining-at-start-is-integer-milliseconds"
+          },
+          {
+            "start_source_byte": 387705,
+            "end_source_byte": 387811,
+            "kind": "anchor",
+            "marker_id": "execution-stopped.reason-is-closed-set"
+          },
+          {
+            "start_source_byte": 387812,
+            "end_source_byte": 387896,
+            "kind": "anchor",
+            "marker_id": "execution-stopped.charging-is-measured-or-clamped"
+          },
+          {
+            "start_source_byte": 387897,
+            "end_source_byte": 388056,
+            "kind": "anchor",
+            "marker_id": "execution-stopped.charged-duration-is-opener-clock-or-recovery-clamp"
+          },
+          {
+            "start_source_byte": 388057,
+            "end_source_byte": 388139,
+            "kind": "anchor",
+            "marker_id": "execution-stopped.observed-at-iff-clamped"
+          },
+          {
+            "start_source_byte": 388140,
+            "end_source_byte": 388252,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 388254,
+            "end_source_byte": 388317,
+            "kind": "anchor",
+            "marker_id": "performer-completed.payload-shape"
+          },
+          {
+            "start_source_byte": 388319,
+            "end_source_byte": 388351,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 388353,
+            "end_source_byte": 388802,
+            "kind": "anchor",
+            "marker_id": "attempt-blocked.payload-shape"
+          },
+          {
+            "start_source_byte": 388804,
+            "end_source_byte": 388878,
+            "kind": "anchor",
+            "marker_id": "attempt-failed.payload-shape"
+          },
+          {
+            "start_source_byte": 388880,
+            "end_source_byte": 388912,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 388914,
+            "end_source_byte": 388947,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 388949,
+            "end_source_byte": 389041,
+            "kind": "anchor",
+            "marker_id": "execution-started.payload-shape"
+          },
+          {
+            "start_source_byte": 389043,
+            "end_source_byte": 389148,
+            "kind": "anchor",
+            "marker_id": "execution-stopped.payload-shape"
+          },
+          {
+            "start_source_byte": 389150,
+            "end_source_byte": 389165,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 389167,
+            "end_source_byte": 389226,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 389227,
+            "end_source_byte": 389248,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 389249,
+            "end_source_byte": 389772,
+            "kind": "anchor",
+            "marker_id": "event-type.artifact-recorded"
+          },
+          {
+            "start_source_byte": 389773,
+            "end_source_byte": 389953,
+            "kind": "anchor",
+            "marker_id": "event-type.change-set-recorded"
+          },
+          {
+            "start_source_byte": 389954,
+            "end_source_byte": 390440,
+            "kind": "anchor",
+            "marker_id": "event-type.verification-passed"
+          },
+          {
+            "start_source_byte": 390441,
+            "end_source_byte": 391343,
+            "kind": "anchor",
+            "marker_id": "event-type.composition-conflicted"
+          },
+          {
+            "start_source_byte": 391344,
+            "end_source_byte": 392151,
+            "kind": "anchor",
+            "marker_id": "event-type.composition-failed"
+          },
+          {
+            "start_source_byte": 392152,
+            "end_source_byte": 392319,
+            "kind": "anchor",
+            "marker_id": "event-type.application-candidate-recorded"
+          },
+          {
+            "start_source_byte": 392320,
+            "end_source_byte": 392465,
+            "kind": "anchor",
+            "marker_id": "event-type.acceptance-started"
+          },
+          {
+            "start_source_byte": 392466,
+            "end_source_byte": 392613,
+            "kind": "anchor",
+            "marker_id": "event-type.criterion-started"
+          },
+          {
+            "start_source_byte": 392614,
+            "end_source_byte": 392742,
+            "kind": "anchor",
+            "marker_id": "event-type.criterion-completed"
+          },
+          {
+            "start_source_byte": 392743,
+            "end_source_byte": 393285,
+            "kind": "anchor",
+            "marker_id": "event-type.acceptance-failed"
+          },
+          {
+            "start_source_byte": 393286,
+            "end_source_byte": 393413,
+            "kind": "anchor",
+            "marker_id": "event-type.acceptance-evaluation-completed"
+          },
+          {
+            "start_source_byte": 393415,
+            "end_source_byte": 393428,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 393430,
+            "end_source_byte": 393452,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 393453,
+            "end_source_byte": 393543,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 393545,
+            "end_source_byte": 393638,
+            "kind": "anchor",
+            "marker_id": "artifact-recorded.content-hash-is-immutable-raw-bytes"
+          },
+          {
+            "start_source_byte": 393639,
+            "end_source_byte": 393742,
+            "kind": "anchor",
+            "marker_id": "artifact-recorded.source-path-is-announced-provenance"
+          },
+          {
+            "start_source_byte": 393743,
+            "end_source_byte": 393810,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 393811,
+            "end_source_byte": 393885,
+            "kind": "anchor",
+            "marker_id": "change-set-recorded.change-set-id-is-identity"
+          },
+          {
+            "start_source_byte": 393886,
+            "end_source_byte": 394016,
+            "kind": "anchor",
+            "marker_id": "change-set-recorded.trees-are-git-native-and-noop-equal"
+          },
+          {
+            "start_source_byte": 394017,
+            "end_source_byte": 394084,
+            "kind": "anchor",
+            "marker_id": "change-set-recorded.commit-is-git-checkpoint"
+          },
+          {
+            "start_source_byte": 394085,
+            "end_source_byte": 394171,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 394172,
+            "end_source_byte": 394267,
+            "kind": "anchor",
+            "marker_id": "change-set-recorded.ref-is-pinning-ref"
+          },
+          {
+            "start_source_byte": 394268,
+            "end_source_byte": 394323,
+            "kind": "anchor",
+            "marker_id": "verification-passed.attests-full-section-5-invariant"
+          },
+          {
+            "start_source_byte": 394324,
+            "end_source_byte": 394464,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 394465,
+            "end_source_byte": 394587,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 394588,
+            "end_source_byte": 394660,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 394661,
+            "end_source_byte": 394723,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.scope-is-closed"
+          },
+          {
+            "start_source_byte": 394724,
+            "end_source_byte": 394802,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.target-id-is-movement-id-for-movement-scope"
+          },
+          {
+            "start_source_byte": 394803,
+            "end_source_byte": 394946,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.target-id-is-run-id-for-candidate-scope"
+          },
+          {
+            "start_source_byte": 394947,
+            "end_source_byte": 395082,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.subject-hash-domain-and-idempotency-component"
+          },
+          {
+            "start_source_byte": 395083,
+            "end_source_byte": 395228,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.subject-hash-is-not-dependency-hash"
+          },
+          {
+            "start_source_byte": 395229,
+            "end_source_byte": 395382,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 395383,
+            "end_source_byte": 395451,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.contributors-preserve-composition-order"
+          },
+          {
+            "start_source_byte": 395452,
+            "end_source_byte": 395506,
+            "kind": "anchor",
+            "marker_id": "composition-conflicted.conflicted-paths-sorted"
+          },
+          {
+            "start_source_byte": 395507,
+            "end_source_byte": 395575,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 395576,
+            "end_source_byte": 395693,
+            "kind": "anchor",
+            "marker_id": "composition-failed.scope-is-closed"
+          },
+          {
+            "start_source_byte": 395694,
+            "end_source_byte": 395804,
+            "kind": "anchor",
+            "marker_id": "composition-failed.target-id-has-scope-dependent-meaning"
+          },
+          {
+            "start_source_byte": 395805,
+            "end_source_byte": 395948,
+            "kind": "anchor",
+            "marker_id": "composition-failed.subject-hash-is-composition-subject-identity"
+          },
+          {
+            "start_source_byte": 395949,
+            "end_source_byte": 396088,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 396089,
+            "end_source_byte": 396146,
+            "kind": "anchor",
+            "marker_id": "composition-failed.cause-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 396147,
+            "end_source_byte": 396305,
+            "kind": "anchor",
+            "marker_id": "composition-failed.git-exit-code-iff-merge-exited"
+          },
+          {
+            "start_source_byte": 396306,
+            "end_source_byte": 396399,
+            "kind": "anchor",
+            "marker_id": "composition-failed.git-exit-code-absent-for-git-signalled"
+          },
+          {
+            "start_source_byte": 396400,
+            "end_source_byte": 396511,
+            "kind": "anchor",
+            "marker_id": "composition-failed.git-exit-code-absent-before-merge"
+          },
+          {
+            "start_source_byte": 396512,
+            "end_source_byte": 396628,
+            "kind": "anchor",
+            "marker_id": "composition-failed.diagnostic-is-sanitized-and-truncated"
+          },
+          {
+            "start_source_byte": 396629,
+            "end_source_byte": 396784,
+            "kind": "anchor",
+            "marker_id": "composition-failed.diagnostic-is-evidence-not-channel"
+          },
+          {
+            "start_source_byte": 396785,
+            "end_source_byte": 396877,
+            "kind": "anchor",
+            "marker_id": "composition-failed.contributors-preserve-composition-order"
+          },
+          {
+            "start_source_byte": 396878,
+            "end_source_byte": 396961,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.candidate-id-is-identity"
+          },
+          {
+            "start_source_byte": 396962,
+            "end_source_byte": 397064,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.ordered-change-sets-content-deduplicated"
+          },
+          {
+            "start_source_byte": 397065,
+            "end_source_byte": 397161,
+            "kind": "anchor",
+            "marker_id": "application-candidate-recorded.contributors-preserve-pre-dedup-order"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
