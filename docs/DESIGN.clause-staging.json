@@ -20928,6 +20928,816 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
+        "ordinal": 29,
+        "start_source_line": 6376,
+        "end_source_line": 6609
+      },
+      "review_receipt": {
+        "source_sha256": "7406e410f08fe8b4ac772e10856d76a69561bf57242b0f33171d120f4f002328",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 428635,
+            "end_source_byte": 428757,
+            "kind": "anchor",
+            "marker_id": "event-type.journal-tail-truncated"
+          },
+          {
+            "start_source_byte": 428758,
+            "end_source_byte": 428829,
+            "kind": "anchor",
+            "marker_id": "event-type.log"
+          },
+          {
+            "start_source_byte": 428830,
+            "end_source_byte": 428886,
+            "kind": "anchor",
+            "marker_id": "event-type.progress"
+          },
+          {
+            "start_source_byte": 428888,
+            "end_source_byte": 428901,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 428903,
+            "end_source_byte": 428925,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 428926,
+            "end_source_byte": 429016,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 429018,
+            "end_source_byte": 429083,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 429084,
+            "end_source_byte": 429203,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 429204,
+            "end_source_byte": 429287,
+            "kind": "anchor",
+            "marker_id": "authority-granted.owner-start-identity-is-tagged-union"
+          },
+          {
+            "start_source_byte": 429288,
+            "end_source_byte": 429394,
+            "kind": "anchor",
+            "marker_id": "authority-granted.owner-start-identity-comparison-replayable"
+          },
+          {
+            "start_source_byte": 429395,
+            "end_source_byte": 429478,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 429479,
+            "end_source_byte": 429564,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 429565,
+            "end_source_byte": 429659,
+            "kind": "anchor",
+            "marker_id": "authority-granted.reclaimed-from-epoch-present-for-stale-lease"
+          },
+          {
+            "start_source_byte": 429660,
+            "end_source_byte": 429723,
+            "kind": "anchor",
+            "marker_id": "authority-granted.incarnation-token-omitted"
+          },
+          {
+            "start_source_byte": 429724,
+            "end_source_byte": 429810,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 429811,
+            "end_source_byte": 429879,
+            "kind": "anchor",
+            "marker_id": "cancel-requested.requested-by-is-cli"
+          },
+          {
+            "start_source_byte": 429880,
+            "end_source_byte": 429926,
+            "kind": "anchor",
+            "marker_id": "cancel-requested.no-other-origin-in-v02"
+          },
+          {
+            "start_source_byte": 429927,
+            "end_source_byte": 429999,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 430000,
+            "end_source_byte": 430105,
+            "kind": "anchor",
+            "marker_id": "journal-tail-truncated.truncated-seq-is-discarded-line-seq"
+          },
+          {
+            "start_source_byte": 430106,
+            "end_source_byte": 430183,
+            "kind": "anchor",
+            "marker_id": "journal-tail-truncated.discarded-bytes-is-length-only"
+          },
+          {
+            "start_source_byte": 430184,
+            "end_source_byte": 430357,
+            "kind": "anchor",
+            "marker_id": "journal-tail-truncated.discarded-bytes-not-retained"
+          },
+          {
+            "start_source_byte": 430358,
+            "end_source_byte": 430468,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 430469,
+            "end_source_byte": 430584,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 430586,
+            "end_source_byte": 430809,
+            "kind": "anchor",
+            "marker_id": "authority-granted.payload-shape"
+          },
+          {
+            "start_source_byte": 430811,
+            "end_source_byte": 430858,
+            "kind": "anchor",
+            "marker_id": "cancel-requested.payload-shape"
+          },
+          {
+            "start_source_byte": 430860,
+            "end_source_byte": 430933,
+            "kind": "anchor",
+            "marker_id": "journal-tail-truncated.payload-shape"
+          },
+          {
+            "start_source_byte": 430935,
+            "end_source_byte": 430969,
+            "kind": "anchor",
+            "marker_id": "log.payload-shape"
+          },
+          {
+            "start_source_byte": 430971,
+            "end_source_byte": 431003,
+            "kind": "anchor",
+            "marker_id": "progress.payload-shape"
+          },
+          {
+            "start_source_byte": 431005,
+            "end_source_byte": 431159,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 431161,
+            "end_source_byte": 431205,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 431206,
+            "end_source_byte": 431294,
+            "kind": "anchor",
+            "marker_id": "recovery-halt.never-journaled"
+          },
+          {
+            "start_source_byte": 431295,
+            "end_source_byte": 431503,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 431504,
+            "end_source_byte": 431588,
+            "kind": "anchor",
+            "marker_id": "recovery-halt.reported-via-command-output-exit5-not-log"
+          },
+          {
+            "start_source_byte": 431590,
+            "end_source_byte": 431593,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 431595,
+            "end_source_byte": 431620,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 431622,
+            "end_source_byte": 431632,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 431633,
+            "end_source_byte": 431739,
+            "kind": "anchor",
+            "marker_id": "recovery.replay-rebuild-resume-from-last-durable-state"
+          },
+          {
+            "start_source_byte": 431740,
+            "end_source_byte": 431868,
+            "kind": "anchor",
+            "marker_id": "recovery.selection-is-top-down-first-match"
+          },
+          {
+            "start_source_byte": 431870,
+            "end_source_byte": 431916,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 431918,
+            "end_source_byte": 431998,
+            "kind": "anchor",
+            "marker_id": "recovery-totality.indexed-by-surface-not-durable-state-alone"
+          },
+          {
+            "start_source_byte": 432000,
+            "end_source_byte": 432147,
+            "kind": "anchor",
+            "marker_id": "recovery-totality.exactly-one-action-or-halt"
+          },
+          {
+            "start_source_byte": 432149,
+            "end_source_byte": 432272,
+            "kind": "anchor",
+            "marker_id": "recovery-totality.surface-is-selection-input"
+          },
+          {
+            "start_source_byte": 432273,
+            "end_source_byte": 432441,
+            "kind": "anchor",
+            "marker_id": "recovery-totality.same-journal-can-select-surface-specific-actions"
+          },
+          {
+            "start_source_byte": 432443,
+            "end_source_byte": 432510,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 432511,
+            "end_source_byte": 432524,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 432525,
+            "end_source_byte": 432711,
+            "kind": "anchor",
+            "marker_id": "recovery-surface.resume-owns-run-projections"
+          },
+          {
+            "start_source_byte": 432712,
+            "end_source_byte": 432802,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 432803,
+            "end_source_byte": 432903,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 432905,
+            "end_source_byte": 432942,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 432943,
+            "end_source_byte": 432996,
+            "kind": "anchor",
+            "marker_id": "recovery-case.stable-identifier-per-selectable-case"
+          },
+          {
+            "start_source_byte": 432997,
+            "end_source_byte": 433040,
+            "kind": "anchor",
+            "marker_id": "recovery-case.identifier-survives-row-moves-and-rewrites"
+          },
+          {
+            "start_source_byte": 433041,
+            "end_source_byte": 433224,
+            "kind": "anchor",
+            "marker_id": "recovery-case.retired-identifier-tombstoned-never-reused"
+          },
+          {
+            "start_source_byte": 433225,
+            "end_source_byte": 433395,
+            "kind": "anchor",
+            "marker_id": "recovery-case.open-is-not-action-and-does-not-satisfy-totality"
+          },
+          {
+            "start_source_byte": 433397,
+            "end_source_byte": 433531,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 433533,
+            "end_source_byte": 433583,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 433584,
+            "end_source_byte": 433597,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 433598,
+            "end_source_byte": 433690,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 433691,
+            "end_source_byte": 433779,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 433780,
+            "end_source_byte": 433883,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 433884,
+            "end_source_byte": 433982,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 433984,
+            "end_source_byte": 434120,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434121,
+            "end_source_byte": 434225,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434227,
+            "end_source_byte": 434267,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434268,
+            "end_source_byte": 434277,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434278,
+            "end_source_byte": 434363,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434364,
+            "end_source_byte": 434573,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434574,
+            "end_source_byte": 434650,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434652,
+            "end_source_byte": 434958,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 434960,
+            "end_source_byte": 435142,
+            "kind": "anchor",
+            "marker_id": "recovery-coverage.known-hole-table-retained-and-gaps-named"
+          },
+          {
+            "start_source_byte": 435143,
+            "end_source_byte": 435199,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435201,
+            "end_source_byte": 435247,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435248,
+            "end_source_byte": 435261,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435263,
+            "end_source_byte": 435328,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435329,
+            "end_source_byte": 435603,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435604,
+            "end_source_byte": 435661,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435663,
+            "end_source_byte": 435715,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435716,
+            "end_source_byte": 435737,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435738,
+            "end_source_byte": 435821,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435822,
+            "end_source_byte": 435886,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435887,
+            "end_source_byte": 435948,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 435949,
+            "end_source_byte": 436013,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436014,
+            "end_source_byte": 436079,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436080,
+            "end_source_byte": 436164,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436165,
+            "end_source_byte": 436255,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436256,
+            "end_source_byte": 436339,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436340,
+            "end_source_byte": 436413,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436414,
+            "end_source_byte": 436483,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436484,
+            "end_source_byte": 436550,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436551,
+            "end_source_byte": 436616,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436617,
+            "end_source_byte": 436721,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436722,
+            "end_source_byte": 436790,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436791,
+            "end_source_byte": 436891,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436892,
+            "end_source_byte": 436957,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 436958,
+            "end_source_byte": 437030,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437031,
+            "end_source_byte": 437104,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437105,
+            "end_source_byte": 437194,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437195,
+            "end_source_byte": 437284,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437285,
+            "end_source_byte": 437408,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437409,
+            "end_source_byte": 437479,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437480,
+            "end_source_byte": 437550,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437551,
+            "end_source_byte": 437624,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437625,
+            "end_source_byte": 437694,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437695,
+            "end_source_byte": 437776,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437777,
+            "end_source_byte": 437880,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437881,
+            "end_source_byte": 437949,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 437950,
+            "end_source_byte": 438054,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438055,
+            "end_source_byte": 438123,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438124,
+            "end_source_byte": 438223,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438224,
+            "end_source_byte": 438327,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438328,
+            "end_source_byte": 438430,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438431,
+            "end_source_byte": 438538,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438539,
+            "end_source_byte": 438612,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438613,
+            "end_source_byte": 438691,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438692,
+            "end_source_byte": 438773,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438774,
+            "end_source_byte": 438874,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438875,
+            "end_source_byte": 438948,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 438949,
+            "end_source_byte": 439056,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439057,
+            "end_source_byte": 439136,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439137,
+            "end_source_byte": 439210,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439211,
+            "end_source_byte": 439286,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439287,
+            "end_source_byte": 439359,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439360,
+            "end_source_byte": 439443,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439444,
+            "end_source_byte": 439527,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439528,
+            "end_source_byte": 439613,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439614,
+            "end_source_byte": 439690,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439691,
+            "end_source_byte": 439786,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439787,
+            "end_source_byte": 439889,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439890,
+            "end_source_byte": 439957,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 439958,
+            "end_source_byte": 440020,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440021,
+            "end_source_byte": 440064,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440065,
+            "end_source_byte": 440113,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440114,
+            "end_source_byte": 440189,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440190,
+            "end_source_byte": 440260,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440261,
+            "end_source_byte": 440327,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440329,
+            "end_source_byte": 440555,
+            "kind": "anchor",
+            "marker_id": "recovery-generic-close.pre-table-exceptions"
+          },
+          {
+            "start_source_byte": 440556,
+            "end_source_byte": 440835,
+            "kind": "anchor",
+            "marker_id": "recovery-generic-close.recovered-clamped-before-admission"
+          },
+          {
+            "start_source_byte": 440836,
+            "end_source_byte": 440925,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440927,
+            "end_source_byte": 440945,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440946,
+            "end_source_byte": 440962,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 440964,
+            "end_source_byte": 441061,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441062,
+            "end_source_byte": 441078,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441079,
+            "end_source_byte": 441158,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441159,
+            "end_source_byte": 441212,
+            "kind": "anchor",
+            "marker_id": "supersession.closes-interval-with-superseded-reason"
+          },
+          {
+            "start_source_byte": 441213,
+            "end_source_byte": 441325,
+            "kind": "anchor",
+            "marker_id": "recovery-generic-close.control-rows-precede-generic-close"
+          },
+          {
+            "start_source_byte": 441326,
+            "end_source_byte": 441447,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441449,
+            "end_source_byte": 441517,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441518,
+            "end_source_byte": 441684,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441685,
+            "end_source_byte": 441809,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441810,
+            "end_source_byte": 441969,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 441971,
+            "end_source_byte": 442066,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 442068,
+            "end_source_byte": 442142,
+            "kind": "anchor",
+            "marker_id": "recovery.never-recompute-live-decisions"
+          },
+          {
+            "start_source_byte": 442143,
+            "end_source_byte": 442164,
+            "kind": "anchor",
+            "marker_id": "recovery.realizes-recorded-outcomes"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
