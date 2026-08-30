@@ -6004,7 +6004,7 @@ decision.obsoleted {
 | `amendment.quiesce_observed` | ✓ | `prepare_id` + `sweep_round` | matching pending prepare, before its quiesced sidecar exists | Updates that prepare's latest durable quiesce receipt and round. This is the only source of the silence timer; its envelope timestamp is core-assigned, and no producer timestamp exists in the payload (§6) |
 | `amendment.approval_abandoned` | ✓ | `prepare_id` | a pending prepare | Terminally closes the prepare and **lifts the barrier**. Required because the journal is append-only: removing the sidecar cannot clear a pending `approval_prepared`, so without this event the prepare stays pending on every replay, "at most one pending prepare" blocks every retry, and the run wedges permanently |
 | `amendment.routed_human` | ✓ | proposal_id | admissible | **Non-terminal** routing marker; appends `decision.requested` for the amendment |
-| `amendment.approved` | ✓ | proposal_id | **a matching commit-ready prepare** (§6 step 3) — not merely "passed 1–9", which would let an implementation bypass preparation and quiescence entirely | The **single authoritative transition**: new snapshot head, new revision, `head_movements` lifecycle projection, superseded attempt ids, obsoleted decision ids, and re-bound `candidate_id`. Resolves its own decision directly. **Finalization special case** (`/status: draft → finalized`, §2): the same event additionally closes the draft phase and projects the interview movement to `SUCCEEDED`, manufacturing no `attempt.completed` and no VERIFIED/APPROVED evidence |
+| `amendment.approved` | ✓ | proposal_id | **a matching commit-ready prepare** (§6 step 3) — not merely "passed 1–9", which would let an implementation bypass preparation and quiescence entirely | The **single authoritative transition**: new snapshot head, new revision, `head_movements` lifecycle projection, superseded attempt ids, obsoleted decision ids, and re-bound `candidate_id`. Resolves its own decision directly. **Finalization special case** (`/status: draft → finalized`, §2): see the B.5 field clauses below |
 | `amendment.human_rejected` | ✓ | proposal_id | routed | Terminal; carries proposal id, decision id, human reason; resolves its own decision |
 
 **Payloads.** Every amendment event carries `base_hash` and `classifier_version` (§9).
@@ -6105,8 +6105,7 @@ coherent specimen.
 - `amendment.approved.fenced_epoch` always equals `observed_authority_epoch + 1`.
 - `amendment.approved.finalization` is true if and only if this is the reserved
   `/status: draft → finalized` amendment (§2).
-- When `amendment.approved.finalization` is true, this event also closes the draft phase and projects
-  the interview movement to `SUCCEEDED`.
+- When `amendment.approved.finalization` is true, this event takes §2's draft-phase closure.
 - Finalization manufactures no `attempt.completed` and no `VERIFIED` or `APPROVED` evidence.
 - `amendment.approval_abandoned` lifts the barrier and changes no score or lifecycle projection.
 - `amendment.approval_abandoned.reason` is `base_head_changed`, `plan_invalidated`, or `cancelled`.
