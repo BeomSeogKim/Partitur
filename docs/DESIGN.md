@@ -5739,11 +5739,11 @@ coherent specimen.
   envelope.
 - Recording `application_candidate.recorded` is the initial binding; no separate binding event is
   ever appended (§8).
-- `acceptance.started.subject_tree` is core-observed and bound before any criterion runs (§7).
+- `acceptance.started.subject_tree` is B.0's subject binding, recorded before any criterion runs.
 - `acceptance.started.acceptance_spec_hash` is the A.4.2 identity of the effective compiled plan.
 - `acceptance.started.planned_criterion_ids` is in execution order, declared then generated (§7).
 - Recovery reads `acceptance.started.planned_criterion_ids` to determine what remains.
-- `criterion.started.subject_tree` repeats the binding on every criterion event (§7).
+- `criterion.started.subject_tree` is B.0's repeated subject binding.
 - `criterion.started.criterion_process` is present if and only if an external-command criterion
   spawned successfully.
 - When `criterion.started.criterion_process` is present, the external command spawned successfully.
@@ -5761,9 +5761,8 @@ coherent specimen.
   be spawned.
 - A spawn failure's `criterion.completed` is `ERROR` with no process identity.
 - Recovery has nothing to sweep for a spawn failure.
-- `criterion.completed.subject_tree` repeats the binding because a mark must be readable from the
-  event that constitutes it, without joining.
-- `criterion.completed.outcome` is `PASS`, `FAIL`, or `ERROR`.
+- `criterion.completed.subject_tree` is B.0's repeated subject binding.
+- `criterion.completed.outcome` is a closed Appendix D enum.
 - `criterion.completed.exit_code` is present for a spawned command that ran to completion.
 - `criterion.completed.duration_ms` is present for an observed completion.
 - `criterion.completed.duration_ms` is absent only when recovery synthesized completion without
