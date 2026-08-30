@@ -68,6 +68,9 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 	if err := ValidateRegistry(documentPath, document, commandBlob, regions, registry); err != nil {
 		t.Fatal(err)
 	}
+	if registry.Activation != nil {
+		t.Fatal("baseline activation must remain absent during staging classification")
+	}
 	if len(regions) == 0 {
 		t.Fatal("generated region universe is empty")
 	}
@@ -264,6 +267,12 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 			SourceSHA256:  "00993ad401a1e4271c9605c53ba946f9cb671f4a0191732a0d0db508d5c962ae",
 			DecisionsHash: "c7468ffbf73f4bc17e712ede4c16bfde3594f3c066a5b6ba5e7103f080f92c46",
 		},
+		33: {
+			DecisionCount: 23,
+			AnchorCount:   15,
+			SourceSHA256:  "150f0d68abe1c56643fd2bf23e36d1aa22b9353c43a20e547e358e6eec5152af",
+			DecisionsHash: "d0792a43e6dc2fdaa736922530f55fbcf1b9b7d119b06dfbd7d2ba883633a860",
+		},
 	}
 	if err := validateStagingReviewProgress(regions, registry, reviewedOrdinals); err != nil {
 		t.Fatal(err)
@@ -271,44 +280,30 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 	if err := validateConfirmedPacketPins(registry, reviewedOrdinals); err != nil {
 		t.Fatal(err)
 	}
-	if len(regions) <= len(reviewedOrdinals) {
-		t.Fatal("review-progress mutation requires an unreviewed region")
+	if len(regions) != len(reviewedOrdinals) {
+		t.Fatalf("reviewed ordinal lock has %d entries, want %d", len(reviewedOrdinals), len(regions))
 	}
-
-	var unreviewedRegion Region
-	unreviewedRegionStart := 0
-	for _, region := range regions {
-		if _, admitted := reviewedOrdinals[region.Key.Ordinal]; !admitted {
-			unreviewedRegion = region
-			break
-		}
-		unreviewedRegionStart += len(regionBytes(region))
+	if pending := Pending(regions, registry); len(pending) != 0 {
+		t.Fatalf("complete staging registry pending = %v, want empty", pending)
 	}
+	// Every region is reviewed, so a receipt-without-admission and a pending region are no
+	// longer reachable by mutating the registry alone: the witness withholds admission instead.
+	terminalWitnessOrdinal := regions[len(regions)-1].Key.Ordinal
 	mutations := []struct {
 		name   string
-		mutate func(*testing.T, *Registry)
+		mutate func(*testing.T, *Registry, map[int]confirmedPacketPin)
 		want   string
 	}{
 		{
 			name: "receipt for unreviewed ordinal",
-			mutate: func(_ *testing.T, got *Registry) {
-				got.Receipts = append(got.Receipts, RegionReceipt{
-					Key: unreviewedRegion.Key,
-					Review: &ReviewReceipt{
-						SourceSHA256: SourceDigest(unreviewedRegion.Lines),
-						Decisions: []Classification{{
-							StartByte: unreviewedRegionStart,
-							EndByte:   unreviewedRegionStart + len(regionBytes(unreviewedRegion)),
-							Kind:      ClassificationNonNormative,
-						}},
-					},
-				})
+			mutate: func(_ *testing.T, _ *Registry, reviewed map[int]confirmedPacketPin) {
+				delete(reviewed, terminalWitnessOrdinal)
 			},
-			want: fmt.Sprintf("packet %d has a receipt but is not admitted", unreviewedRegion.Key.Ordinal),
+			want: fmt.Sprintf("packet %d has a receipt but is not admitted", terminalWitnessOrdinal),
 		},
 		{
 			name: "reviewed ordinal receipt absent",
-			mutate: func(_ *testing.T, got *Registry) {
+			mutate: func(_ *testing.T, got *Registry, _ map[int]confirmedPacketPin) {
 				receipts := make([]RegionReceipt, 0, len(got.Receipts))
 				for _, receipt := range got.Receipts {
 					if receipt.Key.Ordinal != 1 {
@@ -321,7 +316,7 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 		},
 		{
 			name: "reviewed ordinal receipt stale",
-			mutate: func(t *testing.T, got *Registry) {
+			mutate: func(t *testing.T, got *Registry, _ map[int]confirmedPacketPin) {
 				for index := range got.Receipts {
 					if got.Receipts[index].Key.Ordinal == 1 && got.Receipts[index].Review != nil {
 						got.Receipts[index].Review.SourceSHA256 = strings.Repeat("0", 64)
@@ -334,7 +329,15 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 		},
 		{
 			name: "activation while packets pending",
-			mutate: func(_ *testing.T, got *Registry) {
+			mutate: func(_ *testing.T, got *Registry, reviewed map[int]confirmedPacketPin) {
+				receipts := make([]RegionReceipt, 0, len(got.Receipts))
+				for _, receipt := range got.Receipts {
+					if receipt.Key.Ordinal != terminalWitnessOrdinal {
+						receipts = append(receipts, receipt)
+					}
+				}
+				got.Receipts = receipts
+				delete(reviewed, terminalWitnessOrdinal)
 				got.Activation = &ActivationPins{}
 			},
 			want: "baseline activation must remain absent while staging regions are pending",
@@ -343,11 +346,15 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndRemainsUnactivated(t *testing.
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {
 			got := cloneRegistry(registry)
-			mutation.mutate(t, &got)
+			reviewed := make(map[int]confirmedPacketPin, len(reviewedOrdinals))
+			for ordinal, pin := range reviewedOrdinals {
+				reviewed[ordinal] = pin
+			}
+			mutation.mutate(t, &got, reviewed)
 			if err := ValidateRegistry(documentPath, document, commandBlob, regions, got); err != nil {
 				t.Fatalf("injected registry rejected before review-progress check: %v", err)
 			}
-			err := validateStagingReviewProgress(regions, got, reviewedOrdinals)
+			err := validateStagingReviewProgress(regions, got, reviewed)
 			if err == nil || !strings.Contains(err.Error(), mutation.want) {
 				t.Fatalf("review-progress error = %v, want %q", err, mutation.want)
 			}
