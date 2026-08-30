@@ -19942,6 +19942,687 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "ecd3da53140b1139a08a68ff522b7a31a7ce6ef6",
+        "ordinal": 27,
+        "start_source_line": 5946,
+        "end_source_line": 6154
+      },
+      "review_receipt": {
+        "source_sha256": "28d26b4b86bc52f180bbd9a91b78c0ea6733229b40fd5ebbb0f7e19b80fdde7b",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 406312,
+            "end_source_byte": 406442,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 406443,
+            "end_source_byte": 406530,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 406531,
+            "end_source_byte": 406657,
+            "kind": "anchor",
+            "marker_id": "decision-resolved.scope-subject-tree-sole-source"
+          },
+          {
+            "start_source_byte": 406658,
+            "end_source_byte": 406729,
+            "kind": "anchor",
+            "marker_id": "decision-resolved.overridden-findings-sorted-and-duplicate-free"
+          },
+          {
+            "start_source_byte": 406730,
+            "end_source_byte": 406857,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 406858,
+            "end_source_byte": 406953,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 406954,
+            "end_source_byte": 407075,
+            "kind": "anchor",
+            "marker_id": "decision-resolved.override-reason-iff-overridden-findings"
+          },
+          {
+            "start_source_byte": 407076,
+            "end_source_byte": 407175,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 407176,
+            "end_source_byte": 407300,
+            "kind": "anchor",
+            "marker_id": "decision-resolved.reason-optional-nonempty-only-on-rejection"
+          },
+          {
+            "start_source_byte": 407301,
+            "end_source_byte": 407401,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 407402,
+            "end_source_byte": 407492,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 407494,
+            "end_source_byte": 407894,
+            "kind": "anchor",
+            "marker_id": "decision-requested.payload-shape"
+          },
+          {
+            "start_source_byte": 407896,
+            "end_source_byte": 408281,
+            "kind": "anchor",
+            "marker_id": "decision-resolved.payload-shape"
+          },
+          {
+            "start_source_byte": 408283,
+            "end_source_byte": 408331,
+            "kind": "anchor",
+            "marker_id": "decision-obsoleted.payload-shape"
+          },
+          {
+            "start_source_byte": 408333,
+            "end_source_byte": 408350,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 408352,
+            "end_source_byte": 408411,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 408412,
+            "end_source_byte": 408433,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 408434,
+            "end_source_byte": 408946,
+            "kind": "anchor",
+            "marker_id": "event-type.amendment-rejected"
+          },
+          {
+            "start_source_byte": 408947,
+            "end_source_byte": 409795,
+            "kind": "anchor",
+            "marker_id": "event-type.amendment-approval-prepared"
+          },
+          {
+            "start_source_byte": 409796,
+            "end_source_byte": 410136,
+            "kind": "anchor",
+            "marker_id": "event-type.amendment-quiesce-observed"
+          },
+          {
+            "start_source_byte": 410137,
+            "end_source_byte": 410527,
+            "kind": "anchor",
+            "marker_id": "event-type.amendment-approval-abandoned"
+          },
+          {
+            "start_source_byte": 410528,
+            "end_source_byte": 410671,
+            "kind": "anchor",
+            "marker_id": "event-type.amendment-routed-human"
+          },
+          {
+            "start_source_byte": 410672,
+            "end_source_byte": 411204,
+            "kind": "anchor",
+            "marker_id": "event-type.amendment-approved"
+          },
+          {
+            "start_source_byte": 411205,
+            "end_source_byte": 411350,
+            "kind": "anchor",
+            "marker_id": "event-type.amendment-human-rejected"
+          },
+          {
+            "start_source_byte": 411352,
+            "end_source_byte": 411365,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 411366,
+            "end_source_byte": 411439,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 411441,
+            "end_source_byte": 411463,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 411464,
+            "end_source_byte": 411554,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 411556,
+            "end_source_byte": 411648,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.emitted-id-retains-adapter-provenance"
+          },
+          {
+            "start_source_byte": 411649,
+            "end_source_byte": 411843,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.emitted-id-persists-without-decision-request"
+          },
+          {
+            "start_source_byte": 411844,
+            "end_source_byte": 411902,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.reason-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 411903,
+            "end_source_byte": 411997,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.condition-iff-candidate-incompatible"
+          },
+          {
+            "start_source_byte": 411998,
+            "end_source_byte": 412131,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.condition-is-closed-candidate-incompatible-set"
+          },
+          {
+            "start_source_byte": 412132,
+            "end_source_byte": 412194,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 412195,
+            "end_source_byte": 412366,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.typed-delta-and-impact-only-after-step-6"
+          },
+          {
+            "start_source_byte": 412367,
+            "end_source_byte": 412422,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 412423,
+            "end_source_byte": 412519,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 412520,
+            "end_source_byte": 412598,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.patch-operations-hash-domain"
+          },
+          {
+            "start_source_byte": 412599,
+            "end_source_byte": 412713,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.patch-operations-hash-form-iff-hash-present"
+          },
+          {
+            "start_source_byte": 412714,
+            "end_source_byte": 412891,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.patch-operations-hash-form-values"
+          },
+          {
+            "start_source_byte": 412892,
+            "end_source_byte": 412990,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.error-location-identifies-failure"
+          },
+          {
+            "start_source_byte": 412991,
+            "end_source_byte": 413156,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.decision-id-iff-decision-exists-or-could-exist"
+          },
+          {
+            "start_source_byte": 413157,
+            "end_source_byte": 413216,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.always-opens-decision"
+          },
+          {
+            "start_source_byte": 413217,
+            "end_source_byte": 413388,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.routed-nonblocking-rejection-carries-decision-id"
+          },
+          {
+            "start_source_byte": 413389,
+            "end_source_byte": 413477,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 413478,
+            "end_source_byte": 413588,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 413589,
+            "end_source_byte": 413649,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.is-nonterminal-routing-marker"
+          },
+          {
+            "start_source_byte": 413650,
+            "end_source_byte": 413716,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.reason-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 413717,
+            "end_source_byte": 413813,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.emitted-id-retains-adapter-provenance"
+          },
+          {
+            "start_source_byte": 413814,
+            "end_source_byte": 413888,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.decision-type-is-amendment-or-finalization"
+          },
+          {
+            "start_source_byte": 413889,
+            "end_source_byte": 414049,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.decision-type-required-for-request-recovery"
+          },
+          {
+            "start_source_byte": 414050,
+            "end_source_byte": 414173,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 414174,
+            "end_source_byte": 414261,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.blocking-preserves-requires-decision"
+          },
+          {
+            "start_source_byte": 414262,
+            "end_source_byte": 414382,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.blocking-required-for-request-recovery"
+          },
+          {
+            "start_source_byte": 414383,
+            "end_source_byte": 414525,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.blocking-determines-waiting-human"
+          },
+          {
+            "start_source_byte": 414526,
+            "end_source_byte": 414647,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.proposal-record-hash-is-raw-bytes"
+          },
+          {
+            "start_source_byte": 414648,
+            "end_source_byte": 414739,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 414740,
+            "end_source_byte": 414873,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 414874,
+            "end_source_byte": 414961,
+            "kind": "anchor",
+            "marker_id": "amendment-routed-human.decision-id-names-opened-request"
+          },
+          {
+            "start_source_byte": 414962,
+            "end_source_byte": 415049,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 415050,
+            "end_source_byte": 415166,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 415167,
+            "end_source_byte": 415235,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.is-single-authoritative-transition"
+          },
+          {
+            "start_source_byte": 415236,
+            "end_source_byte": 415328,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.emitted-id-retains-adapter-provenance"
+          },
+          {
+            "start_source_byte": 415329,
+            "end_source_byte": 415378,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.mode-is-auto-or-human"
+          },
+          {
+            "start_source_byte": 415379,
+            "end_source_byte": 415495,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.decision-id-iff-human-mode"
+          },
+          {
+            "start_source_byte": 415496,
+            "end_source_byte": 415575,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.envelope-class-iff-auto-mode"
+          },
+          {
+            "start_source_byte": 415576,
+            "end_source_byte": 415716,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.envelope-class-is-closed-approval-set"
+          },
+          {
+            "start_source_byte": 415717,
+            "end_source_byte": 415795,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 415796,
+            "end_source_byte": 415859,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 415860,
+            "end_source_byte": 415957,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.envelope-score-revision-is-new-revision"
+          },
+          {
+            "start_source_byte": 415958,
+            "end_source_byte": 416129,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.new-head-and-candidate-rebinding"
+          },
+          {
+            "start_source_byte": 416130,
+            "end_source_byte": 416249,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.new-snapshot-file-hash-is-raw-written-bytes"
+          },
+          {
+            "start_source_byte": 416250,
+            "end_source_byte": 416359,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.head-movements-score-derived-declaration-order"
+          },
+          {
+            "start_source_byte": 416360,
+            "end_source_byte": 416466,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.head-movements-is-exact-snapshot-projection"
+          },
+          {
+            "start_source_byte": 416467,
+            "end_source_byte": 416627,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.head-movements-are-minimum-replay-state"
+          },
+          {
+            "start_source_byte": 416628,
+            "end_source_byte": 416769,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.superseded-attempt-ids-sorted-and-complete"
+          },
+          {
+            "start_source_byte": 416770,
+            "end_source_byte": 416868,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.superseded-attempt-ids-source-derived-events"
+          },
+          {
+            "start_source_byte": 416869,
+            "end_source_byte": 417005,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.obsoleted-decision-ids-sorted-and-excludes-own"
+          },
+          {
+            "start_source_byte": 417006,
+            "end_source_byte": 417121,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.candidate-id-iff-candidate-exists"
+          },
+          {
+            "start_source_byte": 417122,
+            "end_source_byte": 417200,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.candidate-binding-projects-from-candidate-id"
+          },
+          {
+            "start_source_byte": 417201,
+            "end_source_byte": 417344,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.envelope-evaluation-iff-human-mode"
+          },
+          {
+            "start_source_byte": 417345,
+            "end_source_byte": 417460,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.envelope-evaluation-is-decision-time"
+          },
+          {
+            "start_source_byte": 417461,
+            "end_source_byte": 417549,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 417550,
+            "end_source_byte": 417638,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 417639,
+            "end_source_byte": 417729,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.envelope-evaluation-preserves-later-evaluation"
+          },
+          {
+            "start_source_byte": 417730,
+            "end_source_byte": 417844,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 417845,
+            "end_source_byte": 417978,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 417979,
+            "end_source_byte": 418143,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 418144,
+            "end_source_byte": 418225,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 418226,
+            "end_source_byte": 418355,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.finalization-iff-reserved-draft-transition"
+          },
+          {
+            "start_source_byte": 418356,
+            "end_source_byte": 418449,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 418450,
+            "end_source_byte": 418542,
+            "kind": "anchor",
+            "marker_id": "amendment-approved.finalization-manufactures-no-evidence"
+          },
+          {
+            "start_source_byte": 418543,
+            "end_source_byte": 418639,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-abandoned.lifts-barrier-without-score-or-lifecycle-change"
+          },
+          {
+            "start_source_byte": 418640,
+            "end_source_byte": 418739,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-abandoned.reason-is-closed-appendix-d-enum"
+          },
+          {
+            "start_source_byte": 418740,
+            "end_source_byte": 418866,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-abandoned.base-revision-and-hash-required"
+          },
+          {
+            "start_source_byte": 418867,
+            "end_source_byte": 418962,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.changes-nothing-and-reserves-approval"
+          },
+          {
+            "start_source_byte": 418963,
+            "end_source_byte": 419071,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.prepare-id-names-quiesced-sidecar"
+          },
+          {
+            "start_source_byte": 419072,
+            "end_source_byte": 419135,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.sidecar-name-binds-lease-move"
+          },
+          {
+            "start_source_byte": 419136,
+            "end_source_byte": 419276,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.mode-records-approval-intent"
+          },
+          {
+            "start_source_byte": 419277,
+            "end_source_byte": 419405,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.decision-id-iff-human-mode"
+          },
+          {
+            "start_source_byte": 419406,
+            "end_source_byte": 419536,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.envelope-class-iff-auto-mode"
+          },
+          {
+            "start_source_byte": 419537,
+            "end_source_byte": 419664,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.base-revision-and-hash-bind-head"
+          },
+          {
+            "start_source_byte": 419665,
+            "end_source_byte": 419757,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.new-snapshot-hash-is-score-identity"
+          },
+          {
+            "start_source_byte": 419758,
+            "end_source_byte": 419891,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.new-snapshot-file-hash-is-raw-written-bytes"
+          },
+          {
+            "start_source_byte": 419892,
+            "end_source_byte": 420012,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.plan-record-hash-is-raw-plan-bytes"
+          },
+          {
+            "start_source_byte": 420013,
+            "end_source_byte": 420209,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.plan-record-carries-approved-invariants"
+          },
+          {
+            "start_source_byte": 420210,
+            "end_source_byte": 420344,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 420345,
+            "end_source_byte": 420461,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.target-attempt-ids-sorted-and-nonterminal"
+          },
+          {
+            "start_source_byte": 420462,
+            "end_source_byte": 420591,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.observed-authority-epoch-matches-ack"
+          },
+          {
+            "start_source_byte": 420592,
+            "end_source_byte": 420668,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 420669,
+            "end_source_byte": 420783,
+            "kind": "anchor",
+            "marker_id": "amendment-approval-prepared.silence-measures-latest-quiesce-receipt"
+          },
+          {
+            "start_source_byte": 420784,
+            "end_source_byte": 420895,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 420896,
+            "end_source_byte": 421008,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 421009,
+            "end_source_byte": 421103,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 421104,
+            "end_source_byte": 421185,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 421186,
+            "end_source_byte": 421277,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 421278,
+            "end_source_byte": 421333,
+            "kind": "anchor",
+            "marker_id": "amendment-human-rejected.human-reason-is-nonempty"
+          },
+          {
+            "start_source_byte": 421335,
+            "end_source_byte": 421394,
+            "kind": "anchor",
+            "marker_id": "amendment-rejected.payload-shape"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
