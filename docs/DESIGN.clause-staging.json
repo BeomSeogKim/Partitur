@@ -21738,6 +21738,984 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
+        "ordinal": 30,
+        "start_source_line": 6610,
+        "end_source_line": 6836
+      },
+      "review_receipt": {
+        "source_sha256": "ccb4bb18552a6c4dd35cbdb37e50f55f6d513d24c042be08da308b0b6a33625e",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 442164,
+            "end_source_byte": 442258,
+            "kind": "anchor",
+            "marker_id": "recovery.realizes-recorded-outcomes"
+          },
+          {
+            "start_source_byte": 442259,
+            "end_source_byte": 442365,
+            "kind": "anchor",
+            "marker_id": "recovery.originated-decisions-use-deterministic-rules"
+          },
+          {
+            "start_source_byte": 442366,
+            "end_source_byte": 442424,
+            "kind": "anchor",
+            "marker_id": "recovery.claims-only-verified-outcomes"
+          },
+          {
+            "start_source_byte": 442425,
+            "end_source_byte": 442486,
+            "kind": "anchor",
+            "marker_id": "recovery.unverifiable-is-a-halt"
+          },
+          {
+            "start_source_byte": 442488,
+            "end_source_byte": 442515,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 442517,
+            "end_source_byte": 442631,
+            "kind": "anchor",
+            "marker_id": "recovery.run-level-precedence"
+          },
+          {
+            "start_source_byte": 442633,
+            "end_source_byte": 442702,
+            "kind": "anchor",
+            "marker_id": "recovery.rows-select-actions-not-command-outcomes"
+          },
+          {
+            "start_source_byte": 442703,
+            "end_source_byte": 442804,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 442805,
+            "end_source_byte": 443082,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 443083,
+            "end_source_byte": 443212,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 443214,
+            "end_source_byte": 443223,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 443225,
+            "end_source_byte": 443281,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 443282,
+            "end_source_byte": 443295,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 443296,
+            "end_source_byte": 443917,
+            "kind": "anchor",
+            "marker_id": "recovery.terminal-run-cleanup"
+          },
+          {
+            "start_source_byte": 443918,
+            "end_source_byte": 444324,
+            "kind": "anchor",
+            "marker_id": "recovery.stale-lease-removal"
+          },
+          {
+            "start_source_byte": 444325,
+            "end_source_byte": 444821,
+            "kind": "anchor",
+            "marker_id": "recovery.orphan-lease-quarantine"
+          },
+          {
+            "start_source_byte": 444822,
+            "end_source_byte": 445563,
+            "kind": "anchor",
+            "marker_id": "recovery.unverifiable-current-owner-halts"
+          },
+          {
+            "start_source_byte": 445564,
+            "end_source_byte": 445920,
+            "kind": "anchor",
+            "marker_id": "recovery.live-current-owner-yields"
+          },
+          {
+            "start_source_byte": 445921,
+            "end_source_byte": 446859,
+            "kind": "anchor",
+            "marker_id": "recovery.cancel-request-precedes-resume"
+          },
+          {
+            "start_source_byte": 446860,
+            "end_source_byte": 447920,
+            "kind": "anchor",
+            "marker_id": "recovery.pending-prepare-complete-or-abandon"
+          },
+          {
+            "start_source_byte": 447921,
+            "end_source_byte": 448471,
+            "kind": "anchor",
+            "marker_id": "recovery.unowned-authority-reestablishment"
+          },
+          {
+            "start_source_byte": 448472,
+            "end_source_byte": 448666,
+            "kind": "anchor",
+            "marker_id": "recovery.root-snapshot-divergence-halts"
+          },
+          {
+            "start_source_byte": 448667,
+            "end_source_byte": 448950,
+            "kind": "anchor",
+            "marker_id": "recovery.missing-run-reference-halts"
+          },
+          {
+            "start_source_byte": 448951,
+            "end_source_byte": 449579,
+            "kind": "anchor",
+            "marker_id": "recovery.frozen-blocking-route-realization"
+          },
+          {
+            "start_source_byte": 449580,
+            "end_source_byte": 450085,
+            "kind": "anchor",
+            "marker_id": "recovery.core-finalization-route-rebuild"
+          },
+          {
+            "start_source_byte": 450086,
+            "end_source_byte": 450367,
+            "kind": "anchor",
+            "marker_id": "recovery.routed-source-to-request"
+          },
+          {
+            "start_source_byte": 450368,
+            "end_source_byte": 450983,
+            "kind": "anchor",
+            "marker_id": "recovery.approved-revision-restart"
+          },
+          {
+            "start_source_byte": 450984,
+            "end_source_byte": 451509,
+            "kind": "anchor",
+            "marker_id": "recovery.composition-evidence-terminalization"
+          },
+          {
+            "start_source_byte": 451510,
+            "end_source_byte": 451698,
+            "kind": "anchor",
+            "marker_id": "recovery.dispatches-to-current-attempt-or-scheduler"
+          },
+          {
+            "start_source_byte": 451700,
+            "end_source_byte": 451733,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 451735,
+            "end_source_byte": 451871,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 451872,
+            "end_source_byte": 452044,
+            "kind": "anchor",
+            "marker_id": "recovery.incomplete-attempt-quality-disposition"
+          },
+          {
+            "start_source_byte": 452046,
+            "end_source_byte": 452147,
+            "kind": "anchor",
+            "marker_id": "recovery.current-head-nonsuperseded-attempts-only"
+          },
+          {
+            "start_source_byte": 452148,
+            "end_source_byte": 452306,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 452307,
+            "end_source_byte": 452509,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 452510,
+            "end_source_byte": 452692,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 452693,
+            "end_source_byte": 452755,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 452757,
+            "end_source_byte": 452813,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 452814,
+            "end_source_byte": 452827,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 452828,
+            "end_source_byte": 453331,
+            "kind": "anchor",
+            "marker_id": "recovery.recorded-attempt-disposition-realization"
+          },
+          {
+            "start_source_byte": 453332,
+            "end_source_byte": 453781,
+            "kind": "anchor",
+            "marker_id": "recovery.question-source-request"
+          },
+          {
+            "start_source_byte": 453782,
+            "end_source_byte": 454479,
+            "kind": "anchor",
+            "marker_id": "recovery.released-decision-resume"
+          },
+          {
+            "start_source_byte": 454480,
+            "end_source_byte": 454848,
+            "kind": "anchor",
+            "marker_id": "recovery.unresolved-blocking-decision-quiescence"
+          },
+          {
+            "start_source_byte": 454849,
+            "end_source_byte": 455613,
+            "kind": "anchor",
+            "marker_id": "recovery.unstarted-attempt-handoff-and-failure"
+          },
+          {
+            "start_source_byte": 455614,
+            "end_source_byte": 456219,
+            "kind": "anchor",
+            "marker_id": "recovery.unprobed-adapter-sweep-and-failure"
+          },
+          {
+            "start_source_byte": 456220,
+            "end_source_byte": 456854,
+            "kind": "anchor",
+            "marker_id": "recovery.incomplete-performer-sweep-and-failure"
+          },
+          {
+            "start_source_byte": 456855,
+            "end_source_byte": 457444,
+            "kind": "anchor",
+            "marker_id": "recovery.draft-completion-fails-before-acceptance"
+          },
+          {
+            "start_source_byte": 457445,
+            "end_source_byte": 457817,
+            "kind": "anchor",
+            "marker_id": "recovery.completed-writer-captures-change-set"
+          },
+          {
+            "start_source_byte": 457818,
+            "end_source_byte": 458365,
+            "kind": "anchor",
+            "marker_id": "recovery.completed-attempt-reverifies"
+          },
+          {
+            "start_source_byte": 458366,
+            "end_source_byte": 458994,
+            "kind": "anchor",
+            "marker_id": "recovery.acceptance-start-binds-subject"
+          },
+          {
+            "start_source_byte": 458995,
+            "end_source_byte": 459293,
+            "kind": "anchor",
+            "marker_id": "recovery.completed-attempt-succeeds-movement"
+          },
+          {
+            "start_source_byte": 459294,
+            "end_source_byte": 459671,
+            "kind": "anchor",
+            "marker_id": "recovery.failed-movement-fails-run"
+          },
+          {
+            "start_source_byte": 459672,
+            "end_source_byte": 459930,
+            "kind": "anchor",
+            "marker_id": "recovery.final-gate-rejection-fails-movement"
+          },
+          {
+            "start_source_byte": 459932,
+            "end_source_byte": 459950,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 459951,
+            "end_source_byte": 459967,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 459969,
+            "end_source_byte": 460016,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 460017,
+            "end_source_byte": 460163,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 460164,
+            "end_source_byte": 460485,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 460486,
+            "end_source_byte": 460618,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 460619,
+            "end_source_byte": 460706,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 460708,
+            "end_source_byte": 460734,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 460736,
+            "end_source_byte": 461265,
+            "kind": "anchor",
+            "marker_id": "recovery.acceptance-reverifies-full-subject"
+          },
+          {
+            "start_source_byte": 461266,
+            "end_source_byte": 461357,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 461359,
+            "end_source_byte": 461632,
+            "kind": "anchor",
+            "marker_id": "recovery.synthesized-acceptance-failure-has-disposition"
+          },
+          {
+            "start_source_byte": 461634,
+            "end_source_byte": 461690,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 461691,
+            "end_source_byte": 461704,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 461705,
+            "end_source_byte": 461999,
+            "kind": "anchor",
+            "marker_id": "recovery.acceptance-failed-realizes-recorded-disposition"
+          },
+          {
+            "start_source_byte": 462000,
+            "end_source_byte": 462216,
+            "kind": "anchor",
+            "marker_id": "recovery.failed-criterion-terminalizes-acceptance"
+          },
+          {
+            "start_source_byte": 462217,
+            "end_source_byte": 463158,
+            "kind": "anchor",
+            "marker_id": "recovery.incomplete-criterion-sweep-and-synthesize"
+          },
+          {
+            "start_source_byte": 463159,
+            "end_source_byte": 463309,
+            "kind": "anchor",
+            "marker_id": "recovery.all-pass-completes-evaluation"
+          },
+          {
+            "start_source_byte": 463310,
+            "end_source_byte": 463476,
+            "kind": "anchor",
+            "marker_id": "recovery.evaluation-opens-required-gate"
+          },
+          {
+            "start_source_byte": 463477,
+            "end_source_byte": 463662,
+            "kind": "anchor",
+            "marker_id": "recovery.unresolved-gate-quiescence"
+          },
+          {
+            "start_source_byte": 463663,
+            "end_source_byte": 463903,
+            "kind": "anchor",
+            "marker_id": "recovery.approved-gate-completes-attempt"
+          },
+          {
+            "start_source_byte": 463904,
+            "end_source_byte": 464263,
+            "kind": "anchor",
+            "marker_id": "recovery.rejected-gate-fails-movement"
+          },
+          {
+            "start_source_byte": 464264,
+            "end_source_byte": 464436,
+            "kind": "anchor",
+            "marker_id": "recovery.gate-free-completes-attempt"
+          },
+          {
+            "start_source_byte": 464437,
+            "end_source_byte": 465118,
+            "kind": "anchor",
+            "marker_id": "recovery.unjournaled-criterion-launch-stabilization"
+          },
+          {
+            "start_source_byte": 465119,
+            "end_source_byte": 465216,
+            "kind": "anchor",
+            "marker_id": "recovery.empty-acceptance-starts-first-criterion"
+          },
+          {
+            "start_source_byte": 465217,
+            "end_source_byte": 465357,
+            "kind": "anchor",
+            "marker_id": "recovery.passing-criteria-start-next"
+          },
+          {
+            "start_source_byte": 465359,
+            "end_source_byte": 465412,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 465414,
+            "end_source_byte": 465566,
+            "kind": "anchor",
+            "marker_id": "recovery.scheduler-runs-after-higher-precedence-actions"
+          },
+          {
+            "start_source_byte": 465567,
+            "end_source_byte": 465625,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 465626,
+            "end_source_byte": 465782,
+            "kind": "anchor",
+            "marker_id": "recovery.scheduler-materializes-selected-continuations"
+          },
+          {
+            "start_source_byte": 465784,
+            "end_source_byte": 465840,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 465841,
+            "end_source_byte": 465854,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 465855,
+            "end_source_byte": 466404,
+            "kind": "anchor",
+            "marker_id": "recovery.exhausted-budget-terminates-before-work"
+          },
+          {
+            "start_source_byte": 466405,
+            "end_source_byte": 467057,
+            "kind": "anchor",
+            "marker_id": "recovery.interrupted-composition-reruns-deterministically"
+          },
+          {
+            "start_source_byte": 467058,
+            "end_source_byte": 468015,
+            "kind": "anchor",
+            "marker_id": "recovery.scheduler-advances-one-step"
+          },
+          {
+            "start_source_byte": 468017,
+            "end_source_byte": 468169,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 468170,
+            "end_source_byte": 468501,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 468503,
+            "end_source_byte": 468535,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 468537,
+            "end_source_byte": 468718,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.cut-boundary"
+          },
+          {
+            "start_source_byte": 468719,
+            "end_source_byte": 468904,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.action-reenters-selection"
+          },
+          {
+            "start_source_byte": 468906,
+            "end_source_byte": 468929,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.axes-are-normative"
+          },
+          {
+            "start_source_byte": 468930,
+            "end_source_byte": 469104,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.irrelevant-excludes-unreachable-axis"
+          },
+          {
+            "start_source_byte": 469106,
+            "end_source_byte": 469146,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 469147,
+            "end_source_byte": 469160,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 469161,
+            "end_source_byte": 469284,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.surface-axis"
+          },
+          {
+            "start_source_byte": 469285,
+            "end_source_byte": 469425,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.run-axis"
+          },
+          {
+            "start_source_byte": 469426,
+            "end_source_byte": 469575,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.integrity-axis"
+          },
+          {
+            "start_source_byte": 469576,
+            "end_source_byte": 469744,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.owner-axis"
+          },
+          {
+            "start_source_byte": 469745,
+            "end_source_byte": 469879,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.control-axis"
+          },
+          {
+            "start_source_byte": 469880,
+            "end_source_byte": 470297,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.consequence-axis"
+          },
+          {
+            "start_source_byte": 470298,
+            "end_source_byte": 470521,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.unit-axis"
+          },
+          {
+            "start_source_byte": 470522,
+            "end_source_byte": 471135,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.phase-axis"
+          },
+          {
+            "start_source_byte": 471136,
+            "end_source_byte": 471290,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.decision-axis"
+          },
+          {
+            "start_source_byte": 471291,
+            "end_source_byte": 471416,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.budget-axis"
+          },
+          {
+            "start_source_byte": 471417,
+            "end_source_byte": 471623,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.observation-axis"
+          },
+          {
+            "start_source_byte": 471625,
+            "end_source_byte": 471703,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 471704,
+            "end_source_byte": 471817,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 471818,
+            "end_source_byte": 471846,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 471847,
+            "end_source_byte": 471929,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 471930,
+            "end_source_byte": 472012,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.undeclared-combinations-unreachable"
+          },
+          {
+            "start_source_byte": 472014,
+            "end_source_byte": 472130,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 472131,
+            "end_source_byte": 472180,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 472181,
+            "end_source_byte": 472333,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 472334,
+            "end_source_byte": 472482,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 472483,
+            "end_source_byte": 472635,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 472636,
+            "end_source_byte": 472784,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 472785,
+            "end_source_byte": 472949,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 472950,
+            "end_source_byte": 473093,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 473094,
+            "end_source_byte": 473264,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 473265,
+            "end_source_byte": 473380,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 473381,
+            "end_source_byte": 473497,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 473498,
+            "end_source_byte": 473634,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 473635,
+            "end_source_byte": 473749,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 473750,
+            "end_source_byte": 474012,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474013,
+            "end_source_byte": 474124,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474125,
+            "end_source_byte": 474227,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474228,
+            "end_source_byte": 474334,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474335,
+            "end_source_byte": 474458,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474459,
+            "end_source_byte": 474618,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474619,
+            "end_source_byte": 474762,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474763,
+            "end_source_byte": 474910,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 474911,
+            "end_source_byte": 475045,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475046,
+            "end_source_byte": 475163,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475164,
+            "end_source_byte": 475276,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475277,
+            "end_source_byte": 475387,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475388,
+            "end_source_byte": 475510,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475511,
+            "end_source_byte": 475656,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475657,
+            "end_source_byte": 475836,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475837,
+            "end_source_byte": 475996,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 475997,
+            "end_source_byte": 476166,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 476167,
+            "end_source_byte": 476300,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 476301,
+            "end_source_byte": 476421,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 476422,
+            "end_source_byte": 476545,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 476546,
+            "end_source_byte": 476666,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 476667,
+            "end_source_byte": 476785,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 476786,
+            "end_source_byte": 476918,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 476919,
+            "end_source_byte": 477057,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477058,
+            "end_source_byte": 477165,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477166,
+            "end_source_byte": 477294,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477296,
+            "end_source_byte": 477388,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477389,
+            "end_source_byte": 477452,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477453,
+            "end_source_byte": 477483,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.lower-precedence-wins"
+          },
+          {
+            "start_source_byte": 477484,
+            "end_source_byte": 477603,
+            "kind": "anchor",
+            "marker_id": "recovery-selection.expansion-is-total-and-every-row-wins"
+          },
+          {
+            "start_source_byte": 477605,
+            "end_source_byte": 477775,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477776,
+            "end_source_byte": 477837,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477838,
+            "end_source_byte": 477984,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 477985,
+            "end_source_byte": 478111,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 478112,
+            "end_source_byte": 478258,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 478259,
+            "end_source_byte": 478387,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 478388,
+            "end_source_byte": 478540,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 478541,
+            "end_source_byte": 478684,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 478685,
+            "end_source_byte": 478823,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 478824,
+            "end_source_byte": 478963,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 478964,
+            "end_source_byte": 479109,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 479110,
+            "end_source_byte": 479259,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 479260,
+            "end_source_byte": 479385,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 479386,
+            "end_source_byte": 479542,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 479543,
+            "end_source_byte": 479750,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 479751,
+            "end_source_byte": 479896,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 479897,
+            "end_source_byte": 480071,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 480072,
+            "end_source_byte": 480230,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 480231,
+            "end_source_byte": 480412,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 480413,
+            "end_source_byte": 480591,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 480592,
+            "end_source_byte": 480776,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 480777,
+            "end_source_byte": 480999,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 481000,
+            "end_source_byte": 481176,
+            "kind": "non-normative"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
