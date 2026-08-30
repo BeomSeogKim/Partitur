@@ -23849,6 +23849,945 @@
           }
         ]
       }
+    },
+    {
+      "key": {
+        "input_blob": "fd036263696944cc489796bcb50a23067d2d43e9",
+        "ordinal": 32,
+        "start_source_line": 7092,
+        "end_source_line": 7341
+      },
+      "review_receipt": {
+        "source_sha256": "00993ad401a1e4271c9605c53ba946f9cb671f4a0191732a0d0db508d5c962ae",
+        "confirmed_decisions": [
+          {
+            "start_source_byte": 500588,
+            "end_source_byte": 500886,
+            "kind": "anchor",
+            "marker_id": "recovery-halt.members"
+          },
+          {
+            "start_source_byte": 500887,
+            "end_source_byte": 501114,
+            "kind": "anchor",
+            "marker_id": "recovery-halt.missing-reasons-cover-absence-and-hash-mismatch"
+          },
+          {
+            "start_source_byte": 501116,
+            "end_source_byte": 501156,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 501158,
+            "end_source_byte": 501289,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 501290,
+            "end_source_byte": 501459,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 501460,
+            "end_source_byte": 501618,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.implementation-exposes-frozen-injection-points"
+          },
+          {
+            "start_source_byte": 501620,
+            "end_source_byte": 501694,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.defines-injection-points-and-crash-assertions"
+          },
+          {
+            "start_source_byte": 501695,
+            "end_source_byte": 501857,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 501859,
+            "end_source_byte": 501916,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 501917,
+            "end_source_byte": 502330,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.scope-selected-recovery-families"
+          },
+          {
+            "start_source_byte": 502331,
+            "end_source_byte": 502544,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.selection-uses-last-durable-endpoint"
+          },
+          {
+            "start_source_byte": 502546,
+            "end_source_byte": 502568,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 502570,
+            "end_source_byte": 502643,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.endpoints-attest-different-kinds-of-fact"
+          },
+          {
+            "start_source_byte": 502645,
+            "end_source_byte": 502668,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 502669,
+            "end_source_byte": 502777,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.attests-persistent-mutation-after-sync"
+          },
+          {
+            "start_source_byte": 502778,
+            "end_source_byte": 502904,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.typed-return-after-boundary-before-next-action"
+          },
+          {
+            "start_source_byte": 502905,
+            "end_source_byte": 503286,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.operation-kinds"
+          },
+          {
+            "start_source_byte": 503288,
+            "end_source_byte": 503325,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.one-per-mutation"
+          },
+          {
+            "start_source_byte": 503326,
+            "end_source_byte": 503499,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.multi-mutation-step-has-separate-receipts"
+          },
+          {
+            "start_source_byte": 503500,
+            "end_source_byte": 503637,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 503639,
+            "end_source_byte": 503708,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.all-addressable-only-some-edge-owned"
+          },
+          {
+            "start_source_byte": 503709,
+            "end_source_byte": 503832,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.unowned-receipts-emitted-and-injectable"
+          },
+          {
+            "start_source_byte": 503833,
+            "end_source_byte": 503951,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.unowned-edge-statuses-are-distinct"
+          },
+          {
+            "start_source_byte": 503953,
+            "end_source_byte": 503989,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 503990,
+            "end_source_byte": 504059,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.recovery-neutral-loss-owes-no-assertion"
+          },
+          {
+            "start_source_byte": 504060,
+            "end_source_byte": 504187,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 504188,
+            "end_source_byte": 504233,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 504234,
+            "end_source_byte": 504375,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.out-of-scope-loss-is-not-an-assertion"
+          },
+          {
+            "start_source_byte": 504376,
+            "end_source_byte": 504443,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.silence-is-scope-not-neutrality"
+          },
+          {
+            "start_source_byte": 504445,
+            "end_source_byte": 504529,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.one-mechanism-at-two-granularities"
+          },
+          {
+            "start_source_byte": 504531,
+            "end_source_byte": 504651,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 504652,
+            "end_source_byte": 504693,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 504694,
+            "end_source_byte": 504834,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.unowned-address-derivation"
+          },
+          {
+            "start_source_byte": 504835,
+            "end_source_byte": 504905,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.edgeless-address-prefix-is-protocol-step"
+          },
+          {
+            "start_source_byte": 504906,
+            "end_source_byte": 504987,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.only-edge-ids-are-frozen"
+          },
+          {
+            "start_source_byte": 504989,
+            "end_source_byte": 505010,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 505011,
+            "end_source_byte": 505075,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.attests-arrival-only"
+          },
+          {
+            "start_source_byte": 505076,
+            "end_source_byte": 505199,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.ephemeral-and-not-a-recovery-input"
+          },
+          {
+            "start_source_byte": 505200,
+            "end_source_byte": 505389,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.erasure-already-accounted-for-by-durable-state"
+          },
+          {
+            "start_source_byte": 505391,
+            "end_source_byte": 505474,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.classified-by-attestation-not-component"
+          },
+          {
+            "start_source_byte": 505475,
+            "end_source_byte": 505606,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.lock-acquisition-is-ephemeral"
+          },
+          {
+            "start_source_byte": 505608,
+            "end_source_byte": 505647,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 505648,
+            "end_source_byte": 505795,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.shared-neutral-probe"
+          },
+          {
+            "start_source_byte": 505796,
+            "end_source_byte": 505861,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.production-noop-harness-blocking"
+          },
+          {
+            "start_source_byte": 505862,
+            "end_source_byte": 506002,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 506003,
+            "end_source_byte": 506165,
+            "kind": "anchor",
+            "marker_id": "durability-receipt.not-routed-through-boundary-probe"
+          },
+          {
+            "start_source_byte": 506167,
+            "end_source_byte": 506293,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.catalog-required-not-all-crash-windows"
+          },
+          {
+            "start_source_byte": 506294,
+            "end_source_byte": 506436,
+            "kind": "anchor",
+            "marker_id": "edge-id.semantic-growth-without-renumbering"
+          },
+          {
+            "start_source_byte": 506437,
+            "end_source_byte": 506523,
+            "kind": "anchor",
+            "marker_id": "edge-id.meaning-change-is-a-design-change"
+          },
+          {
+            "start_source_byte": 506524,
+            "end_source_byte": 506860,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 506861,
+            "end_source_byte": 507012,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507013,
+            "end_source_byte": 507197,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507198,
+            "end_source_byte": 507247,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507248,
+            "end_source_byte": 507381,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.catalog-bound-by-scope-and-expansion"
+          },
+          {
+            "start_source_byte": 507383,
+            "end_source_byte": 507401,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507403,
+            "end_source_byte": 507473,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507474,
+            "end_source_byte": 507525,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507526,
+            "end_source_byte": 507600,
+            "kind": "anchor",
+            "marker_id": "boundary-reached.harness-blocks-probe-endpoints-not-fsync"
+          },
+          {
+            "start_source_byte": 507602,
+            "end_source_byte": 507625,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507627,
+            "end_source_byte": 507693,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507694,
+            "end_source_byte": 507715,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 507716,
+            "end_source_byte": 507916,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.prepare-snapshot-to-plan"
+          },
+          {
+            "start_source_byte": 507917,
+            "end_source_byte": 508156,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.prepare-plan-to-prepared"
+          },
+          {
+            "start_source_byte": 508157,
+            "end_source_byte": 508690,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.prepare-prepared-to-observed"
+          },
+          {
+            "start_source_byte": 508691,
+            "end_source_byte": 509106,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.quiesce-observed-to-swept"
+          },
+          {
+            "start_source_byte": 509107,
+            "end_source_byte": 509599,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.quiesce-swept-to-lease-moved"
+          },
+          {
+            "start_source_byte": 509600,
+            "end_source_byte": 510192,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.quiesce-lease-moved-to-commit-lock"
+          },
+          {
+            "start_source_byte": 510193,
+            "end_source_byte": 510887,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.prepare-quarantined-to-abandoned"
+          },
+          {
+            "start_source_byte": 510889,
+            "end_source_byte": 510909,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 510911,
+            "end_source_byte": 510977,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 510978,
+            "end_source_byte": 510999,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 511000,
+            "end_source_byte": 511426,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.proposal-published-to-blocked-route"
+          },
+          {
+            "start_source_byte": 511427,
+            "end_source_byte": 511788,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.proposal-blocked-route-to-routed"
+          },
+          {
+            "start_source_byte": 511789,
+            "end_source_byte": 512359,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.proposal-published-to-routed"
+          },
+          {
+            "start_source_byte": 512360,
+            "end_source_byte": 513006,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.proposal-core-finalization-published-to-routed"
+          },
+          {
+            "start_source_byte": 513007,
+            "end_source_byte": 513323,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.proposal-routed-to-decision-requested"
+          },
+          {
+            "start_source_byte": 513325,
+            "end_source_byte": 513341,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 513342,
+            "end_source_byte": 513403,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 513405,
+            "end_source_byte": 513471,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 513472,
+            "end_source_byte": 513493,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 513494,
+            "end_source_byte": 514131,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.cancel-swept-to-terminal"
+          },
+          {
+            "start_source_byte": 514132,
+            "end_source_byte": 514363,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.cancel-swept-to-quarantined"
+          },
+          {
+            "start_source_byte": 514364,
+            "end_source_byte": 515095,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.cancel-interval-stopped-to-terminal"
+          },
+          {
+            "start_source_byte": 515096,
+            "end_source_byte": 515275,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.cancel-fence-decided-to-terminal"
+          },
+          {
+            "start_source_byte": 515276,
+            "end_source_byte": 515531,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.cancel-terminal-to-lease-removed"
+          },
+          {
+            "start_source_byte": 515533,
+            "end_source_byte": 515557,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 515558,
+            "end_source_byte": 515620,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 515622,
+            "end_source_byte": 515688,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 515689,
+            "end_source_byte": 515710,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 515711,
+            "end_source_byte": 516382,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.supersede-swept-to-approved"
+          },
+          {
+            "start_source_byte": 516383,
+            "end_source_byte": 516752,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.supersede-interval-stopped-to-approved"
+          },
+          {
+            "start_source_byte": 516753,
+            "end_source_byte": 517299,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.supersede-fence-decided-to-approved"
+          },
+          {
+            "start_source_byte": 517300,
+            "end_source_byte": 517801,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.supersede-approved-to-lease-removed"
+          },
+          {
+            "start_source_byte": 517803,
+            "end_source_byte": 517828,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 517830,
+            "end_source_byte": 517896,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 517897,
+            "end_source_byte": 517918,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 517919,
+            "end_source_byte": 518384,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.authority-granted-to-lease-created"
+          },
+          {
+            "start_source_byte": 518386,
+            "end_source_byte": 518396,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 518397,
+            "end_source_byte": 518477,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.launch-edges-apply-per-launch-and-type"
+          },
+          {
+            "start_source_byte": 518479,
+            "end_source_byte": 518545,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 518546,
+            "end_source_byte": 518567,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 518568,
+            "end_source_byte": 519104,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.launch-adapter-marker-held-to-identity-published"
+          },
+          {
+            "start_source_byte": 519105,
+            "end_source_byte": 519462,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.launch-adapter-identity-published-to-recorded"
+          },
+          {
+            "start_source_byte": 519463,
+            "end_source_byte": 519754,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.launch-adapter-recorded-to-gate"
+          },
+          {
+            "start_source_byte": 519755,
+            "end_source_byte": 520147,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.launch-criterion-marker-held-to-identity-published"
+          },
+          {
+            "start_source_byte": 520148,
+            "end_source_byte": 520398,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.launch-criterion-identity-published-to-recorded"
+          },
+          {
+            "start_source_byte": 520399,
+            "end_source_byte": 520535,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.launch-criterion-recorded-to-gate"
+          },
+          {
+            "start_source_byte": 520537,
+            "end_source_byte": 520567,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 520568,
+            "end_source_byte": 520658,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 520660,
+            "end_source_byte": 520726,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 520727,
+            "end_source_byte": 520748,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 520749,
+            "end_source_byte": 521234,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.execute-adapter-swept-to-interval-stopped"
+          },
+          {
+            "start_source_byte": 521235,
+            "end_source_byte": 521698,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.execute-interval-stopped-to-outcome"
+          },
+          {
+            "start_source_byte": 521700,
+            "end_source_byte": 521738,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 521740,
+            "end_source_byte": 521806,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 521807,
+            "end_source_byte": 521828,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 521829,
+            "end_source_byte": 522440,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.change-set-captured-to-recorded"
+          },
+          {
+            "start_source_byte": 522441,
+            "end_source_byte": 523003,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.acceptance-subject-pinned-to-started"
+          },
+          {
+            "start_source_byte": 523004,
+            "end_source_byte": 523567,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.composition-movement-evidence-to-terminal"
+          },
+          {
+            "start_source_byte": 523568,
+            "end_source_byte": 524102,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.composition-candidate-evidence-to-terminal"
+          },
+          {
+            "start_source_byte": 524104,
+            "end_source_byte": 524143,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 524145,
+            "end_source_byte": 524211,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 524212,
+            "end_source_byte": 524233,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 524234,
+            "end_source_byte": 524564,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.lifecycle-attempt-completed-to-movement-succeeded"
+          },
+          {
+            "start_source_byte": 524565,
+            "end_source_byte": 524900,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.lifecycle-movement-failed-to-run-failed"
+          },
+          {
+            "start_source_byte": 524901,
+            "end_source_byte": 525580,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.lifecycle-draft-performer-completed-to-no-blocking-failure"
+          },
+          {
+            "start_source_byte": 525581,
+            "end_source_byte": 525944,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.acceptance-criterion-error-to-failed"
+          },
+          {
+            "start_source_byte": 525945,
+            "end_source_byte": 526597,
+            "kind": "anchor",
+            "marker_id": "ordered-boundary.acceptance-evaluation-completed-to-decision-requested"
+          },
+          {
+            "start_source_byte": 526599,
+            "end_source_byte": 526669,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 526671,
+            "end_source_byte": 526758,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 526759,
+            "end_source_byte": 526911,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 526912,
+            "end_source_byte": 527166,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 527168,
+            "end_source_byte": 527218,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 527219,
+            "end_source_byte": 527289,
+            "kind": "anchor",
+            "marker_id": "fence-decision.not-independently-durable"
+          },
+          {
+            "start_source_byte": 527291,
+            "end_source_byte": 527301,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 527302,
+            "end_source_byte": 527429,
+            "kind": "anchor",
+            "marker_id": "fence-decision.assertions-apply-only-when-predicate-true"
+          },
+          {
+            "start_source_byte": 527430,
+            "end_source_byte": 527565,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 527567,
+            "end_source_byte": 527670,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 527672,
+            "end_source_byte": 527733,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 527734,
+            "end_source_byte": 527777,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 527778,
+            "end_source_byte": 527844,
+            "kind": "anchor",
+            "marker_id": "fence-decision.authority-checkpoint-never-ahead-of-journal"
+          },
+          {
+            "start_source_byte": 527845,
+            "end_source_byte": 527943,
+            "kind": "anchor",
+            "marker_id": "fence-decision.advanced-epoch-claimed-only-by-terminal-event"
+          },
+          {
+            "start_source_byte": 527944,
+            "end_source_byte": 528128,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 528129,
+            "end_source_byte": 528209,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 528210,
+            "end_source_byte": 528324,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 528326,
+            "end_source_byte": 528399,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 528400,
+            "end_source_byte": 528543,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 528544,
+            "end_source_byte": 528648,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 528650,
+            "end_source_byte": 528839,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 528840,
+            "end_source_byte": 528893,
+            "kind": "anchor",
+            "marker_id": "fence-decision.supersession-uses-the-same-assertions"
+          },
+          {
+            "start_source_byte": 528895,
+            "end_source_byte": 529009,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529010,
+            "end_source_byte": 529149,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529151,
+            "end_source_byte": 529193,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529195,
+            "end_source_byte": 529221,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529222,
+            "end_source_byte": 529258,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529259,
+            "end_source_byte": 529357,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529358,
+            "end_source_byte": 529768,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529769,
+            "end_source_byte": 529926,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 529927,
+            "end_source_byte": 530017,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530018,
+            "end_source_byte": 530152,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530154,
+            "end_source_byte": 530212,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530213,
+            "end_source_byte": 530487,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530489,
+            "end_source_byte": 530513,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530514,
+            "end_source_byte": 530669,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530670,
+            "end_source_byte": 530845,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530846,
+            "end_source_byte": 530920,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 530921,
+            "end_source_byte": 531112,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 531114,
+            "end_source_byte": 531250,
+            "kind": "non-normative"
+          },
+          {
+            "start_source_byte": 531251,
+            "end_source_byte": 531305,
+            "kind": "anchor",
+            "marker_id": "edge-id.harness-selection-only"
+          }
+        ]
+      }
     }
   ],
   "baseline_activation": null
