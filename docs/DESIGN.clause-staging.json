@@ -24933,5 +24933,8 @@
       }
     }
   ],
-  "baseline_activation": null
+  "baseline_activation": {
+    "marked_blob": "4bcfdde84a68c0c1ad29da28b8cd52feea3ee2ce",
+    "ordered_classification_sha256": "805ef089d39dd0f1b43527b1ccee4bf4940d4f21154213cd7fdc7b17d1851360"
+  }
 }
