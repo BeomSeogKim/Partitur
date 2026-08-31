@@ -37,7 +37,14 @@ all four:
 
 ```bash
 go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline
+export PATH="$(go env GOPATH)/bin:$PATH"
 ```
+
+An adapter is a thin shim, not the agent. Whichever performer a cast selects, that vendor's own CLI
+has to be installed and on `PATH` as well — the adapter's probe resolves and runs it. `validate`
+exits 3 either way, and the `adapter-environment` diagnostic distinguishes them: `executable_absent`
+means the adapter binary is missing, while a missing vendor CLI surfaces as `error_response` naming
+what the adapter could not resolve. Install the Codex CLI to follow this page as written.
 
 Scaffold a repository:
 
@@ -73,19 +80,25 @@ partitur validate
 ```
 
 Exit 0, with the advisory enforcement block on stderr, means the score and cast are sound and every
-adapter was probed. Then run the draft interview, which asks you what you actually want built:
+adapter was probed. From here the loop is:
 
 ```bash
-partitur run                                     # the interview movement stops on a question
-partitur status                                  # names the open decision and its id
-partitur answer <decision-id> --answer "..."     # continue from your answer
-partitur approve <decision-id> --approve         # resolve a human gate
-partitur promote-score <run-id>                  # draft -> finalized, once the interview settles
-partitur run                                     # execute the finalized score
-partitur apply <run-id>                          # carry the verified result onto your checkout
+partitur run       # execute; the draft interview stops to ask you something
+partitur status    # what the run is waiting on, and the id of the open decision
+partitur answer <decision-id> --answer "..."
+partitur resume <run-id>
 ```
 
-`answer` and `approve` take a **decision** id, not a run id; `status` is where you read it.
+`answer` and `approve` take a **decision** id, not a run id, and `status` is where you read it.
+Resolving a decision records it — it does not by itself start the next attempt, so `resume` is what
+carries the run forward. Repeat that cycle until the interview settles; `approve <decision-id>
+--approve` resolves a human gate or an amendment when one is what `status` reports. Then
+`promote-score <run-id>` turns the draft into a finalized score, `run` executes it, and `apply
+<run-id>` carries the verified result onto your checkout.
+
+Each command's exact operands and exit codes are specified in [`docs/DESIGN.md`](docs/DESIGN.md) §7.
+This page is verified as far as `validate`; the loop above is the specified surface, and the worked
+transcript lands here once it has been executed rather than composed.
 
 Working across several repositories? Cast layers `.partitur/cast.yaml` over
 `~/.config/partitur/cast.yaml`, and `performers` and `bindings` layer independently. Put the
@@ -102,10 +115,12 @@ thirteen commands are dispatched.
 
 [`docs/COMPLETION.md`](docs/COMPLETION.md) §5 is the row that asks whether the tool is *usable*
 rather than whether it is *correct*. It is green on evidence recorded 2026-08-12: one run per
-platform, macOS and Linux, driving the production CLI against this repository with the real `codex`
-performer, carrying a non-no-op write, a criterion that verified it, an approved human gate, a kill
-that left a genuine recovery obligation, and an `apply` onto a checkout that initially differed.
-Both runs produced the same candidate.
+platform, macOS and Linux, against this repository with the real `codex` performer, carrying a
+non-no-op write, a criterion that verified it, an approved human gate, a kill that left a genuine
+recovery obligation, and an `apply` onto a checkout that initially differed. Both runs produced the
+same candidate. Five of those six were confirmed with ordinary production-CLI commands; reaching the
+kill deterministically needed a `-tags=faultprobe` build, and that row records which binary each
+property required rather than blurring them together.
 
 What that evidence does not cover is the distance between one deliberate reference score and daily
 use. Two things follow. Enforcement is advisory in practice — see the Quickstart — so the
