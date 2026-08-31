@@ -236,6 +236,10 @@ func launch(
 		if writeErr == nil {
 			writeErr = io.ErrShortWrite
 		}
+		// The gate byte never left, so no program was released and no
+		// descendant can hold the capture pipe. Reaping here is safe, and
+		// omitting it would leave the trampoline unreaped.
+		_ = command.Wait()
 		return nil, launchError(fmt.Errorf("release launch gate: %w", writeErr))
 	}
 	if err := dependencies.closeGate(gateWrite); err != nil {
