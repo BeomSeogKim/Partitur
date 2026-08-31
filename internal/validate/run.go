@@ -13,6 +13,8 @@ type prober interface {
 	ProbeAll([]string) adapter.Report
 }
 
+const bindingMissingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers"
+
 type dependencies struct {
 	acquisition acquisitionDependencies
 	newProber   func() prober
@@ -147,13 +149,17 @@ func evaluatePrepared(
 }
 
 func castEntry(diagnostic cast.Diagnostic) Entry {
-	return Entry{
+	entry := Entry{
 		Kind:    EntryCast,
 		Rule:    string(diagnostic.Rule),
 		Origin:  diagnostic.Origin,
 		Pointer: diagnostic.Pointer,
 		Detail:  diagnostic.Detail,
 	}
+	if diagnostic.Rule == cast.RuleScore && diagnostic.Detail == "binding_missing" {
+		entry.Hint = bindingMissingHint
+	}
+	return entry
 }
 
 func referencedAdapters(compiled *score.Score, resolved *cast.Cast) []string {

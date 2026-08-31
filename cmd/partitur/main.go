@@ -1388,12 +1388,16 @@ func renderEntry(w io.Writer, entry validation.Entry) {
 	case validation.EntryCast:
 		fmt.Fprintf(
 			w,
-			"cast: rule=%q origin=%q pointer=%q detail=%q\n",
+			"cast: rule=%q origin=%q pointer=%q detail=%q",
 			entry.Rule,
 			entry.Origin,
 			entry.Pointer,
 			entry.Detail,
 		)
+		if entry.Hint != "" {
+			fmt.Fprintf(w, " hint=%q", entry.Hint)
+		}
+		fmt.Fprintln(w)
 	case validation.EntryAdapterEnvironment:
 		fmt.Fprintf(
 			w,
