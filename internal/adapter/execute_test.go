@@ -678,6 +678,33 @@ func TestExecuteCancellationDuringLaunchEndsTheCall(t *testing.T) {
 	}
 }
 
+func TestExecuteLaunchFailureIncludesSanitizedTrampolineStderr(t *testing.T) {
+	var order []string
+	client := newClient(nil, incidentalTestDeadline, 20*time.Millisecond)
+	client.launch = func(_ context.Context, request launch.Request) (*launch.Process, error) {
+		if _, err := request.Stderr.WriteString("race report token=supersecret\n"); err != nil {
+			t.Fatal(err)
+		}
+		return nil, errors.New("trampoline exited before identity")
+	}
+	plan := executePlan(
+		"fake",
+		"/bin/false",
+		"/bin/false",
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	_, err := client.startExecute(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "trampoline exited before identity") ||
+		!strings.Contains(err.Error(), "trampoline stderr: race report token=[REDACTED]") ||
+		strings.Contains(err.Error(), "supersecret") {
+		t.Fatalf("launch error = %v", err)
+	}
+}
+
 func TestExecuteCancellationIsObservedBeforeTheProbeCompletes(t *testing.T) {
 	for _, test := range []struct {
 		name       string

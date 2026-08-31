@@ -197,6 +197,25 @@ func TestRunCapturesRealCriterionAndSweepsDescendant(t *testing.T) {
 	}
 }
 
+func TestRunCapturesTrampolineStderrWhenIdentityPublicationFails(t *testing.T) {
+	root, worktree, _ := criterionFixture(t)
+	trampoline := filepath.Join(t.TempDir(), "failing-trampoline")
+	if err := os.WriteFile(trampoline, []byte("#!/bin/sh\nprintf 'race report token=supersecret\n' >&2\nexit 66\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := Run(criterionConfig(root, worktree, trampoline), criterionRequest(t, "pass"))
+	if !result.SpawnFailed || result.OutputRef == "" {
+		t.Fatalf("result = %#v", result)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", "run", result.OutputRef, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "race report token=supersecret\n" {
+		t.Fatalf("trampoline stderr = %q", contents)
+	}
+}
+
 func TestRunCancelsRecordedCriterionSession(t *testing.T) {
 	root, worktree, trampoline := criterionFixture(t)
 	config := criterionConfig(root, worktree, trampoline)

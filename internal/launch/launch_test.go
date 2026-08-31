@@ -225,6 +225,18 @@ func TestCancelledLaunchContextNeverReleasesProgram(t *testing.T) {
 	}
 }
 
+func TestLaunchFailureWithoutStderrIncludesSanitizedTrampolineDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PARTITUR_TEST_TRAMPOLINE_FAILURE", "1")
+	request := validRequest(t, Adapter, root, "launch")
+	_, err := launch(context.Background(), request, testDependencies())
+	if err == nil || !strings.Contains(err.Error(), "exit status 66") ||
+		!strings.Contains(err.Error(), "trampoline stderr: startup token=[REDACTED]") ||
+		strings.Contains(err.Error(), "supersecret") {
+		t.Fatalf("launch error = %v", err)
+	}
+}
+
 func TestMarkerLockSurvivesExecForProgramLifetime(t *testing.T) {
 	inputRead, inputWrite, err := os.Pipe()
 	if err != nil {
@@ -707,6 +719,10 @@ func TestTrampolineHelper(t *testing.T) {
 	arguments := argumentsAfterDoubleDash()
 	if arguments == nil {
 		return
+	}
+	if os.Getenv("PARTITUR_TEST_TRAMPOLINE_FAILURE") == "1" {
+		fmt.Fprintln(os.Stderr, "startup token=supersecret")
+		os.Exit(66)
 	}
 	if len(arguments) > 0 && strings.HasPrefix(arguments[0], "test-malicious=") {
 		if err := runMaliciousTrampoline(

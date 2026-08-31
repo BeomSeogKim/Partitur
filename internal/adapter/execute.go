@@ -515,14 +515,16 @@ func (c *Client) startExecute(ctx context.Context, plan ExecutePlan) (*runningEx
 		_ = childStdout.Close()
 		return nil, fmt.Errorf("create adapter stderr: %w", err)
 	}
-	closeAll := func() {
-		_ = stdin.Close()
-		_ = childStdin.Close()
-		_ = stdout.Close()
-		_ = childStdout.Close()
-		_ = stderr.Close()
-		_ = childStderr.Close()
-	}
+	stderrBuffer := &limitedBuffer{limit: MaxProbeStderrBytes}
+	stderrDone := make(chan struct{})
+	// Launch can return only after the trampoline has exited, including before
+	// publishing its ready byte. Start draining before that handoff so its
+	// diagnostic is not discarded on the error path and cannot fill the pipe.
+	go func() {
+		defer stderr.Close()
+		_, _ = c.copyStderr(stderrBuffer, stderr)
+		close(stderrDone)
+	}()
 	process, err := c.launch(ctx, launch.Request{
 		Kind:                  launch.Adapter,
 		TrampolinePath:        plan.TrampolinePath,
@@ -540,8 +542,13 @@ func (c *Client) startExecute(ctx context.Context, plan ExecutePlan) (*runningEx
 		Probe:                 plan.Probe,
 	})
 	if err != nil {
-		closeAll()
-		return nil, err
+		_ = stdin.Close()
+		_ = childStdin.Close()
+		_ = stdout.Close()
+		_ = childStdout.Close()
+		_ = childStderr.Close()
+		<-stderrDone
+		return nil, withLaunchStderr(err, stderrBuffer.String())
 	}
 	_ = childStdin.Close()
 	_ = childStdout.Close()
@@ -551,13 +558,6 @@ func (c *Client) startExecute(ctx context.Context, plan ExecutePlan) (*runningEx
 	go func() {
 		defer stdout.Close()
 		c.read(stdout, frames)
-	}()
-	stderrBuffer := &limitedBuffer{limit: MaxProbeStderrBytes}
-	stderrDone := make(chan struct{})
-	go func() {
-		defer stderr.Close()
-		_, _ = c.copyStderr(stderrBuffer, stderr)
-		close(stderrDone)
 	}()
 	identity, err := processIdentityString(process.Identity.Start)
 	if err != nil {
@@ -571,6 +571,14 @@ func (c *Client) startExecute(ctx context.Context, plan ExecutePlan) (*runningEx
 		process: process, stdin: stdin, frames: frames,
 		stderrDone: stderrDone, stderr: stderrBuffer, identity: identity,
 	}, nil
+}
+
+func withLaunchStderr(err error, stderr string) error {
+	diagnostic := adapterkit.SanitizeDiagnostic(stderr)
+	if diagnostic == "" {
+		return err
+	}
+	return fmt.Errorf("%w: trampoline stderr: %s", err, diagnostic)
 }
 
 func processIdentityString(identity runstate.StartIdentity) (string, error) {

@@ -3,6 +3,7 @@
 package launch
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -16,12 +17,14 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
 const gateReleaseByte = byte('G')
+const launchStderrLimit = adapterkit.MaxDiagnosticBytes
 
 type launchDependencies struct {
 	newNonce   func() (string, error)
@@ -107,13 +110,22 @@ func launch(
 	command.Dir = request.Directory
 	command.Stdin = request.Stdin
 	command.Stdout = request.Stdout
-	command.Stderr = request.Stderr
+	stderrCapture, err := newLaunchStderrCapture(request.Stderr)
+	if err != nil {
+		closeAllFiles()
+		return nil, fmt.Errorf("capture launch trampoline stderr: %w", err)
+	}
+	command.Stderr = stderrCapture.writer
 	command.ExtraFiles = []*os.File{gateRead, readyWrite}
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	launchError := func(err error) error {
+		return stderrCapture.wrap(err)
+	}
 	if err := command.Start(); err != nil {
 		closeAllFiles()
-		return nil, fmt.Errorf("start launch trampoline: %w", err)
+		return nil, launchError(fmt.Errorf("start launch trampoline: %w", err))
 	}
+	stderrCapture.closeParentWriter()
 	closeParentFiles()
 
 	type readyResult struct {
@@ -135,7 +147,7 @@ func launch(
 		result = <-ready
 		_ = readyRead.Close()
 		_ = command.Wait()
-		return nil, fmt.Errorf("launch handoff cancelled: %w", ctx.Err())
+		return nil, launchError(fmt.Errorf("launch handoff cancelled: %w", ctx.Err()))
 	}
 	_ = readyRead.Close()
 	if result.err != nil || result.count != 1 {
@@ -145,83 +157,141 @@ func launch(
 			result.err = io.ErrUnexpectedEOF
 		}
 		if waitErr != nil {
-			return nil, fmt.Errorf(
+			return nil, launchError(fmt.Errorf(
 				"launch trampoline did not publish identity: %v: %w",
 				waitErr,
 				result.err,
-			)
+			))
 		}
-		return nil, fmt.Errorf("launch trampoline did not publish identity: %w", result.err)
+		return nil, launchError(fmt.Errorf("launch trampoline did not publish identity: %w", result.err))
 	}
 
 	identity, matched, err := ReadHandoff(launchDir, nonce)
 	if err != nil {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, err
+		return nil, launchError(err)
 	}
 	if !matched {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, ErrStaleHandoff
+		return nil, launchError(ErrStaleHandoff)
 	}
 	if identity.PID != command.Process.Pid {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, fmt.Errorf(
+		return nil, launchError(fmt.Errorf(
 			"%w: published pid %d does not identify trampoline %d",
 			ErrInvalidHandoff,
 			identity.PID,
 			command.Process.Pid,
-		)
+		))
 	}
 	match := procid.Matches(identity.PID, identity.Start)
 	if match.Status != procid.MatchingAndLive {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, fmt.Errorf(
+		return nil, launchError(fmt.Errorf(
 			"%w: published process identity is not live: %v",
 			ErrInvalidHandoff,
 			match.Err,
-		)
+		))
 	}
 	if err := ctx.Err(); err != nil {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, fmt.Errorf("launch handoff cancelled: %w", err)
+		return nil, launchError(fmt.Errorf("launch handoff cancelled: %w", err))
 	}
 
 	journalReceipt, err := request.RecordIdentity(identity)
 	if err != nil {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, err
+		return nil, launchError(err)
 	}
 	if err := validateReceipt(request.Kind, journalReceipt); err != nil {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, err
+		return nil, launchError(err)
 	}
 	reach(request.Probe, recordedPoint(request.Kind))
 	if err := ctx.Err(); err != nil {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, fmt.Errorf("launch handoff cancelled: %w", err)
+		return nil, launchError(fmt.Errorf("launch handoff cancelled: %w", err))
 	}
 	if _, err := gateWrite.Write([]byte{gateReleaseByte}); err != nil {
 		_ = gateWrite.Close()
 		_ = command.Wait()
-		return nil, fmt.Errorf("release launch gate: %w", err)
+		return nil, launchError(fmt.Errorf("release launch gate: %w", err))
 	}
 	if err := gateWrite.Close(); err != nil {
 		_ = command.Wait()
-		return nil, fmt.Errorf("close launch gate: %w", err)
+		return nil, launchError(fmt.Errorf("close launch gate: %w", err))
 	}
 	return &Process{
 		Identity:    identity,
 		LaunchDir:   launchDir,
 		commandWait: command.Wait,
 	}, nil
+}
+
+type launchStderrCapture struct {
+	writer            io.Writer
+	closeParentWriter func()
+	wrap              func(error) error
+}
+
+func newLaunchStderrCapture(stderr *os.File) (launchStderrCapture, error) {
+	if stderr != nil {
+		return launchStderrCapture{
+			writer:            stderr,
+			closeParentWriter: func() {},
+			wrap:              func(err error) error { return err },
+		}, nil
+	}
+	read, write, err := os.Pipe()
+	if err != nil {
+		return launchStderrCapture{}, err
+	}
+	var buffer boundedLaunchStderr
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&buffer, read)
+		_ = read.Close()
+		close(done)
+	}()
+	return launchStderrCapture{
+		writer: write,
+		closeParentWriter: func() {
+			_ = write.Close()
+		},
+		wrap: func(err error) error {
+			_ = write.Close()
+			<-done
+			diagnostic := adapterkit.SanitizeDiagnostic(buffer.String())
+			if diagnostic == "" {
+				return err
+			}
+			return fmt.Errorf("%w: trampoline stderr: %s", err, diagnostic)
+		},
+	}, nil
+}
+
+type boundedLaunchStderr struct {
+	bytes.Buffer
+}
+
+func (buffer *boundedLaunchStderr) Write(value []byte) (int, error) {
+	count := len(value)
+	remaining := launchStderrLimit - buffer.Len()
+	if remaining > 0 {
+		if len(value) > remaining {
+			value = value[:remaining]
+		}
+		_, _ = buffer.Buffer.Write(value)
+	}
+	return count, nil
 }
 
 func recordedPoint(kind Kind) faultpoint.PointID {

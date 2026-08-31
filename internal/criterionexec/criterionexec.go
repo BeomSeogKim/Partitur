@@ -83,6 +83,13 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 		return acceptance.RunCriterionResult{Err: err}
 	}
 	defer stderr.Close()
+	stdoutDone := make(chan bool, 1)
+	stderrDone := make(chan bool, 1)
+	// The trampoline can fail before publishing its identity. Drain from the
+	// start of that handoff so a race report or loader error reaches the
+	// criterion capture rather than being closed unread on the failure path.
+	go func() { stdoutDone <- copyBounded(stdout, stdoutRead) }()
+	go func() { stderrDone <- copyBounded(stderr, stderrRead) }()
 	environment := criterionEnvironment(config.Worktree, temporary)
 	launchID := "criterion-" + request.ID
 	launchContext, cancelLaunch := context.WithCancel(context.Background())
@@ -112,17 +119,19 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 		},
 	})
 	if err != nil {
+		_ = stdoutWrite.Close()
+		_ = stderrWrite.Close()
+		truncated := streams(<-stdoutDone, <-stderrDone)
 		if criterionCancelled(config.Cancel) {
 			return acceptance.RunCriterionResult{Cancelled: true}
 		}
-		return spawnFailure(err)
+		result := spawnFailure(err)
+		result.OutputRef = criterionOutputRef(config, request.ID)
+		result.TruncatedStreams = truncated
+		return result
 	}
 	_ = stdoutWrite.Close()
 	_ = stderrWrite.Close()
-	stdoutDone := make(chan bool, 1)
-	stderrDone := make(chan bool, 1)
-	go func() { stdoutDone <- copyBounded(stdout, stdoutRead) }()
-	go func() { stderrDone <- copyBounded(stderr, stderrRead) }()
 	started := time.Now()
 	timeout, budget, deadlineTied := effectiveTimeout(config.RemainingMS, request.TimeoutMin)
 	wait := make(chan error, 1)
