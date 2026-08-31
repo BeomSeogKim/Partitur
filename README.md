@@ -30,16 +30,88 @@ Agents are getting good at *playing*. Nobody is *conducting*. Partitur is the la
 - **keeps time** — coordinates concurrency and hand-offs between parts
 - **holds the score** — owns the single, declarative plan every part derives from
 
+## Quickstart
+
+Partitur is four binaries. The core resolves the adapters and the trampoline from `PATH`, so install
+all four:
+
+```bash
+go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline
+```
+
+Scaffold a repository:
+
+```bash
+partitur init
+```
+
+That writes `partitur.yaml` — a draft score with one interview movement — and `.partitur/`. It
+deliberately writes no cast: a cast binds parts to the agents *you* choose, and the tool does not
+choose for you. Write `.partitur/cast.yaml`:
+
+```yaml
+cast: "0.1"
+performers:
+  codex:
+    adapter: codex
+    model: gpt-5.6-sol
+    allow_advisory_enforcement: true
+bindings:
+  interview:
+    performer: codex
+```
+
+`allow_advisory_enforcement: true` is required today, and it concedes something real. The
+withheld-authority table in [`docs/DESIGN.md`](docs/DESIGN.md) §4 demands `read_grants` when
+`repo_read` is withheld and `path_grants` when it is granted, and no shipped adapter reports either
+— reads cannot be confined to granted paths, and closing `shell_tool` still leaves another execution
+route open. So the adapters report those dimensions as unmet, honestly, and the flag turns a
+fail-closed refusal into a per-attempt advisory record. Without it `validate` exits 3.
+
+```bash
+partitur validate
+```
+
+Exit 0, with the advisory enforcement block on stderr, means the score and cast are sound and every
+adapter was probed. Then run the draft interview, which asks you what you actually want built:
+
+```bash
+partitur run                                     # the interview movement stops on a question
+partitur status                                  # names the open decision and its id
+partitur answer <decision-id> --answer "..."     # continue from your answer
+partitur approve <decision-id> --approve         # resolve a human gate
+partitur promote-score <run-id>                  # draft -> finalized, once the interview settles
+partitur run                                     # execute the finalized score
+partitur apply <run-id>                          # carry the verified result onto your checkout
+```
+
+`answer` and `approve` take a **decision** id, not a run id; `status` is where you read it.
+
+Working across several repositories? Cast layers `.partitur/cast.yaml` over
+`~/.config/partitur/cast.yaml`, and `performers` and `bindings` layer independently. Put the
+`performers` block in the user-global file once and leave each repository a `bindings` block of four
+lines. Keeping the advisory entry a dedicated, separately named performer — selected per repository
+rather than inherited — is what §3 asks for.
+
 ## Status
 
-**Not usable yet.** The engine runs — a score compiles, movements execute against real adapters,
-acceptance criteria are evaluated, and an interrupted run recovers to a fixpoint — but the commands
-that would make it a tool you can pick up are still landing. `apply`, `amend`, and `init` do not
-exist, so nothing Partitur produces reaches your checkout yet.
+**Runnable, barely packaged.** The whole loop has executed end to end: a score compiles, movements
+execute against real adapters, acceptance criteria are evaluated, a human gate stops the run, an
+interrupted run recovers to a fixpoint, and `apply` carries the result onto the checkout. All
+thirteen commands are dispatched.
 
-What does work today: `validate`, `run`, `resume`, `cancel`, `status`, `logs`, `answer`, `approve`.
-A run can execute a plan, ask you a question and continue from your answer, run declared checks,
-have its output reviewed by a model, and stop at a human gate.
+[`docs/COMPLETION.md`](docs/COMPLETION.md) §5 is the row that asks whether the tool is *usable*
+rather than whether it is *correct*. It is green on evidence recorded 2026-08-12: one run per
+platform, macOS and Linux, driving the production CLI against this repository with the real `codex`
+performer, carrying a non-no-op write, a criterion that verified it, an approved human gate, a kill
+that left a genuine recovery obligation, and an `apply` onto a checkout that initially differed.
+Both runs produced the same candidate.
+
+What that evidence does not cover is the distance between one deliberate reference score and daily
+use. Two things follow. Enforcement is advisory in practice — see the Quickstart — so the
+constraints a score declares are recorded per attempt rather than imposed. And the adapters shell
+out to vendor CLIs that change on their own schedule, while the full real-CLI path has been
+exercised deliberately rather than continuously.
 
 The design is written down before it is built, and the gap between the two is tracked rather than
 estimated:
@@ -51,8 +123,9 @@ estimated:
 | [`docs/HARNESS.md`](docs/HARNESS.md) | which crash boundaries are injected at, and which are not yet |
 | [`docs/COMPLETION.md`](docs/COMPLETION.md) | what "finished" means, as rows that can be checked rather than judged |
 
-`COMPLETION.md` is the honest answer to "how far along is this?" — most of its rows are red, and it
-says so.
+`COMPLETION.md` is the honest answer to "how far along is this?" Its nine sections now read green,
+and its own closing rule says that is necessary and not sufficient: a set of prerequisites has to
+become rows there before completion can be declared, and they have not.
 
 ## The vocabulary
 
