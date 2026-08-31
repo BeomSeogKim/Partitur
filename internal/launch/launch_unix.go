@@ -29,6 +29,7 @@ const launchStderrLimit = adapterkit.MaxDiagnosticBytes
 type launchDependencies struct {
 	newNonce   func() (string, error)
 	newCommand func(string, ...string) *exec.Cmd
+	closeGate  func(*os.File) error
 }
 
 // Launch starts one trusted trampoline and opens its gate only after
@@ -46,6 +47,7 @@ func LaunchContext(ctx context.Context, request Request) (*Process, error) {
 		newCommand: func(path string, arguments ...string) *exec.Cmd {
 			return exec.Command(path, arguments...)
 		},
+		closeGate: func(file *os.File) error { return file.Close() },
 	})
 }
 
@@ -120,6 +122,11 @@ func launch(
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	launchError := func(err error) error {
 		return stderrCapture.wrap(err)
+	}
+	releasedError := func(err error) error {
+		stderrCapture.closeReader()
+		go func() { _ = command.Wait() }()
+		return postReleaseError(err)
 	}
 	if err := command.Start(); err != nil {
 		closeAllFiles()
@@ -220,14 +227,19 @@ func launch(
 		_ = command.Wait()
 		return nil, launchError(fmt.Errorf("launch handoff cancelled: %w", err))
 	}
-	if _, err := gateWrite.Write([]byte{gateReleaseByte}); err != nil {
+	count, writeErr := gateWrite.Write([]byte{gateReleaseByte})
+	if writeErr != nil || count != 1 {
 		_ = gateWrite.Close()
-		_ = command.Wait()
-		return nil, launchError(fmt.Errorf("release launch gate: %w", err))
+		if count == 1 {
+			return nil, releasedError(fmt.Errorf("release launch gate: %w", writeErr))
+		}
+		if writeErr == nil {
+			writeErr = io.ErrShortWrite
+		}
+		return nil, launchError(fmt.Errorf("release launch gate: %w", writeErr))
 	}
-	if err := gateWrite.Close(); err != nil {
-		_ = command.Wait()
-		return nil, launchError(fmt.Errorf("close launch gate: %w", err))
+	if err := dependencies.closeGate(gateWrite); err != nil {
+		return nil, releasedError(fmt.Errorf("close launch gate: %w", err))
 	}
 	return &Process{
 		Identity:    identity,
@@ -239,7 +251,28 @@ func launch(
 type launchStderrCapture struct {
 	writer            io.Writer
 	closeParentWriter func()
+	closeReader       func()
 	wrap              func(error) error
+}
+
+type releasedHandoffError struct {
+	cause error
+}
+
+func (err *releasedHandoffError) Error() string {
+	return err.cause.Error()
+}
+
+func (err *releasedHandoffError) Unwrap() error {
+	return err.cause
+}
+
+func (err *releasedHandoffError) Is(target error) bool {
+	return target == ErrHandoffReleased
+}
+
+func postReleaseError(cause error) error {
+	return &releasedHandoffError{cause: cause}
 }
 
 func newLaunchStderrCapture(stderr *os.File) (launchStderrCapture, error) {
@@ -247,6 +280,7 @@ func newLaunchStderrCapture(stderr *os.File) (launchStderrCapture, error) {
 		return launchStderrCapture{
 			writer:            stderr,
 			closeParentWriter: func() {},
+			closeReader:       func() {},
 			wrap:              func(err error) error { return err },
 		}, nil
 	}
@@ -265,6 +299,9 @@ func newLaunchStderrCapture(stderr *os.File) (launchStderrCapture, error) {
 		writer: write,
 		closeParentWriter: func() {
 			_ = write.Close()
+		},
+		closeReader: func() {
+			_ = read.Close()
 		},
 		wrap: func(err error) error {
 			_ = write.Close()

@@ -40,17 +40,11 @@ jobs:
 
       # Go's per-package test timeout defaults to 10m, which the heaviest
       # packages now approach on a CI runner: `cmd/partitur` measures 412s
-      # under -race locally and the runners are roughly half the speed. macOS
-      # keeps enough headroom for that measured load, but reports a stuck
-      # pre-exec handoff ten minutes earlier and names the last test. Linux
-      # retains the existing 30m non-verbose command.
+      # under -race locally and the runners are roughly half the speed. A
+      # timeout panic reads as a hang, not as a suite that grew — so the bound
+      # is stated rather than inherited.
       - name: Race
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            go test -race -count=1 -timeout=20m -v ./...
-          else
-            go test -race -count=1 -timeout=30m ./...
-          fi
+        run: go test -race -count=1 -timeout=30m ./...
 
       # Keep this in the OS matrix: beyond catalogue parity, the kill harness
       # probes the session-sweeping and fencing assumptions on each runner.

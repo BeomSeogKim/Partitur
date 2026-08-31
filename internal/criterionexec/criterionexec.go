@@ -22,6 +22,8 @@ import (
 
 const outputLimit = 4 * 1024 * 1024
 
+var launchCriterion = launch.LaunchContext
+
 type Config struct {
 	RunID          runstate.RunID
 	AttemptID      runstate.AttemptID
@@ -105,7 +107,7 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 			}
 		}()
 	}
-	process, err := launch.LaunchContext(launchContext, launch.Request{
+	process, err := launchCriterion(launchContext, launch.Request{
 		Kind: launch.Criterion, TrampolinePath: config.TrampolinePath, AttemptRoot: config.AttemptRoot, LaunchID: launchID,
 		Executable: command, Arguments: request.Argv[1:], CommandEnvironment: launch.CommandEnvironment(environment),
 		TrampolineEnvironment: launch.TrampolineEnvironment(slices.Clone(os.Environ())), Directory: config.Worktree,
@@ -121,6 +123,16 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 	if err != nil {
 		_ = stdoutWrite.Close()
 		_ = stderrWrite.Close()
+		if errors.Is(err, launch.ErrHandoffReleased) {
+			_ = stdoutRead.Close()
+			_ = stderrRead.Close()
+			if criterionCancelled(config.Cancel) {
+				return acceptance.RunCriterionResult{Cancelled: true}
+			}
+			result := spawnFailure(err)
+			result.OutputRef = criterionOutputRef(config, request.ID)
+			return result
+		}
 		truncated := streams(<-stdoutDone, <-stderrDone)
 		if criterionCancelled(config.Cancel) {
 			return acceptance.RunCriterionResult{Cancelled: true}

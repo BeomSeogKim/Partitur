@@ -547,6 +547,10 @@ func (c *Client) startExecute(ctx context.Context, plan ExecutePlan) (*runningEx
 		_ = stdout.Close()
 		_ = childStdout.Close()
 		_ = childStderr.Close()
+		if errors.Is(err, launch.ErrHandoffReleased) {
+			_ = stderr.Close()
+			return nil, err
+		}
 		<-stderrDone
 		return nil, withLaunchStderr(err, stderrBuffer.String())
 	}
