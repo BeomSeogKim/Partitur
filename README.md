@@ -37,8 +37,10 @@ all four:
 
 ```bash
 go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline
-export PATH="$(go env GOPATH)/bin:$PATH"
 ```
+
+`go install` writes to `$(go env GOBIN)` when that is set and `$(go env GOPATH)/bin` otherwise. Put
+whichever one applies on your `PATH`.
 
 An adapter is a thin shim, not the agent. Whichever performer a cast selects, that vendor's own CLI
 has to be installed and on `PATH` as well — the adapter's probe resolves and runs it. `validate`
@@ -80,25 +82,23 @@ partitur validate
 ```
 
 Exit 0, with the advisory enforcement block on stderr, means the score and cast are sound and every
-adapter was probed. From here the loop is:
+adapter was probed. That is where this page stops being a transcript, because the rest has not been
+executed here yet — and a walkthrough composed from the specification is how the previous version of
+this section came to describe commands in an order the tool refuses.
 
-```bash
-partitur run       # execute; the draft interview stops to ask you something
-partitur status    # what the run is waiting on, and the id of the open decision
-partitur answer <decision-id> --answer "..."
-partitur resume <run-id>
-```
+What is left is `run`, and then a cycle driven by what `status` reports: `answer <decision-id>` when
+a run stops on a question, `approve <decision-id> --approve` when it stops on a gate or an amendment,
+and `resume <run-id>` to carry it forward. Two things a reader would otherwise guess wrong:
 
-`answer` and `approve` take a **decision** id, not a run id, and `status` is where you read it.
-Resolving a decision records it — it does not by itself start the next attempt, so `resume` is what
-carries the run forward. Repeat that cycle until the interview settles; `approve <decision-id>
---approve` resolves a human gate or an amendment when one is what `status` reports. Then
-`promote-score <run-id>` turns the draft into a finalized score, `run` executes it, and `apply
-<run-id>` carries the verified result onto your checkout.
+- `answer` and `approve` take a **decision** id, not a run id, and resolving a decision does not by
+  itself start the next attempt — `resume` is what does.
+- Promotion comes last, not first. Only the latest revision of a `SUCCEEDED` run may be promoted, at
+  most once, and only after `apply.completed` for the same candidate — so `apply <run-id>` precedes
+  `promote-score <run-id>`.
 
-Each command's exact operands and exit codes are specified in [`docs/DESIGN.md`](docs/DESIGN.md) §7.
-This page is verified as far as `validate`; the loop above is the specified surface, and the worked
-transcript lands here once it has been executed rather than composed.
+Each command's operands, exit codes, and refusal conditions are specified in
+[`docs/DESIGN.md`](docs/DESIGN.md) §7, and the draft phase's own contract in §2. The executed
+walkthrough replaces this section once it has been run rather than composed.
 
 Working across several repositories? Cast layers `.partitur/cast.yaml` over
 `~/.config/partitur/cast.yaml`, and `performers` and `bindings` layer independently. Put the
