@@ -70,12 +70,19 @@ bindings:
     performer: codex
 ```
 
-`allow_advisory_enforcement: true` is required today, and it concedes something real. The
-withheld-authority table in [`docs/DESIGN.md`](docs/DESIGN.md) §4 demands `read_grants` when
-`repo_read` is withheld and `path_grants` when it is granted, and no shipped adapter reports either
-— reads cannot be confined to granted paths, and closing `shell_tool` still leaves another execution
-route open. So the adapters report those dimensions as unmet, honestly, and the flag turns a
-fail-closed refusal into a per-attempt advisory record. Without it `validate` exits 3.
+`allow_advisory_enforcement: true` is what this score needs, and it concedes something real.
+[`docs/DESIGN.md`](docs/DESIGN.md) §4's withheld-authority table pairs each authority a movement
+withholds or scopes with an enforcement dimension the adapter must provide in its place. The
+scaffold withholds `shell` and declares no `allowed_paths`; the Codex adapter reports neither
+`shell_grants` nor `path_grants`; so those two rows go unmet. The flag turns a fail-closed refusal
+into a per-attempt advisory record. Without it `validate` exits 3.
+
+Whether some other score can drop the flag is a question about that score, and `validate` answers it
+by naming the dimensions it found unmet — §4's table and `internal/cast/enforcement.go` say which
+grants and which `allowed_paths` would clear them. One rule there is more mechanical than it reads:
+for a movement granting `repo_read` or `repo_write`, `path_grants` is demanded unless `allowed_paths`
+is exactly `["**"]` — so a repository-granting movement declaring `["**", "src/**"]` still owes it,
+even though that list narrows nothing.
 
 ```bash
 partitur validate
