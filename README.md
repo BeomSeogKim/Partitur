@@ -70,21 +70,19 @@ bindings:
     performer: codex
 ```
 
-`allow_advisory_enforcement: true` is what this particular score needs, and it concedes something
-real. The withheld-authority table in [`docs/DESIGN.md`](docs/DESIGN.md) §4 demands `path_grants`
-whenever a score grants repository access **and scopes it to some subset of paths**, and no shipped
-adapter reports that dimension — an adapter cannot confine reads to granted paths, and closing
-`shell_tool` still leaves another execution route open. The scaffold declares no `allowed_paths`, so
-it is scoped, so the dimension is unmet. The flag turns a fail-closed refusal into a per-attempt
-advisory record; without it `validate` exits 3.
+`allow_advisory_enforcement: true` is what this score needs, and it concedes something real.
+[`docs/DESIGN.md`](docs/DESIGN.md) §4's withheld-authority table pairs each authority a movement
+withholds or scopes with an enforcement dimension the adapter must provide in its place. The
+scaffold withholds `shell` and declares no `allowed_paths`; the Codex adapter reports neither
+`shell_grants` nor `path_grants`; so those two rows go unmet. The flag turns a fail-closed refusal
+into a per-attempt advisory record. Without it `validate` exits 3.
 
-It is not the only reason a score goes advisory, and `allowed_paths: ["**"]` is not a way out on its
-own — it removes the `path_grants` requirement and waives none of the other withheld-authority
-checks. A strict Codex movement must still grant `repo_read` and `shell`, and the scaffold omits
-`shell`, so it stays advisory even with paths unscoped. Claude reports none of the five enforcement
-dimensions, so a Claude-bound draft or final movement cannot validate strictly at all today. Reach
-for a strict entry when `validate` reports no unmet dimensions, not on the strength of any one of
-these conditions.
+Whether some other score can drop the flag is a question about that score, and `validate` answers it
+by naming the dimensions it found unmet — §4's table and `internal/cast/enforcement.go` say which
+grants and which `allowed_paths` would clear them. One rule there is more mechanical than it reads:
+for a movement granting `repo_read` or `repo_write`, `path_grants` is demanded unless `allowed_paths`
+is exactly `["**"]` — so a repository-granting movement declaring `["**", "src/**"]` still owes it,
+even though that list narrows nothing.
 
 ```bash
 partitur validate
