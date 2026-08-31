@@ -2485,6 +2485,31 @@ func TestValidateRendersOrderedBlocksAndExitsThree(t *testing.T) {
 	}
 }
 
+func TestValidateBindingMissingRendersGuidance(t *testing.T) {
+	result := validation.Result{Entries: []validation.Entry{{
+		Kind:    validation.EntryCast,
+		Rule:    "cast.score",
+		Pointer: "/bindings/interview",
+		Detail:  "binding_missing",
+		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
+	}}}
+	var stdout, stderr bytes.Buffer
+	code := runWithValidate(
+		[]string{"validate"},
+		&stdout,
+		&stderr,
+		func() validation.Result { return result },
+	)
+	if code != 3 || stdout.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q", code, stdout.String())
+	}
+	want := "cast: rule=\"cast.score\" origin=\"\" pointer=\"/bindings/interview\" detail=\"binding_missing\" " +
+		"hint=\"write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers\"\n"
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
 func TestAdvisoryReportUsesStderrAndKeepsExitZero(t *testing.T) {
 	t.Parallel()
 	result := validation.Result{Entries: []validation.Entry{{

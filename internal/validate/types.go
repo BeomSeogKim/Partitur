@@ -28,6 +28,7 @@ type Entry struct {
 	Origin              string
 	Pointer             string
 	Detail              string
+	Hint                string
 	AdapterID           string
 	AdapterKind         string
 	Stderr              string

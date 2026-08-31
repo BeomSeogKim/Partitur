@@ -1403,7 +1403,7 @@ func TestValidateEndToEnd(t *testing.T) {
 				),
 			)
 			want := "" +
-				"cast: rule=\"cast.score\" origin=\"\" pointer=\"/bindings/missing\" detail=\"binding_missing\"\n" +
+				"cast: rule=\"cast.score\" origin=\"\" pointer=\"/bindings/missing\" detail=\"binding_missing\" hint=\"write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers\"\n" +
 				"adapter-environment: adapter=\"bad\" kind=\"executable_absent\" detail=\"partitur-adapter-bad is absent from PATH\" stderr=\"\"\n" +
 				"capability: part=\"capability\" performer=\"capability-performer\" missing=[\"network\"]\n" +
 				"enforcement: movement=\"enforcement-movement\" part=\"enforcement\" performer=\"enforcement-performer\" unmet=[\"read_only\"]\n"

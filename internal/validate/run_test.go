@@ -470,6 +470,7 @@ func TestCastAdapterCapabilityEnforcementOrderAndSuppression(t *testing.T) {
 			Rule:    "cast.score",
 			Pointer: "/bindings/missing",
 			Detail:  "binding_missing",
+			Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
 		},
 		{
 			Kind:        EntryAdapterEnvironment,
@@ -534,6 +535,28 @@ func TestAdapterDeduplicationAndBindingLocalSuppression(t *testing.T) {
 		Rule:    "cast.score",
 		Pointer: "/bindings/missing",
 		Detail:  "binding_missing",
+		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
+	}}
+	if !reflect.DeepEqual(result.Entries, want) {
+		t.Fatalf("entries = %#v, want %#v", result.Entries, want)
+	}
+}
+
+func TestMissingBindingGuidance(t *testing.T) {
+	result := evaluate(
+		encode(t, validDraftScore("interview")),
+		nil,
+		func() prober {
+			t.Fatal("missing binding must not probe an adapter")
+			return nil
+		},
+	)
+	want := []Entry{{
+		Kind:    EntryCast,
+		Rule:    "cast.score",
+		Pointer: "/bindings/interview",
+		Detail:  "binding_missing",
+		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
 	}}
 	if !reflect.DeepEqual(result.Entries, want) {
 		t.Fatalf("entries = %#v, want %#v", result.Entries, want)
