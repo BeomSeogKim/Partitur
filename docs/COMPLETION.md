@@ -391,6 +391,9 @@ unreviewed are derived states; it stores no editable status and the completion r
 region enumeration. Until the manual row is complete and the activation pins are present, the P3
 baseline remains red and the document is not enrolled.
 
+Currently green: every region of the pinned universe carries a review receipt, both activation pins
+are present, and the activation check reports `baseline-activation=valid`.
+
 ---
 
 ## Using this contract
