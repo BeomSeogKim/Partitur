@@ -78,11 +78,13 @@ adapter reports that dimension — an adapter cannot confine reads to granted pa
 it is scoped, so the dimension is unmet. The flag turns a fail-closed refusal into a per-attempt
 advisory record; without it `validate` exits 3.
 
-It is not required by every score. A score that declines path confinement outright —
-`allowed_paths: ["**"]` — has nothing left for the adapter to fail to enforce, and validates against
-a strict entry. That is the real trade today: you may have enforcement checked, or you may have it
-scoped, not both. Since scoping is what `allowed_paths` is for, most real scores land on the
-advisory side, but it is worth trying the strict entry first rather than assuming.
+It is not the only reason a score goes advisory, and `allowed_paths: ["**"]` is not a way out on its
+own — it removes the `path_grants` requirement and waives none of the other withheld-authority
+checks. A strict Codex movement must still grant `repo_read` and `shell`, and the scaffold omits
+`shell`, so it stays advisory even with paths unscoped. Claude reports none of the five enforcement
+dimensions, so a Claude-bound draft or final movement cannot validate strictly at all today. Reach
+for a strict entry when `validate` reports no unmet dimensions, not on the strength of any one of
+these conditions.
 
 ```bash
 partitur validate
