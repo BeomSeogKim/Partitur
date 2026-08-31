@@ -70,12 +70,19 @@ bindings:
     performer: codex
 ```
 
-`allow_advisory_enforcement: true` is required today, and it concedes something real. The
-withheld-authority table in [`docs/DESIGN.md`](docs/DESIGN.md) §4 demands `read_grants` when
-`repo_read` is withheld and `path_grants` when it is granted, and no shipped adapter reports either
-— reads cannot be confined to granted paths, and closing `shell_tool` still leaves another execution
-route open. So the adapters report those dimensions as unmet, honestly, and the flag turns a
-fail-closed refusal into a per-attempt advisory record. Without it `validate` exits 3.
+`allow_advisory_enforcement: true` is what this particular score needs, and it concedes something
+real. The withheld-authority table in [`docs/DESIGN.md`](docs/DESIGN.md) §4 demands `path_grants`
+whenever a score grants repository access **and scopes it to some subset of paths**, and no shipped
+adapter reports that dimension — an adapter cannot confine reads to granted paths, and closing
+`shell_tool` still leaves another execution route open. The scaffold declares no `allowed_paths`, so
+it is scoped, so the dimension is unmet. The flag turns a fail-closed refusal into a per-attempt
+advisory record; without it `validate` exits 3.
+
+It is not required by every score. A score that declines path confinement outright —
+`allowed_paths: ["**"]` — has nothing left for the adapter to fail to enforce, and validates against
+a strict entry. That is the real trade today: you may have enforcement checked, or you may have it
+scoped, not both. Since scoping is what `allowed_paths` is for, most real scores land on the
+advisory side, but it is worth trying the strict entry first rather than assuming.
 
 ```bash
 partitur validate
