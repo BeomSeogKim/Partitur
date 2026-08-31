@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -676,6 +678,88 @@ func TestExecuteCancellationDuringLaunchEndsTheCall(t *testing.T) {
 	if len(order) != 0 {
 		t.Fatalf("journal order = %v, want nothing recorded", order)
 	}
+}
+
+func TestExecuteLaunchFailureIncludesSanitizedTrampolineStderr(t *testing.T) {
+	var order []string
+	client := newClient(nil, incidentalTestDeadline, 20*time.Millisecond)
+	client.launch = func(_ context.Context, request launch.Request) (*launch.Process, error) {
+		if _, err := request.Stderr.WriteString("race report token=supersecret\n"); err != nil {
+			t.Fatal(err)
+		}
+		return nil, errors.New("trampoline exited before identity")
+	}
+	plan := executePlan(
+		"fake",
+		"/bin/false",
+		"/bin/false",
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	_, err := client.startExecute(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "trampoline exited before identity") ||
+		!strings.Contains(err.Error(), "trampoline stderr: race report token=[REDACTED]") ||
+		strings.Contains(err.Error(), "supersecret") {
+		t.Fatalf("launch error = %v", err)
+	}
+}
+
+func TestExecutePostReleaseFailureDoesNotWaitForStderrDescendant(t *testing.T) {
+	var holder *exec.Cmd
+	started := make(chan struct{})
+	client := newClient(nil, incidentalTestDeadline, 20*time.Millisecond)
+	closeErr := errors.New("injected gate close failure")
+	client.launch = func(_ context.Context, request launch.Request) (*launch.Process, error) {
+		holder = exec.Command(os.Args[0], "-test.run=^TestExecuteStderrHolder$")
+		holder.Env = append(os.Environ(), "PARTITUR_EXECUTE_STDERR_HOLDER=1")
+		holder.Stderr = request.Stderr
+		if err := holder.Start(); err != nil {
+			return nil, err
+		}
+		close(started)
+		return nil, fmt.Errorf("%w: %w", launch.ErrHandoffReleased, closeErr)
+	}
+	var order []string
+	plan := executePlan(
+		"fake",
+		"/bin/false",
+		"/bin/false",
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+		successfulRecorder(&order),
+		&order,
+	)
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.startExecute(context.Background(), plan)
+		result <- err
+	}()
+	<-started
+	t.Cleanup(func() {
+		if holder != nil && holder.Process != nil {
+			_ = holder.Process.Kill()
+			_ = holder.Wait()
+		}
+	})
+	select {
+	case err := <-result:
+		if !errors.Is(err, closeErr) || !errors.Is(err, launch.ErrHandoffReleased) {
+			t.Fatalf("launch error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("adapter launch failure waited for descendant stderr")
+	}
+}
+
+func TestExecuteStderrHolder(t *testing.T) {
+	if os.Getenv("PARTITUR_EXECUTE_STDERR_HOLDER") == "" {
+		return
+	}
+	select {}
 }
 
 func TestExecuteCancellationIsObservedBeforeTheProbeCompletes(t *testing.T) {

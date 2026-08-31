@@ -22,6 +22,8 @@ import (
 
 const outputLimit = 4 * 1024 * 1024
 
+var launchCriterion = launch.LaunchContext
+
 type Config struct {
 	RunID          runstate.RunID
 	AttemptID      runstate.AttemptID
@@ -83,6 +85,13 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 		return acceptance.RunCriterionResult{Err: err}
 	}
 	defer stderr.Close()
+	stdoutDone := make(chan bool, 1)
+	stderrDone := make(chan bool, 1)
+	// The trampoline can fail before publishing its identity. Drain from the
+	// start of that handoff so a race report or loader error reaches the
+	// criterion capture rather than being closed unread on the failure path.
+	go func() { stdoutDone <- copyBounded(stdout, stdoutRead) }()
+	go func() { stderrDone <- copyBounded(stderr, stderrRead) }()
 	environment := criterionEnvironment(config.Worktree, temporary)
 	launchID := "criterion-" + request.ID
 	launchContext, cancelLaunch := context.WithCancel(context.Background())
@@ -98,7 +107,7 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 			}
 		}()
 	}
-	process, err := launch.LaunchContext(launchContext, launch.Request{
+	process, err := launchCriterion(launchContext, launch.Request{
 		Kind: launch.Criterion, TrampolinePath: config.TrampolinePath, AttemptRoot: config.AttemptRoot, LaunchID: launchID,
 		Executable: command, Arguments: request.Argv[1:], CommandEnvironment: launch.CommandEnvironment(environment),
 		TrampolineEnvironment: launch.TrampolineEnvironment(slices.Clone(os.Environ())), Directory: config.Worktree,
@@ -112,17 +121,29 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 		},
 	})
 	if err != nil {
+		_ = stdoutWrite.Close()
+		_ = stderrWrite.Close()
+		if errors.Is(err, launch.ErrHandoffReleased) {
+			_ = stdoutRead.Close()
+			_ = stderrRead.Close()
+			if criterionCancelled(config.Cancel) {
+				return acceptance.RunCriterionResult{Cancelled: true}
+			}
+			result := spawnFailure(err)
+			result.OutputRef = criterionOutputRef(config, request.ID)
+			return result
+		}
+		truncated := streams(<-stdoutDone, <-stderrDone)
 		if criterionCancelled(config.Cancel) {
 			return acceptance.RunCriterionResult{Cancelled: true}
 		}
-		return spawnFailure(err)
+		result := spawnFailure(err)
+		result.OutputRef = criterionOutputRef(config, request.ID)
+		result.TruncatedStreams = truncated
+		return result
 	}
 	_ = stdoutWrite.Close()
 	_ = stderrWrite.Close()
-	stdoutDone := make(chan bool, 1)
-	stderrDone := make(chan bool, 1)
-	go func() { stdoutDone <- copyBounded(stdout, stdoutRead) }()
-	go func() { stderrDone <- copyBounded(stderr, stderrRead) }()
 	started := time.Now()
 	timeout, budget, deadlineTied := effectiveTimeout(config.RemainingMS, request.TimeoutMin)
 	wait := make(chan error, 1)

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -222,6 +223,60 @@ func TestCancelledLaunchContextNeverReleasesProgram(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("program ran after cancelled launch: %v", err)
+	}
+}
+
+func TestLaunchFailureWithoutStderrIncludesSanitizedTrampolineDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PARTITUR_TEST_TRAMPOLINE_FAILURE", "1")
+	request := validRequest(t, Adapter, root, "launch")
+	_, err := launch(context.Background(), request, testDependencies())
+	if err == nil || !strings.Contains(err.Error(), "exit status 66") ||
+		!strings.Contains(err.Error(), "trampoline stderr: startup token=[REDACTED]") ||
+		strings.Contains(err.Error(), "supersecret") {
+		t.Fatalf("launch error = %v", err)
+	}
+}
+
+const testHoldStderrDescendantEnv = "PARTITUR_TEST_HOLD_STDERR_DESCENDANT"
+
+func TestPostReleaseFailureDoesNotWaitForDescendantStderr(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "stderr-holder-pid")
+	t.Setenv(testHoldStderrDescendantEnv, pidPath)
+	request := validRequest(t, Adapter, t.TempDir(), "launch")
+	request.Arguments = []string{
+		"-test.run=^TestAdapterHelper$",
+		"--",
+		"hold-stderr-descendant",
+	}
+	closeErr := errors.New("injected gate close failure")
+	dependencies := testDependencies()
+	dependencies.closeGate = func(file *os.File) error {
+		if err := file.Close(); err != nil {
+			return err
+		}
+		return closeErr
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := launch(context.Background(), request, dependencies)
+		result <- err
+	}()
+	pid := waitForPIDFile(t, pidPath)
+	t.Cleanup(func() {
+		process, err := os.FindProcess(pid)
+		if err == nil {
+			_ = process.Kill()
+		}
+	})
+	select {
+	case err := <-result:
+		if !errors.Is(err, closeErr) || !errors.Is(err, ErrHandoffReleased) ||
+			strings.Contains(err.Error(), "trampoline stderr") {
+			t.Fatalf("launch error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("post-release launch failure waited for descendant stderr")
 	}
 }
 
@@ -581,6 +636,7 @@ func testDependencies() launchDependencies {
 			helperArguments = append(helperArguments, arguments...)
 			return exec.Command(os.Args[0], helperArguments...)
 		},
+		closeGate: func(file *os.File) error { return file.Close() },
 	}
 }
 
@@ -596,6 +652,7 @@ func maliciousDependencies(mode string) launchDependencies {
 			helperArguments = append(helperArguments, arguments...)
 			return exec.Command(os.Args[0], helperArguments...)
 		},
+		closeGate: func(file *os.File) error { return file.Close() },
 	}
 }
 
@@ -707,6 +764,10 @@ func TestTrampolineHelper(t *testing.T) {
 	arguments := argumentsAfterDoubleDash()
 	if arguments == nil {
 		return
+	}
+	if os.Getenv("PARTITUR_TEST_TRAMPOLINE_FAILURE") == "1" {
+		fmt.Fprintln(os.Stderr, "startup token=supersecret")
+		os.Exit(66)
 	}
 	if len(arguments) > 0 && strings.HasPrefix(arguments[0], "test-malicious=") {
 		if err := runMaliciousTrampoline(
@@ -878,10 +939,29 @@ func TestAdapterHelper(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+	case "hold-stderr-descendant":
+		command := exec.Command(os.Args[0], "-test.run=^TestStderrHoldingDescendant$", "--")
+		command.Env = slices.Clone(os.Environ())
+		command.Stderr = os.Stderr
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintln(os.Stderr, "released parent")
 	default:
 		t.Fatalf("unknown adapter helper mode %q", arguments[0])
 	}
 	os.Exit(0)
+}
+
+func TestStderrHoldingDescendant(t *testing.T) {
+	path := os.Getenv(testHoldStderrDescendantEnv)
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {}
 }
 
 func TestImpostorHelper(t *testing.T) {
@@ -901,6 +981,23 @@ func argumentsAfterDoubleDash() []string {
 		}
 	}
 	return nil
+}
+
+func waitForPIDFile(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if contents, err := os.ReadFile(path); err == nil {
+			pid, parseErr := strconv.Atoi(string(contents))
+			if parseErr == nil && pid > 0 {
+				return pid
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("stderr-holding descendant did not publish pid at %q", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func changedEnvironmentKeys(got, want []string) []string {

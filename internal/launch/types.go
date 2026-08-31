@@ -23,6 +23,10 @@ var (
 	ErrStaleHandoff    = errors.New("launch handoff nonce does not match")
 	ErrInvalidHandoff  = errors.New("invalid launch handoff")
 	ErrInvalidReceipt  = errors.New("invalid launch durability receipt")
+	// ErrHandoffReleased marks an error observed after the gate byte was
+	// written. The process may already have descendants holding its streams,
+	// so callers must not wait for those drains on this error path.
+	ErrHandoffReleased = errors.New("launch handoff released")
 )
 
 // RecordIdentity appends and durably syncs the event that owns the launched

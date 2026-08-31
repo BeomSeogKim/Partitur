@@ -3,6 +3,7 @@ package criterionexec
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
@@ -44,6 +46,8 @@ func TestCriterionHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintln(os.Stdout, child.Process.Pid)
 	case "sleep":
+		select {}
+	case "hold-stderr":
 		select {}
 	}
 }
@@ -194,6 +198,76 @@ func TestRunCapturesRealCriterionAndSweepsDescendant(t *testing.T) {
 	}
 	if err := syscall.Kill(pid, 0); err == nil {
 		t.Fatalf("descendant %d remains after criterion completion", pid)
+	}
+}
+
+func TestRunCapturesTrampolineStderrWhenIdentityPublicationFails(t *testing.T) {
+	root, worktree, _ := criterionFixture(t)
+	trampoline := filepath.Join(t.TempDir(), "failing-trampoline")
+	if err := os.WriteFile(trampoline, []byte("#!/bin/sh\nprintf 'race report token=supersecret\n' >&2\nexit 66\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := Run(criterionConfig(root, worktree, trampoline), criterionRequest(t, "pass"))
+	if !result.SpawnFailed || result.OutputRef == "" {
+		t.Fatalf("result = %#v", result)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", "run", result.OutputRef, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "race report token=supersecret\n" {
+		t.Fatalf("trampoline stderr = %q", contents)
+	}
+}
+
+func TestRunPostReleaseFailureDoesNotWaitForStderrDescendant(t *testing.T) {
+	originalLaunch := launchCriterion
+	t.Cleanup(func() { launchCriterion = originalLaunch })
+	var holder *exec.Cmd
+	started := make(chan struct{})
+	launchCriterion = func(_ context.Context, request launch.Request) (*launch.Process, error) {
+		holder = exec.Command(os.Args[0], "-test.run=^TestCriterionHelperProcess$", "--", "hold-stderr")
+		holder.Stderr = request.Stderr
+		if err := holder.Start(); err != nil {
+			return nil, err
+		}
+		close(started)
+		return nil, fmt.Errorf("%w: injected gate close failure", launch.ErrHandoffReleased)
+	}
+	root := t.TempDir()
+	config := Config{
+		RunID:          "run",
+		AttemptID:      "attempt",
+		AttemptRoot:    filepath.Join(root, "attempt"),
+		Worktree:       t.TempDir(),
+		RepositoryRoot: root,
+		SubjectTree:    "subject",
+		TrampolinePath: "/bin/false",
+		RemainingMS:    10_000,
+	}
+	request := acceptance.RunCriterionRequest{
+		ID:   "criterion",
+		Argv: []string{os.Args[0]},
+		RecordStarted: func(runstate.ProcessIdentity) (faultpoint.DurabilityReceipt, error) {
+			return faultpoint.DurabilityReceipt{}, nil
+		},
+	}
+	result := make(chan acceptance.RunCriterionResult, 1)
+	go func() { result <- Run(config, request) }()
+	<-started
+	t.Cleanup(func() {
+		if holder != nil && holder.Process != nil {
+			_ = holder.Process.Kill()
+			_ = holder.Wait()
+		}
+	})
+	select {
+	case got := <-result:
+		if !got.SpawnFailed || got.OutputRef == "" {
+			t.Fatalf("criterion result = %#v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("criterion launch failure waited for descendant stderr")
 	}
 }
 
