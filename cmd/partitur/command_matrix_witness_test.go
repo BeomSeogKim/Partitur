@@ -1283,7 +1283,7 @@ func runAnswerCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 
 		code, stdout, stderr := invokeCommand("answer", decisionID, "--answer-file", "answer.txt")
 
-		if code != 0 || stdout != "" || stderr != "" {
+		if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint("run-1") {
 			t.Fatalf("exit=%d stdout=%q stderr=%q, want committed answer", code, stdout, stderr)
 		}
 		journal, err := store.ReadJournal("run-1")
@@ -1399,7 +1399,7 @@ func runApproveCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) 
 
 		code, stdout, stderr := invokeCommand("approve", decisionID, "--approve")
 
-		if code != 0 || stdout != "" || stderr != "" {
+		if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint("run-1") {
 			t.Fatalf("exit=%d stdout=%q stderr=%q, want committed gate approval", code, stdout, stderr)
 		}
 		journal, err := store.ReadJournal("run-1")
@@ -1455,7 +1455,8 @@ func runApproveCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) 
 	})
 
 	registry.run(t, "APPROVE-008", witnessDischarged, 0, func(t *testing.T) {
-		root, store, decisionID, _ := routedAmendmentCommandFixture(t)
+		root, store, decisionID, proposalID := routedAmendmentCommandFixture(t)
+		appendPendingCLIDecision(t, store, "human_gate")
 		if err := store.RequestCancellation("run-1"); err != nil {
 			t.Fatal(err)
 		}
@@ -1464,7 +1465,8 @@ func runApproveCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) 
 
 		code, stdout, stderr := invokeCommand("approve", decisionID, "--approve")
 
-		if code != 3 || stdout != "" || !strings.Contains(stderr, "run_cancelling") {
+		wantStderr := fmt.Sprintf("amendment rejected: proposal_id=%q reason=%q\n", proposalID, "run_cancelling") + expectedDecisionResumeHint("run-1")
+		if code != 3 || stdout != "" || stderr != wantStderr {
 			t.Fatalf("exit=%d stdout=%q stderr=%q, want decision-time rejection", code, stdout, stderr)
 		}
 		journal, err := store.ReadJournal("run-1")
@@ -1487,7 +1489,7 @@ func runApproveCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) 
 
 		code, stdout, stderr := invokeCommand("approve", decisionID, "--approve")
 
-		if code != 0 || stdout != "" || stderr != "" {
+		if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint("run-1") {
 			t.Fatalf("exit=%d stdout=%q stderr=%q, want completed amendment approval", code, stdout, stderr)
 		}
 		journal, err := store.ReadJournal("run-1")
@@ -1555,7 +1557,7 @@ func runApproveCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) 
 
 		code, stdout, stderr := invokeCommand("approve", decisionID, "--reject", "--reason", "operator rejected")
 
-		if code != 0 || stdout != "" || stderr != "" {
+		if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint("run-1") {
 			t.Fatalf("exit=%d stdout=%q stderr=%q, want committed amendment rejection", code, stdout, stderr)
 		}
 		journal, err := store.ReadJournal("run-1")

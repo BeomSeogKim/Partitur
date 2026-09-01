@@ -724,7 +724,7 @@ func TestRunHumanGateApprovalProjectsApprovedMark(t *testing.T) {
 	}
 	decisionID := waiting.Run.PendingDecisions[0].ID
 	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve")
-	if code != 0 || stdout != "" || stderr != "" {
+	if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint(runID) {
 		t.Fatalf("approve exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "resume", runID)
@@ -833,7 +833,7 @@ func TestRunHumanGateOverrideProjectsOverriddenAndApprovedMarks(t *testing.T) {
 	}
 
 	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "approve", decisionID, "--approve", "--override", reviewed.FindingsInstanceID+":"+findingID, "--reason", "human judgment")
-	if code != 0 || stdout != "" || stderr != "" {
+	if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint(runID) {
 		t.Fatalf("approve override exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "resume", runID)

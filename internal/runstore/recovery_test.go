@@ -18,6 +18,66 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
 
+func TestResumeLeaseClassificationAgreesWithRecoveryPlanner(t *testing.T) {
+	pid := os.Getpid()
+	start, err := procid.Read(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := Lease{Epoch: 2, Token: "resume-classification", PID: pid, Start: start}
+	for _, test := range []struct {
+		name       string
+		authority  runstate.Authority
+		expectHint bool
+	}{
+		{
+			name:      "matching_owner",
+			authority: runstate.Authority{Epoch: lease.Epoch, Owner: &runstate.AuthorityOwner{PID: lease.PID, Start: lease.Start}},
+		},
+		{
+			name:      "wrong_pid",
+			authority: runstate.Authority{Epoch: lease.Epoch, Owner: &runstate.AuthorityOwner{PID: lease.PID + 1, Start: lease.Start}},
+		},
+		{
+			name:      "wrong_start",
+			authority: runstate.Authority{Epoch: lease.Epoch, Owner: &runstate.AuthorityOwner{PID: lease.PID, Start: distinctStartIdentity(t, lease.Start)}},
+		},
+		{
+			name:       "ownerless_positive_epoch",
+			authority:  runstate.Authority{Epoch: lease.Epoch},
+			expectHint: true,
+		},
+		{
+			name:       "stale",
+			authority:  runstate.Authority{Epoch: lease.Epoch + 1, Owner: &runstate.AuthorityOwner{PID: lease.PID, Start: lease.Start}},
+			expectHint: true,
+		},
+		{
+			name:       "orphan",
+			authority:  runstate.Authority{Epoch: lease.Epoch - 1, Owner: &runstate.AuthorityOwner{PID: lease.PID, Start: lease.Start}},
+			expectHint: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			status := classifyResumeLease(lease, true, nil, test.authority)
+			gotHint := status == ResumeLeaseAvailable || status == ResumeLeaseProjectionMismatch
+			if gotHint != test.expectHint {
+				t.Fatalf("lease status=%d, hint=%t, want hint=%t", status, gotHint, test.expectHint)
+			}
+
+			decision := recovery.Plan(recovery.Input{
+				Projection: recovery.Projection{State: runstate.State{Run: runstate.RunRunning, Authority: test.authority}},
+				Observations: recovery.Observations{Lease: recovery.LeaseObservation{
+					Exists: true, Readable: true, Epoch: lease.Epoch, Owner: recovery.OwnerLive,
+				}},
+			})
+			if gotHint && decision.CaseID == recovery.CaseLiveOwner {
+				t.Fatalf("hint printed for planner decision %s", decision.CaseID)
+			}
+		})
+	}
+}
+
 func TestReclaimDeadRecoveryDriverAllowsOnlyOneConcurrentWinner(t *testing.T) {
 	store := recoveryStore(t)
 	dead := appendDeadRecoveryLease(t, store)

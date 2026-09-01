@@ -692,7 +692,8 @@ func findingReferencePresent(references []runstate.FindingReference, candidate r
 }
 
 func runApprove(decisionID string, approved bool, overridden []runstate.FindingReference, reason string, stderr io.Writer) int {
-	if err := resolveApproval(decisionID, approved, overridden, reason); err != nil {
+	resolution, err := resolveApproval(decisionID, approved, overridden, reason)
+	if err != nil {
 		if errors.Is(err, errApproveOperands) {
 			fmt.Fprintf(stderr, "usage error: %v\n", err)
 			return 1
@@ -704,6 +705,7 @@ func runApprove(decisionID string, approved bool, overridden []runstate.FindingR
 		var rejected *amendmentexec.DecisionRejectedError
 		if errors.As(err, &rejected) {
 			fmt.Fprintf(stderr, "amendment rejected: proposal_id=%q reason=%q\n", rejected.ProposalID, rejected.Reason)
+			renderDecisionResumeHint(stderr, resolution)
 			return 3
 		}
 		if errors.Is(err, runstore.ErrDecisionResolutionNotAllowed) {
@@ -726,17 +728,34 @@ func runApprove(decisionID string, approved bool, overridden []runstate.FindingR
 		fmt.Fprintf(stderr, "run interrupted: state=%q resume=%q detail=%q\n", "nonterminal", "partitur resume", err.Error())
 		return 6
 	}
+	renderDecisionResumeHint(stderr, resolution)
 	return 0
 }
 
-func resolveApproval(decisionID string, approved bool, overridden []runstate.FindingReference, reason string) error {
+type decisionResolution struct {
+	runID             runstate.RunID
+	resumeEligible    bool
+	ownerUnverifiable bool
+}
+
+func renderDecisionResumeHint(stderr io.Writer, resolution decisionResolution) {
+	if resolution.ownerUnverifiable {
+		fmt.Fprintf(stderr, "run blocked: run_id=%q state=%q reason=%q\n", string(resolution.runID), "nonterminal", "owner_unverifiable")
+		return
+	}
+	if resolution.resumeEligible {
+		fmt.Fprintf(stderr, "run waiting: state=%q resume=%q\n", "nonterminal", "partitur resume "+string(resolution.runID))
+	}
+}
+
+func resolveApproval(decisionID string, approved bool, overridden []runstate.FindingReference, reason string) (decisionResolution, error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("resolve invocation directory: %w", err)
+		return decisionResolution{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
 	report, err := statusprojection.Read(root, "")
 	if err != nil {
-		return answerSelectionError{err: err}
+		return decisionResolution{}, answerSelectionError{err: err}
 	}
 	runID := runstate.RunID(report.Run.ID)
 	decisionType := ""
@@ -747,28 +766,66 @@ func resolveApproval(decisionID string, approved bool, overridden []runstate.Fin
 		}
 	}
 	if err := validateApproveOperands(decisionType, approved, overridden, reason); err != nil {
-		return err
+		return decisionResolution{}, err
 	}
 	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
-		return err
+		return decisionResolution{}, err
 	}
 	switch decisionType {
 	case "human_gate":
 		err = store.ResolveHumanGate(runID, decisionID, approved, overridden, reason)
 	case "amendment", "finalization":
 		if approved {
-			return amendmentexec.New().ApproveRouted(context.Background(), store, runID, decisionID)
+			if err := amendmentexec.New().ApproveRouted(context.Background(), store, runID, decisionID); err != nil {
+				var rejected *amendmentexec.DecisionRejectedError
+				if errors.As(err, &rejected) {
+					return classifyDecisionResolution(store, runID, true), err
+				}
+				return decisionResolution{}, err
+			}
+			return classifyDecisionResolution(store, runID, false), nil
 		}
 		err = store.RejectRoutedAmendment(runID, decisionID, reason)
 	default:
-		return runstore.ErrDecisionResolutionNotAllowed
+		return decisionResolution{}, runstore.ErrDecisionResolutionNotAllowed
 	}
 	if err != nil {
-		return err
+		return decisionResolution{}, err
 	}
-	store.WakeLeaseOwner(runID)
-	return nil
+	return classifyDecisionResolution(store, runID, true), nil
+}
+
+func classifyDecisionResolution(store *runstore.Store, runID runstate.RunID, wakeOwner bool) decisionResolution {
+	result := decisionResolution{runID: runID}
+	if wakeOwner {
+		store.WakeLeaseOwner(runID)
+	}
+	snapshot, err := store.ClassifyCurrentResumeLease(runID)
+	if err != nil {
+		return result
+	}
+	return classifyDecisionResumeEligibility(result, &snapshot.Projection, snapshot.LeaseStatus)
+}
+
+func classifyDecisionResumeEligibility(result decisionResolution, projection *runstore.DecisionResolution, leaseStatus runstore.ResumeLeaseStatus) decisionResolution {
+	if projection.Run.Terminal() {
+		return result
+	}
+	switch leaseStatus {
+	case runstore.ResumeLeaseUnverifiable:
+		result.ownerUnverifiable = true
+		return result
+	case runstore.ResumeLeaseLiveOwner:
+		return result
+	case runstore.ResumeLeaseAvailable, runstore.ResumeLeaseProjectionMismatch:
+		// Only statuses known to permit a resume attempt may print the hint.
+	default:
+		return result
+	}
+	result.resumeEligible = projection.Run == runstate.RunRunning ||
+		projection.CancelRequested
+	return result
 }
 
 func validateApproveOperands(decisionType string, approved bool, overridden []runstate.FindingReference, reason string) error {
@@ -817,7 +874,8 @@ func runAnswerSource(decisionID, answer, answerPath string, stderr io.Writer) in
 }
 
 func runAnswer(decisionID, answer string, stderr io.Writer) int {
-	if err := answerQuestion(decisionID, answer); err != nil {
+	resolution, err := answerQuestion(decisionID, answer)
+	if err != nil {
 		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
 			renderDurabilityUnconfirmed(stderr, err)
 			return 7
@@ -842,6 +900,7 @@ func runAnswer(decisionID, answer string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "run interrupted: state=%q resume=%q detail=%q\n", "nonterminal", "partitur resume", err.Error())
 		return 6
 	}
+	renderDecisionResumeHint(stderr, resolution)
 	return 0
 }
 
@@ -850,25 +909,24 @@ type answerSelectionError struct{ err error }
 func (err answerSelectionError) Error() string { return err.err.Error() }
 func (err answerSelectionError) Unwrap() error { return err.err }
 
-func answerQuestion(decisionID, answer string) error {
+func answerQuestion(decisionID, answer string) (decisionResolution, error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("resolve invocation directory: %w", err)
+		return decisionResolution{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
 	report, err := statusprojection.Read(root, "")
 	if err != nil {
-		return answerSelectionError{err: err}
+		return decisionResolution{}, answerSelectionError{err: err}
 	}
 	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
-		return err
+		return decisionResolution{}, err
 	}
 	runID := runstate.RunID(report.Run.ID)
 	if err := store.ResolveQuestion(runID, decisionID, answer); err != nil {
-		return err
+		return decisionResolution{}, err
 	}
-	store.WakeLeaseOwner(runID)
-	return nil
+	return classifyDecisionResolution(store, runID, true), nil
 }
 
 func parseCancelArgs(args []string) (string, bool) {

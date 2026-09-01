@@ -40,7 +40,7 @@ func TestDraftFinalizationLifecycle(t *testing.T) {
 		t.Fatalf("finalization route=%d decision=%q", routed, request)
 	}
 	code, _, stderr = runCommandBinary(t, partitur, repository, environment, "approve", request, "--approve")
-	if code != 0 || stderr != "" {
+	if code != 0 || stderr != expectedDecisionResumeHint(string(runID)) {
 		t.Fatalf("finalization approve exit=%d stderr=%q", code, stderr)
 	}
 	store, err := runstore.New(repository, faultpoint.Nop{})
@@ -156,7 +156,7 @@ func finalizationReady(t *testing.T, partitur, bin, vendor string) (string, []st
 	killPausedRun(t, questionRequest)
 	decisionID := finalizationQuestionDecision(t, repository, runID)
 	code, _, stderr = runCommandBinary(t, partitur, repository, environment, "answer", decisionID, "--answer", "continue")
-	if code != 0 || stderr != "" {
+	if code != 0 || stderr != expectedDecisionResumeHint(string(runID)) {
 		t.Fatalf("answer exit=%d stderr=%q", code, stderr)
 	}
 	return repository, environment, runID

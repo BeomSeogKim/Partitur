@@ -635,8 +635,8 @@ func TestApproveCommandCommitsRoutedAmendmentWithoutDriverAuthority(t *testing.T
 	if code := runApprove(decisionID, true, nil, "", &stderr); code != 0 {
 		t.Fatalf("approve exit=%d stderr=%q", code, stderr.String())
 	}
-	if stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("approve stdout=%q stderr=%q, want empty", stdout.String(), stderr.String())
+	if stdout.Len() != 0 || stderr.String() != expectedDecisionResumeHint("run-1") {
+		t.Fatalf("approve stdout=%q stderr=%q, want resume hint", stdout.String(), stderr.String())
 	}
 	input, err := store.LoadRunInput("run-1")
 	if err != nil {
@@ -805,7 +805,7 @@ func TestAnswerFileAcquisition(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := run([]string{"answer", decisionID, "--answer-file", filepath.Join("operator-input", "answer.txt")}, &stdout, &stderr)
 
-		if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		if code != 0 || stdout.Len() != 0 || stderr.String() != expectedDecisionResumeHint("run-1") {
 			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 		}
 		journal, err := store.ReadJournal("run-1")
@@ -840,7 +840,7 @@ func TestAnswerFileAcquisition(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := run([]string{"answer", decisionID, "--answer-file", "-"}, &stdout, &stderr)
 
-		if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		if code != 0 || stdout.Len() != 0 || stderr.String() != expectedDecisionResumeHint("run-1") {
 			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 		}
 		journal, err := store.ReadJournal("run-1")
@@ -1022,7 +1022,7 @@ func TestApproveHumanGateFormsRemainAccepted(t *testing.T) {
 			before := journalLength(t, store)
 			var stdout, stderr bytes.Buffer
 			args := append([]string{"approve", decisionID}, test.args...)
-			if code := run(args, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+			if code := run(args, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.String() != expectedDecisionResumeHint("run-1") {
 				t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
 			}
 			if after := journalLength(t, store); after != before+1 {

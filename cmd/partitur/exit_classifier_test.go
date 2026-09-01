@@ -18,15 +18,20 @@ import (
 )
 
 var errInjectedJournalSync = errors.New("injected journal fsync failure")
+var errInjectedLeaseRead = errors.New("injected lease read failure")
 
 type journalFailureFS struct {
-	failSync       bool
-	failSyncAt     int
-	journalSyncs   int
-	failAppend     bool
-	failAppendAt   int
-	journalAppends int
-	reached        bool
+	failSync         bool
+	failSyncAt       int
+	journalSyncs     int
+	failAppend       bool
+	failAppendAt     int
+	journalAppends   int
+	reached          bool
+	afterJournalSync func()
+	failLeaseRead    bool
+	leaseReadReached bool
+	afterLeaseRead   func()
 }
 
 func (filesystem *journalFailureFS) MkdirAll(path string, mode fs.FileMode) error {
@@ -34,7 +39,17 @@ func (filesystem *journalFailureFS) MkdirAll(path string, mode fs.FileMode) erro
 }
 
 func (filesystem *journalFailureFS) ReadFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
+	if filesystem.failLeaseRead && filepath.Base(path) == "driver.lease" {
+		filesystem.leaseReadReached = true
+		return nil, errInjectedLeaseRead
+	}
+	contents, err := os.ReadFile(path)
+	if filepath.Base(path) == "driver.lease" && filesystem.afterLeaseRead != nil {
+		after := filesystem.afterLeaseRead
+		filesystem.afterLeaseRead = nil
+		after()
+	}
+	return contents, err
 }
 
 func (filesystem *journalFailureFS) WriteTemp(directory, pattern string, contents []byte, mode fs.FileMode) (string, error) {
@@ -92,7 +107,15 @@ func (filesystem *journalFailureFS) SyncFile(path string) error {
 		return err
 	}
 	defer file.Close()
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if filepath.Base(path) == "journal.jsonl" && filesystem.afterJournalSync != nil {
+		after := filesystem.afterJournalSync
+		filesystem.afterJournalSync = nil
+		after()
+	}
+	return nil
 }
 
 func (filesystem *journalFailureFS) SyncDir(path string) error {
