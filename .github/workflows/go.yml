@@ -38,13 +38,24 @@ jobs:
       - name: Test
         run: go test ./...
 
-      # Go's per-package test timeout defaults to 10m, which the heaviest
-      # packages now approach on a CI runner: `cmd/partitur` measures 412s
-      # under -race locally and the runners are roughly half the speed. A
-      # timeout panic reads as a hang, not as a suite that grew — so the bound
-      # is stated rather than inherited.
+      # Go's per-package test timeout defaults to 10m, and under -race
+      # `cmd/partitur` has exceeded it on macOS and come within 2% of it on
+      # ubuntu, so the bound is stated rather than inherited: a timeout panic
+      # reads as a hang, not as a suite that grew. Measured from this
+      # workflow's own logs on 2026-09-01 — `cmd/partitur` is the binding
+      # package on both runners, at 514-642s across 17 macOS runs
+      # (2026-08-20..08-31) and 417-589s across 8 ubuntu runs (2026-08-31).
+      # The ten daily macOS points show no detectable linear growth over those
+      # twelve days (slope +1.2s/day, r^2=0.01) — a short series, not a
+      # guarantee about what the catalogue does next. 20m is 1.9x the slowest
+      # run observed.
+      #
+      # One bound covers every package, so the slowest one sets it. Both of
+      # #334's timeouts fired in `internal/driver`, whose healthy -race cost
+      # here is 161s: for the package that actually hangs, 20m is still loose
+      # by 7.5x. What this buys is ten minutes, not precision.
       - name: Race
-        run: go test -race -count=1 -timeout=30m ./...
+        run: go test -race -count=1 -timeout=20m ./...
 
       # Keep this in the OS matrix: beyond catalogue parity, the kill harness
       # probes the session-sweeping and fencing assumptions on each runner.
