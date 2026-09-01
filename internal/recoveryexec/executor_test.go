@@ -1122,6 +1122,319 @@ func TestClampedCloseRefreshesBudgetBeforeFailureClassification(t *testing.T) {
 	}
 }
 
+func TestIncompleteAttemptBudgetExhaustionRealizesRecordedDisposition(t *testing.T) {
+	store, driver := handlerStore(t, true)
+	appendMeasuredExecution(t, driver, "spent", "adapter", 600000, 599999)
+	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventExecutionStarted, Payload: handlerPayload(t, map[string]any{
+		"interval_id": "last-millisecond", "phase": "adapter", "wall_start": time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), "remaining_at_start": 1,
+	})}, "test.last_millisecond.started"); err != nil {
+		t.Fatal(err)
+	}
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	for _, event := range []runstate.Event{
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: handlerPayload(t, map[string]any{
+			"attempt_number": 1, "adapter_process": map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}},
+			"granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": versions,
+		})},
+		{RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: handlerPayload(t, map[string]any{
+			"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false},
+			"enforcement":         map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true},
+			"negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{}, "execution_dependency_hash": "sha256:dependency", "identity_versions": versions,
+		})},
+	} {
+		if _, err := driver.Append(event, faultpoint.ReceiptAddress("test.orphaned_attempt."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	load := func(context.Context) (recovery.Input, error) {
+		state, err := driver.State()
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		replayed := state.Attempts["attempt-1"]
+		attempt := &recovery.AttemptRecovery{
+			AttemptID: "attempt-1", MovementID: "write", ScoreRevision: 1, State: replayed.State,
+			FailureClassification: recovery.FailureClassification{
+				CurrentPerformer: "writer", VisitedPerformers: []string{"writer"}, RetriesPerMovement: 1,
+				RemainingTimeMS: 600000 - state.ConsumedBudgetMS,
+			},
+		}
+		if replayed.Failure != nil {
+			disposition := replayed.Failure.Disposition
+			attempt.RecordedDisposition = &disposition
+		}
+		if state.Movements["write"] == runstate.MovementFailed {
+			attempt.MovementFailed = true
+			attempt.FailureDispositionRealized = true
+		}
+		return recovery.Input{
+			Projection: recovery.Projection{
+				State: state, CurrentHeadAttempt: attempt,
+				Scheduler: recovery.Scheduler{RemainingTime: 600000 - state.ConsumedBudgetMS},
+			},
+			Observations: recovery.Observations{Lease: recovery.LeaseObservation{
+				Exists: true, Readable: true, Epoch: state.Authority.Epoch, Owner: recovery.OwnerCurrentDriver,
+			}},
+		}, nil
+	}
+	var kinds []recovery.ActionKind
+	executor := &Executor{
+		Store: store, Driver: driver, RunID: "run-1", Load: load,
+		ObserveDecision: func(decision recovery.Decision) {
+			if decision.Action != nil {
+				kinds = append(kinds, decision.Action.Kind)
+			}
+		},
+		Steps: map[recovery.ActionStep]StepHandler{
+			recovery.StepSweepRecordedSession:     func(context.Context, HandlerContext, recovery.Action) error { return nil },
+			recovery.StepCloseAdapterInterval:     closeAdapterInterval,
+			recovery.StepClassifyAndAppendFailure: appendAttemptFailure,
+		},
+	}
+	result, err := executor.Execute(context.Background())
+	if err != nil {
+		t.Fatalf("recover incomplete attempt after budget exhaustion: %v", err)
+	}
+	if result.Outcome != OutcomeFailed {
+		t.Fatalf("outcome = %q, want %q", result.Outcome, OutcomeFailed)
+	}
+	if !slices.Contains(kinds, recovery.ActionRecoverIncompleteAttempt) || !slices.Contains(kinds, recovery.ActionRealizeRecordedDisposition) {
+		t.Fatalf("selected action kinds = %v, want incomplete-attempt recovery followed by recorded-disposition realization", kinds)
+	}
+
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attemptFailure, movementFailure runstate.Event
+	for _, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventAttemptFailed:
+			attemptFailure = event
+		case runstate.EventMovementFailed:
+			movementFailure = event
+		}
+	}
+	if attemptFailure.EventID == "" || movementFailure.EventID == "" {
+		t.Fatalf("recovered failure chain is incomplete: attempt=%+v movement=%+v", attemptFailure, movementFailure)
+	}
+	if movementFailure.CausationID != attemptFailure.EventID {
+		t.Fatalf("movement failure causation = %q, want recovered attempt failure %q", movementFailure.CausationID, attemptFailure.EventID)
+	}
+}
+
+func TestDurableAcceptanceFailureReplansThroughRealizeDisposition(t *testing.T) {
+	fixture := resumeCriterionFixture(t)
+	defer fixture.driver.Release()
+	startFixtureCriterion(t, fixture, "second")
+
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	loaded, err := fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectTree := loaded.Projection.State.Acceptances[fixture.attemptID].SubjectTree
+	_, err = fixture.driver.Append(runstate.Event{
+		RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: fixture.attemptID, Type: runstate.EventCriterionCompleted,
+		Payload: handlerPayload(t, map[string]any{
+			"criterion_id": "second", "criterion_spec_hash": "sha256:criterion", "subject_tree": subjectTree,
+			"outcome": "FAIL", "identity_versions": versions,
+		}),
+	}, "test.acceptance_failure.criterion_completed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	criterionFailures := matchingEvents(journal.Events, runstate.EventCriterionCompleted)
+	criterionFailure := criterionFailures[len(criterionFailures)-1]
+	_, err = fixture.driver.Append(runstate.Event{
+		RunID: fixture.runID, ScoreRevision: 1, MovementID: "write", PartID: "writer", AttemptID: fixture.attemptID, Type: runstate.EventAcceptanceFailed,
+		CausationID: criterionFailure.EventID,
+		Payload: handlerPayload(t, map[string]any{
+			"reason": "criterion_failed", "subject_tree": subjectTree, "failed_criterion_id": "second",
+			"disposition": map[string]any{"charged": "none", "movement_terminal": true, "terminal_reason": "budget_exhausted"},
+		}),
+	}, "test.acceptance_failure.acceptance_failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err = fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptanceFailure := matchingEvents(journal.Events, runstate.EventAcceptanceFailed)[0]
+
+	loaded, err = fixture.store.LoadRunInput(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt := loaded.Projection.CurrentHeadAttempt; attempt == nil || attempt.AttemptID != fixture.attemptID || attempt.State != runstate.AttemptFailed || attempt.RecordedDisposition == nil {
+		t.Fatalf("loaded current head attempt = %+v, want failed %s with a recorded disposition", attempt, fixture.attemptID)
+	}
+	if acceptance := loaded.Projection.Acceptance; acceptance == nil || !acceptance.Failed {
+		t.Fatalf("loaded acceptance recovery = %+v, want durable failure projected", acceptance)
+	}
+
+	load := func(context.Context) (recovery.Input, error) {
+		current, err := fixture.store.LoadRunInput(fixture.runID)
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		return recovery.Input{
+			Projection: current.Projection,
+			Observations: recovery.Observations{Lease: recovery.LeaseObservation{
+				Exists: true, Readable: true, Epoch: current.Projection.State.Authority.Epoch, Owner: recovery.OwnerCurrentDriver,
+			}},
+		}, nil
+	}
+	var cases []recovery.CaseID
+	executor := &Executor{
+		Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID, Load: load,
+		ObserveDecision: func(decision recovery.Decision) { cases = append(cases, decision.CaseID) },
+	}
+	result, err := executor.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != OutcomeFailed {
+		t.Fatalf("outcome = %q, want %q", result.Outcome, OutcomeFailed)
+	}
+	if !slices.Contains(cases, recovery.CaseRealizeDisposition) || !slices.Contains(cases, recovery.CaseRunFailed) {
+		t.Fatalf("selected cases = %v, want %s followed by %s", cases, recovery.CaseRealizeDisposition, recovery.CaseRunFailed)
+	}
+	if slices.Contains(cases, recovery.CaseAcceptanceFailed) {
+		t.Fatalf("selected cases = %v, durable acceptance failure must not be replanned through %s", cases, recovery.CaseAcceptanceFailed)
+	}
+
+	journal, err = fixture.store.ReadJournal(fixture.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movementFailures := matchingEvents(journal.Events, runstate.EventMovementFailed)
+	runFailures := matchingEvents(journal.Events, runstate.EventRunFailed)
+	if len(movementFailures) != 1 || len(runFailures) != 1 {
+		t.Fatalf("terminal failure chain counts: movement=%d run=%d", len(movementFailures), len(runFailures))
+	}
+	if movementFailures[0].CausationID != acceptanceFailure.EventID {
+		t.Fatalf("movement failure causation = %q, want acceptance failure %q", movementFailures[0].CausationID, acceptanceFailure.EventID)
+	}
+	if runFailures[0].CausationID != movementFailures[0].EventID {
+		t.Fatalf("run failure causation = %q, want movement failure %q", runFailures[0].CausationID, movementFailures[0].EventID)
+	}
+}
+
+func TestStagedAcceptanceFailureRealizesRecordedDisposition(t *testing.T) {
+	store, driver := handlerStore(t, true)
+	advanceHandlerAcceptance(t, driver, true)
+
+	journal, err := store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	criterionStarts := matchingEvents(journal.Events, runstate.EventCriterionStarted)
+	criterionStart := criterionStarts[len(criterionStarts)-1]
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	if _, err := driver.Append(runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventCriterionCompleted,
+		CausationID: criterionStart.EventID,
+		Payload: handlerPayload(t, map[string]any{
+			"criterion_id": "criterion-1", "criterion_spec_hash": "sha256:criterion", "subject_tree": "git-sha1:subject",
+			"outcome": "FAIL", "identity_versions": versions,
+		}),
+	}, "test.staged_acceptance_failure.criterion_completed"); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	criterionFailures := matchingEvents(journal.Events, runstate.EventCriterionCompleted)
+	criterionFailure := criterionFailures[len(criterionFailures)-1]
+	if _, err := driver.Append(runstate.Event{
+		RunID: "run-1", ScoreRevision: 1, MovementID: "write", AttemptID: "attempt-1", Type: runstate.EventAcceptanceFailed,
+		CausationID: criterionFailure.EventID,
+		Payload: handlerPayload(t, map[string]any{
+			"reason": "criterion_failed", "subject_tree": "git-sha1:subject", "failed_criterion_id": "criterion-1",
+			"disposition": map[string]any{"charged": "none", "movement_terminal": true, "terminal_reason": "budget_exhausted"},
+		}),
+	}, "test.staged_acceptance_failure.acceptance_failed"); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptanceFailures := matchingEvents(journal.Events, runstate.EventAcceptanceFailed)
+	acceptanceFailure := acceptanceFailures[len(acceptanceFailures)-1]
+
+	load := func(context.Context) (recovery.Input, error) {
+		state, err := driver.State()
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		replayed := state.Attempts["attempt-1"]
+		attempt := &recovery.AttemptRecovery{
+			AttemptID: "attempt-1", MovementID: "write", ScoreRevision: 1, State: replayed.State, AcceptanceStarted: true,
+		}
+		if replayed.Failure != nil {
+			disposition := replayed.Failure.Disposition
+			attempt.RecordedDisposition = &disposition
+		}
+		if state.Movements["write"] == runstate.MovementFailed {
+			attempt.MovementFailed = true
+			attempt.FailureDispositionRealized = true
+		}
+		return recovery.Input{
+			Projection: recovery.Projection{
+				State: state, CurrentHeadAttempt: attempt,
+				Acceptance: &recovery.AcceptanceRecovery{Failed: true},
+			},
+			Observations: recovery.Observations{Lease: recovery.LeaseObservation{
+				Exists: true, Readable: true, Epoch: state.Authority.Epoch, Owner: recovery.OwnerCurrentDriver,
+			}},
+		}, nil
+	}
+	input, err := load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := recovery.PlanAcceptance(input)
+	if decision.CaseID != recovery.CaseAcceptanceFailed {
+		t.Fatalf("staged acceptance decision = %s, want %s", decision.CaseID, recovery.CaseAcceptanceFailed)
+	}
+	var cases []recovery.CaseID
+	executor := &Executor{
+		Store: store, Driver: driver, RunID: "run-1", Load: load,
+		ObserveDecision: func(decision recovery.Decision) { cases = append(cases, decision.CaseID) },
+	}
+	result, err := executor.execute(context.Background(), input, decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != OutcomeFailed {
+		t.Fatalf("outcome = %q, want %q", result.Outcome, OutcomeFailed)
+	}
+	if len(cases) == 0 || cases[0] != recovery.CaseAcceptanceFailed {
+		t.Fatalf("selected cases = %v, want staged %s first", cases, recovery.CaseAcceptanceFailed)
+	}
+
+	journal, err = store.ReadJournal("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	movementFailures := matchingEvents(journal.Events, runstate.EventMovementFailed)
+	if len(movementFailures) != 1 {
+		t.Fatalf("movement failure count = %d, want 1", len(movementFailures))
+	}
+	if movementFailures[0].CausationID != acceptanceFailure.EventID {
+		t.Fatalf("movement failure causation = %q, want staged acceptance failure %q", movementFailures[0].CausationID, acceptanceFailure.EventID)
+	}
+}
+
 // A recovery-owned attempt that observes a cancellation terminalizes through the §6 oracle,
 // so the run is already terminal when the handler returns. Reporting that as an execution
 // error made `resume` call a cancelled run an operational interruption; §7 gives it exit 4.
