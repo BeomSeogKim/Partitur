@@ -37,6 +37,7 @@ type HandlerContext struct {
 	Driver *runstore.Driver
 	RunID  runstate.RunID
 	Input  recovery.Input
+	caseID recovery.CaseID
 
 	// AfterCompositionEvidence is a deterministic interleave seam for tests.
 	// Production callers leave it nil.
@@ -139,6 +140,7 @@ func Apply(ctx context.Context, execution HandlerContext, caseID recovery.CaseID
 	if action.Kind != entry.kind {
 		return fmt.Errorf("%w: %s has %s, want %s", ErrInvalidAction, caseID, action.Kind, entry.kind)
 	}
+	execution.caseID = caseID
 	return entry.apply(ctx, execution, action)
 }
 
@@ -157,6 +159,7 @@ func ApplyStep(ctx context.Context, execution HandlerContext, caseID recovery.Ca
 	if !ok {
 		return fmt.Errorf("%w: %s step %s", ErrInvalidAction, caseID, step)
 	}
+	execution.caseID = caseID
 	return handler(ctx, execution, action)
 }
 
@@ -739,10 +742,25 @@ func sourceAuthority(execution HandlerContext, state runstate.State, action reco
 				return event.Type == runstate.EventDecisionResolved && match(event) && payloadString(event.Payload, "decision_id") == action.QuestionDecisionID
 			})
 		}
-		if action.FailureReason == "budget_exhausted" {
+		if action.Kind == recovery.ActionAppendBudgetFailure {
 			return LatestEventID(journal.Events, func(event runstate.Event) bool {
 				return event.Type == runstate.EventExecutionStopped && payloadString(event.Payload, "reason") == "budget_exhausted"
 			})
+		}
+		if action.Kind == recovery.ActionRealizeRecordedDisposition {
+			var source runstate.EventType
+			acceptance := execution.Input.Projection.Acceptance
+			switch {
+			case acceptance != nil && acceptance.Failed:
+				source = runstate.EventAcceptanceFailed
+			case execution.caseID == recovery.CaseRealizeDisposition:
+				source = runstate.EventAttemptFailed
+			case execution.caseID == recovery.CaseAcceptanceFailed:
+				return "", errors.New("recorded acceptance disposition source is absent")
+			default:
+				return "", fmt.Errorf("recorded disposition source is undefined for recovery case %q", execution.caseID)
+			}
+			return LatestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == source && match(event) })
 		}
 		if source, err := LatestEventID(journal.Events, func(event runstate.Event) bool { return event.Type == runstate.EventAttemptFailed && match(event) }); err == nil {
 			return source, nil
