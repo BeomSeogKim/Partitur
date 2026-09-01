@@ -40,6 +40,58 @@ func (store *Store) WakeLeaseOwner(runID runstate.RunID) {
 	procid.Wake(lease.PID, lease.Start)
 }
 
+type ResumeLeaseStatus uint8
+
+const (
+	ResumeLeaseUnverifiable ResumeLeaseStatus = iota
+	ResumeLeaseAvailable
+	ResumeLeaseLiveOwner
+	ResumeLeaseProjectionMismatch
+)
+
+// ResumeLeaseSnapshot is the current lifecycle and lease classification from
+// one projected state-lock observation.
+type ResumeLeaseSnapshot struct {
+	Projection  DecisionResolution
+	LeaseStatus ResumeLeaseStatus
+}
+
+// ClassifyCurrentResumeLease projects lifecycle and authority and reads the
+// lease under one state lock so advisory output cannot combine observations
+// from different lifecycle or authority epochs.
+func (store *Store) ClassifyCurrentResumeLease(runID runstate.RunID) (ResumeLeaseSnapshot, error) {
+	var result ResumeLeaseSnapshot
+	err := store.MutateProjected(runID, func(transaction *Txn, state runstate.State) error {
+		lease, present, err := transaction.ReadLease()
+		result = ResumeLeaseSnapshot{
+			Projection:  decisionResolution(state),
+			LeaseStatus: classifyResumeLease(lease, present, err, state.Authority),
+		}
+		return nil
+	})
+	return result, err
+}
+
+func classifyResumeLease(lease Lease, present bool, err error, authority runstate.Authority) ResumeLeaseStatus {
+	if err != nil {
+		return ResumeLeaseUnverifiable
+	}
+	if !present {
+		return ResumeLeaseAvailable
+	}
+	if lease.Epoch != authority.Epoch || authority.Owner == nil {
+		return ResumeLeaseProjectionMismatch
+	}
+	switch lease.MatchOwner().Status {
+	case procid.MatchingAndLive:
+		return ResumeLeaseLiveOwner
+	case procid.GoneOrReused:
+		return ResumeLeaseAvailable
+	default:
+		return ResumeLeaseUnverifiable
+	}
+}
+
 // TerminateLeaseOwner applies §6 step 6 to exactly one still-matching lease
 // owner. It takes no state lock, so the driver can release its lock while
 // responding to cancellation.

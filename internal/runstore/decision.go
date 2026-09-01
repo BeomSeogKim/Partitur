@@ -9,6 +9,18 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
+// DecisionResolution is the narrow post-decision lifecycle projection needed
+// by advisory command output. It deliberately carries no score or cast input.
+type DecisionResolution struct {
+	Run             runstate.RunLifecycle
+	CancelRequested bool
+	Authority       runstate.Authority
+}
+
+func decisionResolution(state runstate.State) DecisionResolution {
+	return DecisionResolution{Run: state.Run, CancelRequested: state.CancelRequested, Authority: state.Authority}
+}
+
 // ResolveQuestion appends one answer for a pending question while holding the
 // repository state lock. It deliberately does not require driver authority:
 // an answer changes the lifecycle but never launches work.
