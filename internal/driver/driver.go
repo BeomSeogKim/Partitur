@@ -42,7 +42,7 @@ var (
 	ErrEnforcement                  = errors.New("enforcement_unavailable")
 )
 
-const maxResolvedDecisionRequestBytes = protocol.MaxFrameBytes / 2
+const maxResolvedDecisionRequestBytes = 512 * 1024
 
 type dependencies struct {
 	probe               faultpoint.Probe

@@ -1881,6 +1881,13 @@ func TestResolvedDecisionsForAttemptSelectsExactScopeAndOrder(t *testing.T) {
 	})
 }
 
+func TestResolvedDecisionRequestBoundMatchesSpec(t *testing.T) {
+	const want = 512 * 1024
+	if maxResolvedDecisionRequestBytes != want {
+		t.Fatalf("resolved-decision request bound = %d, want %d", maxResolvedDecisionRequestBytes, want)
+	}
+}
+
 func TestExecuteAttemptExcludesResolutionsOutsideItsScope(t *testing.T) {
 	t.Run("another movement", func(t *testing.T) {
 		document := sliceScore()
