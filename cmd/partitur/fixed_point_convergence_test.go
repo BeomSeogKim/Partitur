@@ -365,12 +365,13 @@ func assertNoOutcomeImplicationError(t *testing.T, events []runstate.Event, gate
 }
 
 func TestResumeOwnedResidueEnumeration(t *testing.T) {
+	const runID = "01a05f59-8be8-7abc-9123-123456789abc"
 	repository := t.TempDir()
-	runRoot := filepath.Join(repository, ".partitur", "runs", "run")
+	runRoot := filepath.Join(repository, ".partitur", "runs", runID)
 	if err := os.MkdirAll(filepath.Join(runRoot, "prepares"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(repository, ".partitur", "work", "run", "attempt", "criterion-launch"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(repository, ".partitur", "work", runID, "attempt", "criterion-launch"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for path := range map[string]string{
@@ -383,7 +384,7 @@ func TestResumeOwnedResidueEnumeration(t *testing.T) {
 		}
 	}
 
-	residues, err := resumeOwnedResiduals(repository, "run")
+	residues, err := resumeOwnedResiduals(repository, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +410,7 @@ func TestResumeOwnedResidueEnumeration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	residues, err = resumeOwnedResiduals(repository, "run")
+	residues, err = resumeOwnedResiduals(repository, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
