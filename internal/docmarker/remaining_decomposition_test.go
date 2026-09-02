@@ -96,8 +96,8 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 					"**Artifact recording atomicity.** Recording an artifact follows a fixed order:",
 				},
 				24: {
-					"TMPDIR=<attempt staging directory>/tmp\n  TMP=<attempt staging directory>/tmp\n  TEMP=<attempt staging directory>/tmp",
-					"The three temporary-directory spellings are core-set to the attempt staging\n  directory",
+					"TMPDIR=/tmp/p<r>/<a>\n  TMP=/tmp/p<r>/<a>\n  TEMP=/tmp/p<r>/<a>",
+					"The three temporary-directory spellings are core-set to the attempt-exclusive\n  `/tmp/p<r>/<a>` path",
 				},
 			},
 			specimens: []remainingSpecimenExpectation{

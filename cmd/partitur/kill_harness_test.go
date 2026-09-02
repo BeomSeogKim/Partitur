@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/adapter"
+	"github.com/BeomSeogKim/Partitur/internal/criterionexec"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -184,6 +185,11 @@ func TestSubprocessKillHarness(t *testing.T) {
 						t.Run(side.name, func(t *testing.T) {
 							repository, environment := fixture.build(t, bin, vendor)
 							runID := killAtPoint(t, partitur, repository, environment, side.point)
+							t.Cleanup(func() {
+								if err := criterionexec.CleanupRunTemporary(runstate.RunID(runID)); err != nil {
+									t.Errorf("clean criterion temporary test fixture: %v", err)
+								}
+							})
 							if edge.id == faultpoint.EdgeAcceptanceCriterionErrorToFailed {
 								restoreCriterionErrorFixtureWorktree(t, repository, runID)
 							}
@@ -2306,6 +2312,15 @@ func resumeOwnedResiduals(repository, runID string) ([]resumeOwnedResidue, error
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("stat fixed-point attempt staging: %w", err)
 	}
+	criterionTemporary, err := criterionexec.RunTemporaryDirectory(runstate.RunID(runID))
+	if err != nil {
+		return nil, fmt.Errorf("resolve fixed-point criterion temporary staging: %w", err)
+	}
+	if _, err := os.Lstat(criterionTemporary); err == nil {
+		residues = append(residues, resumeOwnedResidue{family: "criterion temporary staging", path: criterionTemporary})
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat fixed-point criterion temporary staging: %w", err)
+	}
 	return residues, nil
 }
 
@@ -2316,10 +2331,10 @@ func assertNoResumeOwnedResiduals(t *testing.T, repository, runID string, state 
 		t.Fatal(err)
 	}
 	for _, residue := range residues {
-		// A human-gate wait retains the attempt worktree deliberately so the
-		// operator can inspect the accepted subject. The existing caller below
-		// still rejects that directory for every other state.
-		if residue.family == "attempt staging" && state.Run == runstate.RunWaitingHuman {
+		// A human-gate wait retains the attempt staging tree deliberately so the
+		// operator can inspect the accepted subject. Criterion temporary files
+		// had the same lifetime inside that tree before their path was shortened.
+		if (residue.family == "attempt staging" || residue.family == "criterion temporary staging") && state.Run == runstate.RunWaitingHuman {
 			continue
 		}
 		t.Fatalf("resume-owned fixed-point residue = %+v", residue)

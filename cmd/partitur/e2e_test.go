@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/criterionexec"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
@@ -691,6 +692,13 @@ func TestRunOneMovementRealAdapterEndToEnd(t *testing.T) {
 		"driver.lease",
 	)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("terminal driver lease: %v", err)
+	}
+	criterionTemporary, err := criterionexec.RunTemporaryDirectory(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(criterionTemporary); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal criterion temporary root stat = %v, want absent", err)
 	}
 }
 

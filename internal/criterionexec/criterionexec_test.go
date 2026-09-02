@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +23,11 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+)
+
+const (
+	criterionTestRunID     = runstate.RunID("01a05f59-8be8-7abc-9123-123456789abc")
+	criterionTestAttemptID = runstate.AttemptID("01a05f5d-04b4-7def-8456-abcdef123456")
 )
 
 func TestCriterionHelperProcess(t *testing.T) {
@@ -49,6 +56,231 @@ func TestCriterionHelperProcess(t *testing.T) {
 		select {}
 	case "hold-stderr":
 		select {}
+	case "bind-unix-socket":
+		fmt.Fprintln(os.Stdout, os.Getenv("TMPDIR"))
+		directory := filepath.Join(os.Getenv("TMPDIR"), "tsx-501")
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		socket := filepath.Join(directory, "53072.pipe")
+		listener, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatalf("listen unix socket %q (%d bytes): %v", socket, len([]byte(socket)), err)
+		}
+		defer listener.Close()
+	case "hold-unix-socket":
+		ready := os.Args[len(os.Args)-3]
+		release := os.Args[len(os.Args)-2]
+		directory := filepath.Join(os.Getenv("TMPDIR"), "shared-name")
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		socket := filepath.Join(directory, "criterion.pipe")
+		listener, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatalf("listen unix socket %q: %v", socket, err)
+		}
+		defer listener.Close()
+		if err := os.WriteFile(ready, []byte("ready"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(release); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("release marker was not published")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		fmt.Fprintln(os.Stdout, os.Getenv("TMPDIR"))
+	}
+}
+
+func TestRunProvidesSocketSafeCriterionTemporaryDirectory(t *testing.T) {
+	root, worktree, trampoline := criterionFixture(t)
+	config := criterionConfig(root, worktree, trampoline)
+	config.RunID = "01a05f59-8be8-7abc-9123-123456789abc"
+	config.AttemptID = "01a05f5d-04b4-7def-8456-abcdef123456"
+	config.AttemptRoot = filepath.Join(root, ".partitur", "work", string(config.RunID), string(config.AttemptID))
+	result := Run(config, criterionRequest(t, "bind-unix-socket"))
+	stdout, _ := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(config.RunID), "attempts", string(config.AttemptID), "criteria", "criterion", "stdout"))
+	temporary, _, _ := strings.Cut(string(stdout), "\n")
+	if strings.HasPrefix(temporary, "/tmp/p") {
+		t.Cleanup(func() {
+			if err := os.RemoveAll(filepath.Dir(temporary)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if result.Outcome != "PASS" {
+		stderr, _ := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(config.RunID), "attempts", string(config.AttemptID), "criteria", "criterion", "stderr"))
+		t.Fatalf("criterion result = %#v\nstdout=%s\nstderr=%s", result, stdout, stderr)
+	}
+	if !strings.HasPrefix(temporary, "/tmp/p") {
+		t.Fatalf("criterion TMPDIR = %q, want the short criterion namespace", temporary)
+	}
+	t.Logf("bound unix socket under %d-byte TMPDIR on %s", len([]byte(temporary)), runtime.GOOS)
+}
+
+func TestConcurrentAttemptsUseDistinctCriterionTemporaryDirectories(t *testing.T) {
+	root, worktree, trampoline := criterionFixture(t)
+	runID := runstate.RunID("01a05f59-8be8-7abc-9123-123456789abc")
+	t.Cleanup(func() {
+		if err := CleanupRunTemporary(runID); err != nil {
+			t.Fatal(err)
+		}
+	})
+	barrier := t.TempDir()
+	release := filepath.Join(barrier, "release")
+	t.Cleanup(func() { _ = os.WriteFile(release, []byte("release"), 0o600) })
+	type attemptResult struct {
+		config Config
+		result acceptance.RunCriterionResult
+	}
+	results := make(chan attemptResult, 2)
+	configs := []Config{
+		criterionConfig(root, worktree, trampoline),
+		criterionConfig(root, worktree, trampoline),
+	}
+	configs[0].RunID = runID
+	configs[0].AttemptID = "01a05f5d-04b4-7def-8456-abcdef123456"
+	configs[1].RunID = runID
+	configs[1].AttemptID = "01a05f5e-04b4-7def-8456-abcdef123456"
+	for index := range configs {
+		config := configs[index]
+		config.AttemptRoot = filepath.Join(root, ".partitur", "work", string(config.RunID), string(config.AttemptID))
+		ready := filepath.Join(barrier, fmt.Sprintf("ready-%d", index))
+		request := criterionRequest(t, "hold-unix-socket")
+		request.Argv = append(request.Argv[:len(request.Argv)-1], ready, release, "hold-unix-socket")
+		go func() { results <- attemptResult{config: config, result: Run(config, request)} }()
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ready := 0
+		for index := range configs {
+			if _, err := os.Stat(filepath.Join(barrier, fmt.Sprintf("ready-%d", index))); err == nil {
+				ready++
+			}
+		}
+		if ready == len(configs) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("concurrent criteria did not both bind their socket")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	temporary := make(map[string]struct{}, len(configs))
+	for range configs {
+		got := <-results
+		if got.result.Outcome != "PASS" {
+			t.Fatalf("attempt %s result = %#v", got.config.AttemptID, got.result)
+		}
+		path, err := AttemptTemporaryDirectory(got.config.RunID, got.config.AttemptID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		temporary[path] = struct{}{}
+	}
+	if len(temporary) != len(configs) {
+		t.Fatalf("concurrent attempts shared temporary directories: %v", temporary)
+	}
+}
+
+func TestRunRejectsUnsafeCriterionTemporaryNamespace(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		plant func(*testing.T, string, string)
+	}{
+		{
+			name: "symlink run root",
+			plant: func(t *testing.T, root, _ string) {
+				t.Helper()
+				if err := os.Symlink(t.TempDir(), root); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "permissive run root",
+			plant: func(t *testing.T, root, _ string) {
+				t.Helper()
+				if err := os.Mkdir(root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "0700 regular attempt path",
+			plant: func(t *testing.T, root, attempt string) {
+				t.Helper()
+				if err := os.Mkdir(root, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(attempt, []byte("not a directory"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(attempt, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, worktree, trampoline := criterionFixture(t)
+			config := criterionConfig(root, worktree, trampoline)
+			runTemporary, err := RunTemporaryDirectory(config.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			attemptTemporary, err := AttemptTemporaryDirectory(config.RunID, config.AttemptID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(runTemporary) })
+			test.plant(t, runTemporary, attemptTemporary)
+			result := Run(config, criterionRequest(t, "pass"))
+			if result.Err == nil {
+				t.Fatalf("criterion result = %#v, want unsafe temporary namespace rejection", result)
+			}
+		})
+	}
+
+	// A foreign-owned 0700 directory requires a second UID or privileged chown,
+	// neither of which a single-UID test runner can honestly provide. The owner
+	// rejection therefore remains unwitnessed here: removing only that check will
+	// survive this package until a multi-user runner supplies such a fixture.
+}
+
+func TestRunRejectsNonUUIDTemporaryIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		runID runstate.RunID
+	}{
+		{name: "malformed UUID", runID: "run"},
+		{name: "UUIDv4", runID: "01a05f59-8be8-4abc-9123-123456789abc"},
+		{name: "invalid RFC variant", runID: "01a05f59-8be8-7abc-7123-123456789abc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, worktree, trampoline := criterionFixture(t)
+			config := criterionConfig(root, worktree, trampoline)
+			config.RunID = test.runID
+			if runTemporary, err := RunTemporaryDirectory(config.RunID); err == nil {
+				t.Cleanup(func() { _ = os.RemoveAll(runTemporary) })
+			}
+			result := Run(config, criterionRequest(t, "pass"))
+			if result.Err == nil {
+				t.Fatalf("criterion result = %#v, want non-UUIDv7 temporary identity rejection", result)
+			}
+		})
 	}
 }
 
@@ -133,7 +365,7 @@ func TestCriterionEnvironmentHelperProcess(t *testing.T) {
 	if result.Outcome != "PASS" {
 		t.Fatalf("criterion result = %#v", result)
 	}
-	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", "run", "attempts", "attempt", "criteria", "criterion", "stdout"))
+	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(criterionTestRunID), "attempts", string(criterionTestAttemptID), "criteria", "criterion", "stdout"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +374,15 @@ func TestCriterionEnvironmentHelperProcess(t *testing.T) {
 	if err := json.Unmarshal(environmentJSON, &got); err != nil {
 		t.Fatalf("decode criterion environment %q: %v", contents, err)
 	}
-	temporary := filepath.Join(config.AttemptRoot, "tmp")
+	temporary, err := AttemptTemporaryDirectory(config.RunID, config.AttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := CleanupRunTemporary(config.RunID); err != nil {
+			t.Fatal(err)
+		}
+	})
 	want := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
@@ -188,7 +428,7 @@ func TestRunCapturesRealCriterionAndSweepsDescendant(t *testing.T) {
 	if result.Outcome != "PASS" || result.OutputRef == "" {
 		t.Fatalf("result = %#v", result)
 	}
-	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", "run", result.OutputRef, "stdout"))
+	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(criterionTestRunID), result.OutputRef, "stdout"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +451,7 @@ func TestRunCapturesTrampolineStderrWhenIdentityPublicationFails(t *testing.T) {
 	if !result.SpawnFailed || result.OutputRef == "" {
 		t.Fatalf("result = %#v", result)
 	}
-	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", "run", result.OutputRef, "stderr"))
+	contents, err := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(criterionTestRunID), result.OutputRef, "stderr"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,8 +476,8 @@ func TestRunPostReleaseFailureDoesNotWaitForStderrDescendant(t *testing.T) {
 	}
 	root := t.TempDir()
 	config := Config{
-		RunID:          "run",
-		AttemptID:      "attempt",
+		RunID:          criterionTestRunID,
+		AttemptID:      criterionTestAttemptID,
 		AttemptRoot:    filepath.Join(root, "attempt"),
 		Worktree:       t.TempDir(),
 		RepositoryRoot: root,
@@ -364,6 +604,11 @@ func TestEffectiveTimeoutTieClassifiesAsCriterionTimeout(t *testing.T) {
 
 func criterionFixture(t *testing.T) (string, string, string) {
 	t.Helper()
+	t.Cleanup(func() {
+		if err := CleanupRunTemporary(criterionTestRunID); err != nil {
+			t.Errorf("clean default criterion temporary test fixture: %v", err)
+		}
+	})
 	root := t.TempDir()
 	runGit(t, root, "init")
 	runGit(t, root, "config", "user.name", "Partitur Test")
@@ -390,7 +635,7 @@ func criterionFixture(t *testing.T) (string, string, string) {
 }
 
 func criterionConfig(root, worktree, trampoline string) Config {
-	return Config{RunID: "run", AttemptID: "attempt", AttemptRoot: filepath.Join(root, ".partitur", "work", "run", "attempt"), Worktree: worktree, RepositoryRoot: root, SubjectTree: gitText(root, "rev-parse", "HEAD^{tree}"), TrampolinePath: trampoline, RemainingMS: 10_000, Probe: faultpoint.Nop{}}
+	return Config{RunID: criterionTestRunID, AttemptID: criterionTestAttemptID, AttemptRoot: filepath.Join(root, ".partitur", "work", string(criterionTestRunID), string(criterionTestAttemptID)), Worktree: worktree, RepositoryRoot: root, SubjectTree: gitText(root, "rev-parse", "HEAD^{tree}"), TrampolinePath: trampoline, RemainingMS: 10_000, Probe: faultpoint.Nop{}}
 }
 
 func criterionRequest(t *testing.T, mode string) acceptance.RunCriterionRequest {

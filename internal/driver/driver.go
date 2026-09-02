@@ -156,6 +156,9 @@ func run(
 		return Result{Err: err}
 	}
 	result = Result{RunID: startResult.RunID}
+	defer func() {
+		result = cleanupTerminalCriterionTemporary(result)
+	}()
 	if err := started(startResult.RunID); err != nil {
 		return interrupted(result, err)
 	}
@@ -215,6 +218,16 @@ func run(
 		return cancelled
 	}
 	return liveRunLoop(ctx, result, startResult.Run, store, authority, control, dependencies)
+}
+
+func cleanupTerminalCriterionTemporary(result Result) Result {
+	switch result.Outcome {
+	case OutcomeSucceeded, OutcomeFailed, OutcomeCancelled:
+		if err := criterionexec.CleanupRunTemporary(result.RunID); err != nil {
+			return interrupted(result, fmt.Errorf("clean criterion temporary directory: %w", err))
+		}
+	}
+	return result
 }
 
 // liveRunLoop executes exactly one selector decision per iteration, then
