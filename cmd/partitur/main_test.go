@@ -1290,18 +1290,36 @@ func TestUnknownRunIDDiagnosticsUseBareResumeRemedy(t *testing.T) {
 	}
 }
 
+func TestResumePreselectionFailureUsesBareRemedy(t *testing.T) {
+	previous := newRunStore
+	newRunStore = func(string, faultpoint.Probe, ...runstore.ReceiptObserver) (*runstore.Store, error) {
+		return nil, errors.New("fixture store unavailable")
+	}
+	t.Cleanup(func() { newRunStore = previous })
+
+	var stdout, stderr bytes.Buffer
+	code := runResume("unresolved-run", &stdout, &stderr, resume)
+	wantStderr := "run interrupted: state=\"nonterminal\" resume=\"partitur resume\" detail=\"fixture store unavailable\"\n"
+	if code != 6 || stdout.Len() != 0 || stderr.String() != wantStderr {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 // This is deliberately an injected executor-result test: the CLI exit mapping
 // is the seam under test, while durable effects are covered below with a real store.
 func TestCancelMapsInjectedExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 	tests := []struct {
 		name       string
 		result     recoveryexec.Result
+		err        error
 		wantCode   int
 		wantStderr string
 	}{
+		{name: "execution error", err: errors.New("fixture interruption"), wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"fixture interruption\"\n"},
 		{name: "unexpected live-owner result is operational interruption", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeRefused}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"cancellation acknowledgement wait ended without a terminal outcome\"\n"},
 		{name: "terminal cancellation", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeCancelled}, wantCode: 4},
 		{name: "terminal failure", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}, wantCode: 4},
+		{name: "unknown halt", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: "unknown"}}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced an unknown halt reason\"\n"},
 		{name: "halt", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: recovery.HaltOwnerUnverifiable}}, wantCode: 5, wantStderr: "recovery halted: run_id=\"run-1\" reason=\"owner_unverifiable\"\n"},
 		{name: "no outcome is operational interruption", result: recoveryexec.Result{}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced no command outcome\"\n"},
 	}
@@ -1309,7 +1327,7 @@ func TestCancelMapsInjectedExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			code := runCancel("", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
-				return recoveryCommandResult{runID: "run-1", result: test.result}, nil
+				return recoveryCommandResult{runID: "run-1", result: test.result}, test.err
 			})
 			if code != test.wantCode {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())

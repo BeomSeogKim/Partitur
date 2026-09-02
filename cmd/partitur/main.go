@@ -972,7 +972,7 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 		return 6
 	}
 	commandResult, err := resume(context.Background(), requestedID)
-	runID := selectedOrRequestedRunID(commandResult.runID, requestedID)
+	runID := string(commandResult.runID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
 			renderDurabilityUnconfirmed(stderr, err)
@@ -1009,13 +1009,6 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 	}
 }
 
-func selectedOrRequestedRunID(selected runstate.RunID, requested string) string {
-	if selected != "" {
-		return string(selected)
-	}
-	return requested
-}
-
 func renderResumeInterruption(stderr io.Writer, runID, detail string) {
 	if runID == "" {
 		fmt.Fprintf(stderr, "run interrupted: state=%q resume=%q detail=%q\n", "nonterminal", "partitur resume", detail)
@@ -1032,7 +1025,7 @@ func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	commandResult, err := cancel(ctx, requestedID)
-	runID := selectedOrRequestedRunID(commandResult.runID, requestedID)
+	runID := string(commandResult.runID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
 			renderDurabilityUnconfirmed(stderr, err)
