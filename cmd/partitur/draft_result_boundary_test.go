@@ -93,6 +93,28 @@ func TestDraftResultBoundaryKillCuts(t *testing.T) {
 	}
 }
 
+func TestResumeRecoveredAttemptWaitingHumanIsQuiescent(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "question")
+	child := pauseRunAtReceipt(t, partitur, repository, environment, "movement.movement.started")
+	runID := routedProposalRunID(t, repository)
+	killPausedRun(t, child)
+
+	code, stdout, stderr := runCommandBinaryWithin(t, 10*time.Second, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	assertDraftBlockingResult(t, repository, runID)
+}
+
 func draftResultRepository(t *testing.T, bin, vendor, result string) (string, []string) {
 	t.Helper()
 	document := draftSchedulingScore()

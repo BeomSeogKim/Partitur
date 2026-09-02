@@ -77,7 +77,12 @@ type runDriver func(
 ) driver.Result
 
 type statusReader func(string) (statusprojection.Report, error)
-type resumeRunner func(context.Context, string) (recoveryexec.Result, error)
+type recoveryCommandResult struct {
+	runID  runstate.RunID
+	result recoveryexec.Result
+}
+
+type resumeRunner func(context.Context, string) (recoveryCommandResult, error)
 
 var newRunStore = runstore.New
 
@@ -963,10 +968,11 @@ func parseResumeArgs(args []string) (string, bool) {
 
 func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner) int {
 	if resume == nil {
-		fmt.Fprintln(stderr, "run interrupted: run_id=\"\" state=\"nonterminal\" resume=\"partitur resume\" detail=\"resume unavailable\"")
+		renderResumeInterruption(stderr, "", "resume unavailable")
 		return 6
 	}
-	result, err := resume(context.Background(), requestedID)
+	commandResult, err := resume(context.Background(), requestedID)
+	runID := string(commandResult.runID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
 			renderDurabilityUnconfirmed(stderr, err)
@@ -978,9 +984,10 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 			renderStatusError(stderr, err)
 			return code
 		}
-		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, err.Error())
+		renderResumeInterruption(stderr, runID, err.Error())
 		return 6
 	}
+	result := commandResult.result
 	switch result.Outcome {
 	case recoveryexec.OutcomeSucceeded, recoveryexec.OutcomeQuiescent:
 		return 0
@@ -991,25 +998,34 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 		return 2
 	case recoveryexec.OutcomeHalted:
 		if !recovery.IsHaltReason(result.Decision.Halt) {
-			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced an unknown halt reason")
+			renderResumeInterruption(stderr, runID, "recovery produced an unknown halt reason")
 			return 6
 		}
-		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", requestedID, result.Decision.Halt)
+		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", runID, result.Decision.Halt)
 		return 5
 	default:
-		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced no command outcome")
+		renderResumeInterruption(stderr, runID, "recovery produced no command outcome")
 		return 6
 	}
 }
 
+func renderResumeInterruption(stderr io.Writer, runID, detail string) {
+	if runID == "" {
+		fmt.Fprintf(stderr, "run interrupted: state=%q resume=%q detail=%q\n", "nonterminal", "partitur resume", detail)
+		return
+	}
+	fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", runID, "nonterminal", "partitur resume "+runID, detail)
+}
+
 func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner) int {
 	if cancel == nil {
-		fmt.Fprintln(stderr, "run interrupted: run_id=\"\" state=\"nonterminal\" resume=\"partitur resume\" detail=\"cancel unavailable\"")
+		renderResumeInterruption(stderr, "", "cancel unavailable")
 		return 6
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	result, err := cancel(ctx, requestedID)
+	commandResult, err := cancel(ctx, requestedID)
+	runID := string(commandResult.runID)
 	if err != nil {
 		if errors.Is(err, runstore.ErrJournalDurabilityUnconfirmed) {
 			renderDurabilityUnconfirmed(stderr, err)
@@ -1029,44 +1045,45 @@ func runCancel(requestedID string, stdout, stderr io.Writer, cancel resumeRunner
 			renderStatusError(stderr, err)
 			return code
 		}
-		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, err.Error())
+		renderResumeInterruption(stderr, runID, err.Error())
 		return 6
 	}
+	result := commandResult.result
 	switch result.Outcome {
 	case recoveryexec.OutcomeSucceeded, recoveryexec.OutcomeQuiescent:
 		return 0
 	case recoveryexec.OutcomeFailed, recoveryexec.OutcomeCancelled:
 		return 4
 	case recoveryexec.OutcomeRefused:
-		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "cancellation acknowledgement wait ended without a terminal outcome")
+		renderResumeInterruption(stderr, runID, "cancellation acknowledgement wait ended without a terminal outcome")
 		return 6
 	case recoveryexec.OutcomeHalted:
 		if !recovery.IsHaltReason(result.Decision.Halt) {
-			fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced an unknown halt reason")
+			renderResumeInterruption(stderr, runID, "recovery produced an unknown halt reason")
 			return 6
 		}
-		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", requestedID, result.Decision.Halt)
+		fmt.Fprintf(stderr, "recovery halted: run_id=%q reason=%q\n", runID, result.Decision.Halt)
 		return 5
 	default:
-		fmt.Fprintf(stderr, "run interrupted: run_id=%q state=%q resume=%q detail=%q\n", requestedID, "nonterminal", "partitur resume "+requestedID, "recovery produced no command outcome")
+		renderResumeInterruption(stderr, runID, "recovery produced no command outcome")
 		return 6
 	}
 }
 
-func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error) {
+func resume(ctx context.Context, requestedID string) (recoveryCommandResult, error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
+		return recoveryCommandResult{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
 	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
-		return recoveryexec.Result{}, err
+		return recoveryCommandResult{}, err
 	}
 	runID := runstate.RunID(requestedID)
 	if requestedID == "" {
 		report, err := statusprojection.Read(root, requestedID)
 		if err != nil {
-			return recoveryexec.Result{}, resumeSelectionError{err: err}
+			return recoveryCommandResult{}, resumeSelectionError{err: err}
 		}
 		runID = runstate.RunID(report.Run.ID)
 	} else {
@@ -1075,10 +1092,11 @@ func resume(ctx context.Context, requestedID string) (recoveryexec.Result, error
 		case selectionErr == nil:
 			runID = runstate.RunID(report.Run.ID)
 		case errors.Is(selectionErr, statusprojection.ErrInvalidRunID), errors.Is(selectionErr, statusprojection.ErrRunNotFound):
-			return recoveryexec.Result{}, resumeSelectionError{err: selectionErr}
+			return recoveryCommandResult{}, resumeSelectionError{err: selectionErr}
 		}
 	}
-	return executeRecovery(ctx, store, runID)
+	result, err := executeRecovery(ctx, store, runID)
+	return recoveryCommandResult{runID: runID, result: result}, err
 }
 
 type cancelSelectionError struct {
@@ -1089,25 +1107,26 @@ func (err cancelSelectionError) Error() string { return err.err.Error() }
 
 func (err cancelSelectionError) Unwrap() error { return err.err }
 
-func cancel(ctx context.Context, requestedID string) (recoveryexec.Result, error) {
+func cancel(ctx context.Context, requestedID string) (recoveryCommandResult, error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return recoveryexec.Result{}, fmt.Errorf("resolve invocation directory: %w", err)
+		return recoveryCommandResult{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
 	store, err := newRunStore(root, faultpoint.ProbeFromEnvironment(), runstore.ReceiptObserverFromEnvironment())
 	if err != nil {
-		return recoveryexec.Result{}, err
+		return recoveryCommandResult{}, err
 	}
 	report, err := statusprojection.Read(root, requestedID)
 	if err != nil {
-		return recoveryexec.Result{}, cancelSelectionError{err: err}
+		return recoveryCommandResult{}, cancelSelectionError{err: err}
 	}
 	runID := runstate.RunID(report.Run.ID)
 	if err := store.RequestCancellation(runID); err != nil {
-		return recoveryexec.Result{}, err
+		return recoveryCommandResult{runID: runID}, err
 	}
 	store.WakeLeaseOwner(runID)
-	return waitForCancellation(ctx, store, runID)
+	result, err := waitForCancellation(ctx, store, runID)
+	return recoveryCommandResult{runID: runID, result: result}, err
 }
 
 func waitForCancellation(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {

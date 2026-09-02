@@ -1197,8 +1197,8 @@ func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
-				return test.result, nil
+			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
+				return recoveryCommandResult{runID: "run-1", result: test.result}, nil
 			})
 			if code != test.wantCode {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1213,26 +1213,121 @@ func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 	}
 }
 
+func TestBareResumeDiagnosticsUseSelectedRunID(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     recoveryexec.Result
+		err        error
+		wantCode   int
+		wantStderr string
+	}{
+		{
+			name:       "execution error",
+			err:        errors.New("fixture interruption"),
+			wantCode:   6,
+			wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"fixture interruption\"\n",
+		},
+		{
+			name:       "unknown halt",
+			result:     recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: "unknown"}},
+			wantCode:   6,
+			wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced an unknown halt reason\"\n",
+		},
+		{
+			name:       "named halt",
+			result:     recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: recovery.HaltOwnerUnverifiable}},
+			wantCode:   5,
+			wantStderr: "recovery halted: run_id=\"run-1\" reason=\"owner_unverifiable\"\n",
+		},
+		{
+			name:       "missing outcome",
+			wantCode:   6,
+			wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced no command outcome\"\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runResume("", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
+				return recoveryCommandResult{runID: "run-1", result: test.result}, test.err
+			})
+			if code != test.wantCode || stdout.Len() != 0 || stderr.String() != test.wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestUnknownRunIDDiagnosticsUseBareResumeRemedy(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		invoke func(*bytes.Buffer, *bytes.Buffer) int
+		detail string
+	}{
+		{
+			name: "resume unavailable",
+			invoke: func(stdout, stderr *bytes.Buffer) int {
+				return runResume("", stdout, stderr, nil)
+			},
+			detail: "resume unavailable",
+		},
+		{
+			name: "cancel unavailable",
+			invoke: func(stdout, stderr *bytes.Buffer) int {
+				return runCancel("", stdout, stderr, nil)
+			},
+			detail: "cancel unavailable",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := test.invoke(&stdout, &stderr)
+			wantStderr := fmt.Sprintf("run interrupted: state=\"nonterminal\" resume=\"partitur resume\" detail=%q\n", test.detail)
+			if code != 6 || stdout.Len() != 0 || stderr.String() != wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestResumePreselectionFailureUsesBareRemedy(t *testing.T) {
+	previous := newRunStore
+	newRunStore = func(string, faultpoint.Probe, ...runstore.ReceiptObserver) (*runstore.Store, error) {
+		return nil, errors.New("fixture store unavailable")
+	}
+	t.Cleanup(func() { newRunStore = previous })
+
+	var stdout, stderr bytes.Buffer
+	code := runResume("unresolved-run", &stdout, &stderr, resume)
+	wantStderr := "run interrupted: state=\"nonterminal\" resume=\"partitur resume\" detail=\"fixture store unavailable\"\n"
+	if code != 6 || stdout.Len() != 0 || stderr.String() != wantStderr {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 // This is deliberately an injected executor-result test: the CLI exit mapping
 // is the seam under test, while durable effects are covered below with a real store.
 func TestCancelMapsInjectedExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 	tests := []struct {
 		name       string
 		result     recoveryexec.Result
+		err        error
 		wantCode   int
 		wantStderr string
 	}{
+		{name: "execution error", err: errors.New("fixture interruption"), wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"fixture interruption\"\n"},
 		{name: "unexpected live-owner result is operational interruption", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeRefused}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"cancellation acknowledgement wait ended without a terminal outcome\"\n"},
 		{name: "terminal cancellation", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeCancelled}, wantCode: 4},
 		{name: "terminal failure", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}, wantCode: 4},
+		{name: "unknown halt", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: "unknown"}}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced an unknown halt reason\"\n"},
 		{name: "halt", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: recovery.HaltOwnerUnverifiable}}, wantCode: 5, wantStderr: "recovery halted: run_id=\"run-1\" reason=\"owner_unverifiable\"\n"},
 		{name: "no outcome is operational interruption", result: recoveryexec.Result{}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced no command outcome\"\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
-				return test.result, nil
+			code := runCancel("", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
+				return recoveryCommandResult{runID: "run-1", result: test.result}, test.err
 			})
 			if code != test.wantCode {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1485,8 +1580,8 @@ func TestResumeMapsEveryAppendixDHaltAndNoOtherReasonToExitFive(t *testing.T) {
 	for _, reason := range recovery.AppendixDHaltReasons() {
 		t.Run(string(reason), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
-				return recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: reason}}, nil
+			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
+				return recoveryCommandResult{runID: "run-1", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: reason}}}, nil
 			})
 			if code != 5 || stdout.Len() != 0 || !strings.Contains(stderr.String(), fmt.Sprintf("reason=%q", reason)) {
 				t.Fatalf("reason=%q exit=%d stdout=%q stderr=%q", reason, code, stdout.String(), stderr.String())
@@ -1495,8 +1590,8 @@ func TestResumeMapsEveryAppendixDHaltAndNoOtherReasonToExitFive(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
-		return recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: "not_an_appendix_d_reason"}}, nil
+	code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
+		return recoveryCommandResult{runID: "run-1", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: "not_an_appendix_d_reason"}}}, nil
 	})
 	if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown halt reason") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1505,8 +1600,8 @@ func TestResumeMapsEveryAppendixDHaltAndNoOtherReasonToExitFive(t *testing.T) {
 
 func TestResumeSelectionSnapshotInvalidIsRefused(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
-		return recoveryexec.Result{}, resumeSelectionError{err: statusprojection.ErrSnapshotInvalid}
+	code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
+		return recoveryCommandResult{}, resumeSelectionError{err: statusprojection.ErrSnapshotInvalid}
 	})
 	if code != 2 || stdout.Len() != 0 || stderr.String() != "precondition refused: detail=\"run score snapshot is invalid\"\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1973,8 +2068,9 @@ func TestResumeMapsAuthorityAcquisitionInputHaltsToExitFive(t *testing.T) {
 			}
 
 			var stdout, stderr bytes.Buffer
-			code := runResume("run-1", &stdout, &stderr, func(ctx context.Context, _ string) (recoveryexec.Result, error) {
-				return executor.Execute(ctx)
+			code := runResume("run-1", &stdout, &stderr, func(ctx context.Context, _ string) (recoveryCommandResult, error) {
+				result, err := executor.Execute(ctx)
+				return recoveryCommandResult{runID: "run-1", result: result}, err
 			})
 			if code != 5 || stdout.Len() != 0 || stderr.String() != test.wantStderr {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
