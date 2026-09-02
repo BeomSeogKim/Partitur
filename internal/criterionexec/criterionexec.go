@@ -59,7 +59,10 @@ func Run(config Config, request acceptance.RunCriterionRequest) acceptance.RunCr
 	if err := os.MkdirAll(config.AttemptRoot, 0o700); err != nil {
 		return acceptance.RunCriterionResult{Err: fmt.Errorf("create criterion staging: %w", err)}
 	}
-	temporary := filepath.Join(config.AttemptRoot, "tmp")
+	temporary, err := AttemptTemporaryDirectory(config.RunID, config.AttemptID)
+	if err != nil {
+		return acceptance.RunCriterionResult{Err: fmt.Errorf("resolve criterion temporary directory: %w", err)}
+	}
 	if err := os.MkdirAll(temporary, 0o700); err != nil {
 		return acceptance.RunCriterionResult{Err: fmt.Errorf("create criterion temporary directory: %w", err)}
 	}

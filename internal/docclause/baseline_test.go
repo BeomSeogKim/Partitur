@@ -21,8 +21,8 @@ type confirmedPacketPin struct {
 }
 
 const (
-	confirmedBaselineMarkedBlob                  = "4bcfdde84a68c0c1ad29da28b8cd52feea3ee2ce"
-	confirmedBaselineOrderedClassificationSHA256 = "805ef089d39dd0f1b43527b1ccee4bf4940d4f21154213cd7fdc7b17d1851360"
+	confirmedBaselineMarkedBlob                  = "ae5c4e5ba59a57b57c8b1f063b2cbb98dbfacf36"
+	confirmedBaselineOrderedClassificationSHA256 = "3777e72fce51ff2ada8fe6a8e9c75ade9d42b627a0fa3a6af0b391a57c146eb7"
 )
 
 func TestDesignStagingLedgerPinsCurrentUniverseAndActivatesBaseline(t *testing.T) {
@@ -159,10 +159,10 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndActivatesBaseline(t *testing.T
 			DecisionsHash: "3efe40c1dc1aeaacf9256ef9d5414dffceecaba0f00bb9eed805928a7ef23b92",
 		},
 		14: {
-			DecisionCount: 129,
-			AnchorCount:   88,
-			SourceSHA256:  "2d1c1e7ec2ca8b7c75383c9773f8c3cfb643a13166a5a945a1af1818e3d7d0a5",
-			DecisionsHash: "9e0162dfca95a452c35892bf81c88e6333705f7af02a77ad53655543a36ecaa4",
+			DecisionCount: 130,
+			AnchorCount:   89,
+			SourceSHA256:  "f75165ba4df18dc21462bde678c9a20212c7d8a48f3e4584ea322f817301c46d",
+			DecisionsHash: "7be602cd417289191b80a0a5e9d2d10a863e2e3028b7f038e0f5137a370098a9",
 		},
 		15: {
 			DecisionCount: 137,
@@ -257,7 +257,7 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndActivatesBaseline(t *testing.T
 		30: {
 			DecisionCount: 178,
 			AnchorCount:   75,
-			SourceSHA256:  "ccb4bb18552a6c4dd35cbdb37e50f55f6d513d24c042be08da308b0b6a33625e",
+			SourceSHA256:  "3dea7cc568a6d181a663aa654bd031d437129e6731ec6959dd787a6087582699",
 			DecisionsHash: "53ffcd25f494240ed3b1dc48011c9a6f000923240417a58065202e15dd233282",
 		},
 		31: {

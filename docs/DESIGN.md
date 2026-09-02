@@ -3058,19 +3058,19 @@ outside Partitur's control.
   PATH=<PATH inherited by the core>
   HOME=<HOME inherited by the core>
   PWD=<attempt worktree>
-  TMPDIR=<attempt staging directory>/tmp
-  TMP=<attempt staging directory>/tmp
-  TEMP=<attempt staging directory>/tmp
+  TMPDIR=/tmp/p<r>/<a>
+  TMP=/tmp/p<r>/<a>
+  TEMP=/tmp/p<r>/<a>
   ```
 
   No other inherited variable is passed. `PATH` is retained so an argv command may name an
   ordinary tool rather than an absolute executable; `HOME` is retained because language tools
   commonly find their configuration and default caches there. `PWD` reports the specified
   working directory even to commands that inspect the environment rather than the process
-  directory. The three temporary-directory spellings are core-set to the attempt staging
-  directory, so the usual platform conventions do not place default temporary files elsewhere.
-  These are invocation inputs fixed by the core, not score-selectable inputs and not an
-  isolation boundary.
+  directory. The three temporary-directory spellings are core-set to the attempt-exclusive
+  `/tmp/p<r>/<a>` path; `<r>` and `<a>` are `u` plus the UUID's 16 octets in unpadded URL-safe
+  base64. Terminal cleanup removes its run parent with repository staging. These fixed inputs are
+  not an isolation boundary: criteria run under user authority.
 
   For each spawned external command, the core captures `stdout` and `stderr` separately at
   `attempts/<attempt-id>/criteria/<criterion-id>/stdout` and `stderr`. Each stream is bounded
@@ -6628,7 +6628,7 @@ The rows:
 
 | Recovery case | Last durable state | Recovery action |
 |---|---|---|
-| `RC-RESUME-002` | Run is terminal | Complete any derived projections idempotently (`movement.cancelled`, `attempt.cancelled`, `decision.obsoleted`), **and finish any residual non-journal cleanup**: remove a stale `driver.lease` or quiesced sidecar, an orphan plan record, and the run's staging root. This is what makes `(f)` crash-closed — a crash between `(e)` and `(f)` makes this row win, and the cancellation row can no longer match because the run is now terminal, so without cleanup here `(f)` would never be retried. Terminality protects the driver CAS; it must not also strand the filesystem. Launch nothing |
+| `RC-RESUME-002` | Run is terminal | Complete any derived projections idempotently (`movement.cancelled`, `attempt.cancelled`, `decision.obsoleted`), **and finish any residual non-journal cleanup**: remove a stale `driver.lease` or quiesced sidecar, an orphan plan record, and both run staging roots. This is what makes `(f)` crash-closed — a crash between `(e)` and `(f)` makes this row win, and the cancellation row can no longer match because the run is now terminal, so without cleanup here `(f)` would never be retried. Terminality protects the driver CAS; it must not also strand the filesystem. Launch nothing |
 | `RC-RESUME-003` | A readable `driver.lease` is at an epoch **older** than the journal-projected one | It is stale, not dangerous: the mutation CAS requires a lease at the current epoch (§6), so its owner cannot mutate whatever its liveness. Remove it and re-evaluate this table from the top. This is what clears a lease stranded by a crash between a fencing terminal event and its cleanup (Appendix E) |
 | `RC-RESUME-004` | A `driver.lease` exists with no `authority.granted` at its epoch | An orphan from a crashed acquisition (§6): quarantine it and **re-evaluate this table from the top**. Reclamation is deliberately not performed here — this row sits above the cancellation and pending-prepare rows, and reclaiming authority while a prepare is pending is exactly what that row forbids. Once the orphan is gone, whichever row genuinely applies wins, including the no-live-owner reclaim below |
 | `RC-RESUME-005` | A `driver.lease` exists **at the current journal-projected epoch** and its owner is **unverifiable** | Halt `owner_unverifiable`. This outranks even a pending cancellation: cancellation outranks *resumption*, never the safety check that terminalizing requires. Declaring a run cancelled while a possibly-live owner could still mutate it is the one thing §6 forbids outright. The check is scoped to a **current** lease deliberately — the CAS needs one, so an owner without one is already unable to act, and an unscoped check halts on states that are provably safe: after `authority.granted` but before the lease exists, after the lease has moved to a quiesced sidecar, and after a fence has advanced the epoch past it |

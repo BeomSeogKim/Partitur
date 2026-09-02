@@ -757,7 +757,10 @@ func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Act
 	}); err != nil {
 		return err
 	}
-	return os.RemoveAll(filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID)))
+	return errors.Join(
+		os.RemoveAll(filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID))),
+		criterionexec.CleanupRunTemporary(execution.RunID),
+	)
 }
 
 func terminalCleanupResidues(root string, runID runstate.RunID) ([]string, error) {

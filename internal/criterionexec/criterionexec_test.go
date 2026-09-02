@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -49,6 +51,139 @@ func TestCriterionHelperProcess(t *testing.T) {
 		select {}
 	case "hold-stderr":
 		select {}
+	case "bind-unix-socket":
+		fmt.Fprintln(os.Stdout, os.Getenv("TMPDIR"))
+		directory := filepath.Join(os.Getenv("TMPDIR"), "tsx-501")
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		socket := filepath.Join(directory, "53072.pipe")
+		listener, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatalf("listen unix socket %q (%d bytes): %v", socket, len([]byte(socket)), err)
+		}
+		defer listener.Close()
+	case "hold-unix-socket":
+		ready := os.Args[len(os.Args)-3]
+		release := os.Args[len(os.Args)-2]
+		directory := filepath.Join(os.Getenv("TMPDIR"), "shared-name")
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		socket := filepath.Join(directory, "criterion.pipe")
+		listener, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatalf("listen unix socket %q: %v", socket, err)
+		}
+		defer listener.Close()
+		if err := os.WriteFile(ready, []byte("ready"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(release); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("release marker was not published")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		fmt.Fprintln(os.Stdout, os.Getenv("TMPDIR"))
+	}
+}
+
+func TestRunProvidesSocketSafeCriterionTemporaryDirectory(t *testing.T) {
+	root, worktree, trampoline := criterionFixture(t)
+	config := criterionConfig(root, worktree, trampoline)
+	config.RunID = "01a05f59-8be8-7abc-9123-123456789abc"
+	config.AttemptID = "01a05f5d-04b4-7def-8456-abcdef123456"
+	config.AttemptRoot = filepath.Join(root, ".partitur", "work", string(config.RunID), string(config.AttemptID))
+	result := Run(config, criterionRequest(t, "bind-unix-socket"))
+	stdout, _ := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(config.RunID), "attempts", string(config.AttemptID), "criteria", "criterion", "stdout"))
+	temporary, _, _ := strings.Cut(string(stdout), "\n")
+	if strings.HasPrefix(temporary, "/tmp/p") {
+		t.Cleanup(func() {
+			if err := os.RemoveAll(filepath.Dir(temporary)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if result.Outcome != "PASS" {
+		stderr, _ := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(config.RunID), "attempts", string(config.AttemptID), "criteria", "criterion", "stderr"))
+		t.Fatalf("criterion result = %#v\nstdout=%s\nstderr=%s", result, stdout, stderr)
+	}
+	if !strings.HasPrefix(temporary, "/tmp/p") {
+		t.Fatalf("criterion TMPDIR = %q, want the short criterion namespace", temporary)
+	}
+	t.Logf("bound unix socket under %d-byte TMPDIR on %s", len([]byte(temporary)), runtime.GOOS)
+}
+
+func TestConcurrentAttemptsUseDistinctCriterionTemporaryDirectories(t *testing.T) {
+	root, worktree, trampoline := criterionFixture(t)
+	runID := runstate.RunID("01a05f59-8be8-7abc-9123-123456789abc")
+	t.Cleanup(func() {
+		if err := CleanupRunTemporary(runID); err != nil {
+			t.Fatal(err)
+		}
+	})
+	barrier := t.TempDir()
+	release := filepath.Join(barrier, "release")
+	t.Cleanup(func() { _ = os.WriteFile(release, []byte("release"), 0o600) })
+	type attemptResult struct {
+		config Config
+		result acceptance.RunCriterionResult
+	}
+	results := make(chan attemptResult, 2)
+	configs := []Config{
+		criterionConfig(root, worktree, trampoline),
+		criterionConfig(root, worktree, trampoline),
+	}
+	configs[0].RunID = runID
+	configs[0].AttemptID = "01a05f5d-04b4-7def-8456-abcdef123456"
+	configs[1].RunID = runID
+	configs[1].AttemptID = "01a05f5e-04b4-7def-8456-abcdef123456"
+	for index := range configs {
+		config := configs[index]
+		config.AttemptRoot = filepath.Join(root, ".partitur", "work", string(config.RunID), string(config.AttemptID))
+		ready := filepath.Join(barrier, fmt.Sprintf("ready-%d", index))
+		request := criterionRequest(t, "hold-unix-socket")
+		request.Argv = append(request.Argv[:len(request.Argv)-1], ready, release, "hold-unix-socket")
+		go func() { results <- attemptResult{config: config, result: Run(config, request)} }()
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ready := 0
+		for index := range configs {
+			if _, err := os.Stat(filepath.Join(barrier, fmt.Sprintf("ready-%d", index))); err == nil {
+				ready++
+			}
+		}
+		if ready == len(configs) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("concurrent criteria did not both bind their socket")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	temporary := make(map[string]struct{}, len(configs))
+	for range configs {
+		got := <-results
+		if got.result.Outcome != "PASS" {
+			t.Fatalf("attempt %s result = %#v", got.config.AttemptID, got.result)
+		}
+		path, err := AttemptTemporaryDirectory(got.config.RunID, got.config.AttemptID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		temporary[path] = struct{}{}
+	}
+	if len(temporary) != len(configs) {
+		t.Fatalf("concurrent attempts shared temporary directories: %v", temporary)
 	}
 }
 
@@ -142,7 +277,15 @@ func TestCriterionEnvironmentHelperProcess(t *testing.T) {
 	if err := json.Unmarshal(environmentJSON, &got); err != nil {
 		t.Fatalf("decode criterion environment %q: %v", contents, err)
 	}
-	temporary := filepath.Join(config.AttemptRoot, "tmp")
+	temporary, err := AttemptTemporaryDirectory(config.RunID, config.AttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := CleanupRunTemporary(config.RunID); err != nil {
+			t.Fatal(err)
+		}
+	})
 	want := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
@@ -364,6 +507,11 @@ func TestEffectiveTimeoutTieClassifiesAsCriterionTimeout(t *testing.T) {
 
 func criterionFixture(t *testing.T) (string, string, string) {
 	t.Helper()
+	t.Cleanup(func() {
+		if err := CleanupRunTemporary("run"); err != nil {
+			t.Errorf("clean default criterion temporary test fixture: %v", err)
+		}
+	})
 	root := t.TempDir()
 	runGit(t, root, "init")
 	runGit(t, root, "config", "user.name", "Partitur Test")
