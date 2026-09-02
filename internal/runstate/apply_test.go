@@ -1355,6 +1355,28 @@ func TestAutoApprovalCommitsPreparedHeadAndSupersedesExactAttempts(t *testing.T)
 	}
 }
 
+func TestAmendmentApprovalPrunesResolvedDecisionsFromObsoleteRevision(t *testing.T) {
+	state := runningAttemptState(t)
+	state.ResolvedDecisions = []ResolvedDecision{
+		{DecisionID: "question-1", MovementID: "m1", ScoreRevision: 1, Sequence: 17, Kind: "answer", Answer: "old answer"},
+		{DecisionID: "amendment-1", MovementID: "m1", ScoreRevision: 1, Sequence: 23, Kind: "amendment_rejected", Reason: "patch_error"},
+	}
+	var err error
+	state, err = Apply(state, fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := Apply(state, fixtureEvent(EventAmendmentApproved, approvalPayload("auto"), func(event *Event) {
+		event.ScoreRevision = 2
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.ResolvedDecisions) != 0 {
+		t.Fatalf("resolved decisions after revision advance = %#v, want none", next.ResolvedDecisions)
+	}
+}
+
 func TestAmendmentApprovalModeFieldsAreConditional(t *testing.T) {
 	for _, test := range []struct {
 		name   string

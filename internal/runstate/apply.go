@@ -855,6 +855,7 @@ func Apply(input State, event Event) (State, error) {
 			return state, invalid(event, "fenced_epoch is not observed authority epoch plus one")
 		}
 		state.ScoreHead = approvedHead
+		state.ResolvedDecisions = nil
 		state.Movements = movements
 		state.MovementOrder = order
 		state.RepoWriteMovements = repoWrite
