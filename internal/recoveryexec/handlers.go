@@ -696,17 +696,18 @@ func executeRecoveredAttemptAtBase(
 }
 
 // recoveredAttemptOutcome maps what a recovery-owned attempt ended as onto what the executor
-// should see. Cancellation is not a failure: the driver observed the request mid-attempt and
-// ran the §6 oracle, so the run is already terminal, and reporting an error here would make
-// `resume` call a cancelled run an operational interruption where §7 gives it exit 4. The
-// sentinel makes the executor replan so C.1's terminal row supplies the outcome, rather than
-// this handler inventing a second way out.
+// should see. Cancellation and WAITING_HUMAN are not failures: the driver has already durably
+// changed the run state, and reporting an error here would make `resume` call an ordinary
+// terminal or quiescent result an operational interruption. The sentinels make the executor
+// replan so C.1 supplies the command outcome instead of this handler inventing a second exit.
 func recoveredAttemptOutcome(outcome driver.Outcome) error {
 	switch outcome {
 	case driver.OutcomeSucceeded:
 		return nil
 	case driver.OutcomeCancelled:
 		return ErrRunCancelledDuringRecovery
+	case driver.OutcomeWaitingHuman:
+		return ErrRunWaitingHumanDuringRecovery
 	default:
 		return fmt.Errorf("recovery attempt execution ended %s", outcome)
 	}

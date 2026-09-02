@@ -1507,16 +1507,17 @@ func TestCancellationDuringRecoveryReplansToTheTerminalRow(t *testing.T) {
 	}
 }
 
-// The test above injects the sentinel, so it cannot see whether the attempt handler still
-// produces it. This pins that mapping directly: it is the line a review round found
-// reporting a cancelled run as an execution failure.
-func TestRecoveredAttemptOutcomeMapsCancellationToTheSentinel(t *testing.T) {
+// Executor tests inject these sentinels, so they cannot see whether the attempt handler still
+// produces them. Pin the mappings directly: both outcomes already changed durable run state and
+// must be replanned instead of becoming execution failures.
+func TestRecoveredAttemptOutcomeMapsDurableRunStatesToReplanSentinels(t *testing.T) {
 	for _, test := range []struct {
 		outcome driver.Outcome
 		want    error
 	}{
 		{outcome: driver.OutcomeSucceeded, want: nil},
 		{outcome: driver.OutcomeCancelled, want: ErrRunCancelledDuringRecovery},
+		{outcome: driver.OutcomeWaitingHuman, want: ErrRunWaitingHumanDuringRecovery},
 	} {
 		t.Run(string(test.outcome), func(t *testing.T) {
 			if err := recoveredAttemptOutcome(test.outcome); !errors.Is(err, test.want) {
@@ -1529,7 +1530,7 @@ func TestRecoveredAttemptOutcomeMapsCancellationToTheSentinel(t *testing.T) {
 		driver.OutcomeFailed, driver.OutcomeHalted, driver.OutcomeInterrupted,
 	} {
 		err := recoveredAttemptOutcome(outcome)
-		if err == nil || errors.Is(err, ErrRunCancelledDuringRecovery) {
+		if err == nil || errors.Is(err, ErrRunCancelledDuringRecovery) || errors.Is(err, ErrRunWaitingHumanDuringRecovery) {
 			t.Fatalf("outcome %s mapped to %v", outcome, err)
 		}
 	}

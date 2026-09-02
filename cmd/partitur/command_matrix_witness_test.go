@@ -532,8 +532,9 @@ func runResumeCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 		before := journalLength(t, store)
 		var stdout, stderr bytes.Buffer
 
-		code := runResume("run-1", &stdout, &stderr, func(ctx context.Context, _ string) (recoveryexec.Result, error) {
-			return executor.Execute(ctx)
+		code := runResume("run-1", &stdout, &stderr, func(ctx context.Context, _ string) (recoveryCommandResult, error) {
+			result, err := executor.Execute(ctx)
+			return recoveryCommandResult{runID: "run-1", result: result}, err
 		})
 
 		if code != 5 || stdout.Len() != 0 || stderr.String() != "recovery halted: run_id=\"run-1\" reason=\"missing_snapshot_file\"\n" {
@@ -547,9 +548,10 @@ func runResumeCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 		t.Chdir(root)
 		before := journalLength(t, store)
 
-		code, stdout, stderr := invokeCommand("resume", "run-1")
+		code, stdout, stderr := invokeCommand("resume")
 
-		if code != 6 || stdout != "" || !strings.Contains(stderr, "partitur resume run-1") {
+		wantStderr := "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"execute recovery action select_initial_performer: partitur-adapter-adapter is absent from PATH\"\n"
+		if code != 6 || stdout != "" || stderr != wantStderr {
 			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 		}
 		assertCommandWitnessJournalDelta(t, store, before,
@@ -1851,17 +1853,17 @@ func runCancelCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 			before := journalLength(t, store)
 			var stdout, stderr bytes.Buffer
 
-			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
 				if err := store.RequestCancellation("run-1"); err != nil {
-					return recoveryexec.Result{}, err
+					return recoveryCommandResult{runID: "run-1"}, err
 				}
 				if err := store.Mutate("run-1", "", func(tx *runstore.Txn) error {
 					_, err := tx.At("command-witness.failed-race").Append(resumeEvent("run-1", runstate.EventRunFailed, map[string]any{"reason": "fixture race"}))
 					return err
 				}); err != nil {
-					return recoveryexec.Result{}, err
+					return recoveryCommandResult{runID: "run-1"}, err
 				}
-				return recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}, nil
+				return recoveryCommandResult{runID: "run-1", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}}, nil
 			})
 
 			if code != 4 || stdout.Len() != 0 || stderr.Len() != 0 {
@@ -1908,11 +1910,11 @@ func runCancelCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 			before := journalLength(t, store)
 			var stdout, stderr bytes.Buffer
 
-			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
 				if err := store.RequestCancellation("run-1"); err != nil {
-					return recoveryexec.Result{}, err
+					return recoveryCommandResult{runID: "run-1"}, err
 				}
-				return recoveryexec.Result{Outcome: recoveryexec.OutcomeRefused}, nil
+				return recoveryCommandResult{runID: "run-1", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeRefused}}, nil
 			})
 
 			if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "partitur resume run-1") {
@@ -1930,11 +1932,11 @@ func runCancelCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 			before := journalLength(t, store)
 			var stdout, stderr bytes.Buffer
 
-			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryexec.Result, error) {
+			code := runCancel("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
 				if err := store.RequestCancellation("run-1"); err != nil {
-					return recoveryexec.Result{}, err
+					return recoveryCommandResult{runID: "run-1"}, err
 				}
-				return recoveryexec.Result{}, nil
+				return recoveryCommandResult{runID: "run-1"}, nil
 			})
 
 			if code != 6 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "partitur resume run-1") {
