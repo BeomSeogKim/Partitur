@@ -793,6 +793,100 @@ func TestDecisionResolutionRetainsFullHumanGateFact(t *testing.T) {
 	}
 }
 
+func TestPerformerFacingResolutionsRemainProjected(t *testing.T) {
+	t.Run("answered question", func(t *testing.T) {
+		state := NewState([]MovementSeed{{ID: "m1", Initial: MovementPending}})
+		state.Run = RunWaitingHuman
+		state.Movements["m1"] = MovementWaitingHuman
+		state.PendingDecisions["question-1"] = PendingDecision{
+			ID: "question-1", Type: "question", MovementID: "m1", AttemptID: "a1", ScoreRevision: 7,
+		}
+		event := fixtureEvent(EventDecisionResolved, map[string]any{
+			"decision_id": "question-1", "decision_type": "question", "disposition": "answered", "answer": "yes",
+		}, func(event *Event) {
+			event.Seq = 23
+			event.ScoreRevision = 7
+			event.MovementID = "m1"
+			event.AttemptID = "a1"
+		})
+		next, err := Apply(state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []ResolvedDecision{{
+			DecisionID: "question-1", MovementID: "m1", ScoreRevision: 7, Sequence: 23, Kind: "answer", Answer: "yes",
+		}}
+		if !reflect.DeepEqual(next.ResolvedDecisions, want) {
+			t.Fatalf("resolved decisions = %#v, want %#v", next.ResolvedDecisions, want)
+		}
+	})
+
+	t.Run("amendment rejected before request", func(t *testing.T) {
+		state := runningAttemptState(t)
+		payload := amendmentRejectedPayload()
+		payload["decision_id"] = "proposal-decision"
+		event := fixtureEvent(EventAmendmentRejected, payload, func(event *Event) {
+			event.Seq = 31
+			event.MovementID = "m1"
+			event.AttemptID = "a1"
+		})
+		next, err := Apply(state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ResolvedDecision{
+			DecisionID: "proposal-decision", MovementID: "m1", ScoreRevision: 1,
+			Sequence: 31, Kind: "amendment_rejected", Reason: "patch_error",
+		}
+		if len(next.ResolvedDecisions) != 1 || next.ResolvedDecisions[0] != want {
+			t.Fatalf("resolved decisions = %#v, want %#v", next.ResolvedDecisions, want)
+		}
+	})
+
+	t.Run("human rejected amendment", func(t *testing.T) {
+		state := runningAttemptState(t)
+		route := fixtureEvent(EventAmendmentRoutedHuman, routedAmendmentPayload(), func(event *Event) {
+			event.MovementID = "m1"
+			event.AttemptID = "a1"
+		})
+		var err error
+		state, err = Apply(state, route)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err = Apply(state, fixtureEvent(EventDecisionRequested, map[string]any{
+			"decision_id": "decision-1", "decision_type": "amendment", "proposal_id": "proposal-1",
+			"routed_reason": "auto_disabled", "blocking": true,
+		}, func(event *Event) {
+			event.MovementID = "m1"
+			event.AttemptID = "a1"
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rejected := fixtureEvent(EventAmendmentHumanRejected, map[string]any{
+			"proposal_id": "proposal-1", "decision_id": "decision-1", "human_reason": "not now",
+			"base_revision": 1, "base_hash": "sha256:score-1", "classifier_version": 1,
+			"identity_versions": testIdentityVersions(),
+		}, func(event *Event) {
+			event.Seq = 37
+			event.MovementID = "m1"
+			event.AttemptID = "a1"
+		})
+		next, err := Apply(state, rejected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ResolvedDecision{
+			DecisionID: "decision-1", MovementID: "m1", ScoreRevision: 1,
+			Sequence: 37, Kind: "amendment_rejected", Reason: "human_rejected",
+		}
+		if len(next.ResolvedDecisions) != 1 || next.ResolvedDecisions[0] != want {
+			t.Fatalf("resolved decisions = %#v, want %#v", next.ResolvedDecisions, want)
+		}
+	})
+}
+
 func TestHumanGateRequestRetainsBlockingFindings(t *testing.T) {
 	state := NewState([]MovementSeed{{ID: "m1", Initial: MovementPending}})
 	state.Run = RunRunning

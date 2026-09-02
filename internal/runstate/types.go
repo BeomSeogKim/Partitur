@@ -185,6 +185,18 @@ type HumanGateResolution struct {
 	Reason             string
 }
 
+// ResolvedDecision retains one performer-facing resolution after it leaves
+// the pending-decision projection.
+type ResolvedDecision struct {
+	DecisionID    string
+	MovementID    MovementID
+	ScoreRevision uint64
+	Sequence      uint64
+	Kind          string
+	Answer        string
+	Reason        string
+}
+
 type RoutedAmendment struct {
 	ProposalID        ProposalID
 	DecisionID        string
@@ -404,6 +416,7 @@ type State struct {
 	CriterionLaunches    map[CriterionLaunchKey]CriterionLaunch
 	Acceptances          map[AttemptID]Acceptance
 	PendingDecisions     map[string]PendingDecision
+	ResolvedDecisions    []ResolvedDecision
 	ResolvedHumanGates   map[AttemptID]HumanGateResolution
 	RoutedAmendments     map[ProposalID]RoutedAmendment
 	CancelRequested      bool

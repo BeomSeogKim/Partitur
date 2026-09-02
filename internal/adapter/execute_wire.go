@@ -61,6 +61,16 @@ func encodeExecuteRequest(request protocol.ExecuteRequest) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+// SerializedExecuteRequestBytes returns the JSON-RPC frame size without its
+// newline transport delimiter.
+func SerializedExecuteRequestBytes(request protocol.ExecuteRequest) (int, error) {
+	encoded, err := encodeExecuteRequest(request)
+	if err != nil {
+		return 0, err
+	}
+	return len(encoded) - 1, nil
+}
+
 func encodeCancelRequest(request protocol.CancelRequest) ([]byte, error) {
 	frame := struct {
 		JSONRPC string                 `json:"jsonrpc"`

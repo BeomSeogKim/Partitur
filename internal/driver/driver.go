@@ -42,6 +42,8 @@ var (
 	ErrEnforcement                  = errors.New("enforcement_unavailable")
 )
 
+const maxResolvedDecisionRequestBytes = protocol.MaxFrameBytes / 2
+
 type dependencies struct {
 	probe               faultpoint.Probe
 	receiptObserver     runstore.ReceiptObserver
@@ -671,7 +673,7 @@ func ExecuteAttempt(
 		},
 		Inputs:            inputs,
 		Feedback:          []protocol.Feedback{},
-		ResolvedDecisions: []protocol.ResolvedDecision{},
+		ResolvedDecisions: resolvedDecisionsForAttempt(inputState, attempt.MovementID, execution.Score.Revision()),
 	}
 	if extension, present := performer.Extensions[performer.Adapter]; present {
 		encoded, err := json.Marshal(extension)
@@ -681,6 +683,10 @@ func ExecuteAttempt(
 		request.Extensions = map[string]json.RawMessage{
 			performer.Adapter: encoded,
 		}
+	}
+	truncatedResolutions, err := boundResolvedDecisions(&request)
+	if err != nil {
+		return interrupted(result, err)
 	}
 	adapterInterval, err := dependencies.newID()
 	if err != nil {
@@ -751,7 +757,7 @@ func ExecuteAttempt(
 			"capabilities":              capabilityPayload(probe.Capabilities),
 			"enforcement":               probe.Enforcement,
 			"negotiated_features":       features,
-			"truncated_resolutions":     []any{},
+			"truncated_resolutions":     stringsToAny(truncatedResolutions),
 			"delivered_resolutions":     resolutions,
 			"delivered_feedback":        feedbackProjection(request.Feedback),
 			"advisory_dimensions":       advisory,
@@ -1367,6 +1373,52 @@ func ExecuteAttempt(
 	}
 	result.Outcome = OutcomeSucceeded
 	return result
+}
+
+func resolvedDecisionsForAttempt(state runstate.State, movementID runstate.MovementID, revision uint64) []protocol.ResolvedDecision {
+	eligible := make([]runstate.ResolvedDecision, 0, len(state.ResolvedDecisions))
+	for _, resolution := range state.ResolvedDecisions {
+		if resolution.MovementID == movementID && resolution.ScoreRevision == revision {
+			eligible = append(eligible, resolution)
+		}
+	}
+	slices.SortFunc(eligible, func(left, right runstate.ResolvedDecision) int {
+		switch {
+		case left.Sequence < right.Sequence:
+			return -1
+		case left.Sequence > right.Sequence:
+			return 1
+		default:
+			return 0
+		}
+	})
+	result := make([]protocol.ResolvedDecision, len(eligible))
+	for index, resolution := range eligible {
+		result[index] = protocol.ResolvedDecision{
+			DecisionID: resolution.DecisionID,
+			Kind:       protocol.ResolvedDecisionKind(resolution.Kind),
+			Answer:     resolution.Answer,
+			Reason:     resolution.Reason,
+		}
+	}
+	return result
+}
+
+func boundResolvedDecisions(request *protocol.ExecuteRequest) ([]string, error) {
+	truncated := make([]string, 0)
+	for len(request.ResolvedDecisions) != 0 {
+		frameBytes, err := adapter.SerializedExecuteRequestBytes(*request)
+		if err != nil {
+			return nil, err
+		}
+		if frameBytes <= maxResolvedDecisionRequestBytes {
+			break
+		}
+		truncated = append(truncated, request.ResolvedDecisions[0].DecisionID)
+		request.ResolvedDecisions = request.ResolvedDecisions[1:]
+	}
+	slices.Sort(truncated)
+	return truncated, nil
 }
 
 func adapterDecisionID(attemptID runstate.AttemptID, emittedID string) (string, error) {

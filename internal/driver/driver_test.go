@@ -1739,6 +1739,261 @@ func TestExecuteAttemptRecordsWaitingHumanAsBlockedTerminal(t *testing.T) {
 	}
 }
 
+func TestExecuteAttemptDeliversResolvedQuestionToNextAttempt(t *testing.T) {
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Score.Revision(), MovementID: "inspect", Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.resolved_delivery."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := &waitingAdapterFixture{t: t}
+	executeWaiting := func() runstate.Event {
+		t.Helper()
+		attempt, err := started.Run.CreateAttempt("inspect")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dependencies := testDependencies()
+		dependencies.client = client
+		result := ExecuteAttempt(context.Background(), AttemptExecution{
+			RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
+			RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
+			Authority: authority, PerformerID: "worker", SelectionReason: "decision_resume", RemainingMS: input.Projection.Scheduler.RemainingTime,
+		}, executionDependenciesFrom(dependencies))
+		if result.Outcome != OutcomeWaitingHuman || result.Err != nil {
+			t.Fatalf("waiting result = %+v", result)
+		}
+		journal, err := store.ReadJournal(started.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return journal.Events[len(journal.Events)-1]
+	}
+	blocked := executeWaiting()
+	resolveBlockedQuestion := func(blocked runstate.Event, answer string) string {
+		t.Helper()
+		raised := decodeDriverPayload(t, blocked)["raised"].([]any)[0].(map[string]any)
+		decisionID := raised["decision_id"].(string)
+		requestPayload, err := json.Marshal(map[string]any{
+			"decision_id": decisionID, "decision_type": "question", "emitted_id": raised["emitted_id"], "question": raised["question"],
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: blocked.ScoreRevision, MovementID: blocked.MovementID, PartID: blocked.PartID,
+			AttemptID: blocked.AttemptID, Type: runstate.EventDecisionRequested, Payload: requestPayload,
+		}, faultpoint.ReceiptAddress("test.resolved_delivery.request."+decisionID)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ResolveQuestion(started.RunID, decisionID, answer); err != nil {
+			t.Fatal(err)
+		}
+		return decisionID
+	}
+	decisionID := resolveBlockedQuestion(blocked, "Use the durable answer.")
+	secondBlocked := executeWaiting()
+	if len(client.requests) != 2 {
+		t.Fatalf("execute request count = %d, want 2", len(client.requests))
+	}
+	want := []protocol.ResolvedDecision{{
+		DecisionID: decisionID, Kind: protocol.ResolvedDecisionAnswer, Answer: "Use the durable answer.",
+	}}
+	if got := client.requests[1].ResolvedDecisions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("next attempt resolved decisions = %#v, want %#v", got, want)
+	}
+	secondDecisionID := resolveBlockedQuestion(secondBlocked, "Keep the earlier answer too.")
+	executeWaiting()
+	want = append(want, protocol.ResolvedDecision{
+		DecisionID: secondDecisionID, Kind: protocol.ResolvedDecisionAnswer, Answer: "Keep the earlier answer too.",
+	})
+	if got := client.requests[2].ResolvedDecisions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("third attempt resolved decisions = %#v, want both in resolving order %#v", got, want)
+	}
+}
+
+func TestResolvedDecisionsForAttemptSelectsExactScopeAndOrder(t *testing.T) {
+	t.Run("another movement", func(t *testing.T) {
+		state := runstate.NewState(nil)
+		state.ResolvedDecisions = []runstate.ResolvedDecision{
+			{DecisionID: "other", MovementID: "other", ScoreRevision: 2, Sequence: 1, Kind: "answer", Answer: "no"},
+			{DecisionID: "own", MovementID: "inspect", ScoreRevision: 2, Sequence: 2, Kind: "answer", Answer: "yes"},
+		}
+		got := resolvedDecisionsForAttempt(state, "inspect", 2)
+		if len(got) != 1 || got[0].DecisionID != "own" {
+			t.Fatalf("selected resolutions = %#v, want only own movement", got)
+		}
+	})
+
+	t.Run("obsolete revision", func(t *testing.T) {
+		state := runstate.NewState(nil)
+		state.ResolvedDecisions = []runstate.ResolvedDecision{
+			{DecisionID: "old", MovementID: "inspect", ScoreRevision: 1, Sequence: 1, Kind: "answer", Answer: "old"},
+			{DecisionID: "current", MovementID: "inspect", ScoreRevision: 2, Sequence: 2, Kind: "answer", Answer: "current"},
+		}
+		got := resolvedDecisionsForAttempt(state, "inspect", 2)
+		if len(got) != 1 || got[0].DecisionID != "current" {
+			t.Fatalf("selected resolutions = %#v, want only current revision", got)
+		}
+	})
+
+	t.Run("all prior blocks", func(t *testing.T) {
+		state := runstate.NewState(nil)
+		state.ResolvedDecisions = []runstate.ResolvedDecision{
+			{DecisionID: "first", MovementID: "inspect", ScoreRevision: 2, Sequence: 3, Kind: "answer", Answer: "one"},
+			{DecisionID: "second", MovementID: "inspect", ScoreRevision: 2, Sequence: 9, Kind: "answer", Answer: "two"},
+		}
+		got := resolvedDecisionsForAttempt(state, "inspect", 2)
+		if len(got) != 2 || got[0].DecisionID != "first" || got[1].DecisionID != "second" {
+			t.Fatalf("selected resolutions = %#v, want both prior blocks", got)
+		}
+	})
+
+	t.Run("resolving sequence", func(t *testing.T) {
+		state := runstate.NewState(nil)
+		state.ResolvedDecisions = []runstate.ResolvedDecision{
+			{DecisionID: "a-later", MovementID: "inspect", ScoreRevision: 2, Sequence: 9, Kind: "answer", Answer: "later"},
+			{DecisionID: "z-earlier", MovementID: "inspect", ScoreRevision: 2, Sequence: 3, Kind: "answer", Answer: "earlier"},
+		}
+		got := resolvedDecisionsForAttempt(state, "inspect", 2)
+		if len(got) != 2 || got[0].DecisionID != "z-earlier" || got[1].DecisionID != "a-later" {
+			t.Fatalf("selected resolutions = %#v, want resolving sequence", got)
+		}
+	})
+}
+
+func TestExecuteAttemptExcludesResolutionsOutsideItsScope(t *testing.T) {
+	t.Run("another movement", func(t *testing.T) {
+		document := sliceScore()
+		inspect := document["movements"].([]any)[0].(map[string]any)
+		other := make(map[string]any, len(inspect))
+		for key, value := range inspect {
+			other[key] = value
+		}
+		other["id"] = "other"
+		other["needs"] = []any{"inspect"}
+		other["outputs"] = []any{map[string]any{"id": "other-report", "kind": "artifact"}}
+		other["acceptance"] = map[string]any{"hard": []any{map[string]any{"id": "other-present", "artifact": "other-report"}}}
+		document["movements"] = []any{inspect, other}
+		document["verification"].(map[string]any)["final_movement"] = "other"
+		fixture := newResolvedRequestFixtureFor(t, document, "inspect")
+		fixture.startMovement("other")
+		fixture.resolveQuestionFor("other", fixture.input.Score.Revision(), "other-decision", "other answer")
+		fixture.resolveQuestion("own-decision", "own answer")
+		request, _ := fixture.executeWaiting()
+		if len(request.ResolvedDecisions) != 1 || request.ResolvedDecisions[0].DecisionID != "own-decision" {
+			t.Fatalf("delivered resolutions = %#v, want only own movement", request.ResolvedDecisions)
+		}
+	})
+
+	t.Run("obsolete revision", func(t *testing.T) {
+		document := sliceScore()
+		document["revision"] = float64(2)
+		fixture := newResolvedRequestFixtureFor(t, document, "inspect")
+		fixture.resolveQuestionFor("inspect", 1, "old-decision", "old answer")
+		fixture.resolveQuestion("current-decision", "current answer")
+		request, _ := fixture.executeWaiting()
+		if len(request.ResolvedDecisions) != 1 || request.ResolvedDecisions[0].DecisionID != "current-decision" {
+			t.Fatalf("delivered resolutions = %#v, want only current revision", request.ResolvedDecisions)
+		}
+	})
+}
+
+func TestExecuteAttemptDeliversPreRequestAmendmentRejection(t *testing.T) {
+	fixture := newResolvedRequestFixture(t)
+	versions, err := identityVersions(canonical.DomainScore, canonical.DomainPatchOperations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions["classifier"] = canonical.AmendmentClassifierVersion
+	patchHash, err := canonical.Hash(canonical.DomainPatchOperations, []any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.authority.Append(runstate.Event{
+		RunID: fixture.started.RunID, ScoreRevision: fixture.input.Score.Revision(), MovementID: "inspect", AttemptID: "rejected-attempt",
+		Type: runstate.EventAmendmentRejected, Payload: testPayload(t, map[string]any{
+			"proposal_id": "proposal-1", "decision_id": "decision-1", "reason": "patch_error",
+			"base_revision": fixture.input.Score.Revision(), "base_hash": fixture.input.Projection.State.ScoreHead.SemanticHash,
+			"classifier_version": canonical.AmendmentClassifierVersion, "patch_operations_hash": patchHash,
+			"patch_operations_hash_form": "partitur/patch-operations", "error_location": "operations", "identity_versions": versions,
+		}),
+	}, faultpoint.ReceiptAddress("test.pre_request_rejection")); err != nil {
+		t.Fatal(err)
+	}
+	request, _ := fixture.executeWaiting()
+	want := []protocol.ResolvedDecision{{
+		DecisionID: "decision-1", Kind: protocol.ResolvedDecisionAmendmentRejected, Reason: "patch_error",
+	}}
+	if !reflect.DeepEqual(request.ResolvedDecisions, want) {
+		t.Fatalf("delivered rejection = %#v, want %#v", request.ResolvedDecisions, want)
+	}
+}
+
+func TestExecuteAttemptTruncatesOldestResolutionsByFullFrameSize(t *testing.T) {
+	document := sliceScore()
+	document["movements"].([]any)[0].(map[string]any)["instruction"] = strings.Repeat("b", 300*1024)
+	fixture := newResolvedRequestFixtureFor(t, document, "inspect")
+	answer := strings.Repeat("x", 120*1024)
+	for _, decisionID := range []string{"z-oldest", "a-middle", "m-newest"} {
+		fixture.resolveQuestion(decisionID, answer)
+	}
+	request, state := fixture.executeWaiting()
+	all := request
+	all.ResolvedDecisions = resolvedDecisionsForAttempt(state, "inspect", fixture.input.Score.Revision())
+	resolutionBytes, err := json.Marshal(all.ResolvedDecisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolutionBytes) >= maxResolvedDecisionRequestBytes {
+		t.Fatalf("resolution subsection bytes = %d, want below %d", len(resolutionBytes), maxResolvedDecisionRequestBytes)
+	}
+	allBytes, err := adapter.SerializedExecuteRequestBytes(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allBytes <= maxResolvedDecisionRequestBytes {
+		t.Fatalf("unbounded request bytes = %d, want over %d", allBytes, maxResolvedDecisionRequestBytes)
+	}
+	deliveredBytes, err := adapter.SerializedExecuteRequestBytes(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deliveredBytes > maxResolvedDecisionRequestBytes {
+		t.Fatalf("bounded request bytes = %d, want at most %d", deliveredBytes, maxResolvedDecisionRequestBytes)
+	}
+	if len(request.ResolvedDecisions) != 1 || request.ResolvedDecisions[0].DecisionID != "m-newest" {
+		deliveredIDs := make([]string, len(request.ResolvedDecisions))
+		for index, resolution := range request.ResolvedDecisions {
+			deliveredIDs[index] = resolution.DecisionID
+		}
+		t.Fatalf("delivered resolution ids = %#v, want newest suffix", deliveredIDs)
+	}
+	observation := state.AdapterObservations[runstate.AttemptID(request.AttemptID)]
+	if !reflect.DeepEqual(observation.TruncatedResolutions, []string{"a-middle", "z-oldest"}) {
+		t.Fatalf("truncated resolution record = %#v", observation.TruncatedResolutions)
+	}
+}
+
 func TestExecuteAttemptRefusesProposalWaitingHumanUntilRoutedRequestExists(t *testing.T) {
 	scoreDocument := sliceScore()
 	scoreDocument["movements"].([]any)[0].(map[string]any)["may_propose"] = true
@@ -2142,6 +2397,17 @@ type completedAdapterFixture struct {
 	t *testing.T
 }
 
+type resolvedRequestFixture struct {
+	t           *testing.T
+	preparation *validate.Preparation
+	started     workspace.StartResult
+	store       *runstore.Store
+	authority   *runstore.Driver
+	input       runstore.RunInput
+	client      *waitingAdapterFixture
+	movementID  runstate.MovementID
+}
+
 type deliveredInputAdapterFixture struct {
 	t                 *testing.T
 	sourceContents    string
@@ -2154,9 +2420,96 @@ type waitingAdapterFixture struct {
 	proposal *protocol.ProposalEvent
 	raised   []adapter.RaisedDecision
 	pending  []string
+	requests []protocol.ExecuteRequest
 }
 
 type proposalDispositionFixture struct{}
+
+func newResolvedRequestFixture(t *testing.T) *resolvedRequestFixture {
+	return newResolvedRequestFixtureFor(t, sliceScore(), "inspect")
+}
+
+func newResolvedRequestFixtureFor(t *testing.T, document map[string]any, movementID runstate.MovementID) *resolvedRequestFixture {
+	t.Helper()
+	preparation := prepareRunnableFixture(t, document, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authority.Release() })
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &resolvedRequestFixture{
+		t: t, preparation: preparation, started: started, store: store, authority: authority, input: input,
+		client: &waitingAdapterFixture{t: t}, movementID: movementID,
+	}
+	fixture.startMovement(movementID)
+	return fixture
+}
+
+func (fixture *resolvedRequestFixture) startMovement(movementID runstate.MovementID) {
+	fixture.t.Helper()
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := fixture.authority.Append(runstate.Event{
+			RunID: fixture.started.RunID, ScoreRevision: fixture.input.Score.Revision(), MovementID: movementID, Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.resolved_fixture."+string(eventType))); err != nil {
+			fixture.t.Fatal(err)
+		}
+	}
+}
+
+func (fixture *resolvedRequestFixture) resolveQuestion(decisionID, answer string) {
+	fixture.resolveQuestionFor(fixture.movementID, fixture.input.Score.Revision(), decisionID, answer)
+}
+
+func (fixture *resolvedRequestFixture) resolveQuestionFor(movementID runstate.MovementID, revision uint64, decisionID, answer string) {
+	fixture.t.Helper()
+	if _, err := fixture.authority.Append(runstate.Event{
+		RunID: fixture.started.RunID, ScoreRevision: revision, MovementID: movementID, AttemptID: runstate.AttemptID("source-" + decisionID),
+		Type: runstate.EventDecisionRequested, Payload: testPayload(fixture.t, map[string]any{
+			"decision_id": decisionID, "decision_type": "question", "emitted_id": decisionID, "question": "Question?",
+		}),
+	}, faultpoint.ReceiptAddress("test.resolved_fixture.request."+decisionID)); err != nil {
+		fixture.t.Fatal(err)
+	}
+	if err := fixture.store.ResolveQuestion(fixture.started.RunID, decisionID, answer); err != nil {
+		fixture.t.Fatal(err)
+	}
+}
+
+func (fixture *resolvedRequestFixture) executeWaiting() (protocol.ExecuteRequest, runstate.State) {
+	fixture.t.Helper()
+	attempt, err := fixture.started.Run.CreateAttempt(string(fixture.movementID))
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	dependencies := testDependencies()
+	dependencies.client = fixture.client
+	result := ExecuteAttempt(context.Background(), AttemptExecution{
+		RepositoryRoot: fixture.preparation.RepositoryRoot, Score: fixture.input.Score, Cast: fixture.input.Cast,
+		RunID: fixture.started.RunID, Attempt: attempt, BaseTree: fixture.input.BaseTree, CandidateTree: fixture.input.BaseTree,
+		Authority: fixture.authority, PerformerID: "worker", SelectionReason: "decision_resume",
+		RemainingMS: fixture.input.Projection.Scheduler.RemainingTime,
+	}, executionDependenciesFrom(dependencies))
+	if result.Outcome != OutcomeWaitingHuman || result.Err != nil {
+		fixture.t.Fatalf("waiting result = %+v", result)
+	}
+	state, err := fixture.authority.State()
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return fixture.client.requests[len(fixture.client.requests)-1], state
+}
 
 func (proposalDispositionFixture) PrepareAdapterProposal(context.Context, AdapterProposal) (AdapterProposalDisposition, error) {
 	return AdapterProposalDisposition{}, nil
@@ -2168,6 +2521,7 @@ func (fixture *waitingAdapterFixture) Resolve(adapterID string) (string, error) 
 
 func (fixture *waitingAdapterFixture) Execute(_ context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
 	fixture.t.Helper()
+	fixture.requests = append(fixture.requests, plan.Request)
 	start, err := procid.Read(os.Getpid())
 	if err != nil {
 		return adapter.ExecuteReport{}, err
