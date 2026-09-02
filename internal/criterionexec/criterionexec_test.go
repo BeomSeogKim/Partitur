@@ -195,11 +195,11 @@ func TestConcurrentAttemptsUseDistinctCriterionTemporaryDirectories(t *testing.T
 func TestRunRejectsUnsafeCriterionTemporaryNamespace(t *testing.T) {
 	for _, test := range []struct {
 		name  string
-		plant func(*testing.T, string)
+		plant func(*testing.T, string, string)
 	}{
 		{
 			name: "symlink run root",
-			plant: func(t *testing.T, root string) {
+			plant: func(t *testing.T, root, _ string) {
 				t.Helper()
 				if err := os.Symlink(t.TempDir(), root); err != nil {
 					t.Fatal(err)
@@ -208,12 +208,27 @@ func TestRunRejectsUnsafeCriterionTemporaryNamespace(t *testing.T) {
 		},
 		{
 			name: "permissive run root",
-			plant: func(t *testing.T, root string) {
+			plant: func(t *testing.T, root, _ string) {
 				t.Helper()
 				if err := os.Mkdir(root, 0o755); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.Chmod(root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "0700 regular attempt path",
+			plant: func(t *testing.T, root, attempt string) {
+				t.Helper()
+				if err := os.Mkdir(root, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(attempt, []byte("not a directory"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(attempt, 0o700); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -226,24 +241,46 @@ func TestRunRejectsUnsafeCriterionTemporaryNamespace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			attemptTemporary, err := AttemptTemporaryDirectory(config.RunID, config.AttemptID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			t.Cleanup(func() { _ = os.RemoveAll(runTemporary) })
-			test.plant(t, runTemporary)
+			test.plant(t, runTemporary, attemptTemporary)
 			result := Run(config, criterionRequest(t, "pass"))
 			if result.Err == nil {
 				t.Fatalf("criterion result = %#v, want unsafe temporary namespace rejection", result)
 			}
 		})
 	}
+
+	// A foreign-owned 0700 directory requires a second UID or privileged chown,
+	// neither of which a single-UID test runner can honestly provide. The owner
+	// rejection therefore remains unwitnessed here: removing only that check will
+	// survive this package until a multi-user runner supplies such a fixture.
 }
 
 func TestRunRejectsNonUUIDTemporaryIdentity(t *testing.T) {
-	root, worktree, trampoline := criterionFixture(t)
-	config := criterionConfig(root, worktree, trampoline)
-	config.RunID = "run"
-	config.AttemptID = "attempt"
-	result := Run(config, criterionRequest(t, "pass"))
-	if result.Err == nil {
-		t.Fatalf("criterion result = %#v, want non-UUID temporary identity rejection", result)
+	for _, test := range []struct {
+		name  string
+		runID runstate.RunID
+	}{
+		{name: "malformed UUID", runID: "run"},
+		{name: "UUIDv4", runID: "01a05f59-8be8-4abc-9123-123456789abc"},
+		{name: "invalid RFC variant", runID: "01a05f59-8be8-7abc-7123-123456789abc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, worktree, trampoline := criterionFixture(t)
+			config := criterionConfig(root, worktree, trampoline)
+			config.RunID = test.runID
+			if runTemporary, err := RunTemporaryDirectory(config.RunID); err == nil {
+				t.Cleanup(func() { _ = os.RemoveAll(runTemporary) })
+			}
+			result := Run(config, criterionRequest(t, "pass"))
+			if result.Err == nil {
+				t.Fatalf("criterion result = %#v, want non-UUIDv7 temporary identity rejection", result)
+			}
+		})
 	}
 }
 
