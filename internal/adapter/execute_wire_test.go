@@ -8,7 +8,7 @@ import (
 )
 
 func TestEncodeExecuteRequestTagsResolvedDecisions(t *testing.T) {
-	encoded, err := encodeExecuteRequest(protocol.ExecuteRequest{
+	request := protocol.ExecuteRequest{
 		ResolvedDecisions: []protocol.ResolvedDecision{
 			{
 				DecisionID: "question-1",
@@ -20,7 +20,8 @@ func TestEncodeExecuteRequestTagsResolvedDecisions(t *testing.T) {
 				Reason:     "human_rejected",
 			},
 		},
-	})
+	}
+	encoded, err := encodeExecuteRequest(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,5 +33,12 @@ func TestEncodeExecuteRequestTagsResolvedDecisions(t *testing.T) {
 	)
 	if !bytes.Contains(encoded, want) {
 		t.Fatalf("encoded request missing tagged resolutions:\n%s", encoded)
+	}
+	frameBytes, err := SerializedExecuteRequestBytes(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frameBytes != len(encoded)-1 {
+		t.Fatalf("serialized frame bytes = %d, want %d", frameBytes, len(encoded)-1)
 	}
 }

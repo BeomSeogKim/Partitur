@@ -120,6 +120,7 @@ func cloneState(input State) State {
 		decision.BlockingFindings = append([]FindingReference(nil), decision.BlockingFindings...)
 		output.PendingDecisions[id] = decision
 	}
+	output.ResolvedDecisions = append([]ResolvedDecision(nil), input.ResolvedDecisions...)
 	output.ResolvedHumanGates = cloneMap(input.ResolvedHumanGates)
 	for id, resolution := range output.ResolvedHumanGates {
 		resolution.OverriddenFindings = append([]FindingReference(nil), resolution.OverriddenFindings...)

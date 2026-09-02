@@ -621,11 +621,20 @@ func Apply(input State, event Event) (State, error) {
 			resolution.OverrideReason, _ = payload["override_reason"].(string)
 			resolution.Reason, _ = payload["reason"].(string)
 			state.ResolvedHumanGates[decision.AttemptID] = resolution
+		} else {
+			state.ResolvedDecisions = append(state.ResolvedDecisions, ResolvedDecision{
+				DecisionID: decisionID, MovementID: decision.MovementID, ScoreRevision: decision.ScoreRevision,
+				Sequence: event.Seq, Kind: "answer", Answer: mustString(payload, "answer"),
+			})
 		}
 		delete(state.PendingDecisions, decisionID)
 		refreshWaitingHuman(&state)
 	case EventAmendmentRejected:
 		if decisionID, ok := payload["decision_id"].(string); ok {
+			state.ResolvedDecisions = append(state.ResolvedDecisions, ResolvedDecision{
+				DecisionID: decisionID, MovementID: event.MovementID, ScoreRevision: event.ScoreRevision,
+				Sequence: event.Seq, Kind: "amendment_rejected", Reason: mustString(payload, "reason"),
+			})
 			delete(state.PendingDecisions, decisionID)
 			if state.rejectedAmendments == nil {
 				state.rejectedAmendments = make(map[string]ProposalID)
@@ -668,6 +677,10 @@ func Apply(input State, event Event) (State, error) {
 		}
 		delete(state.RoutedAmendments, proposalID)
 		delete(state.PendingDecisions, routed.DecisionID)
+		state.ResolvedDecisions = append(state.ResolvedDecisions, ResolvedDecision{
+			DecisionID: routed.DecisionID, MovementID: event.MovementID, ScoreRevision: event.ScoreRevision,
+			Sequence: event.Seq, Kind: "amendment_rejected", Reason: "human_rejected",
+		})
 		refreshWaitingHuman(&state)
 	case EventCompositionConflicted, EventCompositionFailed:
 		if err := requireCompositionSource(state, event, payload); err != nil {
@@ -842,6 +855,7 @@ func Apply(input State, event Event) (State, error) {
 			return state, invalid(event, "fenced_epoch is not observed authority epoch plus one")
 		}
 		state.ScoreHead = approvedHead
+		state.ResolvedDecisions = nil
 		state.Movements = movements
 		state.MovementOrder = order
 		state.RepoWriteMovements = repoWrite
