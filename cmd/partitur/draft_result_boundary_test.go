@@ -114,6 +114,31 @@ func TestLiveBlockingRequestCrashReachesFixedPoint(t *testing.T) {
 	assertDraftBlockingResult(t, repository, runID, 4)
 }
 
+func TestRecoveredBlockingRequestCrashReachesFixedPoint(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "questions")
+	child := pauseRunAtReceipt(t, partitur, repository, environment, "attempt.blocked")
+	runID := routedProposalRunID(t, repository)
+	killPausedRun(t, child)
+
+	child = pauseCommandAtReceipt(t, partitur, repository, environment, "recovery.decision.requested.question", "resume", string(runID))
+	killPausedRun(t, child)
+
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	assertDraftBlockingResult(t, repository, runID, 4)
+}
+
 func TestDraftResultBoundaryKillCuts(t *testing.T) {
 	root := repositoryRoot(t)
 	bin := t.TempDir()
