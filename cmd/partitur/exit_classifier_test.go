@@ -188,10 +188,48 @@ func appendPendingCLIDecision(t *testing.T, store *runstore.Store, decisionType 
 	decisionID := decisionType + "-1"
 	payload := map[string]any{"decision_id": decisionID, "decision_type": decisionType}
 	var routePayload map[string]any
+	var questionSource []runstate.Event
 	switch decisionType {
 	case "question":
 		payload["question"] = "Continue?"
 		payload["emitted_id"] = "emitted-1"
+		input, err := store.LoadRunInput("run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, ok := input.Cast.Binding("reviewer")
+		if !ok {
+			t.Fatal("reviewer binding is absent")
+		}
+		performer, ok := input.Cast.Performer(binding.Performer)
+		if !ok {
+			t.Fatal("reviewer performer is absent")
+		}
+		versions := resumeIdentityVersions()
+		startedPayload := map[string]any{
+			"attempt_number":    1,
+			"adapter_process":   map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}},
+			"granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": versions,
+		}
+		if input.Projection.State.DependencyMovements["review"] {
+			startedPayload["base_composition_hash"] = "sha256:fixture-composition"
+		}
+		questionSource = []runstate.Event{
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "review", Type: runstate.EventMovementReady, Payload: resumePayload(t, map[string]any{})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "review", Type: runstate.EventMovementStarted, Payload: resumePayload(t, map[string]any{})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: resumePayload(t, map[string]any{"reason": "initial", "performer_id": performer.ID, "adapter_id": performer.Adapter, "model": performer.Model})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: resumePayload(t, startedPayload)},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: resumePayload(t, map[string]any{
+				"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false},
+				"enforcement":         map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true},
+				"negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{},
+				"execution_dependency_hash": "sha256:dependency", "identity_versions": versions,
+			})},
+			{RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1", Type: runstate.EventAttemptBlocked, Payload: resumePayload(t, map[string]any{
+				"raised":               []any{map[string]any{"decision_id": decisionID, "emitted_id": "emitted-1", "kind": "question", "question": "Continue?", "blocking": true}},
+				"pending_decision_ids": []any{decisionID},
+			})},
+		}
 	case "human_gate":
 		payload["gate_id"] = "gate-attempt-1"
 		payload["gate_mode"] = "always"
@@ -234,6 +272,11 @@ func appendPendingCLIDecision(t *testing.T, store *runstore.Store, decisionType 
 		}
 	}
 	err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
+		for _, event := range questionSource {
+			if _, err := transaction.At(faultpoint.ReceiptAddress("fixture.question.source." + string(event.Type))).Append(event); err != nil {
+				return err
+			}
+		}
 		if routePayload != nil {
 			if _, err := transaction.At("fixture.amendment.routed_human").Append(runstate.Event{
 				RunID: "run-1", ScoreRevision: 1, MovementID: "review", AttemptID: "attempt-1",

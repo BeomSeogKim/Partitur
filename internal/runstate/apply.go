@@ -350,6 +350,7 @@ func Apply(input State, event Event) (State, error) {
 		if err := validateBlockedProposalRoutes(state, payload["raised"].([]any)); err != nil {
 			return state, invalid(event, err.Error())
 		}
+		recordBlockedDecisionSources(&state, event, payload["raised"].([]any))
 		attempt.State = AttemptBlocked
 		state.Attempts[event.AttemptID] = attempt
 	case EventAttemptFailed:
@@ -567,6 +568,11 @@ func Apply(input State, event Event) (State, error) {
 			return state, transition(event, "decision is already pending")
 		}
 		decisionType := mustString(payload, "decision_type")
+		if decisionType == "question" {
+			if err := validateQuestionRequestSource(state, event, payload); err != nil {
+				return state, err
+			}
+		}
 		if decisionType == "amendment" || decisionType == "finalization" {
 			proposalID := ProposalID(mustString(payload, "proposal_id"))
 			routed, ok := state.RoutedAmendments[proposalID]
@@ -654,6 +660,11 @@ func Apply(input State, event Event) (State, error) {
 		proposalID := ProposalID(mustString(payload, "proposal_id"))
 		if _, exists := state.RoutedAmendments[proposalID]; exists {
 			return state, transition(event, "proposal is already routed")
+		}
+		if _, fromAdapter := payload["emitted_id"].(string); fromAdapter && mustBool(payload, "blocking") {
+			if err := validateBlockedProposalRouteSource(state, event, proposalID, payload); err != nil {
+				return state, err
+			}
 		}
 		state.RoutedAmendments[proposalID] = RoutedAmendment{
 			ProposalID:        proposalID,
@@ -2601,6 +2612,94 @@ func validateBlockedProposalRoute(route map[string]any) error {
 		if err := validateEnvelopeEvaluation(evaluation.(map[string]any)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func recordBlockedDecisionSources(state *State, event Event, values []any) {
+	envelope := sourceEnvelope{
+		RunID: event.RunID, ScoreRevision: event.ScoreRevision, MovementID: event.MovementID,
+		PartID: event.PartID, AttemptID: event.AttemptID,
+	}
+	for _, raw := range values {
+		decision := raw.(map[string]any)
+		switch mustString(decision, "kind") {
+		case "question":
+			state.blockedSources.Questions[mustString(decision, "decision_id")] = blockedQuestionSource{
+				Envelope: envelope, EmittedID: mustString(decision, "emitted_id"), Question: mustString(decision, "question"),
+			}
+		case "proposal":
+			route, routed := decision["route"].(map[string]any)
+			if !routed {
+				continue
+			}
+			payload := make(map[string]any, len(route)+4)
+			for key, value := range route {
+				payload[key] = value
+			}
+			proposalID := ProposalID(mustString(decision, "proposal_id"))
+			payload["proposal_id"] = string(proposalID)
+			payload["emitted_id"] = mustString(decision, "emitted_id")
+			payload["decision_id"] = mustString(decision, "decision_id")
+			payload["blocking"] = true
+			encoded, _ := json.Marshal(payload)
+			state.blockedSources.ProposalRoutes[proposalID] = blockedProposalRouteSource{Envelope: envelope, Payload: string(encoded)}
+		}
+	}
+}
+
+func validateQuestionRequestSource(state State, event Event, payload map[string]any) error {
+	source, ok := state.blockedSources.Questions[mustString(payload, "decision_id")]
+	if !ok {
+		return transition(event, "question has no attempt.blocked source")
+	}
+	if event.RunID != source.Envelope.RunID {
+		return invalid(event, "question request run does not match attempt.blocked")
+	}
+	if event.ScoreRevision != source.Envelope.ScoreRevision {
+		return invalid(event, "question request score revision does not match attempt.blocked")
+	}
+	if event.MovementID != source.Envelope.MovementID {
+		return invalid(event, "question request movement does not match attempt.blocked")
+	}
+	if event.PartID != source.Envelope.PartID {
+		return invalid(event, "question request part does not match attempt.blocked")
+	}
+	if event.AttemptID != source.Envelope.AttemptID {
+		return invalid(event, "question request attempt does not match attempt.blocked")
+	}
+	if stringOrEmpty(payload, "emitted_id") != source.EmittedID {
+		return invalid(event, "question request emitted id does not match attempt.blocked")
+	}
+	if mustString(payload, "question") != source.Question {
+		return invalid(event, "question request text does not match attempt.blocked")
+	}
+	return nil
+}
+
+func validateBlockedProposalRouteSource(state State, event Event, proposalID ProposalID, payload map[string]any) error {
+	source, ok := state.blockedSources.ProposalRoutes[proposalID]
+	if !ok {
+		return transition(event, "blocking adapter proposal has no attempt.blocked source")
+	}
+	if event.RunID != source.Envelope.RunID {
+		return invalid(event, "blocking proposal route run does not match attempt.blocked")
+	}
+	if event.ScoreRevision != source.Envelope.ScoreRevision {
+		return invalid(event, "blocking proposal route score revision does not match attempt.blocked")
+	}
+	if event.MovementID != source.Envelope.MovementID {
+		return invalid(event, "blocking proposal route movement does not match attempt.blocked")
+	}
+	if event.PartID != source.Envelope.PartID {
+		return invalid(event, "blocking proposal route part does not match attempt.blocked")
+	}
+	if event.AttemptID != source.Envelope.AttemptID {
+		return invalid(event, "blocking proposal route attempt does not match attempt.blocked")
+	}
+	encoded, _ := json.Marshal(payload)
+	if string(encoded) != source.Payload {
+		return invalid(event, "blocking proposal route payload does not match attempt.blocked")
 	}
 	return nil
 }

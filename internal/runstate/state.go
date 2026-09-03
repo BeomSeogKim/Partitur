@@ -36,6 +36,9 @@ func NewState(seed []MovementSeed) State {
 		Application:         ApplicationProjection{State: ApplicationNotApplied},
 		Promotion:           PromotionProjection{State: PromotionNotPromoted},
 	}
+	state.blockedSources = blockedDecisionSources{
+		Questions: make(map[string]blockedQuestionSource), ProposalRoutes: make(map[ProposalID]blockedProposalRouteSource),
+	}
 	for _, movement := range seed {
 		if movement.ID == "" {
 			panic("runstate: empty movement id in seed")
@@ -127,6 +130,8 @@ func cloneState(input State) State {
 		output.ResolvedHumanGates[id] = resolution
 	}
 	output.RoutedAmendments = cloneMap(input.RoutedAmendments)
+	output.blockedSources.Questions = cloneMap(input.blockedSources.Questions)
+	output.blockedSources.ProposalRoutes = cloneMap(input.blockedSources.ProposalRoutes)
 	output.rejectedAmendments = cloneMap(input.rejectedAmendments)
 	output.appliedEvents = cloneMap(input.appliedEvents)
 	output.Acceptances = make(map[AttemptID]Acceptance, len(input.Acceptances))

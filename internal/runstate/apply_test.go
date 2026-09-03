@@ -426,6 +426,117 @@ func TestAttemptBlockedBlockingProposalRouteMatchesPriorEvaluation(t *testing.T)
 	})
 }
 
+func TestQuestionRequestRequiresMatchingAttemptBlockedSource(t *testing.T) {
+	request := fixtureEvent(EventDecisionRequested, map[string]any{
+		"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
+	}, attemptEnvelope)
+	state := blockedQuestionState(t, "decision-1", "question-1", "Continue?")
+	if _, err := Apply(state, request); err != nil {
+		t.Fatalf("matching request rejected: %v", err)
+	}
+	if _, err := Apply(runningAttemptState(t), request); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("source-free request error = %v, want ErrIllegalTransition", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Event, map[string]any)
+	}{
+		{name: "run", mutate: func(event *Event, _ map[string]any) { event.RunID = "other-run" }},
+		{name: "score revision", mutate: func(event *Event, _ map[string]any) { event.ScoreRevision++ }},
+		{name: "movement", mutate: func(event *Event, _ map[string]any) { event.MovementID = "other-movement" }},
+		{name: "part", mutate: func(event *Event, _ map[string]any) { event.PartID = "other-part" }},
+		{name: "attempt", mutate: func(event *Event, _ map[string]any) { event.AttemptID = "other-attempt" }},
+		{name: "emitted id", mutate: func(_ *Event, payload map[string]any) { payload["emitted_id"] = "other-question" }},
+		{name: "question", mutate: func(_ *Event, payload map[string]any) { payload["question"] = "Different?" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := request
+			var payload map[string]any
+			if err := json.Unmarshal(mutated.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&mutated, payload)
+			mutated.Payload = mustPayload(t, payload)
+			if _, err := Apply(state, mutated); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("error = %v, want ErrInvalidEvent", err)
+			}
+		})
+	}
+}
+
+func TestBlockingAdapterRouteRequiresMatchingAttemptBlockedSource(t *testing.T) {
+	descriptor := blockingProposalRoutePayload()
+	blocked := fixtureEvent(EventAttemptBlocked, map[string]any{
+		"raised": []any{map[string]any{
+			"decision_id": "decision-1", "emitted_id": "emitted-1", "kind": "proposal",
+			"proposal_id": "proposal-1", "blocking": true, "route": descriptor,
+		}},
+		"pending_decision_ids": []any{"decision-1"},
+	}, attemptEnvelope)
+	state, err := Apply(probedAttemptState(t), blocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := make(map[string]any, len(descriptor)+4)
+	for key, value := range descriptor {
+		payload[key] = value
+	}
+	payload["proposal_id"] = "proposal-1"
+	payload["emitted_id"] = "emitted-1"
+	payload["decision_id"] = "decision-1"
+	payload["blocking"] = true
+	route := fixtureEvent(EventAmendmentRoutedHuman, payload, attemptEnvelope)
+	if _, err := Apply(state, route); err != nil {
+		t.Fatalf("matching route rejected: %v", err)
+	}
+
+	withoutSource := probedAttemptState(t)
+	if _, err := Apply(withoutSource, route); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("source-free route error = %v, want ErrIllegalTransition", err)
+	}
+
+	nonBlocking := fixtureEvent(EventAmendmentRoutedHuman, routedAmendmentPayload(), func(event *Event) {
+		event.MovementID = "m1"
+		event.AttemptID = "a1"
+	})
+	var nonBlockingPayload map[string]any
+	if err := json.Unmarshal(nonBlocking.Payload, &nonBlockingPayload); err != nil {
+		t.Fatal(err)
+	}
+	nonBlockingPayload["emitted_id"] = "emitted-1"
+	nonBlockingPayload["blocking"] = false
+	nonBlocking.Payload = mustPayload(t, nonBlockingPayload)
+	if _, err := Apply(withoutSource, nonBlocking); err != nil {
+		t.Fatalf("non-blocking adapter route requires blocked source: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Event, map[string]any)
+	}{
+		{name: "run", mutate: func(event *Event, _ map[string]any) { event.RunID = "other-run" }},
+		{name: "score revision", mutate: func(event *Event, _ map[string]any) { event.ScoreRevision++ }},
+		{name: "movement", mutate: func(event *Event, _ map[string]any) { event.MovementID = "other-movement" }},
+		{name: "part", mutate: func(event *Event, _ map[string]any) { event.PartID = "other-part" }},
+		{name: "attempt", mutate: func(event *Event, _ map[string]any) { event.AttemptID = "other-attempt" }},
+		{name: "payload", mutate: func(_ *Event, payload map[string]any) { payload["reason"] = "auto_disabled" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := route
+			var payload map[string]any
+			if err := json.Unmarshal(mutated.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&mutated, payload)
+			mutated.Payload = mustPayload(t, payload)
+			if _, err := Apply(state, mutated); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("error = %v, want ErrInvalidEvent", err)
+			}
+		})
+	}
+}
+
 func TestMovementFailedHumanGateAtomicallyFailsWaitingFinalMovement(t *testing.T) {
 	state := verifyingAttemptState(t)
 	state.Run = RunWaitingHuman
@@ -550,7 +661,9 @@ func TestDecisionAmendmentAndCompositionEvents(t *testing.T) {
 	question := fixtureEvent(EventDecisionRequested, map[string]any{
 		"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
 	}, attemptEnvelope)
-	questionState := func(t *testing.T) State { return runningAttemptState(t) }
+	questionState := func(t *testing.T) State {
+		return blockedQuestionState(t, "decision-1", "question-1", "Continue?")
+	}
 
 	route := fixtureEvent(EventAmendmentRoutedHuman, routedAmendmentPayload(), nil)
 	routeState := func(t *testing.T) State {
@@ -903,7 +1016,7 @@ func TestHumanGateRequestRetainsBlockingFindings(t *testing.T) {
 }
 
 func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
-	state := runningAttemptState(t)
+	state := blockedQuestionState(t, "decision-1", "question-1", "Continue?")
 	requested := fixtureEvent(EventDecisionRequested, map[string]any{
 		"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
 	}, attemptEnvelope)
@@ -925,7 +1038,7 @@ func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
 		t.Fatalf("unresolved derived apply error = %v, want ErrInvalidEvent", err)
 	}
 	cancelled := fixtureEvent(EventRunCancelled, map[string]any{
-		"cancelled_movement_ids": []any{"m1"}, "cancelled_attempt_ids": []any{"a1"}, "obsoleted_decision_ids": []any{"decision-1"},
+		"cancelled_movement_ids": []any{"m1"}, "cancelled_attempt_ids": []any{}, "obsoleted_decision_ids": []any{"decision-1"},
 	}, nil)
 	next, err := Apply(state, cancelled)
 	if err != nil {
@@ -936,7 +1049,10 @@ func TestDecisionObsoletionIsDerivedFromTerminalSources(t *testing.T) {
 	}
 
 	state = runningAttemptState(t)
-	state, err = Apply(state, requested)
+	state, err = Apply(state, fixtureEvent(EventDecisionRequested, map[string]any{
+		"decision_id": "decision-1", "decision_type": "human_gate", "gate_id": "gate-1", "gate_mode": "always",
+		"subject_tree": "git-sha1:tree", "blocking_findings": []any{},
+	}, attemptEnvelope))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1896,6 +2012,21 @@ func probedAttemptState(t *testing.T) State {
 		t.Fatal(err)
 	}
 	return state
+}
+
+func blockedQuestionState(t *testing.T, decisionID, emittedID, question string) State {
+	t.Helper()
+	state := probedAttemptState(t)
+	next, err := Apply(state, fixtureEvent(EventAttemptBlocked, map[string]any{
+		"raised": []any{map[string]any{
+			"decision_id": decisionID, "emitted_id": emittedID, "kind": "question", "question": question, "blocking": true,
+		}},
+		"pending_decision_ids": []any{decisionID},
+	}, attemptEnvelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
 }
 
 func verifiedAttemptState(t *testing.T) State {

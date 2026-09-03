@@ -2494,8 +2494,48 @@ func (fixture *resolvedRequestFixture) resolveQuestion(decisionID, answer string
 
 func (fixture *resolvedRequestFixture) resolveQuestionFor(movementID runstate.MovementID, revision uint64, decisionID, answer string) {
 	fixture.t.Helper()
+	attemptID := runstate.AttemptID("source-" + decisionID)
+	state, err := fixture.authority.State()
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	attemptNumber := 1
+	for _, attempt := range state.Attempts {
+		if attempt.MovementID == movementID {
+			attemptNumber++
+		}
+	}
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	attemptStartedPayload := map[string]any{
+		"attempt_number":    attemptNumber,
+		"adapter_process":   map[string]any{"pid": 999999, "session_id": 999999, "start_identity": map[string]any{"platform": "linux", "boot_id": "fixture", "start_ticks": "0"}},
+		"granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": versions,
+	}
+	if state.DependencyMovements[movementID] {
+		attemptStartedPayload["base_composition_hash"] = "sha256:fixture-composition"
+	}
+	for _, event := range []runstate.Event{
+		{RunID: fixture.started.RunID, ScoreRevision: revision, MovementID: movementID, AttemptID: attemptID, Type: runstate.EventPerformerSelected, Payload: testPayload(fixture.t, map[string]any{
+			"reason": "quality_retry", "performer_id": "worker", "adapter_id": "fixture", "model": "fixture",
+		})},
+		{RunID: fixture.started.RunID, ScoreRevision: revision, MovementID: movementID, AttemptID: attemptID, Type: runstate.EventAttemptStarted, Payload: testPayload(fixture.t, attemptStartedPayload)},
+		{RunID: fixture.started.RunID, ScoreRevision: revision, MovementID: movementID, AttemptID: attemptID, Type: runstate.EventAdapterProbed, Payload: testPayload(fixture.t, map[string]any{
+			"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false},
+			"enforcement":         map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true},
+			"negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{},
+			"execution_dependency_hash": "sha256:dependency", "identity_versions": versions,
+		})},
+		{RunID: fixture.started.RunID, ScoreRevision: revision, MovementID: movementID, AttemptID: attemptID, Type: runstate.EventAttemptBlocked, Payload: testPayload(fixture.t, map[string]any{
+			"raised":               []any{map[string]any{"decision_id": decisionID, "emitted_id": decisionID, "kind": "question", "question": "Question?", "blocking": true}},
+			"pending_decision_ids": []any{decisionID},
+		})},
+	} {
+		if _, err := fixture.authority.Append(event, faultpoint.ReceiptAddress("test.resolved_fixture.source."+string(event.Type))); err != nil {
+			fixture.t.Fatal(err)
+		}
+	}
 	if _, err := fixture.authority.Append(runstate.Event{
-		RunID: fixture.started.RunID, ScoreRevision: revision, MovementID: movementID, AttemptID: runstate.AttemptID("source-" + decisionID),
+		RunID: fixture.started.RunID, ScoreRevision: revision, MovementID: movementID, AttemptID: attemptID,
 		Type: runstate.EventDecisionRequested, Payload: testPayload(fixture.t, map[string]any{
 			"decision_id": decisionID, "decision_type": "question", "emitted_id": decisionID, "question": "Question?",
 		}),
