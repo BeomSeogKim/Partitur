@@ -1470,7 +1470,7 @@ func interruptedBlockingProposalFixture(t *testing.T) (*runstore.Store, *runstor
 }
 
 func recoveryExecutor(store *runstore.Store, runID runstate.RunID) *recoveryexec.Executor {
-	return &recoveryexec.Executor{Store: store, RunID: runID, Load: func(context.Context) (recovery.Input, error) {
+	return &recoveryexec.Executor{Store: store, RunID: runID, AttemptDependencies: driver.DefaultExecutionDependencies(faultpoint.Nop{}), Load: func(context.Context) (recovery.Input, error) {
 		input, err := store.LoadRunInput(runID)
 		if err != nil {
 			return recovery.Input{}, err

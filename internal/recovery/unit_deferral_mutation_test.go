@@ -29,8 +29,8 @@ func TestMutationUnitOwnedDeferralBoundaryRejectsPopulation(t *testing.T) {
 func TestMutationUnitOwnedDeferralBoundaryRejectsSecondRepresentation(t *testing.T) {
 	runUnitOwnedDeferralMutation(t,
 		filepath.Join("internal", "recoveryexec", "handlers.go"),
-		"func defaultKinds() map[recovery.ActionKind]StepHandler {\n",
-		"var _ = []recovery.UnitOwnedDeferral(nil) // mutation\n\nfunc defaultKinds() map[recovery.ActionKind]StepHandler {\n",
+		"func defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {\n",
+		"var _ = []recovery.UnitOwnedDeferral(nil) // mutation\n\nfunc defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {\n",
 	)
 }
 

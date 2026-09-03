@@ -203,6 +203,39 @@ func TestProductionExecutionDependenciesWireAmendmentDispositioner(t *testing.T)
 	}
 }
 
+func TestProductionRecoveryExecutionDependenciesMatchLive(t *testing.T) {
+	probe := faultpoint.Nop{}
+	live := productionExecutionDependencies(probe)
+	recovered := productionRecoveryExecutor(nil, "", probe).AttemptDependencies
+	liveValue := reflect.ValueOf(live)
+	recoveredValue := reflect.ValueOf(recovered)
+	dependenciesType := liveValue.Type()
+	for index := 0; index < dependenciesType.NumField(); index++ {
+		field := dependenciesType.Field(index)
+		if !sameExecutionDependencyField(liveValue.Field(index), recoveredValue.Field(index)) {
+			t.Fatalf("recovery execution dependency %s differs from live construction", field.Name)
+		}
+	}
+}
+
+func sameExecutionDependencyField(left, right reflect.Value) bool {
+	if left.Type() != right.Type() || left.Kind() != right.Kind() {
+		return false
+	}
+	switch left.Kind() {
+	case reflect.Func:
+		return left.IsNil() == right.IsNil() && (left.IsNil() || left.Pointer() == right.Pointer())
+	case reflect.Interface, reflect.Pointer:
+		// Separate constructor calls necessarily produce distinct instances. This
+		// comparison therefore pins nilness and dynamic type, not configuration;
+		// an interface whose configuration affects behavior needs its own semantic
+		// comparison here and a behavioral witness at the consuming boundary.
+		return left.IsNil() == right.IsNil() && (left.IsNil() || left.Elem().Type() == right.Elem().Type())
+	default:
+		return left.CanInterface() && right.CanInterface() && reflect.DeepEqual(left.Interface(), right.Interface())
+	}
+}
+
 func TestStatusRendersProjectionAndClassifiesOutcomes(t *testing.T) {
 	base := statusprojection.Report{
 		Schema: "partitur/status+json;v=1",
