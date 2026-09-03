@@ -1856,6 +1856,13 @@ func runVendorFixture() {
 		case "empty":
 		case "question":
 			questions = []any{map[string]any{"id": "fixture-question", "question": "Which direction should the draft take?"}}
+		case "questions":
+			questions = []any{
+				map[string]any{"id": "fixture-question-1", "question": "Which direction should the draft take?"},
+				map[string]any{"id": "fixture-question-2", "question": "Which constraint matters most?"},
+				map[string]any{"id": "fixture-question-3", "question": "Which tradeoff is acceptable?"},
+				map[string]any{"id": "fixture-question-4", "question": "What should the proposal preserve?"},
+			}
 		case "proposal":
 		default:
 			os.Exit(97)

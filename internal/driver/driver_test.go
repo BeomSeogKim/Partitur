@@ -1721,11 +1721,15 @@ func TestExecuteAttemptRecordsWaitingHumanAsBlockedTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	last := journal.Events[len(journal.Events)-1]
-	if last.Type != runstate.EventAttemptBlocked || last.AttemptID != attempt.AttemptID {
-		t.Fatalf("terminal event = %+v", last)
+	if len(journal.Events) < 2 {
+		t.Fatalf("waiting journal = %+v", journal.Events)
 	}
-	payload := decodeDriverPayload(t, last)
+	blocked := journal.Events[len(journal.Events)-2]
+	requested := journal.Events[len(journal.Events)-1]
+	if blocked.Type != runstate.EventAttemptBlocked || blocked.AttemptID != attempt.AttemptID || requested.Type != runstate.EventDecisionRequested {
+		t.Fatalf("terminal events = %+v", journal.Events[len(journal.Events)-2:])
+	}
+	payload := decodeDriverPayload(t, blocked)
 	decisionID, err := adapterDecisionID(attempt.AttemptID, "question-1")
 	if err != nil {
 		t.Fatal(err)
@@ -1736,6 +1740,10 @@ func TestExecuteAttemptRecordsWaitingHumanAsBlockedTerminal(t *testing.T) {
 	raised := payload["raised"].([]any)[0].(map[string]any)
 	if raised["decision_id"] != decisionID || raised["emitted_id"] != "question-1" {
 		t.Fatalf("raised question = %#v", raised)
+	}
+	request := decodeDriverPayload(t, requested)
+	if request["decision_id"] != decisionID || request["decision_type"] != "question" || request["emitted_id"] != raised["emitted_id"] || request["question"] != raised["question"] {
+		t.Fatalf("requested question = %#v, want blocked source %#v", request, raised)
 	}
 }
 
@@ -1786,25 +1794,19 @@ func TestExecuteAttemptDeliversResolvedQuestionToNextAttempt(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return journal.Events[len(journal.Events)-1]
+		for index := len(journal.Events) - 1; index >= 0; index-- {
+			if journal.Events[index].Type == runstate.EventAttemptBlocked && journal.Events[index].AttemptID == attempt.AttemptID {
+				return journal.Events[index]
+			}
+		}
+		t.Fatalf("attempt %q has no attempt.blocked", attempt.AttemptID)
+		return runstate.Event{}
 	}
 	blocked := executeWaiting()
 	resolveBlockedQuestion := func(blocked runstate.Event, answer string) string {
 		t.Helper()
 		raised := decodeDriverPayload(t, blocked)["raised"].([]any)[0].(map[string]any)
 		decisionID := raised["decision_id"].(string)
-		requestPayload, err := json.Marshal(map[string]any{
-			"decision_id": decisionID, "decision_type": "question", "emitted_id": raised["emitted_id"], "question": raised["question"],
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := authority.Append(runstate.Event{
-			RunID: started.RunID, ScoreRevision: blocked.ScoreRevision, MovementID: blocked.MovementID, PartID: blocked.PartID,
-			AttemptID: blocked.AttemptID, Type: runstate.EventDecisionRequested, Payload: requestPayload,
-		}, faultpoint.ReceiptAddress("test.resolved_delivery.request."+decisionID)); err != nil {
-			t.Fatal(err)
-		}
 		if err := store.ResolveQuestion(started.RunID, decisionID, answer); err != nil {
 			t.Fatal(err)
 		}
@@ -2131,7 +2133,22 @@ func TestExecuteAttemptPreservesRaisedWireOrderAndAllowsNonBlockingProposal(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := decodeDriverPayload(t, journal.Events[len(journal.Events)-1])
+	var payload map[string]any
+	requested := make([]string, 0, 2)
+	for _, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventAttemptBlocked:
+			payload = decodeDriverPayload(t, event)
+		case runstate.EventDecisionRequested:
+			request := decodeDriverPayload(t, event)
+			if request["decision_type"] == "question" {
+				requested = append(requested, request["emitted_id"].(string))
+			}
+		}
+	}
+	if payload == nil {
+		t.Fatal("attempt.blocked is absent")
+	}
 	raised := payload["raised"].([]any)
 	if got := []string{
 		raised[0].(map[string]any)["emitted_id"].(string),
@@ -2142,6 +2159,9 @@ func TestExecuteAttemptPreservesRaisedWireOrderAndAllowsNonBlockingProposal(t *t
 	}
 	if raised[1].(map[string]any)["blocking"] != false {
 		t.Fatalf("non-blocking proposal = %#v", raised[1])
+	}
+	if !reflect.DeepEqual(requested, []string{"question-2", "question-1"}) {
+		t.Fatalf("question request order = %#v", requested)
 	}
 }
 
@@ -2191,36 +2211,29 @@ func TestQuestionDecisionIDsStayDistinctAcrossResumedAttempts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return attempt, journal.Events[len(journal.Events)-1]
+		for index := len(journal.Events) - 1; index >= 0; index-- {
+			if journal.Events[index].Type == runstate.EventAttemptBlocked && journal.Events[index].AttemptID == attempt.AttemptID {
+				return attempt, journal.Events[index]
+			}
+		}
+		t.Fatalf("attempt %q has no attempt.blocked", attempt.AttemptID)
+		return nil, runstate.Event{}
 	}
-	appendQuestionRequest := func(event runstate.Event) string {
+	decisionIDFromBlocked := func(event runstate.Event) string {
 		t.Helper()
 		payload := decodeDriverPayload(t, event)
 		raised := payload["raised"].([]any)[0].(map[string]any)
-		decisionID := raised["decision_id"].(string)
-		requestPayload, err := json.Marshal(map[string]any{
-			"decision_id": decisionID, "decision_type": "question", "emitted_id": raised["emitted_id"], "question": raised["question"],
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := authority.Append(runstate.Event{
-			RunID: started.RunID, ScoreRevision: event.ScoreRevision, MovementID: event.MovementID, PartID: event.PartID,
-			AttemptID: event.AttemptID, Type: runstate.EventDecisionRequested, Payload: requestPayload,
-		}, faultpoint.ReceiptAddress("test.duplicate_emitted.request")); err != nil {
-			t.Fatal(err)
-		}
-		return decisionID
+		return raised["decision_id"].(string)
 	}
 	firstAttempt, firstBlocked := executeWaitingQuestion()
 	firstRaised := decodeDriverPayload(t, firstBlocked)["raised"].([]any)[0].(map[string]any)
-	firstDecisionID := appendQuestionRequest(firstBlocked)
+	firstDecisionID := decisionIDFromBlocked(firstBlocked)
 	if err := store.ResolveQuestion(started.RunID, firstDecisionID, "yes"); err != nil {
 		t.Fatal(err)
 	}
 	secondAttempt, secondBlocked := executeWaitingQuestion()
 	secondRaised := decodeDriverPayload(t, secondBlocked)["raised"].([]any)[0].(map[string]any)
-	secondDecisionID := appendQuestionRequest(secondBlocked)
+	secondDecisionID := decisionIDFromBlocked(secondBlocked)
 	if firstRaised["emitted_id"] != "question-1" || secondRaised["emitted_id"] != "question-1" {
 		t.Fatalf("same emitted id fixture drifted: %#v, %#v", firstRaised, secondRaised)
 	}

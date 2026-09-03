@@ -4123,6 +4123,15 @@ func executeClearOwnerRecovery(t *testing.T, store *runstore.Store) Result {
 		if projection.State.PendingDecisions == nil {
 			projection.State.PendingDecisions = make(map[string]runstate.PendingDecision)
 		}
+		// These fixtures isolate clear-owner preprocessing. Hide unrelated
+		// source-to-route residues and present routed requests as durable so the
+		// planner can reach the synthetic waiting-human fixed point.
+		projection.BlockedProposalRoutes = nil
+		for _, routed := range projection.State.RoutedAmendments {
+			projection.State.PendingDecisions[routed.DecisionID] = runstate.PendingDecision{
+				ID: routed.DecisionID, Type: routed.DecisionType, Blocking: routed.Blocking, ProposalID: routed.ProposalID,
+			}
+		}
 		projection.State.PendingDecisions["cleanup-wait"] = runstate.PendingDecision{ID: "cleanup-wait", Blocking: true}
 		return recovery.Input{Projection: projection}, nil
 	}

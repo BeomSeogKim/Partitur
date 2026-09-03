@@ -625,8 +625,11 @@ func TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.Events) < 2 || journal.Events[len(journal.Events)-2].Type != runstate.EventAttemptBlocked || journal.Events[len(journal.Events)-1].Type != runstate.EventAmendmentRoutedHuman {
-		t.Fatalf("terminal ordering = %#v", journal.Events[len(journal.Events)-2:])
+	if len(journal.Events) < 3 ||
+		journal.Events[len(journal.Events)-3].Type != runstate.EventAttemptBlocked ||
+		journal.Events[len(journal.Events)-2].Type != runstate.EventAmendmentRoutedHuman ||
+		journal.Events[len(journal.Events)-1].Type != runstate.EventDecisionRequested {
+		t.Fatalf("terminal ordering = %#v", journal.Events[len(journal.Events)-3:])
 	}
 }
 

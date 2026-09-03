@@ -82,6 +82,105 @@ func TestMutationDraftResultBoundary(t *testing.T) {
 	}
 }
 
+func TestMutationLiveBlockingDecisionRequests(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []struct {
+		name, source, before, after, packageName, testName string
+	}{
+		{
+			name: "live question request append is skipped", source: "internal/driver/driver.go",
+			before:      `_, err = authority.Append(event, "attempt.decision.requested.question")`,
+			after:       `_ = event; err = nil // mutation: skip live question request`,
+			packageName: "./cmd/partitur", testName: "TestDraftResultBoundary/blocking_question_remains_blocked",
+		},
+		{
+			name: "live proposal request append is skipped", source: "internal/driver/driver.go",
+			before:      `_, err = authority.Append(event, "amendment.decision.requested")`,
+			after:       `_ = event; err = nil // mutation: skip live proposal request`,
+			packageName: "./cmd/partitur", testName: "TestDraftResultBoundary/blocking_proposal_remains_blocked",
+		},
+		{
+			name: "live request materialization loop is skipped", source: "internal/driver/driver.go",
+			before:      `for _, appendRequest := range appendRequests {`,
+			after:       `for _, appendRequest := range appendRequests[:0] { // mutation: skip all live requests`,
+			packageName: "./cmd/partitur", testName: "TestDraftResultBoundary/blocking_questions_remains_blocked",
+		},
+		{
+			name: "waiting ignores a missing blocked proposal route", source: "internal/recovery/planner.go",
+			before: `if _, ok := firstBlockedProposalRoute(projection.BlockedProposalRoutes); ok {
+		return true
+	}`,
+			after: `if _, ok := firstBlockedProposalRoute(projection.BlockedProposalRoutes); ok {
+		return false // mutation: ignore missing blocked proposal route
+	}`,
+			packageName: "./internal/recovery", testName: "TestPlanWaitsOnlyAfterEveryDecisionRequestIsDurable/missing_blocked_proposal_route",
+		},
+		{
+			name: "waiting ignores a missing routed proposal request", source: "internal/recovery/planner.go",
+			before: `if _, ok := firstMissingRoutedRequest(projection.State); ok {
+		return true
+	}`,
+			after: `if _, ok := firstMissingRoutedRequest(projection.State); ok {
+		return false // mutation: ignore missing routed proposal request
+	}`,
+			packageName: "./internal/recovery", testName: "TestPlanWaitsOnlyAfterEveryDecisionRequestIsDurable/missing_routed_proposal_request",
+		},
+		{
+			name: "waiting ignores a missing question request", source: "internal/recovery/planner.go",
+			before: `_, ok := firstMissingQuestionRequest(attempt.QuestionRequests)
+	return ok`,
+			after: `_, ok := firstMissingQuestionRequest(attempt.QuestionRequests)
+	return false && ok // mutation: ignore missing question request`,
+			packageName: "./internal/recovery", testName: "TestPlanWaitsOnlyAfterEveryDecisionRequestIsDurable/missing_question_request",
+		},
+		{
+			name: "waiting invents a missing source without an attempt", source: "internal/recovery/planner.go",
+			before: `func hasMissingDecisionRequest(projection Projection) bool {
+	if _, ok := firstBlockedProposalRoute(projection.BlockedProposalRoutes); ok {
+		return true
+	}
+	if _, ok := firstMissingRoutedRequest(projection.State); ok {
+		return true
+	}
+	attempt := currentHeadAttempt(projection)
+	if attempt == nil {
+		return false
+	}
+	_, ok := firstMissingQuestionRequest(attempt.QuestionRequests)
+	return ok
+}`,
+			after: `func hasMissingDecisionRequest(projection Projection) bool {
+	if _, ok := firstBlockedProposalRoute(projection.BlockedProposalRoutes); ok {
+		return true
+	}
+	if _, ok := firstMissingRoutedRequest(projection.State); ok {
+		return true
+	}
+	attempt := currentHeadAttempt(projection)
+	if attempt == nil {
+		return true // mutation: invent missing source
+	}
+	_, ok := firstMissingQuestionRequest(attempt.QuestionRequests)
+	return ok
+}`,
+			packageName: "./internal/recovery", testName: "TestPlanWaitsOnlyAfterEveryDecisionRequestIsDurable/no_decision_source_is_missing",
+		},
+		{
+			name: "waiting ignores source completeness", source: "internal/recovery/planner.go",
+			before:      `!hasMissingDecisionRequest(input.Projection) {`,
+			after:       `true { // mutation: ignore request completeness`,
+			packageName: "./cmd/partitur", testName: "TestLiveBlockingRequestCrashReachesFixedPoint",
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			assertDraftResultMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, mutation.packageName, mutation.testName)
+		})
+	}
+}
+
 func assertDraftResultMutationKilled(
 	t *testing.T,
 	environment mutationtest.GoEnvironment,

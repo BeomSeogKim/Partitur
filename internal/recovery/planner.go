@@ -569,7 +569,9 @@ func Plan(input Input) Decision {
 		}
 		return action(CasePendingPrepare, ActionCompleteOrAbandonPrepare, false)
 	}
-	if (!lease.Exists || lease.Owner == OwnerCurrentDriver) && hasAnyUnresolvedBlockingDecision(state) {
+	if (!lease.Exists || lease.Owner == OwnerCurrentDriver) &&
+		hasAnyUnresolvedBlockingDecision(state) &&
+		!hasMissingDecisionRequest(input.Projection) {
 		return action(CaseHumanGateWaiting, ActionReturnWaitingHuman, false)
 	}
 	if state.Authority.Epoch > 0 && (!lease.Exists || lease.Owner == OwnerDead) {
@@ -635,6 +637,21 @@ func hasAnyUnresolvedBlockingDecision(state runstate.State) bool {
 		}
 	}
 	return false
+}
+
+func hasMissingDecisionRequest(projection Projection) bool {
+	if _, ok := firstBlockedProposalRoute(projection.BlockedProposalRoutes); ok {
+		return true
+	}
+	if _, ok := firstMissingRoutedRequest(projection.State); ok {
+		return true
+	}
+	attempt := currentHeadAttempt(projection)
+	if attempt == nil {
+		return false
+	}
+	_, ok := firstMissingQuestionRequest(attempt.QuestionRequests)
+	return ok
 }
 
 // PlanAttempt applies Appendix C.2 after C.1 selects ActionProceedAttempt.

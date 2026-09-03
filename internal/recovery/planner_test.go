@@ -128,6 +128,60 @@ func TestFinalizationRebuildPrecedesCurrentAttempt(t *testing.T) {
 	}
 }
 
+func TestPlanWaitsOnlyAfterEveryDecisionRequestIsDurable(t *testing.T) {
+	blocking := runstate.PendingDecision{ID: "blocking", AttemptID: "attempt", Blocking: true}
+	tests := []struct {
+		name     string
+		input    Input
+		wantCase CaseID
+		wantKind ActionKind
+		replan   bool
+	}{
+		{
+			name: "missing blocked proposal route",
+			input: func() Input {
+				input := withMissingBlockedProposalRoute(baseInput())
+				input.Projection.State.PendingDecisions[blocking.ID] = blocking
+				return input
+			}(),
+			wantCase: CaseBlockedProposalRoute, wantKind: ActionAppendBlockedProposalRoute, replan: true,
+		},
+		{
+			name: "missing routed proposal request",
+			input: func() Input {
+				input := withMissingRoutedRequest(baseInput())
+				input.Projection.State.PendingDecisions[blocking.ID] = blocking
+				return input
+			}(),
+			wantCase: CaseRoutedAmendment, wantKind: ActionAppendRoutedRequest, replan: true,
+		},
+		{
+			name:     "missing question request",
+			input:    withQuestionRequests(c2Input(runstate.AttemptBlocked), false, true),
+			wantCase: CaseContinue, wantKind: ActionProceedAttempt,
+		},
+		{
+			name:     "all required requests durable",
+			input:    withQuestionRequests(c2Input(runstate.AttemptBlocked), true, true),
+			wantCase: CaseHumanGateWaiting, wantKind: ActionReturnWaitingHuman,
+		},
+		{
+			name: "no decision source is missing",
+			input: func() Input {
+				input := baseInput()
+				input.Projection.State.PendingDecisions[blocking.ID] = blocking
+				return input
+			}(),
+			wantCase: CaseHumanGateWaiting, wantKind: ActionReturnWaitingHuman,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertDecision(t, Plan(test.input), test.wantCase, test.wantKind, "", test.replan)
+		})
+	}
+}
+
 func TestPlanRevisionRestartCarriesItsSelectedSuccessorToC4(t *testing.T) {
 	decision := Plan(withRevisionRestart(baseInput()))
 	if decision.CaseID != CaseRevisionRestart || decision.Action == nil || decision.Action.Kind != ActionSelectRevisionRestart {
