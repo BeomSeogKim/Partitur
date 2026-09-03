@@ -1863,6 +1863,10 @@ func runVendorFixture() {
 				map[string]any{"id": "fixture-question-3", "question": "Which tradeoff is acceptable?"},
 				map[string]any{"id": "fixture-question-4", "question": "What should the proposal preserve?"},
 			}
+		case "question_then_proposal":
+			if !strings.Contains(string(prompt), `kind="answer" answer="continue"`) {
+				questions = []any{map[string]any{"id": "fixture-question", "question": "Which direction should the draft take?"}}
+			}
 		case "proposal":
 		default:
 			os.Exit(97)
@@ -1884,7 +1888,7 @@ func runVendorFixture() {
 		artifacts = append(artifacts, map[string]any{"artifact_id": "findings", "path": "findings.json"})
 	}
 	proposal := any(nil)
-	if baseHash := os.Getenv(runVendorProposalBaseHashEnvironment); baseHash != "" {
+	if baseHash := os.Getenv(runVendorProposalBaseHashEnvironment); baseHash != "" && len(questions) == 0 {
 		proposal = map[string]any{
 			"id": "fixture-amendment",
 			"amendment": map[string]any{

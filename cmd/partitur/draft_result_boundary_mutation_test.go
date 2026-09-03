@@ -82,6 +82,39 @@ func TestMutationDraftResultBoundary(t *testing.T) {
 	}
 }
 
+func TestMutationRecoveryAttemptDependencies(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []struct {
+		name, source, before, after, testName string
+	}{
+		{
+			name: "production recovery reconstructs attempt dependencies", source: "cmd/partitur/main.go",
+			before:   `AttemptDependencies: productionExecutionDependencies(probe),`,
+			after:    `AttemptDependencies: driver.DefaultExecutionDependencies(probe), // mutation: recovery drifts from live construction`,
+			testName: "TestProductionRecoveryExecutionDependenciesMatchLive",
+		},
+		{
+			name: "recovery-selected initial attempt drops production dependencies", source: "internal/recoveryexec/handlers.go",
+			before:   `return selectInitialPerformerWithExecutionDependencies(ctx, execution, action, attemptDependencies)`,
+			after:    `return selectInitialPerformerWithExecutionDependencies(ctx, execution, action, driver.DefaultExecutionDependencies(faultpoint.Nop{})) // mutation: drop production dependencies`,
+			testName: "TestRecoverySelectedInitialAttemptRoutesProposal",
+		},
+		{
+			name: "recovery successor drops production dependencies", source: "internal/recoveryexec/handlers.go",
+			before:   `return materializeSuccessorWithExecutionDependencies(ctx, execution, action, attemptDependencies)`,
+			after:    `return materializeSuccessorWithExecutionDependencies(ctx, execution, action, driver.DefaultExecutionDependencies(faultpoint.Nop{})) // mutation: drop production dependencies`,
+			testName: "TestRecoveryCreatedAttemptRoutesProposal",
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			assertDraftResultMutationKilled(t, environment, mutation.source, mutation.before, mutation.after, "./cmd/partitur", mutation.testName)
+		})
+	}
+}
+
 func TestMutationLiveBlockingDecisionRequests(t *testing.T) {
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {

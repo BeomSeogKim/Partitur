@@ -72,6 +72,16 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 }
 
 func defaultKinds() map[recovery.ActionKind]StepHandler {
+	return defaultKindsWithExecutionDependencies(driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()))
+}
+
+func defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {
+	selectInitialPerformer := func(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+		return selectInitialPerformerWithExecutionDependencies(ctx, execution, action, attemptDependencies)
+	}
+	materializeSuccessor := func(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+		return materializeSuccessorWithExecutionDependencies(ctx, execution, action, attemptDependencies)
+	}
 	return map[recovery.ActionKind]StepHandler{
 		recovery.ActionCloseOpenExecutionInterval:   closeOpenExecutionInterval,
 		recovery.ActionRepairJournalTail:            repairJournalTail,
@@ -382,6 +392,17 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 }
 
 func selectInitialPerformer(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+	return selectInitialPerformerWithExecutionDependencies(
+		ctx, execution, action, driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()),
+	)
+}
+
+func selectInitialPerformerWithExecutionDependencies(
+	ctx context.Context,
+	execution HandlerContext,
+	action recovery.Action,
+	attemptDependencies driver.ExecutionDependencies,
+) error {
 	if execution.Store == nil || execution.Driver == nil || action.MovementID == "" {
 		return errors.New("recovery initial performer selection requires store, driver, and movement")
 	}
@@ -428,7 +449,7 @@ func selectInitialPerformer(ctx context.Context, execution HandlerContext, actio
 		baseCommit, baseTree, baseHash = composed.Commit, composed.Tree, composed.Hash
 		break
 	}
-	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performer.ID, "initial", "", baseCommit, baseTree, baseHash)
+	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performer.ID, "initial", "", baseCommit, baseTree, baseHash, attemptDependencies)
 }
 
 func resumeCriterion(ctx context.Context, execution HandlerContext, action recovery.Action) error {
@@ -545,19 +566,18 @@ func closeRecoveredAcceptanceBudgetInterval(execution HandlerContext, action rec
 	})
 }
 
-// recoveredExecutionDependencies gives a recovered attempt the same receipt
-// seam a live one has. `DefaultExecutionDependencies` leaves the observer nil,
-// and the run command fills it in on its own path — so without this, every
-// durable append made by an attempt that recovery started is unobservable, and
-// the cut between `attempt.completed` and `movement.succeeded` cannot be
-// reached by any caller.
-func recoveredExecutionDependencies() driver.ExecutionDependencies {
-	execution := driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment())
-	execution.ReceiptObserver = runstore.ReceiptObserverFromEnvironment()
-	return execution
+func materializeSuccessor(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+	return materializeSuccessorWithExecutionDependencies(
+		ctx, execution, action, driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()),
+	)
 }
 
-func materializeSuccessor(ctx context.Context, execution HandlerContext, action recovery.Action) error {
+func materializeSuccessorWithExecutionDependencies(
+	ctx context.Context,
+	execution HandlerContext,
+	action recovery.Action,
+	attemptDependencies driver.ExecutionDependencies,
+) error {
 	if execution.Store == nil || execution.Driver == nil || action.PendingSuccessor == nil {
 		return errors.New("recovery successor materialization requires store, driver, and pending successor")
 	}
@@ -606,6 +626,7 @@ func materializeSuccessor(ctx context.Context, execution HandlerContext, action 
 	}
 	return executeRecoveredAttempt(
 		ctx, execution, input, string(pending.MovementID), performer.ID, pending.Reason, causationID,
+		attemptDependencies,
 	)
 }
 
@@ -638,6 +659,7 @@ func executeRecoveredAttempt(
 	execution HandlerContext,
 	input runstore.RunInput,
 	movementID, performerID, reason, causationID string,
+	attemptDependencies driver.ExecutionDependencies,
 ) error {
 	base, err := driver.PrepareSuccessorBase(execution.Store, execution.Driver, input, runstate.MovementID(movementID), input.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID)
 	if err != nil {
@@ -652,7 +674,7 @@ func executeRecoveredAttempt(
 		}
 		return err
 	}
-	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performerID, reason, causationID, base.Commit, base.Tree, base.Hash)
+	return executeRecoveredAttemptAtBase(ctx, execution, input, movementID, performerID, reason, causationID, base.Commit, base.Tree, base.Hash, attemptDependencies)
 }
 
 func executeRecoveredAttemptAtBase(
@@ -660,6 +682,7 @@ func executeRecoveredAttemptAtBase(
 	execution HandlerContext,
 	input runstore.RunInput,
 	movementID, performerID, reason, causationID, baseCommit, baseTree, baseCompositionHash string,
+	attemptDependencies driver.ExecutionDependencies,
 ) error {
 	if execution.Store == nil || execution.Driver == nil || input.Score == nil || input.Cast == nil {
 		return errors.New("recovery attempt execution requires durable score, cast, store, and driver")
@@ -688,7 +711,7 @@ func executeRecoveredAttemptAtBase(
 		RemainingMS:          input.Projection.Scheduler.RemainingTime,
 		RetriesConsumed:      retriesConsumed(input.Projection.State, runstate.MovementID(movementID)),
 		VisitedPerformers:    visitedPerformers(input.Projection, runstate.MovementID(movementID)),
-	}, recoveredExecutionDependencies())
+	}, attemptDependencies)
 	if result.Err != nil {
 		return result.Err
 	}

@@ -92,6 +92,77 @@ func TestLiveBlockingRequestsRemainFixedAfterResume(t *testing.T) {
 	assertDraftBlockingResult(t, repository, runID, 4)
 }
 
+func TestRecoveryCreatedAttemptRoutesProposal(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "question_then_proposal")
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := runstate.RunID(strings.TrimSpace(stdout))
+	if code != 0 || runID == "" || stderr != "" {
+		t.Fatalf("draft question run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	decisionID := finalizationQuestionDecision(t, repository, runID)
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "answer", decisionID, "--answer", "continue")
+	if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint(string(runID)) {
+		t.Fatalf("draft answer exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("draft proposal resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Projection.State.Run != runstate.RunWaitingHuman || len(input.Projection.State.PendingDecisions) != 1 {
+		t.Fatalf("recovered proposal projection run=%s pending=%d, want WAITING_HUMAN with one decision", input.Projection.State.Run, len(input.Projection.State.PendingDecisions))
+	}
+	var pendingID string
+	for id, pending := range input.Projection.State.PendingDecisions {
+		if pending.Type != "amendment" {
+			t.Fatalf("recovered pending decision %q type=%q, want amendment", id, pending.Type)
+		}
+		pendingID = id
+	}
+	routed, requested := -1, -1
+	for index, event := range readDraftSchedulingJournal(t, repository, runID) {
+		var payload map[string]any
+		switch event.Type {
+		case runstate.EventAmendmentRoutedHuman:
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["decision_id"] == pendingID {
+				routed = index
+			}
+		case runstate.EventDecisionRequested:
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["decision_id"] == pendingID {
+				requested = index
+			}
+		case runstate.EventAmendmentRejected:
+			t.Fatalf("recovery-created proposal was rejected: %s", event.Payload)
+		}
+	}
+	if routed < 0 || requested <= routed {
+		t.Fatalf("recovered proposal route/request indexes = %d/%d, want routed then requested", routed, requested)
+	}
+}
+
 func TestLiveBlockingRequestCrashReachesFixedPoint(t *testing.T) {
 	root := repositoryRoot(t)
 	bin := t.TempDir()
@@ -196,6 +267,28 @@ func TestResumeRecoveredAttemptWaitingHumanIsQuiescent(t *testing.T) {
 	assertDraftBlockingResult(t, repository, runID, 1)
 }
 
+func TestRecoverySelectedInitialAttemptRoutesProposal(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "proposal")
+	child := pauseRunAtReceipt(t, partitur, repository, environment, "movement.movement.started")
+	runID := routedProposalRunID(t, repository)
+	killPausedRun(t, child)
+
+	code, stdout, stderr := runCommandBinaryWithin(t, 10*time.Second, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("recovery-selected proposal resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	assertDraftBlockingResult(t, repository, runID, 1)
+}
+
 func draftResultRepository(t *testing.T, bin, vendor, result string) (string, []string) {
 	t.Helper()
 	document := draftSchedulingScore()
@@ -217,7 +310,7 @@ func draftResultRepository(t *testing.T, bin, vendor, result string) (string, []
 	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
 	runGit(t, repository, "commit", "-m", "fixture")
 	environmentValues := map[string]string{runVendorDraftResultEnvironment: result}
-	if result == "proposal" {
+	if result == "proposal" || result == "question_then_proposal" {
 		environmentValues[runVendorProposalBaseHashEnvironment] = baseHash
 	}
 	environment := replaceEnvironment(draftSchedulingEnvironment(bin, vendor), environmentValues)

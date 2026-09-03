@@ -146,6 +146,14 @@ func productionExecutionDependencies(probe faultpoint.Probe) driver.ExecutionDep
 	return execution
 }
 
+func productionRecoveryExecutor(store *runstore.Store, runID runstate.RunID, probe faultpoint.Probe) *recoveryexec.Executor {
+	return &recoveryexec.Executor{
+		Store: store, RunID: runID,
+		CoreFinalizer:       amendmentexec.New().RebuildFinalization,
+		AttemptDependencies: productionExecutionDependencies(probe),
+	}
+}
+
 func runWithValidate(
 	args []string,
 	stdout, stderr io.Writer,
@@ -1170,7 +1178,7 @@ func newCancellationWaiter(store *runstore.Store, runID runstate.RunID) cancelwa
 }
 
 func executeRecovery(ctx context.Context, store *runstore.Store, runID runstate.RunID) (recoveryexec.Result, error) {
-	executor := &recoveryexec.Executor{Store: store, RunID: runID, CoreFinalizer: amendmentexec.New().RebuildFinalization}
+	executor := productionRecoveryExecutor(store, runID, faultpoint.ProbeFromEnvironment())
 	trace := recoveryDecisionTraceFromEnvironment()
 	executor.ObserveDecision = trace.Observe
 	executor.Load = func(context.Context) (recovery.Input, error) {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/BeomSeogKim/Partitur/internal/canonical"
+	"github.com/BeomSeogKim/Partitur/internal/driver"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryconsequence"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
@@ -66,6 +67,10 @@ type Executor struct {
 	RunID         runstate.RunID
 	Load          LoadInput
 	CoreFinalizer func(context.Context, *runstore.Store, runstate.RunID) error
+	// AttemptDependencies is the complete production dependency bundle used
+	// when recovery materializes an attempt. Keeping it whole prevents the
+	// recovery path from reconstructing and drifting from live execution.
+	AttemptDependencies driver.ExecutionDependencies
 
 	// ObserveDecision records each selected recovery decision. It is an
 	// observation seam: it neither selects nor changes an action.
@@ -575,7 +580,7 @@ func (executor *Executor) kindHandler(caseID recovery.CaseID, kind recovery.Acti
 			return recoveryconsequence.Apply(ctx, execution, caseID, action)
 		}, true
 	}
-	handler, ok := defaultKinds()[kind]
+	handler, ok := defaultKindsWithExecutionDependencies(executor.AttemptDependencies)[kind]
 	return handler, ok
 }
 
