@@ -33,6 +33,14 @@ func TestMutationRecoveryFanInSuccessorMaterializesAtComposedBase(t *testing.T) 
 	assertRecoveryMutationKilled(t, "TestRecoveryFanInSuccessorMaterializesAtComposedBase", goEnvironment, filepath.Join("internal", "recoveryexec", "handlers.go"), "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)", "workspace.CreateRecoveredAttempt(execution.Store, execution.Driver, input, movementID)")
 }
 
+func TestMutationRecoveryProductionRejectsIndependentAttemptDependencies(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertRecoveryMutationKilled(t, "TestRecoveryProductionDoesNotConstructAttemptDependencies", goEnvironment, filepath.Join("internal", "recoveryexec", "handlers.go"),
+		"func defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {",
+		"var _ = driver.DefaultExecutionDependencies(faultpoint.Nop{}) // mutation: independent production bundle\n\nfunc defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {",
+	)
+}
+
 func TestMutationPlanBetweenUnitRecoveryExecutorRejectsWholeActionReplacement(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	assertRecoveryMutationKilled(t, "TestPlanBetweenUnitActionKindsHaveRecoveryExecutor", goEnvironment, filepath.Join("internal", "recovery", "planner.go"),

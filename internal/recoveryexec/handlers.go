@@ -71,10 +71,6 @@ func defaultSteps() map[recovery.ActionStep]StepHandler {
 	}
 }
 
-func defaultKinds() map[recovery.ActionKind]StepHandler {
-	return defaultKindsWithExecutionDependencies(driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()))
-}
-
 func defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {
 	selectInitialPerformer := func(ctx context.Context, execution HandlerContext, action recovery.Action) error {
 		return selectInitialPerformerWithExecutionDependencies(ctx, execution, action, attemptDependencies)
@@ -391,12 +387,6 @@ func appendAcceptanceStarted(_ context.Context, execution HandlerContext, action
 	return fmt.Errorf("recovery acceptance start movement %q is absent from pinned score", attempt.MovementID)
 }
 
-func selectInitialPerformer(ctx context.Context, execution HandlerContext, action recovery.Action) error {
-	return selectInitialPerformerWithExecutionDependencies(
-		ctx, execution, action, driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()),
-	)
-}
-
 func selectInitialPerformerWithExecutionDependencies(
 	ctx context.Context,
 	execution HandlerContext,
@@ -564,12 +554,6 @@ func closeRecoveredAcceptanceBudgetInterval(execution HandlerContext, action rec
 		"interval_id": interval.ID, "reason": "budget_exhausted", "charging": "clamped",
 		"charged_duration": duration, "observed_at": observed.Format("2006-01-02T15:04:05.000Z"),
 	})
-}
-
-func materializeSuccessor(ctx context.Context, execution HandlerContext, action recovery.Action) error {
-	return materializeSuccessorWithExecutionDependencies(
-		ctx, execution, action, driver.DefaultExecutionDependencies(faultpoint.ProbeFromEnvironment()),
-	)
 }
 
 func materializeSuccessorWithExecutionDependencies(
