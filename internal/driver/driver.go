@@ -27,6 +27,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/protectedpath"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/recovery"
+	"github.com/BeomSeogKim/Partitur/internal/recoveryconsequence"
 	"github.com/BeomSeogKim/Partitur/internal/recoveryobs"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
@@ -941,6 +942,7 @@ func ExecuteAttempt(
 				raised := make([]any, 0, len(observation.Raised))
 				pending := make([]string, 0, len(observation.Raised))
 				appendRoutes := make([]func(context.Context) error, 0, len(observation.Raised))
+				appendRequests := make([]func() error, 0, len(observation.Raised))
 				var prepared *faultpoint.DurabilityReceipt
 				for _, decision := range observation.Raised {
 					switch decision.Kind {
@@ -960,6 +962,14 @@ func ExecuteAttempt(
 							"blocking":    true,
 						})
 						pending = append(pending, decisionID)
+						appendRequests = append(appendRequests, func() error {
+							event, err := recoveryconsequence.QuestionRequestEvent(store, execution.RunID, attempt.AttemptID, decisionID)
+							if err != nil {
+								return err
+							}
+							_, err = authority.Append(event, "attempt.decision.requested.question")
+							return err
+						})
 					case protocol.EventProposal:
 						if decision.Proposal == nil {
 							return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal is absent")
@@ -993,6 +1003,14 @@ func ExecuteAttempt(
 								return faultpoint.DurabilityReceipt{}, errors.New("routed proposal has no routed_human append")
 							}
 							appendRoutes = append(appendRoutes, disposition.AppendRoute)
+							appendRequests = append(appendRequests, func() error {
+								event, err := recoveryconsequence.RoutedRequestEvent(store, execution.RunID, runstate.ProposalID(proposalID))
+								if err != nil {
+									return err
+								}
+								_, err = authority.Append(event, "amendment.decision.requested")
+								return err
+							})
 						}
 						if disposition.PreparedReceipt != nil {
 							if prepared != nil {
@@ -1023,6 +1041,11 @@ func ExecuteAttempt(
 				for _, appendRoute := range appendRoutes {
 					if err := appendRoute(ctx); err != nil {
 						return faultpoint.DurabilityReceipt{}, fmt.Errorf("append routed human: %w", err)
+					}
+				}
+				for _, appendRequest := range appendRequests {
+					if err := appendRequest(); err != nil {
+						return faultpoint.DurabilityReceipt{}, fmt.Errorf("append decision request: %w", err)
 					}
 				}
 				return receipt, nil

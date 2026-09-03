@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,17 +47,96 @@ func TestDraftResultBoundary(t *testing.T) {
 		assertDraftAcceptanceAbsent(t, repository, runstate.RunID(runID))
 	})
 
-	for _, result := range []string{"question", "proposal"} {
-		t.Run("blocking "+result+" remains blocked", func(t *testing.T) {
-			repository, environment := draftResultRepository(t, bin, vendor, result)
+	for _, result := range []struct {
+		kind    string
+		pending int
+	}{
+		{kind: "question", pending: 1},
+		{kind: "questions", pending: 4},
+		{kind: "proposal", pending: 1},
+	} {
+		t.Run("blocking "+result.kind+" remains blocked", func(t *testing.T) {
+			repository, environment := draftResultRepository(t, bin, vendor, result.kind)
 			code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
 			runID := strings.TrimSpace(stdout)
 			if code != 0 || runID == "" || stdout != runID+"\n" || stderr != "" {
 				t.Fatalf("run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
-			assertDraftBlockingResult(t, repository, runstate.RunID(runID))
+			assertDraftBlockingResult(t, repository, runstate.RunID(runID), result.pending)
 		})
 	}
+}
+
+func TestLiveBlockingRequestsRemainFixedAfterResume(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "questions")
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "run")
+	runID := runstate.RunID(strings.TrimSpace(stdout))
+	if code != 0 || runID == "" || stderr != "" {
+		t.Fatalf("run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	assertDraftBlockingResult(t, repository, runID, 4)
+
+	code, stdout, stderr = runCommandBinary(t, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	assertDraftBlockingResult(t, repository, runID, 4)
+}
+
+func TestLiveBlockingRequestCrashReachesFixedPoint(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "questions")
+	child := pauseRunAtReceipt(t, partitur, repository, environment, "attempt.decision.requested.question")
+	runID := routedProposalRunID(t, repository)
+	killPausedRun(t, child)
+
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	assertDraftBlockingResult(t, repository, runID, 4)
+}
+
+func TestRecoveredBlockingRequestCrashReachesFixedPoint(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "questions")
+	child := pauseRunAtReceipt(t, partitur, repository, environment, "attempt.blocked")
+	runID := routedProposalRunID(t, repository)
+	killPausedRun(t, child)
+
+	child = pauseCommandAtReceipt(t, partitur, repository, environment, "recovery.decision.requested.question", "resume", string(runID))
+	killPausedRun(t, child)
+
+	code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	assertDraftBlockingResult(t, repository, runID, 4)
 }
 
 func TestDraftResultBoundaryKillCuts(t *testing.T) {
@@ -112,7 +193,7 @@ func TestResumeRecoveredAttemptWaitingHumanIsQuiescent(t *testing.T) {
 	if code != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	assertDraftBlockingResult(t, repository, runID)
+	assertDraftBlockingResult(t, repository, runID, 1)
 }
 
 func draftResultRepository(t *testing.T, bin, vendor, result string) (string, []string) {
@@ -186,20 +267,110 @@ func assertDraftNoBlockingFailure(t *testing.T, repository string, runID runstat
 	}
 }
 
-func assertDraftBlockingResult(t *testing.T, repository string, runID runstate.RunID) {
+func assertDraftBlockingResult(t *testing.T, repository string, runID runstate.RunID, wantPending int) {
 	t.Helper()
 	journal := readDraftSchedulingJournal(t, repository, runID)
-	for _, event := range journal {
+	type indexedPayload struct {
+		index   int
+		payload map[string]any
+	}
+	blocked := -1
+	raised := make(map[string]map[string]any)
+	raisedOrder := make([]string, 0, wantPending)
+	requested := make(map[string][]indexedPayload)
+	requestOrder := make([]string, 0, wantPending)
+	routed := make(map[string]indexedPayload)
+	for index, event := range journal {
 		switch event.Type {
 		case runstate.EventAttemptBlocked:
-			return
+			blocked = index
+			var payload struct {
+				Raised []map[string]any `json:"raised"`
+			}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			for _, decision := range payload.Raised {
+				decisionID, _ := decision["decision_id"].(string)
+				raised[decisionID] = decision
+				raisedOrder = append(raisedOrder, decisionID)
+			}
+		case runstate.EventAmendmentRoutedHuman:
+			var payload map[string]any
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			decisionID, _ := payload["decision_id"].(string)
+			routed[decisionID] = indexedPayload{index: index, payload: payload}
+		case runstate.EventDecisionRequested:
+			var payload map[string]any
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			decisionID, _ := payload["decision_id"].(string)
+			requested[decisionID] = append(requested[decisionID], indexedPayload{index: index, payload: payload})
+			requestOrder = append(requestOrder, decisionID)
+			if blocked < 0 || index <= blocked {
+				t.Fatalf("decision.requested at %d precedes attempt.blocked at %d", index, blocked)
+			}
 		case runstate.EventAttemptFailed:
 			t.Fatalf("blocking draft result failed: %s", event.Payload)
 		case runstate.EventAcceptanceStarted:
 			t.Fatalf("blocking draft result started acceptance: %s", event.EventID)
 		}
 	}
-	t.Fatalf("blocking draft result journal = %v", eventKinds(journal))
+	if blocked < 0 {
+		t.Fatalf("blocking draft result journal = %v", eventKinds(journal))
+	}
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := input.Projection.State
+	if state.Run != runstate.RunWaitingHuman || len(state.PendingDecisions) != wantPending {
+		t.Fatalf("blocking projection run=%s pending=%d, want WAITING_HUMAN pending=%d", state.Run, len(state.PendingDecisions), wantPending)
+	}
+	for decisionID := range state.PendingDecisions {
+		requests := requested[decisionID]
+		if len(requests) != 1 {
+			t.Fatalf("pending decision %q has %d decision.requested events, want 1", decisionID, len(requests))
+		}
+		source := raised[decisionID]
+		request := requests[0]
+		switch state.PendingDecisions[decisionID].Type {
+		case "question":
+			if request.payload["decision_type"] != "question" ||
+				request.payload["question"] != source["question"] ||
+				request.payload["emitted_id"] != source["emitted_id"] {
+				t.Fatalf("question request=%#v, want blocked source=%#v", request.payload, source)
+			}
+		case "amendment":
+			route, ok := routed[decisionID]
+			if !ok || route.index <= blocked || request.index <= route.index {
+				t.Fatalf("amendment order blocked=%d routed=%d requested=%d", blocked, route.index, request.index)
+			}
+			for requestField, routedField := range map[string]string{
+				"decision_id": "decision_id", "decision_type": "decision_type", "proposal_id": "proposal_id",
+				"routed_reason": "reason", "blocking": "blocking", "emitted_id": "emitted_id",
+			} {
+				if request.payload[requestField] != route.payload[routedField] {
+					t.Fatalf("request %s=%#v, want routed %s=%#v", requestField, request.payload[requestField], routedField, route.payload[routedField])
+				}
+			}
+		default:
+			t.Fatalf("unexpected pending decision type %q", state.PendingDecisions[decisionID].Type)
+		}
+	}
+	if len(requested) != wantPending {
+		t.Fatalf("decision.requested count=%d, want %d", len(requested), wantPending)
+	}
+	if !slices.Equal(requestOrder, raisedOrder) {
+		t.Fatalf("decision.requested order=%v, want raised order=%v", requestOrder, raisedOrder)
+	}
 }
 
 func assertDraftAcceptanceAbsent(t *testing.T, repository string, runID runstate.RunID) {

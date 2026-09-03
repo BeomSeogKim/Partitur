@@ -420,8 +420,33 @@ type State struct {
 	ResolvedHumanGates   map[AttemptID]HumanGateResolution
 	RoutedAmendments     map[ProposalID]RoutedAmendment
 	CancelRequested      bool
+	blockedSources       blockedDecisionSources
 	rejectedAmendments   map[string]ProposalID
 	appliedEvents        map[string]appliedEvent
+}
+
+type sourceEnvelope struct {
+	RunID         RunID
+	ScoreRevision uint64
+	MovementID    MovementID
+	PartID        string
+	AttemptID     AttemptID
+}
+
+type blockedQuestionSource struct {
+	Envelope  sourceEnvelope
+	EmittedID string
+	Question  string
+}
+
+type blockedProposalRouteSource struct {
+	Envelope sourceEnvelope
+	Payload  string
+}
+
+type blockedDecisionSources struct {
+	Questions      map[string]blockedQuestionSource
+	ProposalRoutes map[ProposalID]blockedProposalRouteSource
 }
 
 // appliedEvent retains the envelope authority needed to validate a later

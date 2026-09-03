@@ -258,7 +258,7 @@ func derivedSourceProjectionFixtures() map[string]derivedSourceProjectionFixture
 func derivedRunCancelledFixture() derivedSourceProjectionFixture {
 	journal := newDerivedFixtureJournal([]MovementSeed{{ID: "m1", Initial: MovementPending, Final: true}})
 	journal.runningAttempt()
-	journal.questionDecision()
+	journal.humanGateDecision()
 	journal.add(fixtureEvent(EventRunCancelled, map[string]any{
 		"cancelled_movement_ids": []any{"m1"},
 		"cancelled_attempt_ids":  []any{"a1"},
@@ -270,7 +270,7 @@ func derivedRunCancelledFixture() derivedSourceProjectionFixture {
 func derivedAmendmentApprovedFixture() derivedSourceProjectionFixture {
 	journal := newDerivedFixtureJournal([]MovementSeed{{ID: "m1", Initial: MovementPending, Final: true}})
 	journal.runningAttempt()
-	journal.questionDecision()
+	journal.humanGateDecision()
 	journal.add(fixtureEvent(EventAmendmentApprovalPrepared, autoPreparePayload(), nil))
 	payload := approvalPayload("auto")
 	payload["obsoleted_decision_ids"] = []any{"decision-1"}
@@ -307,7 +307,7 @@ func derivedMovementFailedFixture() derivedSourceProjectionFixture {
 	journal.runningAttempt()
 	journal.add(fixtureEvent(EventAdapterProbed, adapterProbedPayload(), attemptEnvelope))
 	journal.add(fixtureEvent(EventPerformerCompleted, map[string]any{"session_hint_stored": false}, attemptEnvelope))
-	journal.questionDecision()
+	journal.humanGateDecision()
 	journal.add(fixtureEvent(EventMovementFailed, map[string]any{
 		"reason": "human_gate_rejected", "decision_id": "gate-1", "subject_tree": "git-sha1:tree", "run_failed": true,
 	}, attemptEnvelope))
@@ -364,9 +364,10 @@ func (journal *derivedFixtureJournal) runningAttempt() {
 	journal.add(fixtureEvent(EventAttemptStarted, attemptStartedPayload(), attemptEnvelope))
 }
 
-func (journal *derivedFixtureJournal) questionDecision() {
+func (journal *derivedFixtureJournal) humanGateDecision() {
 	journal.add(fixtureEvent(EventDecisionRequested, map[string]any{
-		"decision_id": "decision-1", "decision_type": "question", "emitted_id": "question-1", "question": "Continue?",
+		"decision_id": "decision-1", "decision_type": "human_gate", "gate_id": "gate-1", "gate_mode": "always",
+		"subject_tree": "git-sha1:tree", "blocking_findings": []any{},
 	}, attemptEnvelope))
 }
 

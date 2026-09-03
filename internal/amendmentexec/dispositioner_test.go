@@ -94,6 +94,13 @@ func TestPreparePublicationCutChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.RecordRecoveredZeroWriterCandidate(store, authority, input); err != nil {
+		t.Fatal(err)
+	}
 	prepareRoutedHumanApproval(t, store, authority, started.RunID, hash)
 	if _, err := fmt.Fprintln(os.Stdout, started.RunID); err != nil {
 		t.Fatal(err)
@@ -113,6 +120,7 @@ func prepareRoutedHumanApproval(t *testing.T, store *runstore.Store, authority *
 	if disposition.AppendRoute == nil {
 		t.Fatal("human approval crash fixture has no routed proposal")
 	}
+	appendBlockingProposalSource(t, store, authority, runID, disposition.RouteDescriptor)
 	if err := disposition.AppendRoute(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +405,7 @@ func TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource(t *test
 	if disposition.AppendRoute == nil {
 		t.Fatal("routed disposition has no append closure")
 	}
+	appendBlockingProposalSource(t, store, authority, started.RunID, disposition.RouteDescriptor)
 	if err := disposition.AppendRoute(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -625,8 +634,11 @@ func TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.Events) < 2 || journal.Events[len(journal.Events)-2].Type != runstate.EventAttemptBlocked || journal.Events[len(journal.Events)-1].Type != runstate.EventAmendmentRoutedHuman {
-		t.Fatalf("terminal ordering = %#v", journal.Events[len(journal.Events)-2:])
+	if len(journal.Events) < 3 ||
+		journal.Events[len(journal.Events)-3].Type != runstate.EventAttemptBlocked ||
+		journal.Events[len(journal.Events)-2].Type != runstate.EventAmendmentRoutedHuman ||
+		journal.Events[len(journal.Events)-1].Type != runstate.EventDecisionRequested {
+		t.Fatalf("terminal ordering = %#v", journal.Events[len(journal.Events)-3:])
 	}
 }
 
@@ -694,6 +706,7 @@ func TestApproveRoutedPreparesHumanApprovalFromImmutableRecord(t *testing.T) {
 	if disposition.AppendRoute == nil {
 		t.Fatal("routed proposal has no route append")
 	}
+	appendBlockingProposalSource(t, store, authority, started.RunID, disposition.RouteDescriptor)
 	if err := disposition.AppendRoute(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -852,6 +865,7 @@ func TestApproveRoutedRequiresLiveRoutedDecision(t *testing.T) {
 	if disposition.AppendRoute == nil {
 		t.Fatal("routed proposal has no route append")
 	}
+	appendBlockingProposalSource(t, store, authority, started.RunID, disposition.RouteDescriptor)
 	if err := disposition.AppendRoute(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -1493,6 +1507,79 @@ func adapterProposal(store *runstore.Store, authority *runstore.Driver, runID ru
 	return driver.AdapterProposal{Store: store, Authority: authority, RunID: runID, AttemptID: "attempt-1", MovementID: "inspect", PartID: "reader", ProposalID: "prp-1", DecisionID: "dec-1", Event: protocol.ProposalEvent{ID: "emitted-1", Amendment: amendment, RequiresDecision: requiresDecision}}
 }
 
+func appendBlockingProposalSource(t *testing.T, store *runstore.Store, authority *runstore.Driver, runID runstate.RunID, descriptor map[string]any) {
+	t.Helper()
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, ok := input.Cast.Binding("reader")
+	if !ok {
+		t.Fatal("reader binding is absent")
+	}
+	performer, ok := input.Cast.Performer(binding.Performer)
+	if !ok {
+		t.Fatal("reader performer is absent")
+	}
+	versions := map[string]any{"canonical_encoding": 1, "projections": map[string]any{}}
+	adapterProcess := deadAdapterProcessPayload(t)
+	for _, event := range []runstate.Event{
+		{RunID: runID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementReady, Payload: []byte(`{}`)},
+		{RunID: runID, ScoreRevision: 1, MovementID: "inspect", Type: runstate.EventMovementStarted, Payload: []byte(`{}`)},
+		{RunID: runID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: "attempt-1", Type: runstate.EventPerformerSelected, Payload: testPayload(t, map[string]any{"reason": "initial", "performer_id": performer.ID, "adapter_id": performer.Adapter, "model": performer.Model})},
+		{RunID: runID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: "attempt-1", Type: runstate.EventAttemptStarted, Payload: testPayload(t, map[string]any{
+			"attempt_number": 1, "adapter_process": adapterProcess,
+			"granted_authority": map[string]any{"paths_rw": []any{}, "paths_ro": []any{"**"}, "shell": false, "network": false}, "identity_versions": versions,
+		})},
+		{RunID: runID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: "attempt-1", Type: runstate.EventAdapterProbed, Payload: testPayload(t, map[string]any{
+			"adapter_version": "1", "capabilities": map[string]any{"repo_read": true, "repo_write": false, "shell": false, "network": false, "resumable_sessions": false},
+			"enforcement":         map[string]any{"path_grants": true, "read_only": true, "network_grants": true, "shell_grants": true, "read_grants": true},
+			"negotiated_features": []any{}, "truncated_resolutions": []any{}, "delivered_resolutions": []any{}, "delivered_feedback": []any{}, "advisory_dimensions": []any{},
+			"execution_dependency_hash": "sha256:dependency", "identity_versions": versions,
+		})},
+		{RunID: runID, ScoreRevision: 1, MovementID: "inspect", PartID: "reader", AttemptID: "attempt-1", Type: runstate.EventAttemptBlocked, Payload: testPayload(t, map[string]any{
+			"raised":               []any{map[string]any{"decision_id": "dec-1", "emitted_id": "emitted-1", "kind": "proposal", "proposal_id": "prp-1", "blocking": true, "route": descriptor}},
+			"pending_decision_ids": []any{"dec-1"},
+		})},
+	} {
+		if _, err := authority.Append(event, faultpoint.ReceiptAddress("test.blocking_source."+string(event.Type))); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func deadAdapterProcessPayload(t *testing.T) map[string]any {
+	t.Helper()
+	command := exec.Command("sleep", "60")
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := command.Process.Pid
+	identity, err := procid.Read(pid)
+	if err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		t.Fatal(err)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("killed adapter fixture exited successfully")
+	}
+	var start map[string]any
+	switch value := identity.(type) {
+	case runstate.LinuxStartIdentity:
+		start = map[string]any{"platform": "linux", "boot_id": value.BootID, "start_ticks": value.StartTicks}
+	case runstate.DarwinStartIdentity:
+		start = map[string]any{"platform": "darwin", "start_tvsec": value.StartTVSec, "start_tvusec": value.StartTVUsec}
+	default:
+		t.Fatalf("unsupported start identity %T", identity)
+	}
+	return map[string]any{"pid": pid, "session_id": pid, "start_identity": start}
+}
+
 func testDispositioner() ProposalDispositioner {
 	return New()
 }
@@ -1705,6 +1792,15 @@ func eventPayload(t *testing.T, event runstate.Event) map[string]any {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func testPayload(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 type waitingProposalExecutor struct {

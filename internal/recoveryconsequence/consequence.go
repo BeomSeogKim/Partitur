@@ -1,5 +1,5 @@
-// Package recoveryconsequence owns the durable recovery consequences that
-// must be shared by recovery and amendment preparation.
+// Package recoveryconsequence owns durable source-derived consequences shared
+// by live execution, recovery, and amendment preparation.
 package recoveryconsequence
 
 import (
@@ -396,37 +396,49 @@ func AppendQuestionRequest(_ context.Context, execution HandlerContext, action r
 	if execution.Store == nil || execution.Driver == nil || action.AttemptID == "" || action.QuestionDecisionID == "" {
 		return errors.New("recovery question request requires store, driver, attempt, and decision")
 	}
-	journal, err := execution.Store.ReadJournal(execution.RunID)
+	event, err := QuestionRequestEvent(execution.Store, execution.RunID, action.AttemptID, action.QuestionDecisionID)
 	if err != nil {
 		return err
 	}
+	_, err = execution.Driver.Append(event, "recovery.decision.requested.question")
+	return err
+}
+
+// QuestionRequestEvent derives a request only from its durable attempt.blocked
+// source. Live execution and recovery use the same reconstruction rule.
+func QuestionRequestEvent(store *runstore.Store, runID runstate.RunID, attemptID runstate.AttemptID, decisionID string) (runstate.Event, error) {
+	if store == nil || runID == "" || attemptID == "" || decisionID == "" {
+		return runstate.Event{}, errors.New("question request requires store, run, attempt, and decision")
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		return runstate.Event{}, err
+	}
 	for _, source := range journal.Events {
-		if source.Type != runstate.EventAttemptBlocked || source.AttemptID != action.AttemptID {
+		if source.Type != runstate.EventAttemptBlocked || source.AttemptID != attemptID {
 			continue
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(source.Payload, &payload); err != nil {
-			return err
+			return runstate.Event{}, err
 		}
 		raisedValues, ok := payload["raised"].([]any)
 		if !ok {
-			return fmt.Errorf("blocked attempt %q has invalid raised decisions", action.AttemptID)
+			return runstate.Event{}, fmt.Errorf("blocked attempt %q has invalid raised decisions", attemptID)
 		}
 		for _, raw := range raisedValues {
 			raised, ok := raw.(map[string]any)
 			kind, _ := raised["kind"].(string)
-			decisionID, _ := raised["decision_id"].(string)
-			if !ok || kind != "question" || decisionID != action.QuestionDecisionID {
+			raisedDecisionID, _ := raised["decision_id"].(string)
+			if !ok || kind != "question" || raisedDecisionID != decisionID {
 				continue
 			}
 			emittedID, _ := raised["emitted_id"].(string)
 			question, _ := raised["question"].(string)
-			event := runstate.Event{RunID: execution.RunID, ScoreRevision: source.ScoreRevision, MovementID: source.MovementID, PartID: source.PartID, AttemptID: source.AttemptID, Type: runstate.EventDecisionRequested, Payload: RecoveryPayload(map[string]any{"decision_id": action.QuestionDecisionID, "decision_type": "question", "emitted_id": emittedID, "question": question})}
-			_, err := execution.Driver.Append(event, "recovery.decision.requested.question")
-			return err
+			return runstate.Event{RunID: runID, ScoreRevision: source.ScoreRevision, MovementID: source.MovementID, PartID: source.PartID, AttemptID: source.AttemptID, Type: runstate.EventDecisionRequested, Payload: RecoveryPayload(map[string]any{"decision_id": decisionID, "decision_type": "question", "emitted_id": emittedID, "question": question})}, nil
 		}
 	}
-	return fmt.Errorf("recovery question %q is absent from blocked attempt %q", action.QuestionDecisionID, action.AttemptID)
+	return runstate.Event{}, fmt.Errorf("question %q is absent from blocked attempt %q", decisionID, attemptID)
 }
 
 // AppendBlockedProposalRoute completes the frozen source-to-route cut for a
@@ -481,9 +493,31 @@ func AppendRoutedRequest(_ context.Context, execution HandlerContext, action rec
 	if execution.Store == nil || execution.Driver == nil || action.RoutedProposalID == "" {
 		return errors.New("recovery routed request requires store, driver, and proposal")
 	}
-	journal, err := execution.Store.ReadJournal(execution.RunID)
+	event, err := RoutedRequestEvent(execution.Store, execution.RunID, action.RoutedProposalID)
 	if err != nil {
 		return err
+	}
+	address := faultpoint.ReceiptAddress("recovery.decision.requested.amendment")
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return err
+	}
+	if payload["decision_type"] == "finalization" {
+		address = faultpoint.ReceiptAddress("recovery.decision.requested.finalization")
+	}
+	_, err = execution.Driver.Append(event, address)
+	return err
+}
+
+// RoutedRequestEvent derives a request only from its durable
+// amendment.routed_human source. attempt.blocked is not consulted.
+func RoutedRequestEvent(store *runstore.Store, runID runstate.RunID, proposalID runstate.ProposalID) (runstate.Event, error) {
+	if store == nil || runID == "" || proposalID == "" {
+		return runstate.Event{}, errors.New("routed request requires store, run, and proposal")
+	}
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		return runstate.Event{}, err
 	}
 	for _, source := range journal.Events {
 		if source.Type != runstate.EventAmendmentRoutedHuman {
@@ -491,9 +525,9 @@ func AppendRoutedRequest(_ context.Context, execution HandlerContext, action rec
 		}
 		var routed map[string]any
 		if err := json.Unmarshal(source.Payload, &routed); err != nil {
-			return err
+			return runstate.Event{}, err
 		}
-		if routed["proposal_id"] != string(action.RoutedProposalID) {
+		if routed["proposal_id"] != string(proposalID) {
 			continue
 		}
 		payload := map[string]any{
@@ -503,23 +537,19 @@ func AppendRoutedRequest(_ context.Context, execution HandlerContext, action rec
 			"routed_reason": routed["reason"],
 			"blocking":      routed["blocking"],
 		}
-		address := faultpoint.ReceiptAddress("recovery.decision.requested.amendment")
 		if routed["decision_type"] == "finalization" {
 			delete(payload, "blocking")
-			address = faultpoint.ReceiptAddress("recovery.decision.requested.finalization")
 		}
 		if emittedID, ok := routed["emitted_id"]; ok {
 			payload["emitted_id"] = emittedID
 		}
-		event := runstate.Event{
-			RunID: execution.RunID, ScoreRevision: source.ScoreRevision, MovementID: source.MovementID,
+		return runstate.Event{
+			RunID: runID, ScoreRevision: source.ScoreRevision, MovementID: source.MovementID,
 			PartID: source.PartID, AttemptID: source.AttemptID, Type: runstate.EventDecisionRequested,
 			Payload: RecoveryPayload(payload),
-		}
-		_, err = execution.Driver.Append(event, address)
-		return err
+		}, nil
 	}
-	return fmt.Errorf("recovery routed amendment %q is absent", action.RoutedProposalID)
+	return runstate.Event{}, fmt.Errorf("routed amendment %q is absent", proposalID)
 }
 
 func frozenRoutePayload(execution HandlerContext, source runstate.Event, raised, descriptor map[string]any) (map[string]any, error) {

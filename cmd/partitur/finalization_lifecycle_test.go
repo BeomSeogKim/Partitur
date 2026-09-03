@@ -152,8 +152,6 @@ func finalizationReady(t *testing.T, partitur, bin, vendor string) (string, []st
 	if code != 0 || runID == "" || stderr != "" {
 		t.Fatalf("draft run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	questionRequest := pauseCommandAtReceipt(t, partitur, repository, environment, "recovery.decision.requested.question", "resume", string(runID))
-	killPausedRun(t, questionRequest)
 	decisionID := finalizationQuestionDecision(t, repository, runID)
 	code, _, stderr = runCommandBinary(t, partitur, repository, environment, "answer", decisionID, "--answer", "continue")
 	if code != 0 || stderr != expectedDecisionResumeHint(string(runID)) {
