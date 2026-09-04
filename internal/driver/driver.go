@@ -645,6 +645,16 @@ func ExecuteAttempt(
 	if err != nil {
 		return stopped(result, err)
 	}
+	reservedInputs := make([]protocol.ArtifactRef, 0, 2)
+	if movement.MayPropose {
+		input, err := publishScoreBaseInput(
+			authority, execution.RepositoryRoot, execution.RunID, execution.Score, movement,
+		)
+		if err != nil {
+			return stopped(result, err)
+		}
+		reservedInputs = append(reservedInputs, input)
+	}
 	var reviewInput *protocol.ArtifactRef
 	if len(movement.Acceptance.ReviewCriteria) == 1 {
 		reviewSubjectTree := execution.BaseTree
@@ -655,6 +665,7 @@ func ExecuteAttempt(
 		if err != nil {
 			return stopped(result, err)
 		}
+		reservedInputs = append(reservedInputs, input)
 		reviewInput = &input
 	}
 	inputState, err := authority.State()
@@ -667,7 +678,7 @@ func ExecuteAttempt(
 		inputState,
 		execution.RepositoryRoot,
 		execution.RunID,
-		reviewInput,
+		reservedInputs,
 	)
 	if err != nil {
 		return stopped(result, err)
@@ -1522,6 +1533,66 @@ func publishReviewSubjectInput(
 	}, nil
 }
 
+// publishScoreBaseInput implements §4's prescribed score-base id, kind,
+// contents, raw file hash, proposal-capable delivery, and read-only location
+// outside the worktree. The revision-keyed run path, instance id, receipt-only
+// publication, same-revision reuse, and absence of a separate orphan sweep are
+// implementation decisions modeled on partitur.subject-tree.
+func publishScoreBaseInput(
+	authority *runstore.Driver,
+	repositoryRoot string,
+	runID runstate.RunID,
+	compiled *score.Score,
+	movement score.MovementView,
+) (protocol.ArtifactRef, error) {
+	scoreBytes, err := compiled.ProjectionBytes()
+	if err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	scoreValue, err := canonical.ParseJSON(scoreBytes)
+	if err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	baseHash, err := compiled.Hash()
+	if err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	contents, err := canonical.Encode(map[string]any{
+		"schema":        "partitur/score-base+json;v=1",
+		"base_revision": float64(compiled.Revision()),
+		"base_hash":     baseHash,
+		"score":         scoreValue,
+	})
+	if err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	digest := sha256.Sum256(contents)
+	hash := runstate.Hash(fmt.Sprintf("sha256:%x", digest))
+	revision := compiled.Revision()
+	relative := runstore.Path(filepath.ToSlash(filepath.Join(
+		"inputs", movement.ID, fmt.Sprintf("revision-%d", revision), "score-base.json",
+	)))
+	if err := authority.Mutate(func(transaction *runstore.Txn, _ runstate.State) error {
+		_, err := transaction.At("proposal.score_base.published").PublishImmutable(relative, contents, hash)
+		return err
+	}); err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	path := filepath.Join(
+		repositoryRoot, ".partitur", "runs", string(runID), filepath.FromSlash(string(relative)),
+	)
+	if err := os.Chmod(path, 0o400); err != nil {
+		return protocol.ArtifactRef{}, err
+	}
+	return protocol.ArtifactRef{
+		ArtifactID: "partitur.score-base",
+		Kind:       "partitur/score-base+json;v=1",
+		InstanceID: fmt.Sprintf("partitur.score-base@%s@%d", movement.ID, revision),
+		Path:       path,
+		Hash:       string(hash),
+	}, nil
+}
+
 // deliveredInputs freezes the artifact instances that this attempt will send
 // to its performer. It reads only the already-materialized state passed by the
 // caller; retries and fallbacks therefore resolve the same successful source
@@ -1532,7 +1603,7 @@ func deliveredInputs(
 	state runstate.State,
 	repositoryRoot string,
 	runID runstate.RunID,
-	reviewInput *protocol.ArtifactRef,
+	reservedInputs []protocol.ArtifactRef,
 ) ([]protocol.ArtifactRef, error) {
 	outputs := make(map[string]score.OutputView)
 	producers := make(map[string]runstate.MovementID)
@@ -1542,7 +1613,7 @@ func deliveredInputs(
 			producers[output.ArtifactID] = runstate.MovementID(candidate.ID)
 		}
 	}
-	inputs := make([]protocol.ArtifactRef, 0, len(movement.Inputs)+1)
+	inputs := make([]protocol.ArtifactRef, 0, len(movement.Inputs)+len(reservedInputs))
 	for _, artifactID := range movement.Inputs {
 		output, exists := outputs[artifactID]
 		if !exists {
@@ -1570,9 +1641,7 @@ func deliveredInputs(
 			Hash: string(record.ContentHash),
 		})
 	}
-	if reviewInput != nil {
-		inputs = append(inputs, *reviewInput)
-	}
+	inputs = append(inputs, reservedInputs...)
 	slices.SortFunc(inputs, func(left, right protocol.ArtifactRef) int {
 		return strings.Compare(left.ArtifactID, right.ArtifactID)
 	})

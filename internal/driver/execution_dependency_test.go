@@ -229,6 +229,53 @@ func TestExecutionDependencyHashBindsScoreBaseForMayPropose(t *testing.T) {
 	}
 }
 
+func TestLiveScoreBaseInputIsBoundInMovementInputs(t *testing.T) {
+	document := sliceScore()
+	document["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	fixture := newResolvedRequestFixtureFor(t, document, "inspect")
+	request, state := fixture.executeWaiting()
+	scoreBase := scoreBaseInputFromRequest(t, request)
+
+	movement, part, performer, plan, err := selectAttempt(
+		fixture.input.Score, fixture.input.Cast, "inspect", "worker",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, globalInvariants, err := executeBrief(
+		fixture.input.Score, movement,
+		effectiveGrants(movement, fixture.input.Score.EffectivePolicy()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := func(inputs []protocol.ArtifactRef) string {
+		t.Helper()
+		value, err := executionDependencyHash(
+			fixture.input.Score, movement, part, performer,
+			effectiveGrants(movement, fixture.input.Score.EffectivePolicy()), globalInvariants,
+			plan.Hash(), "", inputs, request.ResolvedDecisions, request.Feedback,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	recorded := string(state.AdapterObservations[runstate.AttemptID(request.AttemptID)].ExecutionDependencyHash)
+	if got := hash(request.Inputs); got != recorded {
+		t.Fatalf("recomputed dependency hash = %q, recorded = %q", got, recorded)
+	}
+	withoutScoreBase := make([]protocol.ArtifactRef, 0, len(request.Inputs)-1)
+	for _, input := range request.Inputs {
+		if input != scoreBase {
+			withoutScoreBase = append(withoutScoreBase, input)
+		}
+	}
+	if got := hash(withoutScoreBase); got == recorded {
+		t.Fatal("recorded execution dependency ignores the delivered score-base input entry")
+	}
+}
+
 func TestExecutionDependencyHashBindsDraftPhase(t *testing.T) {
 	prepared := fanInProjectionFixture(t)
 	movement, part, performer, plan, err := selectAttempt(prepared.Score, prepared.Cast, "inspect", "worker")
@@ -435,9 +482,9 @@ func TestDeliveredInputsSortByArtifactID(t *testing.T) {
 			},
 		},
 	}
-	inputs, err := deliveredInputs(prepared.Score, movement, state, "/repo", "run-1", &protocol.ArtifactRef{
+	inputs, err := deliveredInputs(prepared.Score, movement, state, "/repo", "run-1", []protocol.ArtifactRef{{
 		ArtifactID: "partitur.subject-tree", Kind: "partitur/subject-tree+json;v=1", InstanceID: "partitur.subject-tree@inspect@1", Hash: "sha256:subject",
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
