@@ -280,6 +280,80 @@ func TestPublicationOrderAndImmutability(t *testing.T) {
 	}
 }
 
+func TestIdempotentPublicationSyncsReadOnlyTarget(t *testing.T) {
+	store := newTestStore(t)
+	contents := []byte("snapshot")
+	path := Path("scores/revision-1.yaml")
+	hash := Hash(digest(contents))
+
+	err := store.Mutate("run-1", "", func(transaction *Txn) error {
+		_, err := transaction.At("test.publication.initial").PublishImmutable(path, contents, hash)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(store.root, ".partitur", "runs", "run-1", string(path))
+	if err := os.Chmod(target, 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	var receipt DurabilityReceipt
+	err = store.Mutate("run-1", "", func(transaction *Txn) error {
+		var err error
+		receipt, err = transaction.At("test.publication.reused").PublishImmutable(path, contents, hash)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("republish read-only target: %v", err)
+	}
+	if receipt.Address != "test.publication.reused" || receipt.Mutation.Path != ".partitur/runs/run-1/scores/revision-1.yaml" {
+		t.Fatalf("idempotent publication receipt = %+v", receipt)
+	}
+}
+
+func TestIdempotentPublicationRequiresSyncsBeforeReceipt(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		fail func(*recordingFS)
+	}{
+		{
+			name: "file sync",
+			fail: func(recorder *recordingFS) { recorder.failSyncFile = true },
+		},
+		{
+			name: "directory sync",
+			fail: func(recorder *recordingFS) { recorder.failSyncDirAt = 1 },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			contents := []byte("snapshot")
+			path := Path("scores/revision-1.yaml")
+			hash := Hash(digest(contents))
+			if err := store.Mutate("run-1", "", func(transaction *Txn) error {
+				_, err := transaction.At("test.publication.initial").PublishImmutable(path, contents, hash)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			recorder := &recordingFS{delegate: realFS{}}
+			test.fail(recorder)
+			store.fs = recorder
+			var receipt DurabilityReceipt
+			err := store.Mutate("run-1", "", func(transaction *Txn) error {
+				var err error
+				receipt, err = transaction.At("test.publication.reused").PublishImmutable(path, contents, hash)
+				return err
+			})
+			if err == nil || receipt.Address != "" {
+				t.Fatalf("error=%v receipt=%+v, want sync failure without receipt", err, receipt)
+			}
+		})
+	}
+}
+
 func TestHashMismatchPublishesNothing(t *testing.T) {
 	store := newTestStore(t)
 	err := store.Mutate("run-1", "", func(transaction *Txn) error {

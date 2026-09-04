@@ -1578,6 +1578,56 @@ func TestLiveReviewSubjectInputRendersReservedBriefContract(t *testing.T) {
 	}
 }
 
+func TestLiveReviewRetryReusesReadOnlySubjectInput(t *testing.T) {
+	document := sliceScore()
+	movement := document["movements"].([]any)[0].(map[string]any)
+	movement["outputs"] = append(movement["outputs"].([]any), map[string]any{
+		"id": "findings", "kind": "findings",
+	})
+	movement["acceptance"].(map[string]any)["review"] = []any{map[string]any{
+		"id": "review", "findings": "findings", "rubric": []any{"coverage"},
+	}}
+	fixture := newResolvedRequestFixtureFor(t, document, "inspect")
+
+	_, state := fixture.executeWaiting()
+	if len(state.PendingDecisions) != 1 {
+		t.Fatalf("first attempt pending decisions = %#v, want one", state.PendingDecisions)
+	}
+	var decisionID string
+	for decisionID = range state.PendingDecisions {
+	}
+	inputPath := filepath.Join(
+		fixture.preparation.RepositoryRoot, ".partitur", "runs", string(fixture.started.RunID),
+		"inputs", "inspect", "revision-1", "subject-tree.json",
+	)
+	info, err := os.Stat(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o400 {
+		t.Fatalf("subject-tree mode = %#o, want 0400", got)
+	}
+	if err := fixture.store.ResolveQuestion(fixture.started.RunID, decisionID, "continue"); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.executeWaiting()
+	if len(fixture.client.requests) != 2 {
+		t.Fatalf("review execute request count = %d, want 2", len(fixture.client.requests))
+	}
+	for index, request := range fixture.client.requests {
+		var subjectInput *protocol.ArtifactRef
+		for inputIndex := range request.Inputs {
+			if request.Inputs[inputIndex].ArtifactID == "partitur.subject-tree" {
+				subjectInput = &request.Inputs[inputIndex]
+			}
+		}
+		if subjectInput == nil || subjectInput.Path != inputPath {
+			t.Fatalf("review request %d inputs = %#v, want reused reserved subject tree %q", index+1, request.Inputs, inputPath)
+		}
+	}
+}
+
 func TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement(t *testing.T) {
 	scoreDocument := sliceScore()
 	movement := scoreDocument["movements"].([]any)[0].(map[string]any)

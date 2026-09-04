@@ -71,7 +71,7 @@ func (realFS) Append(path string, contents []byte, mode fs.FileMode) error {
 }
 
 func (realFS) SyncFile(path string) error {
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
