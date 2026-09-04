@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1578,6 +1579,223 @@ func TestLiveReviewSubjectInputRendersReservedBriefContract(t *testing.T) {
 	}
 }
 
+func TestLiveProposalCapableMovementReceivesScoreBase(t *testing.T) {
+	document := sliceScore()
+	document["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	fixture := newResolvedRequestFixtureFor(t, document, "inspect")
+
+	request, _ := fixture.executeWaiting()
+	if len(request.Inputs) != 1 {
+		t.Fatalf("proposal-capable inputs = %#v, want exactly one score base", request.Inputs)
+	}
+	scoreBase := request.Inputs[0]
+	wantPath := filepath.Join(
+		fixture.preparation.RepositoryRoot, ".partitur", "runs", string(fixture.started.RunID),
+		"inputs", "inspect", "revision-1", "score-base.json",
+	)
+	t.Run("artifact_id", func(t *testing.T) {
+		if scoreBase.ArtifactID != "partitur.score-base" {
+			t.Fatalf("score-base artifact id = %q", scoreBase.ArtifactID)
+		}
+	})
+	t.Run("kind", func(t *testing.T) {
+		if scoreBase.Kind != "partitur/score-base+json;v=1" {
+			t.Fatalf("score-base kind = %q", scoreBase.Kind)
+		}
+	})
+	t.Run("instance_id", func(t *testing.T) {
+		if scoreBase.InstanceID != "partitur.score-base@inspect@1" {
+			t.Fatalf("score-base instance id = %q", scoreBase.InstanceID)
+		}
+	})
+	t.Run("path", func(t *testing.T) {
+		if scoreBase.Path != wantPath {
+			t.Fatalf("score-base path = %q, want %q", scoreBase.Path, wantPath)
+		}
+	})
+	contents, err := os.ReadFile(scoreBase.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(contents)
+	t.Run("raw_hash", func(t *testing.T) {
+		if want := fmt.Sprintf("sha256:%x", digest); scoreBase.Hash != want {
+			t.Fatalf("score-base raw hash = %q, want %q", scoreBase.Hash, want)
+		}
+	})
+	info, err := os.Stat(scoreBase.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("read_only", func(t *testing.T) {
+		if got := info.Mode().Perm(); got != 0o400 {
+			t.Fatalf("score-base mode = %#o, want 0400", got)
+		}
+	})
+	var envelope struct {
+		Schema       string          `json:"schema"`
+		BaseRevision uint64          `json:"base_revision"`
+		BaseHash     runstate.Hash   `json:"base_hash"`
+		Score        json.RawMessage `json:"score"`
+	}
+	if err := json.Unmarshal(contents, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("schema", func(t *testing.T) {
+		if envelope.Schema != "partitur/score-base+json;v=1" {
+			t.Fatalf("score-base schema = %q", envelope.Schema)
+		}
+	})
+	t.Run("base_revision", func(t *testing.T) {
+		if envelope.BaseRevision != fixture.input.Projection.State.ScoreHead.Revision {
+			t.Fatalf("score-base revision = %d, checked proposal revision = %d", envelope.BaseRevision, fixture.input.Projection.State.ScoreHead.Revision)
+		}
+	})
+	t.Run("base_hash", func(t *testing.T) {
+		if envelope.BaseHash != fixture.input.Projection.State.ScoreHead.SemanticHash {
+			t.Fatalf("score-base hash = %q, checked proposal hash = %q", envelope.BaseHash, fixture.input.Projection.State.ScoreHead.SemanticHash)
+		}
+	})
+	wantScore, err := fixture.input.Score.ProjectionBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotScore, err := canonical.ParseJSON(envelope.Score)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantScoreValue, err := canonical.ParseJSON(wantScore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("score", func(t *testing.T) {
+		if !reflect.DeepEqual(gotScore, wantScoreValue) {
+			t.Fatalf("score-base score = %#v, want compiled score projection %#v", gotScore, wantScoreValue)
+		}
+	})
+}
+
+func TestLiveNonProposalMovementDoesNotReceiveScoreBase(t *testing.T) {
+	fixture := newResolvedRequestFixture(t)
+	request, _ := fixture.executeWaiting()
+	for _, input := range request.Inputs {
+		if input.ArtifactID == "partitur.score-base" {
+			t.Fatalf("may_propose=false request received score base: %#v", input)
+		}
+	}
+}
+
+func TestLiveProposalRetriesAndFallbacksReuseScoreBaseAtOneRevision(t *testing.T) {
+	document := sliceScore()
+	document["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	castDocument := sliceCast()
+	castDocument["performers"].(map[string]any)["backup"] = map[string]any{
+		"adapter": "codex", "model": "gpt-5.6-sol",
+	}
+	castDocument["bindings"].(map[string]any)["reader"] = map[string]any{
+		"performer": "worker", "fallbacks": []any{"backup"},
+	}
+	fixture := newResolvedRequestFixtureForCast(t, document, castDocument, "inspect")
+
+	first, state := fixture.executeWaitingAs("worker", "initial")
+	resolveOnlyPendingQuestion(t, fixture.store, fixture.started.RunID, state)
+	retry, state := fixture.executeWaitingAs("worker", "quality_retry")
+	resolveOnlyPendingQuestion(t, fixture.store, fixture.started.RunID, state)
+	fallback, _ := fixture.executeWaitingAs("backup", "fallback")
+
+	want := scoreBaseInputFromRequest(t, first)
+	for index, request := range []protocol.ExecuteRequest{retry, fallback} {
+		if got := scoreBaseInputFromRequest(t, request); !reflect.DeepEqual(got, want) {
+			t.Fatalf("attempt %d score base = %#v, want same-revision reuse %#v", index+2, got, want)
+		}
+	}
+}
+
+func TestScoreBasePublicationChangesPathAndInstanceAtNewRevision(t *testing.T) {
+	document := sliceScore()
+	document["movements"].([]any)[0].(map[string]any)["may_propose"] = true
+	preparation := prepareRunnableFixture(t, document, sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	first, err := publishScoreBaseInput(
+		authority, preparation.RepositoryRoot, started.RunID,
+		preparation.Score, preparation.Score.Movements()[0],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	document["revision"] = float64(2)
+	document["goal"] = "Produce the revised report."
+	secondScore, diagnostics := score.CompileValue(document)
+	if len(diagnostics) != 0 {
+		t.Fatalf("compile revision 2: %v", diagnostics)
+	}
+	second, err := publishScoreBaseInput(
+		authority, preparation.RepositoryRoot, started.RunID,
+		secondScore, secondScore.Movements()[0],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Path == second.Path {
+		t.Fatalf("score-base revision paths both = %q", first.Path)
+	}
+	if first.InstanceID == second.InstanceID {
+		t.Fatalf("score-base revision instance ids both = %q", first.InstanceID)
+	}
+	if first.Hash == second.Hash {
+		t.Fatalf("score-base revision raw hashes both = %q", first.Hash)
+	}
+	if want := filepath.Join("revision-2", "score-base.json"); !strings.HasSuffix(second.Path, want) {
+		t.Fatalf("revision-2 score-base path = %q, want suffix %q", second.Path, want)
+	}
+	if second.InstanceID != "partitur.score-base@inspect@2" {
+		t.Fatalf("revision-2 score-base instance id = %q", second.InstanceID)
+	}
+}
+
+func scoreBaseInputFromRequest(t *testing.T, request protocol.ExecuteRequest) protocol.ArtifactRef {
+	t.Helper()
+	var matches []protocol.ArtifactRef
+	for _, input := range request.Inputs {
+		if input.ArtifactID == "partitur.score-base" {
+			matches = append(matches, input)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("score-base inputs = %#v, want exactly one", matches)
+	}
+	return matches[0]
+}
+
+func resolveOnlyPendingQuestion(t *testing.T, store *runstore.Store, runID runstate.RunID, state runstate.State) {
+	t.Helper()
+	var decisions []string
+	for id, decision := range state.PendingDecisions {
+		if decision.Type == "question" {
+			decisions = append(decisions, id)
+		}
+	}
+	if len(decisions) != 1 {
+		t.Fatalf("pending questions = %v, all pending = %#v", decisions, state.PendingDecisions)
+	}
+	if err := store.ResolveQuestion(runID, decisions[0], "continue"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLiveReviewRetryReusesReadOnlySubjectInput(t *testing.T) {
 	document := sliceScore()
 	movement := document["movements"].([]any)[0].(map[string]any)
@@ -2500,8 +2718,12 @@ func newResolvedRequestFixture(t *testing.T) *resolvedRequestFixture {
 }
 
 func newResolvedRequestFixtureFor(t *testing.T, document map[string]any, movementID runstate.MovementID) *resolvedRequestFixture {
+	return newResolvedRequestFixtureForCast(t, document, sliceCast(), movementID)
+}
+
+func newResolvedRequestFixtureForCast(t *testing.T, document, castDocument map[string]any, movementID runstate.MovementID) *resolvedRequestFixture {
 	t.Helper()
-	preparation := prepareRunnableFixture(t, document, sliceCast())
+	preparation := prepareRunnableFixture(t, document, castDocument)
 	started, err := workspace.Start(preparation, faultpoint.Nop{})
 	if err != nil {
 		t.Fatal(err)
@@ -2598,6 +2820,10 @@ func (fixture *resolvedRequestFixture) resolveQuestionFor(movementID runstate.Mo
 }
 
 func (fixture *resolvedRequestFixture) executeWaiting() (protocol.ExecuteRequest, runstate.State) {
+	return fixture.executeWaitingAs("worker", "decision_resume")
+}
+
+func (fixture *resolvedRequestFixture) executeWaitingAs(performerID, selectionReason string) (protocol.ExecuteRequest, runstate.State) {
 	fixture.t.Helper()
 	attempt, err := fixture.started.Run.CreateAttempt(string(fixture.movementID))
 	if err != nil {
@@ -2608,7 +2834,7 @@ func (fixture *resolvedRequestFixture) executeWaiting() (protocol.ExecuteRequest
 	result := ExecuteAttempt(context.Background(), AttemptExecution{
 		RepositoryRoot: fixture.preparation.RepositoryRoot, Score: fixture.input.Score, Cast: fixture.input.Cast,
 		RunID: fixture.started.RunID, Attempt: attempt, BaseTree: fixture.input.BaseTree, CandidateTree: fixture.input.BaseTree,
-		Authority: fixture.authority, PerformerID: "worker", SelectionReason: "decision_resume",
+		Authority: fixture.authority, PerformerID: performerID, SelectionReason: selectionReason,
 		RemainingMS: fixture.input.Projection.Scheduler.RemainingTime,
 	}, executionDependenciesFrom(dependencies))
 	if result.Outcome != OutcomeWaitingHuman || result.Err != nil {

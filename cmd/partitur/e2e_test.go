@@ -35,6 +35,7 @@ const runVendorContestedEnvironment = "PARTITUR_RUN_VENDOR_CONTESTED"
 const runVendorFindingIDEnvironment = "PARTITUR_RUN_VENDOR_FINDING_ID"
 const runVendorProposalBaseHashEnvironment = "PARTITUR_RUN_VENDOR_PROPOSAL_BASE_HASH"
 const runVendorDraftResultEnvironment = "PARTITUR_RUN_VENDOR_DRAFT_RESULT"
+const runVendorScoreBaseFlowEnvironment = "PARTITUR_RUN_VENDOR_SCORE_BASE_FLOW"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(initTestCommandEnvironment) == "1" {
@@ -1888,6 +1889,38 @@ func runVendorFixture() {
 		artifacts = append(artifacts, map[string]any{"artifact_id": "findings", "path": "findings.json"})
 	}
 	proposal := any(nil)
+	if os.Getenv(runVendorScoreBaseFlowEnvironment) == "1" {
+		artifacts = []any{}
+		scoreBase, err := vendorScoreBaseFromPrompt(prompt)
+		if err != nil {
+			os.Exit(99)
+		}
+		if _, amended := scoreBase.Score["verification"]; !amended {
+			if !strings.Contains(string(prompt), `kind="answer" answer="continue"`) {
+				questions = []any{map[string]any{"id": "fixture-question", "question": "Which direction should the draft take?"}}
+			} else {
+				proposal = map[string]any{
+					"id": "fixture-amendment",
+					"amendment": map[string]any{
+						"base_revision": float64(scoreBase.BaseRevision),
+						"base_hash":     scoreBase.BaseHash,
+						"operations": []any{map[string]any{
+							"op": "add", "path": "/verification", "value": map[string]any{
+								"expectation": map[string]any{
+									"intent":     "pass-existing-tests",
+									"apply_gate": map[string]any{"waived": true, "reason": "draft interview complete"},
+								},
+							},
+						}},
+						"reason": "record the resolved draft contract",
+					},
+					"requires_decision": true,
+				}
+			}
+		} else {
+			questions = []any{map[string]any{"id": "fixture-finalization-question", "question": "Is the amended draft ready to finalize?"}}
+		}
+	}
 	if baseHash := os.Getenv(runVendorProposalBaseHashEnvironment); baseHash != "" && len(questions) == 0 {
 		proposal = map[string]any{
 			"id": "fixture-amendment",
@@ -1927,6 +1960,45 @@ func runVendorFixture() {
 	fmt.Println(
 		`{"type":"item.started","item":{"type":"command_execution","name":"fixture"}}`,
 	)
+}
+
+type vendorScoreBase struct {
+	Schema       string                     `json:"schema"`
+	BaseRevision uint64                     `json:"base_revision"`
+	BaseHash     string                     `json:"base_hash"`
+	Score        map[string]json.RawMessage `json:"score"`
+}
+
+func vendorScoreBaseFromPrompt(prompt []byte) (vendorScoreBase, error) {
+	const prefix = `- SCORE BASE: artifact_id="partitur.score-base" kind="partitur/score-base+json;v=1" path=`
+	lineStart := strings.Index(string(prompt), prefix)
+	if lineStart < 0 {
+		return vendorScoreBase{}, errors.New("score-base prompt entry is absent")
+	}
+	pathAndHash := string(prompt)[lineStart+len(prefix):]
+	if lineEnd := strings.IndexByte(pathAndHash, '\n'); lineEnd >= 0 {
+		pathAndHash = pathAndHash[:lineEnd]
+	}
+	hashStart := strings.LastIndex(pathAndHash, ` hash=`)
+	if hashStart < 0 {
+		return vendorScoreBase{}, errors.New("score-base prompt hash is absent")
+	}
+	path, err := strconv.Unquote(pathAndHash[:hashStart])
+	if err != nil {
+		return vendorScoreBase{}, err
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return vendorScoreBase{}, err
+	}
+	var value vendorScoreBase
+	if err := json.Unmarshal(contents, &value); err != nil {
+		return vendorScoreBase{}, err
+	}
+	if value.Schema != "partitur/score-base+json;v=1" || value.BaseRevision == 0 || value.BaseHash == "" || value.Score == nil {
+		return vendorScoreBase{}, errors.New("score-base content is incomplete")
+	}
+	return value, nil
 }
 
 func runScore() map[string]any {

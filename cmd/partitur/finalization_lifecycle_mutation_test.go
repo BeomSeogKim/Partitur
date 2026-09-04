@@ -102,6 +102,20 @@ func TestMutationFinalizationLifecycle(t *testing.T) {
 			after:       "if false { // mutation",
 			packageName: "./cmd/partitur", testName: "TestDraftResultBoundaryKillCuts",
 		},
+		{
+			name:        "delivered score base revision cannot pass the stale check",
+			source:      "internal/driver/driver.go",
+			before:      `"base_revision": float64(compiled.Revision()),`,
+			after:       `"base_revision": float64(compiled.Revision() + 1),`,
+			packageName: "./cmd/partitur", testName: "TestDraftInterviewConvergesThroughDeliveredScoreBase",
+		},
+		{
+			name:        "delivered score base hash cannot pass the stale check",
+			source:      "internal/driver/driver.go",
+			before:      `"base_hash":     baseHash,`,
+			after:       `"base_hash":     strings.Replace(baseHash, "sha256:", "sha256:mutated", 1),`,
+			packageName: "./cmd/partitur", testName: "TestDraftInterviewConvergesThroughDeliveredScoreBase",
+		},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			assertFinalizationMutationKilled(

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,214 @@ func TestDraftFinalizationLifecycle(t *testing.T) {
 			t.Fatalf("finalization appended forbidden event %s", event.Type)
 		}
 	}
+}
+
+func TestDraftInterviewConvergesThroughDeliveredScoreBase(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	writeValidateInputs(t, repository, draftSchedulingScore(), draftSchedulingCast())
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", "partitur.yaml", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+	environment := replaceEnvironment(draftSchedulingEnvironment(bin, vendor), map[string]string{
+		runVendorScoreBaseFlowEnvironment: "1",
+	})
+
+	code, stdout, stderr := runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "run")
+	runID := runstate.RunID(strings.TrimSpace(stdout))
+	if code != 0 || runID == "" || stderr != "" {
+		t.Fatalf("draft question run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	questionID := pendingDecisionOfType(t, repository, runID, "question")
+	code, _, stderr = runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "answer", questionID, "--answer", "continue")
+	if code != 0 || stderr != expectedDecisionResumeHint(string(runID)) {
+		t.Fatalf("draft answer exit=%d stderr=%q", code, stderr)
+	}
+
+	code, stdout, stderr = runScoreBaseProposalResume(t, partitur, repository, environment, runID)
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("draft proposal resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	amendmentID := pendingDecisionOfType(t, repository, runID, "amendment")
+	code, stdout, stderr = runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "approve", amendmentID, "--approve")
+	if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint(string(runID)) {
+		t.Fatalf("draft amendment approval exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("amended draft resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	finalQuestionID := pendingDecisionOfType(t, repository, runID, "question")
+	code, stdout, stderr = runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "answer", finalQuestionID, "--answer", "finalize")
+	if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint(string(runID)) {
+		t.Fatalf("finalization answer exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "resume", string(runID))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("finalization route resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	finalizationID := pendingDecisionOfType(t, repository, runID, "finalization")
+	code, stdout, stderr = runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "approve", finalizationID, "--approve")
+	if code != 0 || stdout != "" || stderr != expectedDecisionResumeHint(string(runID)) {
+		t.Fatalf("finalization approval exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Score.Status() != "finalized" || input.Projection.State.ScoreHead.Revision != 3 {
+		t.Fatalf("converged score status=%q head=%+v, want finalized revision 3", input.Score.Status(), input.Projection.State.ScoreHead)
+	}
+	bases := make(map[uint64]vendorScoreBase)
+	for revision := uint64(1); revision <= 2; revision++ {
+		path := filepath.Join(repository, ".partitur", "runs", string(runID), "inputs", "interview", fmt.Sprintf("revision-%d", revision), "score-base.json")
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o400 {
+			t.Fatalf("revision-%d score base mode=%v err=%v, want 0400", revision, info, err)
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var base vendorScoreBase
+		if err := json.Unmarshal(contents, &base); err != nil {
+			t.Fatal(err)
+		}
+		if base.BaseRevision != revision {
+			t.Fatalf("revision-%d score base carries revision %d", revision, base.BaseRevision)
+		}
+		bases[revision] = base
+	}
+	if bases[1].BaseHash == bases[2].BaseHash {
+		t.Fatalf("revision score bases share semantic hash %q", bases[1].BaseHash)
+	}
+	routes := make(map[string]map[string]any)
+	for _, event := range readDraftSchedulingJournal(t, repository, runID) {
+		if event.Type != runstate.EventAmendmentRoutedHuman {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		routes[payload["decision_type"].(string)] = payload
+	}
+	for decisionType, revision := range map[string]uint64{"amendment": 1, "finalization": 2} {
+		route := routes[decisionType]
+		if route == nil || route["base_revision"] != float64(revision) || route["base_hash"] != bases[revision].BaseHash {
+			t.Fatalf("%s route = %#v, want score-base revision=%d hash=%q", decisionType, route, revision, bases[revision].BaseHash)
+		}
+	}
+}
+
+// runScoreBaseProposalResume turns a delivered-identity mismatch into the
+// durable stale-rejection assertion it represents. Without the test-side
+// cancellation, a rejected blocking proposal has no route or request that can
+// make the live planner quiescent, so a generic process timeout obscures the
+// stale-check evidence this witness is meant to hold.
+func runScoreBaseProposalResume(
+	t *testing.T,
+	partitur, repository string,
+	environment []string,
+	runID runstate.RunID,
+) (int, string, string) {
+	t.Helper()
+	type commandResult struct {
+		code           int
+		stdout, stderr string
+	}
+	done := make(chan commandResult, 1)
+	go func() {
+		code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "resume", string(runID))
+		done <- commandResult{code: code, stdout: stdout, stderr: stderr}
+	}()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleRejection := func() (runstate.Event, bool) {
+		journal, err := store.ReadJournal(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range journal.Events {
+			if event.Type == runstate.EventAmendmentRejected && strings.Contains(string(event.Payload), `"reason":"stale"`) {
+				return event, true
+			}
+		}
+		return runstate.Event{}, false
+	}
+	failStale := func(event runstate.Event, result commandResult) {
+		t.Helper()
+		t.Fatalf("score-base proposal was rejected as stale before routing: event=%s payload=%s command_exit=%d stdout=%q stderr=%q", event.EventID, event.Payload, result.code, result.stdout, result.stderr)
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(20 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case result := <-done:
+			if event, stale := staleRejection(); stale {
+				failStale(event, result)
+			}
+			return result.code, result.stdout, result.stderr
+		case <-ticker.C:
+			event, stale := staleRejection()
+			if !stale {
+				continue
+			}
+			if err := store.RequestCancellation(runID); err != nil {
+				t.Fatalf("score-base proposal was rejected as stale before routing, then cancellation failed: event=%s payload=%s err=%v", event.EventID, event.Payload, err)
+			}
+			select {
+			case result := <-done:
+				failStale(event, result)
+			case <-time.After(10 * time.Second):
+				t.Fatalf("score-base proposal was rejected as stale before routing and cancellation did not stop resume: event=%s payload=%s", event.EventID, event.Payload)
+			}
+		case <-timeout.C:
+			t.Fatal("score-base proposal resume did not return within 20s and recorded no stale rejection")
+		}
+	}
+}
+
+func pendingDecisionOfType(t *testing.T, repository string, runID runstate.RunID, decisionType string) string {
+	t.Helper()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.LoadRunInput(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for id, decision := range input.Projection.State.PendingDecisions {
+		if decision.Type == decisionType {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) != 1 {
+		t.Fatalf("pending %s decisions = %v, all pending = %#v", decisionType, ids, input.Projection.State.PendingDecisions)
+	}
+	return ids[0]
 }
 
 func TestCoreFinalizationPublishedToRoutedKillCuts(t *testing.T) {

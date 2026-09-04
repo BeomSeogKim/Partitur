@@ -400,7 +400,7 @@ func TestMutationExecutionDependencyHashBindsResolvedQuestions(t *testing.T) {
 func TestMutationExecutionDependencyHashBindsScoreBaseForMayPropose(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestExecutionDependencyHashBindsScoreBaseForMayPropose(t)
-	assertDriverMutationKilled(t, "TestExecutionDependencyHashBindsScoreBaseForMayPropose", goEnvironment, "driver.go", `if movement.MayPropose {
+	assertDriverMutationKilledUnique(t, "TestExecutionDependencyHashBindsScoreBaseForMayPropose", goEnvironment, "driver.go", `if movement.MayPropose {
 		scoreBaseHash, err := compiled.Hash()
 		if err != nil {
 			return nil, err
@@ -409,6 +409,96 @@ func TestMutationExecutionDependencyHashBindsScoreBaseForMayPropose(t *testing.T
 	}`, `if movement.MayPropose {
 		// mutation: semantic score-base hash omitted
 	}`)
+}
+
+func TestMutationScoreBaseDeliveryContract(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	for _, mutation := range []struct {
+		name, testName, before, after string
+	}{
+		{
+			name: "proposal-capable delivery omitted", testName: "TestLiveProposalCapableMovementReceivesScoreBase",
+			before: `if movement.MayPropose {
+		input, err := publishScoreBaseInput(`,
+			after: `if false { // mutation: proposal-capable score base omitted
+		input, err := publishScoreBaseInput(`,
+		},
+		{
+			name: "non-proposal movement receives score base", testName: "TestLiveNonProposalMovementDoesNotReceiveScoreBase",
+			before: `if movement.MayPropose {
+		input, err := publishScoreBaseInput(`,
+			after: `if !movement.MayPropose { // mutation: delivery eligibility inverted
+		input, err := publishScoreBaseInput(`,
+		},
+		{
+			name: "artifact id", testName: "TestLiveProposalCapableMovementReceivesScoreBase/artifact_id",
+			before: `ArtifactID: "partitur.score-base",`, after: `ArtifactID: "partitur.score-base-mutated",`,
+		},
+		{
+			name: "kind", testName: "TestLiveProposalCapableMovementReceivesScoreBase/kind",
+			before: `Kind:       "partitur/score-base+json;v=1",`, after: `Kind:       "partitur/score-base+json;v=mutated",`,
+		},
+		{
+			name: "instance id", testName: "TestLiveProposalCapableMovementReceivesScoreBase/instance_id",
+			before: `InstanceID: fmt.Sprintf("partitur.score-base@%s@%d", movement.ID, revision),`, after: `InstanceID: fmt.Sprintf("partitur.score-base@mutated@%d", revision),`,
+		},
+		{
+			name: "path", testName: "TestLiveProposalCapableMovementReceivesScoreBase/path",
+			before: `"inputs", movement.ID, fmt.Sprintf("revision-%d", revision), "score-base.json",`, after: `"inputs", movement.ID, fmt.Sprintf("revision-%d", revision), "mutated-score-base.json",`,
+		},
+		{
+			name: "raw hash", testName: "TestLiveProposalCapableMovementReceivesScoreBase/raw_hash",
+			before: `InstanceID: fmt.Sprintf("partitur.score-base@%s@%d", movement.ID, revision),
+		Path:       path,
+		Hash:       string(hash),`, after: `InstanceID: fmt.Sprintf("partitur.score-base@%s@%d", movement.ID, revision),
+		Path:       path,
+		Hash:       string(hash) + "-mutated",`,
+		},
+		{
+			name: "read only", testName: "TestLiveProposalCapableMovementReceivesScoreBase/read_only",
+			before: `path := filepath.Join(
+		repositoryRoot, ".partitur", "runs", string(runID), filepath.FromSlash(string(relative)),
+	)
+	if err := os.Chmod(path, 0o400); err != nil {`,
+			after: `path := filepath.Join(
+		repositoryRoot, ".partitur", "runs", string(runID), filepath.FromSlash(string(relative)),
+	)
+	if err := os.Chmod(path, 0o600); err != nil { // mutation: score base remains writable`,
+		},
+		{
+			name: "schema", testName: "TestLiveProposalCapableMovementReceivesScoreBase/schema",
+			before: `"schema":        "partitur/score-base+json;v=1",`, after: `"schema":        "partitur/score-base+json;v=mutated",`,
+		},
+		{
+			name: "base revision", testName: "TestLiveProposalCapableMovementReceivesScoreBase/base_revision",
+			before: `"base_revision": float64(compiled.Revision()),`, after: `"base_revision": float64(compiled.Revision() + 1),`,
+		},
+		{
+			name: "base hash", testName: "TestLiveProposalCapableMovementReceivesScoreBase/base_hash",
+			before: `"base_hash":     baseHash,`, after: `"base_hash":     strings.Replace(baseHash, "sha256:", "sha256:mutated", 1),`,
+		},
+		{
+			name: "canonical score", testName: "TestLiveProposalCapableMovementReceivesScoreBase/score",
+			before: `"score":         scoreValue,`, after: `"score":         map[string]any{"mutated": scoreValue},`,
+		},
+		{
+			name: "revision-keyed publication", testName: "TestScoreBasePublicationChangesPathAndInstanceAtNewRevision",
+			before: `revision := compiled.Revision()`, after: `revision := uint64(1) // mutation: every score base reuses revision 1`,
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			assertDriverMutationKilledUnique(t, mutation.testName, goEnvironment, "driver.go", mutation.before, mutation.after)
+		})
+	}
+}
+
+func TestMutationLiveScoreBaseInputParticipatesInA5Inputs(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	TestLiveScoreBaseInputIsBoundInMovementInputs(t)
+	assertDriverMutationKilledUnique(t, "TestLiveScoreBaseInputIsBoundInMovementInputs", goEnvironment, "driver.go",
+		`baseCompositionHash,
+			request.Inputs,`, `baseCompositionHash,
+			nil, // mutation: delivered inputs omitted from recorded A.5 identity`)
 }
 
 func TestMutationAdapterProbedRecordsReachedA5Closure(t *testing.T) {
@@ -476,6 +566,23 @@ func mutationGoEnvironment(t *testing.T) mutationtest.GoEnvironment {
 func assertDriverMutationKilled(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName, before, after string) {
 	t.Helper()
 	assertDriverMutationKilledAt(t, testName, goEnvironment, filepath.Join("internal", "driver", sourceName), before, after)
+}
+
+func assertDriverMutationKilledUnique(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName, before, after string) {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve driver test source directory")
+	}
+	sourcePath := filepath.Join(filepath.Dir(currentFile), sourceName)
+	contents, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(contents), before); count != 1 {
+		t.Fatalf("mutation anchor %q occurs %d times in %s, want exactly one", before, count, sourcePath)
+	}
+	assertDriverMutationKilled(t, testName, goEnvironment, sourceName, before, after)
 }
 
 func assertDriverMutationKilledAt(t *testing.T, testName string, goEnvironment mutationtest.GoEnvironment, sourceName, before, after string) {
