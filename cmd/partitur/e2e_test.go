@@ -36,6 +36,7 @@ const runVendorFindingIDEnvironment = "PARTITUR_RUN_VENDOR_FINDING_ID"
 const runVendorProposalBaseHashEnvironment = "PARTITUR_RUN_VENDOR_PROPOSAL_BASE_HASH"
 const runVendorDraftResultEnvironment = "PARTITUR_RUN_VENDOR_DRAFT_RESULT"
 const runVendorScoreBaseFlowEnvironment = "PARTITUR_RUN_VENDOR_SCORE_BASE_FLOW"
+const runVendorRetryBeforeProposalEnvironment = "PARTITUR_RUN_VENDOR_RETRY_BEFORE_PROPOSAL"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(initTestCommandEnvironment) == "1" {
@@ -1811,6 +1812,16 @@ func runVendorFixture() {
 	}
 	if outputDir == "" {
 		os.Exit(92)
+	}
+	if marker := os.Getenv(runVendorRetryBeforeProposalEnvironment); marker != "" {
+		if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(marker, []byte("first attempt failed\n"), 0o600); err != nil {
+				os.Exit(94)
+			}
+			return
+		} else if err != nil {
+			os.Exit(94)
+		}
 	}
 	outcome := os.Getenv(runVendorOutcomeEnvironment)
 	if outcome == "task_failed" {

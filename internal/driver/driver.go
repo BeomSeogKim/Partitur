@@ -544,14 +544,7 @@ func ExecuteAttempt(
 	attempt := execution.Attempt
 	authority := execution.Authority
 	remainingMS := execution.RemainingMS
-	dependencies := dependencies{
-		probe:               executionDependencies.Probe,
-		client:              executionDependencies.Client,
-		resolveTrampoline:   executionDependencies.ResolveTrampoline,
-		now:                 executionDependencies.Now,
-		newID:               executionDependencies.NewID,
-		afterMovementFailed: executionDependencies.afterMovementFailed,
-	}
+	dependencies := dependenciesFromExecution(executionDependencies)
 	result = Result{RunID: execution.RunID}
 	storeFactory := executionDependencies.StoreFactory
 	if storeFactory == nil {

@@ -140,6 +140,54 @@ func TestMutationLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	assertDriverMutationKilled(t, "TestLiveFanInCreatesTargetAtPinnedBaseCommit", goEnvironment, "driver.go", "attempt, err = run.CreateAttemptAtBase(movement.ID, baseCommit)", "attempt, err = run.CreateAttempt(movement.ID)")
 }
 
+func TestMutationExecuteAttemptCannotNarrowDependenciesIndependently(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesCompleteDependencyConversion",
+		goEnvironment,
+		"driver.go",
+		`remainingMS := execution.RemainingMS
+	dependencies := dependenciesFromExecution(executionDependencies)
+	result = Result{RunID: execution.RunID}`,
+		`remainingMS := execution.RemainingMS
+	dependencies := dependencies{
+		probe:               executionDependencies.Probe,
+		client:              executionDependencies.Client,
+		resolveTrampoline:   executionDependencies.ResolveTrampoline,
+		now:                 executionDependencies.Now,
+		newID:               executionDependencies.NewID,
+		afterMovementFailed: executionDependencies.afterMovementFailed,
+	}
+	result = Result{RunID: execution.RunID}`,
+	)
+}
+
+func TestMutationExecutionDependencyNarrowingPreservesEveryDroppedField(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	for _, field := range []struct {
+		public, private string
+	}{
+		{public: "ReceiptObserver", private: "receiptObserver"},
+		{public: "StoreFactory", private: "storeFactory"},
+		{public: "ProposalDisposition", private: "proposalDisposition"},
+		{public: "AfterPrepareAcknowledged", private: "afterPrepareAcknowledged"},
+		{public: "AcquireDriver", private: "acquireDriver"},
+	} {
+		field := field
+		t.Run(field.public, func(t *testing.T) {
+			assertDriverMutationKilledUnique(
+				t,
+				"TestExecutionDependencyConversionsCoverPublicBundle/"+field.public,
+				goEnvironment,
+				"driver.go",
+				field.private+": execution."+field.public,
+				field.private+": nil",
+			)
+		})
+	}
+}
+
 func TestMutationAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestCompleteAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t)
