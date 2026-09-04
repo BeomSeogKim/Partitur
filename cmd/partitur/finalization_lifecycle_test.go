@@ -94,7 +94,7 @@ func TestDraftInterviewConvergesThroughDeliveredScoreBase(t *testing.T) {
 		t.Fatalf("draft answer exit=%d stderr=%q", code, stderr)
 	}
 
-	code, stdout, stderr = runCommandBinaryWithin(t, 20*time.Second, partitur, repository, environment, "resume", string(runID))
+	code, stdout, stderr = runScoreBaseProposalResume(t, partitur, repository, environment, runID)
 	if code != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("draft proposal resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -172,6 +172,78 @@ func TestDraftInterviewConvergesThroughDeliveredScoreBase(t *testing.T) {
 		route := routes[decisionType]
 		if route == nil || route["base_revision"] != float64(revision) || route["base_hash"] != bases[revision].BaseHash {
 			t.Fatalf("%s route = %#v, want score-base revision=%d hash=%q", decisionType, route, revision, bases[revision].BaseHash)
+		}
+	}
+}
+
+// runScoreBaseProposalResume turns a delivered-identity mismatch into the
+// durable stale-rejection assertion it represents. Without the test-side
+// cancellation, a rejected blocking proposal has no route or request that can
+// make the live planner quiescent, so a generic process timeout obscures the
+// stale-check evidence this witness is meant to hold.
+func runScoreBaseProposalResume(
+	t *testing.T,
+	partitur, repository string,
+	environment []string,
+	runID runstate.RunID,
+) (int, string, string) {
+	t.Helper()
+	type commandResult struct {
+		code           int
+		stdout, stderr string
+	}
+	done := make(chan commandResult, 1)
+	go func() {
+		code, stdout, stderr := runCommandBinary(t, partitur, repository, environment, "resume", string(runID))
+		done <- commandResult{code: code, stdout: stdout, stderr: stderr}
+	}()
+	store, err := runstore.New(repository, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleRejection := func() (runstate.Event, bool) {
+		journal, err := store.ReadJournal(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range journal.Events {
+			if event.Type == runstate.EventAmendmentRejected && strings.Contains(string(event.Payload), `"reason":"stale"`) {
+				return event, true
+			}
+		}
+		return runstate.Event{}, false
+	}
+	failStale := func(event runstate.Event, result commandResult) {
+		t.Helper()
+		t.Fatalf("score-base proposal was rejected as stale before routing: event=%s payload=%s command_exit=%d stdout=%q stderr=%q", event.EventID, event.Payload, result.code, result.stdout, result.stderr)
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(20 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case result := <-done:
+			if event, stale := staleRejection(); stale {
+				failStale(event, result)
+			}
+			return result.code, result.stdout, result.stderr
+		case <-ticker.C:
+			event, stale := staleRejection()
+			if !stale {
+				continue
+			}
+			if err := store.RequestCancellation(runID); err != nil {
+				t.Fatalf("score-base proposal was rejected as stale before routing, then cancellation failed: event=%s payload=%s err=%v", event.EventID, event.Payload, err)
+			}
+			select {
+			case result := <-done:
+				failStale(event, result)
+			case <-time.After(10 * time.Second):
+				t.Fatalf("score-base proposal was rejected as stale before routing and cancellation did not stop resume: event=%s payload=%s", event.EventID, event.Payload)
+			}
+		case <-timeout.C:
+			t.Fatal("score-base proposal resume did not return within 20s and recorded no stale rejection")
 		}
 	}
 }

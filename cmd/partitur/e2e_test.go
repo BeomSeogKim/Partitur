@@ -1895,33 +1895,30 @@ func runVendorFixture() {
 		if err != nil {
 			os.Exit(99)
 		}
-		switch scoreBase.BaseRevision {
-		case 1:
+		if _, amended := scoreBase.Score["verification"]; !amended {
 			if !strings.Contains(string(prompt), `kind="answer" answer="continue"`) {
 				questions = []any{map[string]any{"id": "fixture-question", "question": "Which direction should the draft take?"}}
-				break
-			}
-			proposal = map[string]any{
-				"id": "fixture-amendment",
-				"amendment": map[string]any{
-					"base_revision": float64(scoreBase.BaseRevision),
-					"base_hash":     scoreBase.BaseHash,
-					"operations": []any{map[string]any{
-						"op": "add", "path": "/verification", "value": map[string]any{
-							"expectation": map[string]any{
-								"intent":     "pass-existing-tests",
-								"apply_gate": map[string]any{"waived": true, "reason": "draft interview complete"},
+			} else {
+				proposal = map[string]any{
+					"id": "fixture-amendment",
+					"amendment": map[string]any{
+						"base_revision": float64(scoreBase.BaseRevision),
+						"base_hash":     scoreBase.BaseHash,
+						"operations": []any{map[string]any{
+							"op": "add", "path": "/verification", "value": map[string]any{
+								"expectation": map[string]any{
+									"intent":     "pass-existing-tests",
+									"apply_gate": map[string]any{"waived": true, "reason": "draft interview complete"},
+								},
 							},
-						},
-					}},
-					"reason": "record the resolved draft contract",
-				},
-				"requires_decision": true,
+						}},
+						"reason": "record the resolved draft contract",
+					},
+					"requires_decision": true,
+				}
 			}
-		case 2:
+		} else {
 			questions = []any{map[string]any{"id": "fixture-finalization-question", "question": "Is the amended draft ready to finalize?"}}
-		default:
-			os.Exit(99)
 		}
 	}
 	if baseHash := os.Getenv(runVendorProposalBaseHashEnvironment); baseHash != "" && len(questions) == 0 {
@@ -1966,9 +1963,10 @@ func runVendorFixture() {
 }
 
 type vendorScoreBase struct {
-	Schema       string `json:"schema"`
-	BaseRevision uint64 `json:"base_revision"`
-	BaseHash     string `json:"base_hash"`
+	Schema       string                     `json:"schema"`
+	BaseRevision uint64                     `json:"base_revision"`
+	BaseHash     string                     `json:"base_hash"`
+	Score        map[string]json.RawMessage `json:"score"`
 }
 
 func vendorScoreBaseFromPrompt(prompt []byte) (vendorScoreBase, error) {
@@ -1997,7 +1995,7 @@ func vendorScoreBaseFromPrompt(prompt []byte) (vendorScoreBase, error) {
 	if err := json.Unmarshal(contents, &value); err != nil {
 		return vendorScoreBase{}, err
 	}
-	if value.Schema != "partitur/score-base+json;v=1" || value.BaseRevision == 0 || value.BaseHash == "" {
+	if value.Schema != "partitur/score-base+json;v=1" || value.BaseRevision == 0 || value.BaseHash == "" || value.Score == nil {
 		return vendorScoreBase{}, errors.New("score-base content is incomplete")
 	}
 	return value, nil
