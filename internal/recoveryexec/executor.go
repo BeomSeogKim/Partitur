@@ -38,7 +38,11 @@ var (
 	// durably entered WAITING_HUMAN. The executor replans so C.1's waiting row
 	// supplies the quiescent outcome instead of treating a normal wait as an error.
 	ErrRunWaitingHumanDuringRecovery = errors.New("recovery attempt is waiting for a human")
-	ErrRecoveryReplan                = recoveryconsequence.ErrReplan
+	// ErrRunFailedDuringRecovery reports that a recovery-owned attempt durably
+	// failed. The executor replans so C.1's terminal row supplies the outcome
+	// instead of turning a durable failure into an operational interruption.
+	ErrRunFailedDuringRecovery = errors.New("recovery attempt failed durably")
+	ErrRecoveryReplan          = recoveryconsequence.ErrReplan
 )
 
 // LoadInput returns a fresh, fully observed recovery input. It is called again
@@ -293,7 +297,7 @@ func (executor *Executor) executeSelected(ctx context.Context, input recovery.In
 					result.Outcome = OutcomeQuiescent
 					return result, nil
 				}
-				if errors.Is(err, ErrRunCancelledDuringRecovery) || errors.Is(err, ErrRunWaitingHumanDuringRecovery) {
+				if errors.Is(err, ErrRunCancelledDuringRecovery) || errors.Is(err, ErrRunWaitingHumanDuringRecovery) || errors.Is(err, ErrRunFailedDuringRecovery) {
 					// The action ran before it reported the new durable run state.
 					result.Kinds = append(result.Kinds, action.Kind)
 					refreshed, halted, reloadErr := executor.reloadAfterEffect(ctx, input, decision)

@@ -642,6 +642,121 @@ func TestDispositionerAppendsRoutedHumanAfterDriverBlockedSource(t *testing.T) {
 	}
 }
 
+func TestStaleBlockingProposalContinuesTheLiveAttempt(t *testing.T) {
+	preparation, store, authority, started := dispositionFixture(t)
+	defer authority.Release()
+	// inspect is the final verifier. Its initial and successor attempts both
+	// require the durable candidate that production records before starting it.
+	before, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.ComposeCandidate(store, authority, before, before.Projection.Scheduler.RemainingTime, time.Now, workspace.NewID); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{RunID: started.RunID, ScoreRevision: 1, MovementID: "inspect", Type: eventType, Payload: []byte(`{}`)}, faultpoint.ReceiptAddress("test."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := preparation.Score.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &staleThenHonestProposalExecutor{first: waitingProposalExecutor{t: t, baseHash: hash, requiresDecision: true}}
+	result := driver.ExecuteAttempt(context.Background(), driver.AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast, RunID: started.RunID,
+		Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree, Authority: authority,
+		PerformerID: "worker", SelectionReason: "initial", RemainingMS: input.Projection.Scheduler.RemainingTime,
+	}, driver.ExecutionDependencies{Probe: faultpoint.Nop{}, Client: client, ResolveTrampoline: func() (string, error) { return "/fixture/trampoline", nil }, Now: time.Now, NewID: workspace.NewID, ProposalDisposition: testDispositioner()})
+	if result.Outcome != driver.OutcomeWaitingHuman || result.Err != nil {
+		t.Errorf("execute result = %+v, want quiescent WAITING_HUMAN", result)
+	}
+	input, err = store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := input.Projection.State
+	if state.Run != runstate.RunWaitingHuman || len(state.PendingDecisions) != 1 {
+		t.Errorf("reported outcome=%s but projected run=%s pending=%d, want WAITING_HUMAN with one decision", result.Outcome, state.Run, len(state.PendingDecisions))
+	}
+	for _, decision := range state.PendingDecisions {
+		if decision.Type != "amendment" || !decision.Blocking {
+			t.Errorf("pending decision=%+v, want blocking amendment", decision)
+		}
+	}
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected, blocked []runstate.Event
+	var rejection runstate.Event
+	for _, event := range journal.Events {
+		switch event.Type {
+		case runstate.EventPerformerSelected:
+			selected = append(selected, event)
+		case runstate.EventAttemptBlocked:
+			blocked = append(blocked, event)
+		case runstate.EventAmendmentRejected:
+			if event.AttemptID == attempt.AttemptID {
+				rejection = event
+			}
+		}
+	}
+	if len(client.requests) != 2 || len(selected) != 2 {
+		t.Fatalf("adapter calls=%d performer selections=%d, want two same-revision attempts with rejection causation", len(client.requests), len(selected))
+	}
+	var rejectionPayload struct {
+		Reason     string `json:"reason"`
+		DecisionID string `json:"decision_id"`
+	}
+	if err := json.Unmarshal(rejection.Payload, &rejectionPayload); err != nil {
+		t.Fatal(err)
+	}
+	var selectionPayload struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(selected[1].Payload, &selectionPayload); err != nil {
+		t.Fatal(err)
+	}
+	if selected[1].AttemptID == selected[0].AttemptID || selected[1].ScoreRevision != 1 || selectionPayload.Reason != "decision_resume" || selected[1].CausationID != rejection.EventID {
+		t.Errorf("successor=%+v reason=%q, want new attempt at revision 1 caused by rejection %s", selected[1], selectionPayload.Reason, rejection.EventID)
+	}
+	if len(blocked) != 2 {
+		t.Fatalf("blocked events=%d, want two", len(blocked))
+	}
+	var blockedPayload struct {
+		Pending []string `json:"pending_decision_ids"`
+	}
+	if err := json.Unmarshal(blocked[0].Payload, &blockedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if rejectionPayload.Reason != "stale" || rejectionPayload.DecisionID == "" || len(blockedPayload.Pending) != 1 || blockedPayload.Pending[0] != rejectionPayload.DecisionID || rejection.Seq >= blocked[0].Seq {
+		t.Errorf("rejection=%+v blocked=%+v, want stale closure before blocking on the same derived id", rejection, blocked[0])
+	}
+	resolutions := client.requests[1].ResolvedDecisions
+	if len(resolutions) != 1 || resolutions[0].DecisionID != rejectionPayload.DecisionID || resolutions[0].Kind != "amendment_rejected" || resolutions[0].Reason != "stale" {
+		t.Errorf("successor resolutions=%+v, want the stale rejection", resolutions)
+	}
+	tail := journal.Events[len(journal.Events)-3:]
+	if tail[0].Type != runstate.EventAttemptBlocked || tail[1].Type != runstate.EventAmendmentRoutedHuman || tail[2].Type != runstate.EventDecisionRequested {
+		t.Errorf("successor handshake=%+v", tail)
+	}
+	for _, event := range tail {
+		if event.AttemptID != selected[1].AttemptID {
+			t.Errorf("handshake event belongs to %s, want successor %s", event.AttemptID, selected[1].AttemptID)
+		}
+	}
+}
+
 func TestDispositionerPreparesAutoApproval(t *testing.T) {
 	preparation, store, authority, started := dispositionFixture(t)
 	defer authority.Release()
@@ -1814,6 +1929,28 @@ var errContinuedAutoApproval = errors.New("continued auto approval attempt")
 type autoThenInterruptedExecutor struct {
 	first waitingProposalExecutor
 	calls int
+}
+
+type staleThenHonestProposalExecutor struct {
+	first    waitingProposalExecutor
+	requests []protocol.ExecuteRequest
+}
+
+func (fixture *staleThenHonestProposalExecutor) Resolve(id string) (string, error) {
+	return fixture.first.Resolve(id)
+}
+
+func (fixture *staleThenHonestProposalExecutor) Execute(ctx context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	fixture.requests = append(fixture.requests, plan.Request)
+	proposal := fixture.first
+	switch len(fixture.requests) {
+	case 1:
+		proposal.baseHash = strings.Replace(proposal.baseHash, "sha256:", "sha256:stale", 1)
+	case 2:
+	default:
+		return adapter.ExecuteReport{}, errors.New("unexpected third proposal attempt")
+	}
+	return proposal.Execute(ctx, plan)
 }
 
 func (fixture *autoThenInterruptedExecutor) Resolve(adapterID string) (string, error) {
