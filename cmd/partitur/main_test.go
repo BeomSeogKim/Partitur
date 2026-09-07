@@ -375,7 +375,7 @@ func TestStatusJSONAndArgumentErrors(t *testing.T) {
 			return statusprojection.Report{}, nil
 		},
 	)
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, promote-score, cancel, status, logs\n" {
+	if code != 1 || stdout.Len() != 0 || stderr.String() != expectedUsage() {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -535,7 +535,7 @@ func TestOnlyImplementedCommandsAreAdvertised(t *testing.T) {
 				t.Fatalf("args=%v exit code=%d", args, code)
 			}
 			if stdout.Len() != 0 ||
-				stderr.String() != "usage: partitur <command>\ncommands: version, init, validate, run, resume, answer, approve, amend, apply, promote-score, cancel, status, logs\n" {
+				stderr.String() != expectedUsage() {
 				t.Fatalf(
 					"args=%v stdout=%q stderr=%q",
 					args,
@@ -903,6 +903,29 @@ func TestAnswerFileAcquisition(t *testing.T) {
 	})
 }
 
+func expectedUsage() string {
+	return `usage: partitur <command>
+  partitur init
+  partitur validate
+  partitur answer  <decision-id> --answer <text> | --answer-file <path>
+  partitur approve <decision-id> --approve
+                                | --approve --override <artifact-instance-id>:<finding-id>
+                                    [--override <artifact-instance-id>:<finding-id>]... --reason <text>
+                                | --reject [--reason <text>]
+                                | --reject --reason <text>
+  partitur amend   [<run-id>] --patch <path>
+                   --reason <text> [--claimed-impact <path>]
+  partitur cancel  [<run-id>]
+  partitur run
+  partitur resume  [<run-id>]
+  partitur status  [<run-id>] [--json]
+  partitur logs    [<run-id>] [--jsonl] [--follow]
+  partitur apply   <run-id> [--recover]
+  partitur promote-score <run-id> [--recover]
+  partitur version
+`
+}
+
 func TestAnswerSourceUsage(t *testing.T) {
 	root, store := resumeAttemptFixture(t)
 	decisionID := appendPendingCLIDecision(t, store, "question")
@@ -910,6 +933,7 @@ func TestAnswerSourceUsage(t *testing.T) {
 	before := journalLength(t, store)
 	for _, args := range [][]string{
 		{"answer", decisionID},
+		{"answer", decisionID, "an answer"},
 		{"answer", decisionID, "--answer"},
 		{"answer", decisionID, "--answer-file"},
 		{"answer", decisionID, "--answer-file", ""},
@@ -917,7 +941,7 @@ func TestAnswerSourceUsage(t *testing.T) {
 		{"answer", decisionID, "--answer-file", "answer.txt", "--answer", "yes"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(args, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: partitur") {
+		if code := run(args, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: partitur") || !strings.Contains(stderr.String(), "--answer <text> | --answer-file <path>") {
 			t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
 		}
 	}
