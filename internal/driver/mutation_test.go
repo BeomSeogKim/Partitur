@@ -140,6 +140,102 @@ func TestMutationLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
 	assertDriverMutationKilled(t, "TestLiveFanInCreatesTargetAtPinnedBaseCommit", goEnvironment, "driver.go", "attempt, err = run.CreateAttemptAtBase(movement.ID, baseCommit)", "attempt, err = run.CreateAttempt(movement.ID)")
 }
 
+func TestMutationExecuteAttemptCannotNarrowDependenciesIndependently(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesOneImmutableDependencyView/complete_conversion",
+		goEnvironment,
+		"driver.go",
+		`) (result Result) {
+	dependencies := dependenciesFromExecution(executionDependencies)
+	if execution.RepositoryRoot == ""`,
+		`) (result Result) {
+	dependencies := dependencies{
+		probe:               executionDependencies.Probe,
+		client:              executionDependencies.Client,
+		resolveTrampoline:   executionDependencies.ResolveTrampoline,
+		now:                 executionDependencies.Now,
+		newID:               executionDependencies.NewID,
+		afterMovementFailed: executionDependencies.afterMovementFailed,
+	}
+	if execution.RepositoryRoot == ""`,
+	)
+}
+
+func TestMutationExecuteAttemptCannotReadThePublicBundleAfterConversion(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesOneImmutableDependencyView/no_public_reads_after_conversion",
+		goEnvironment,
+		"driver.go",
+		"storeFactory := dependencies.storeFactory",
+		"storeFactory := executionDependencies.StoreFactory",
+	)
+}
+
+func TestMutationExecuteAttemptCannotOverwriteThePrivateDependencyView(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesOneImmutableDependencyView/private_view_has_no_writes",
+		goEnvironment,
+		"driver.go",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\tif execution.RepositoryRoot == \"\"",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\tdependencies.proposalDisposition = nil\n\tif execution.RepositoryRoot == \"\"",
+	)
+}
+
+func TestMutationExecuteAttemptCannotExposeThePrivateDependencyView(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesOneImmutableDependencyView/private_view_has_no_address_escape",
+		goEnvironment,
+		"driver.go",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\tif execution.RepositoryRoot == \"\"",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\t_ = &dependencies.proposalDisposition\n\tif execution.RepositoryRoot == \"\"",
+	)
+}
+
+func TestMutationProductionDependencyLiteralsMustBeReviewed(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestProductionDependencyLiteralsAreReviewed",
+		goEnvironment,
+		"driver.go",
+		"func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {\n\treturn ExecutionDependencies{",
+		"func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {\n\t_ = dependencies{probe: probe}\n\treturn ExecutionDependencies{",
+	)
+}
+
+func TestMutationExecutionDependencyNarrowingPreservesEveryDroppedField(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	for _, field := range []struct {
+		public, private string
+	}{
+		{public: "ReceiptObserver", private: "receiptObserver"},
+		{public: "StoreFactory", private: "storeFactory"},
+		{public: "ProposalDisposition", private: "proposalDisposition"},
+		{public: "AfterPrepareAcknowledged", private: "afterPrepareAcknowledged"},
+		{public: "AcquireDriver", private: "acquireDriver"},
+	} {
+		field := field
+		t.Run(field.public, func(t *testing.T) {
+			assertDriverMutationKilledUnique(
+				t,
+				"TestExecutionDependencyConversionsCoverPublicBundle/"+field.public,
+				goEnvironment,
+				"driver.go",
+				field.private+": execution."+field.public,
+				field.private+": nil",
+			)
+		})
+	}
+}
+
 func TestMutationAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestCompleteAutoApprovalRefusesCommitWhileNormalDriverAuthorityRemains(t)

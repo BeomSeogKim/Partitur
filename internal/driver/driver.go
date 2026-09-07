@@ -517,12 +517,13 @@ func ExecuteAttempt(
 	execution AttemptExecution,
 	executionDependencies ExecutionDependencies,
 ) (result Result) {
+	dependencies := dependenciesFromExecution(executionDependencies)
 	if execution.RepositoryRoot == "" || execution.Score == nil || execution.Cast == nil ||
 		execution.RunID == "" || execution.Attempt == nil || execution.BaseTree == "" || execution.CandidateTree == "" ||
 		execution.Authority == nil || execution.PerformerID == "" || execution.SelectionReason == "" ||
-		executionDependencies.Probe == nil || executionDependencies.Client == nil ||
-		executionDependencies.ResolveTrampoline == nil || executionDependencies.Now == nil ||
-		executionDependencies.NewID == nil {
+		dependencies.probe == nil || dependencies.client == nil ||
+		dependencies.resolveTrampoline == nil || dependencies.now == nil ||
+		dependencies.newID == nil {
 		return Result{RunID: execution.RunID, Err: errors.New("driver: incomplete attempt execution")}
 	}
 	movement, part, performer, plan, err := selectAttempt(
@@ -544,20 +545,12 @@ func ExecuteAttempt(
 	attempt := execution.Attempt
 	authority := execution.Authority
 	remainingMS := execution.RemainingMS
-	dependencies := dependencies{
-		probe:               executionDependencies.Probe,
-		client:              executionDependencies.Client,
-		resolveTrampoline:   executionDependencies.ResolveTrampoline,
-		now:                 executionDependencies.Now,
-		newID:               executionDependencies.NewID,
-		afterMovementFailed: executionDependencies.afterMovementFailed,
-	}
 	result = Result{RunID: execution.RunID}
-	storeFactory := executionDependencies.StoreFactory
+	storeFactory := dependencies.storeFactory
 	if storeFactory == nil {
 		storeFactory = runstore.New
 	}
-	store, err := storeFactory(execution.RepositoryRoot, executionDependencies.Probe, executionDependencies.ReceiptObserver)
+	store, err := storeFactory(execution.RepositoryRoot, dependencies.probe, dependencies.receiptObserver)
 	if err != nil {
 		return stopped(result, err)
 	}
@@ -938,7 +931,7 @@ func ExecuteAttempt(
 					if decision.Kind != protocol.EventProposal || decision.Proposal == nil {
 						continue
 					}
-					if executionDependencies.ProposalDisposition == nil {
+					if dependencies.proposalDisposition == nil {
 						return faultpoint.DurabilityReceipt{}, errors.New("waiting_human proposal has no amendment dispositioner")
 					}
 					autoProposal = autoProposal || !decision.Proposal.RequiresDecision
@@ -947,7 +940,7 @@ func ExecuteAttempt(
 				// attempt.blocked source. It therefore cannot share an adapter outcome
 				// with another raised question or proposal whose durable source would be
 				// skipped by that barrier transition.
-				if guard, ok := executionDependencies.ProposalDisposition.(AutoProposalShapeGuard); ok && guard.RequiresSingleRaisedForAuto() && autoProposal && len(observation.Raised) != 1 {
+				if guard, ok := dependencies.proposalDisposition.(AutoProposalShapeGuard); ok && guard.RequiresSingleRaisedForAuto() && autoProposal && len(observation.Raised) != 1 {
 					return faultpoint.DurabilityReceipt{}, errors.New("auto approval prepare requires exactly one raised proposal")
 				}
 				raised := make([]any, 0, len(observation.Raised))
@@ -993,7 +986,7 @@ func ExecuteAttempt(
 						if err != nil {
 							return faultpoint.DurabilityReceipt{}, err
 						}
-						disposition, err := executionDependencies.ProposalDisposition.PrepareAdapterProposal(ctx, AdapterProposal{
+						disposition, err := dependencies.proposalDisposition.PrepareAdapterProposal(ctx, AdapterProposal{
 							Store: store, Authority: authority, RunID: execution.RunID, ScoreRevision: execution.Score.Revision(), AttemptID: attempt.AttemptID,
 							MovementID: attempt.MovementID, PartID: movement.PartID, ProposalID: runstate.ProposalID(proposalID),
 							DecisionID: decisionID, Event: *decision.Proposal,
@@ -1135,10 +1128,10 @@ func ExecuteAttempt(
 			return cancelled
 		}
 		result.prepareAcknowledged = true
-		if executionDependencies.AfterPrepareAcknowledged != nil {
-			executionDependencies.AfterPrepareAcknowledged()
+		if dependencies.afterPrepareAcknowledged != nil {
+			dependencies.afterPrepareAcknowledged()
 		}
-		return completeAutoApprovalAndContinue(ctx, result, store, control, executionDependencies)
+		return completeAutoApprovalAndContinue(ctx, result, store, control, executionDependenciesFrom(dependencies))
 	}
 	if cancelled, handled := controlResult(ctx, result, store, authority, control); handled {
 		return cancelled
