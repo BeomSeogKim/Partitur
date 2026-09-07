@@ -73,7 +73,7 @@ func TestExecuteAttemptUsesOneImmutableDependencyView(t *testing.T) {
 			return true
 		})
 	})
-	t.Run("private_view_is_immutable", func(t *testing.T) {
+	t.Run("private_view_has_no_writes", func(t *testing.T) {
 		ast.Inspect(function.Body, func(node ast.Node) bool {
 			switch node := node.(type) {
 			case *ast.AssignStmt:
@@ -86,11 +86,15 @@ func TestExecuteAttemptUsesOneImmutableDependencyView(t *testing.T) {
 				if selectorOwnedBy(node.X, "dependencies") {
 					t.Fatal("ExecuteAttempt mutates its converted dependency view")
 				}
-			case *ast.UnaryExpr:
-				identifier, ok := node.X.(*ast.Ident)
-				if node.Op == token.AND && ok && identifier.Name == "dependencies" {
-					t.Fatal("ExecuteAttempt exposes its converted dependency view for mutation")
-				}
+			}
+			return true
+		})
+	})
+	t.Run("private_view_has_no_address_escape", func(t *testing.T) {
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			address, ok := node.(*ast.UnaryExpr)
+			if ok && address.Op == token.AND && expressionRootedAt(address.X, "dependencies") {
+				t.Fatal("ExecuteAttempt exposes its converted dependency view for mutation")
 			}
 			return true
 		})
@@ -219,6 +223,19 @@ func selectorOwnedBy(expression ast.Expr, owner string) bool {
 	selector, ok := expression.(*ast.SelectorExpr)
 	got, ownerOK := selectorOwner(selector)
 	return ok && ownerOK && got == owner
+}
+
+func expressionRootedAt(expression ast.Expr, owner string) bool {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		return expression.Name == owner
+	case *ast.SelectorExpr:
+		return expressionRootedAt(expression.X, owner)
+	case *ast.ParenExpr:
+		return expressionRootedAt(expression.X, owner)
+	default:
+		return false
+	}
 }
 
 func driverFunction(t *testing.T, name string) *ast.FuncDecl {

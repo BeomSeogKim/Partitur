@@ -179,11 +179,23 @@ func TestMutationExecuteAttemptCannotOverwriteThePrivateDependencyView(t *testin
 	goEnvironment := mutationGoEnvironment(t)
 	assertDriverMutationKilledUnique(
 		t,
-		"TestExecuteAttemptUsesOneImmutableDependencyView/private_view_is_immutable",
+		"TestExecuteAttemptUsesOneImmutableDependencyView/private_view_has_no_writes",
 		goEnvironment,
 		"driver.go",
 		"dependencies := dependenciesFromExecution(executionDependencies)\n\tif execution.RepositoryRoot == \"\"",
 		"dependencies := dependenciesFromExecution(executionDependencies)\n\tdependencies.proposalDisposition = nil\n\tif execution.RepositoryRoot == \"\"",
+	)
+}
+
+func TestMutationExecuteAttemptCannotExposeThePrivateDependencyView(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesOneImmutableDependencyView/private_view_has_no_address_escape",
+		goEnvironment,
+		"driver.go",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\tif execution.RepositoryRoot == \"\"",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\t_ = &dependencies.proposalDisposition\n\tif execution.RepositoryRoot == \"\"",
 	)
 }
 
