@@ -215,7 +215,8 @@ func runRunCommandWitnesses(t *testing.T, registry *commandWitnessRegistry) {
 			commandWitnessRunDriver(t, adapter),
 		)
 
-		if code != 3 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "run validation failed:") || adapter.called {
+		if code != 3 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "run validation failed:") ||
+			!strings.Contains(stderr.String(), "hint=") || !strings.Contains(stderr.String(), "git add partitur.yaml") || adapter.called {
 			t.Fatalf("adapter_called=%t exit=%d stdout=%q stderr=%q", adapter.called, code, stdout.String(), stderr.String())
 		}
 		assertCommandWitnessRunCount(t, root, 0)
