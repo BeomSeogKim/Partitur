@@ -23,6 +23,8 @@ func TestMutationDispositionerGuards(t *testing.T) {
 	for _, mutation := range []struct {
 		name, source, before, after, target string
 	}{
+		{"live blocking return consults projection", "internal/driver/driver.go", "return continueAfterBlockingResult(ctx, result, store, authority, control, dependencies)", "result.Outcome = OutcomeWaitingHuman; return result", "TestStaleBlockingProposalContinuesTheLiveAttempt"},
+		{"decision resume uses rejection causation", "internal/driver/driver.go", "if reason == \"decision_resume\" {", "if false { // mutation", "TestStaleBlockingProposalContinuesTheLiveAttempt"},
 		{"blocking rejection closes derived decision", "internal/amendmentexec/dispositioner.go", "if proposal.Event.RequiresDecision || proposal.humanDecision {", "if false { // mutation", "TestDispositionerRejectsBlockingProposalBeforeAttemptBlocked"},
 		{"frozen descriptor retains evaluated reason", "internal/amendmentexec/dispositioner.go", `"reason": outcome.Reason, "decision_type": decisionType,`, `"reason": "auto_disabled", "decision_type": decisionType,`, "TestDispositionerPublishesFrozenRouteThenAppendsItAfterDriverSource"},
 		{"pending prepare guard refuses a second prepare", "internal/amendmentexec/dispositioner.go", "if state.PendingPrepare != nil {", "if false { // mutation", "TestDispositionerPreparesAutoApproval"},

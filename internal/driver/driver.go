@@ -1147,8 +1147,7 @@ func ExecuteAttempt(
 		return terminal
 	}
 	if report.Result != nil && report.Result.Outcome == protocol.OutcomeWaitingHuman {
-		result.Outcome = OutcomeWaitingHuman
-		return result
+		return continueAfterBlockingResult(ctx, result, store, authority, control, dependencies)
 	}
 	if report.Result == nil || report.Result.Outcome != protocol.OutcomeCompleted {
 		return interrupted(result, errors.New("adapter did not complete"))
@@ -2338,6 +2337,54 @@ func realizeRecordedNoneDisposition(
 	return result, true
 }
 
+// continueAfterBlockingResult treats WAITING_HUMAN as a projected state, not
+// an adapter promise. A rejected proposal already closed its derived decision.
+// Like failure continuation, this also runs for recovery-owned ExecuteAttempt
+// calls; the recovery executor reprojects the resulting durable effects afterward.
+func continueAfterBlockingResult(
+	ctx context.Context,
+	result Result,
+	store *runstore.Store,
+	authority *runstore.Driver,
+	control *cancellation.Watcher,
+	dependencies dependencies,
+) Result {
+	input, err := store.LoadRunInput(result.RunID)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	observations, err := recoveryobs.Collect(store, result.RunID, input.Projection)
+	if err != nil {
+		return interrupted(result, err)
+	}
+	if identity := observations.Lease.Identity; identity != nil && authority.MatchesLease(runstore.LeaseIdentity{
+		Epoch: identity.Epoch, Token: identity.Token, PID: identity.PID, Start: identity.Start,
+	}) {
+		observations.Lease.Owner = recovery.OwnerCurrentDriver
+	}
+	decision := recovery.Plan(recovery.Input{Projection: input.Projection, Observations: observations})
+	if decision.Action != nil && decision.Action.Kind == recovery.ActionProceedAttempt {
+		decision = recovery.PlanAttempt(recovery.Input{Projection: input.Projection, Observations: observations})
+	}
+	if decision.Action != nil && decision.Action.Kind == recovery.ActionReturnWaitingHuman {
+		result.Outcome = OutcomeWaitingHuman
+		return result
+	}
+	if decision.CaseID != recovery.CaseDecisionResume || decision.Action == nil ||
+		decision.Action.Kind != recovery.ActionSelectDecisionResume || decision.Action.PendingSuccessor == nil ||
+		decision.Action.Continuation != recovery.ContinuationC4 {
+		return interrupted(result, errors.New("driver: post-blocking planner did not select waiting or decision resume"))
+	}
+	pending := *decision.Action.PendingSuccessor
+	input.Projection.Scheduler.PendingSuccessor = &pending
+	c4 := recovery.PlanScheduler(recovery.Input{Projection: input.Projection, Observations: observations})
+	if c4.Action == nil || c4.Action.Kind != recovery.ActionMaterializeSuccessor ||
+		c4.Action.PendingSuccessor == nil || *c4.Action.PendingSuccessor != pending {
+		return interrupted(result, errors.New("driver: post-blocking C.4 did not receive C.2 successor"))
+	}
+	return liveMaterializeSuccessor(ctx, result, store, authority, control, dependencies, input)
+}
+
 // liveMaterializeSuccessor performs exactly one durable live continuation.
 // Every invocation appends one performer.selected and reloads the journal.
 // Revision restarts and decision resumes have no retry-policy attempt bound;
@@ -2375,7 +2422,7 @@ func liveMaterializeSuccessor(
 	causationID := pending.CausationID
 	if causationID == "" {
 		var err error
-		causationID, err = latestFailureEventID(store, result.RunID, pending.AttemptID)
+		causationID, err = latestSuccessorEventID(store, result.RunID, pending.AttemptID, pending.Reason)
 		if err != nil {
 			return interrupted(result, err)
 		}
@@ -2532,7 +2579,7 @@ func liveMaterializationMismatch(action *recovery.Action, pending *recovery.Pend
 		action.MovementID != pending.MovementID || action.PendingSuccessor == nil
 }
 
-func latestFailureEventID(store *runstore.Store, runID runstate.RunID, attemptID runstate.AttemptID) (string, error) {
+func latestSuccessorEventID(store *runstore.Store, runID runstate.RunID, attemptID runstate.AttemptID, reason string) (string, error) {
 	journal, err := store.ReadJournal(runID)
 	if err != nil {
 		return "", err
@@ -2542,6 +2589,14 @@ func latestFailureEventID(store *runstore.Store, runID runstate.RunID, attemptID
 		if event.AttemptID != attemptID {
 			continue
 		}
+		if reason == "decision_resume" {
+			switch event.Type {
+			case runstate.EventDecisionResolved, runstate.EventAmendmentHumanRejected, runstate.EventAmendmentRejected:
+				return event.EventID, nil
+			default:
+				continue
+			}
+		}
 		if event.Type == runstate.EventAttemptFailed || event.Type == runstate.EventAcceptanceFailed {
 			if event.EventID == "" {
 				return "", errors.New("driver: successor failure causation_id is absent")
@@ -2549,7 +2604,7 @@ func latestFailureEventID(store *runstore.Store, runID runstate.RunID, attemptID
 			return event.EventID, nil
 		}
 	}
-	return "", errors.New("driver: successor failure event is absent")
+	return "", errors.New("driver: successor causation event is absent")
 }
 
 func liveMovementAttemptCount(state runstate.State, movementID runstate.MovementID) int {
