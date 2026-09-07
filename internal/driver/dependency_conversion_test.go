@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -32,32 +34,77 @@ func TestExecutionDependencyConversionsCoverPublicBundle(t *testing.T) {
 	}
 }
 
-func TestExecuteAttemptUsesCompleteDependencyConversion(t *testing.T) {
+func TestExecuteAttemptUsesOneImmutableDependencyView(t *testing.T) {
 	function := driverFunction(t, "ExecuteAttempt")
-	assignments := 0
-	ast.Inspect(function.Body, func(node ast.Node) bool {
-		assignment, ok := node.(*ast.AssignStmt)
-		if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
-			return true
+	t.Run("complete_conversion", func(t *testing.T) {
+		assignments := 0
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			assignment, ok := node.(*ast.AssignStmt)
+			if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+				return true
+			}
+			left, ok := assignment.Lhs[0].(*ast.Ident)
+			if !ok || left.Name != "dependencies" {
+				return true
+			}
+			assignments++
+			call, ok := assignment.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				t.Fatal("ExecuteAttempt dependencies assignment must call dependenciesFromExecution")
+			}
+			callee, calleeOK := call.Fun.(*ast.Ident)
+			argument, argumentOK := singleIdentifierArgument(call)
+			if !calleeOK || callee.Name != "dependenciesFromExecution" || !argumentOK || argument != "executionDependencies" {
+				t.Fatal("ExecuteAttempt dependencies assignment must use dependenciesFromExecution(executionDependencies)")
+			}
+			return false
+		})
+		if assignments != 1 {
+			t.Fatalf("ExecuteAttempt dependencies assignments=%d, want exactly one", assignments)
 		}
-		left, ok := assignment.Lhs[0].(*ast.Ident)
-		if !ok || left.Name != "dependencies" {
-			return true
-		}
-		assignments++
-		call, ok := assignment.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			t.Fatal("ExecuteAttempt dependencies assignment must call dependenciesFromExecution")
-		}
-		callee, calleeOK := call.Fun.(*ast.Ident)
-		argument, argumentOK := singleIdentifierArgument(call)
-		if !calleeOK || callee.Name != "dependenciesFromExecution" || !argumentOK || argument != "executionDependencies" {
-			t.Fatalf("ExecuteAttempt dependencies assignment must use dependenciesFromExecution(executionDependencies)")
-		}
-		return false
 	})
-	if assignments != 1 {
-		t.Fatalf("ExecuteAttempt dependencies assignments=%d, want exactly one", assignments)
+	t.Run("no_public_reads_after_conversion", func(t *testing.T) {
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			owner, ownerOK := selectorOwner(selector)
+			if ok && ownerOK && owner == "executionDependencies" {
+				t.Fatalf("ExecuteAttempt reads public dependency %s after constructing its private view", selector.Sel.Name)
+			}
+			return true
+		})
+	})
+	t.Run("private_view_is_immutable", func(t *testing.T) {
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.AssignStmt:
+				for _, target := range node.Lhs {
+					if selectorOwnedBy(target, "dependencies") {
+						t.Fatal("ExecuteAttempt mutates its converted dependency view")
+					}
+				}
+			case *ast.IncDecStmt:
+				if selectorOwnedBy(node.X, "dependencies") {
+					t.Fatal("ExecuteAttempt mutates its converted dependency view")
+				}
+			case *ast.UnaryExpr:
+				identifier, ok := node.X.(*ast.Ident)
+				if node.Op == token.AND && ok && identifier.Name == "dependencies" {
+					t.Fatal("ExecuteAttempt exposes its converted dependency view for mutation")
+				}
+			}
+			return true
+		})
+	})
+}
+
+func TestProductionDependencyLiteralsAreReviewed(t *testing.T) {
+	want := []string{
+		"acceptance_budget.go:TerminalizeAcceptanceBudget:probe=terminalization.Probe",
+		"driver.go:dependenciesFromExecution:acquireDriver=execution.AcquireDriver,afterMovementFailed=execution.afterMovementFailed,afterPrepareAcknowledged=execution.AfterPrepareAcknowledged,client=execution.Client,newID=execution.NewID,now=execution.Now,probe=execution.Probe,proposalDisposition=execution.ProposalDisposition,receiptObserver=execution.ReceiptObserver,resolveTrampoline=execution.ResolveTrampoline,storeFactory=execution.StoreFactory",
+	}
+	got := productionDependencyLiterals(t)
+	if !slices.Equal(got, want) {
+		t.Fatalf("production dependency literals = %q, want reviewed sites %q", got, want)
 	}
 }
 
@@ -97,6 +144,81 @@ func dependencyConversionFields(t *testing.T, name string) map[string]string {
 		t.Fatalf("%s dependency literal is absent", name)
 	}
 	return fields
+}
+
+func productionDependencyLiterals(t *testing.T) []string {
+	t.Helper()
+	_, current, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate dependency conversion test")
+	}
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(current), "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sites []string
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, declaration := range parsed.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				literal, ok := node.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				name, nameOK := literal.Type.(*ast.Ident)
+				if !nameOK || name.Name != "dependencies" {
+					return true
+				}
+				fields := make([]string, 0, len(literal.Elts))
+				for _, element := range literal.Elts {
+					pair, ok := element.(*ast.KeyValueExpr)
+					if !ok {
+						t.Fatalf("%s:%s contains an unkeyed dependency field", filepath.Base(path), function.Name.Name)
+					}
+					key, keyOK := pair.Key.(*ast.Ident)
+					value, valueOK := pair.Value.(*ast.SelectorExpr)
+					owner, ownerOK := selectorOwner(value)
+					if !keyOK || !valueOK || !ownerOK {
+						fields = append(fields, "unreviewed")
+						continue
+					}
+					fields = append(fields, key.Name+"="+owner+"."+value.Sel.Name)
+				}
+				sort.Strings(fields)
+				sites = append(sites, filepath.Base(path)+":"+function.Name.Name+":"+strings.Join(fields, ","))
+				return false
+			})
+		}
+	}
+	sort.Strings(sites)
+	return sites
+}
+
+func selectorOwner(selector *ast.SelectorExpr) (string, bool) {
+	if selector == nil {
+		return "", false
+	}
+	owner, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return owner.Name, true
+}
+
+func selectorOwnedBy(expression ast.Expr, owner string) bool {
+	selector, ok := expression.(*ast.SelectorExpr)
+	got, ownerOK := selectorOwner(selector)
+	return ok && ownerOK && got == owner
 }
 
 func driverFunction(t *testing.T, name string) *ast.FuncDecl {

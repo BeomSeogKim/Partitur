@@ -144,13 +144,13 @@ func TestMutationExecuteAttemptCannotNarrowDependenciesIndependently(t *testing.
 	goEnvironment := mutationGoEnvironment(t)
 	assertDriverMutationKilledUnique(
 		t,
-		"TestExecuteAttemptUsesCompleteDependencyConversion",
+		"TestExecuteAttemptUsesOneImmutableDependencyView/complete_conversion",
 		goEnvironment,
 		"driver.go",
-		`remainingMS := execution.RemainingMS
+		`) (result Result) {
 	dependencies := dependenciesFromExecution(executionDependencies)
-	result = Result{RunID: execution.RunID}`,
-		`remainingMS := execution.RemainingMS
+	if execution.RepositoryRoot == ""`,
+		`) (result Result) {
 	dependencies := dependencies{
 		probe:               executionDependencies.Probe,
 		client:              executionDependencies.Client,
@@ -159,7 +159,43 @@ func TestMutationExecuteAttemptCannotNarrowDependenciesIndependently(t *testing.
 		newID:               executionDependencies.NewID,
 		afterMovementFailed: executionDependencies.afterMovementFailed,
 	}
-	result = Result{RunID: execution.RunID}`,
+	if execution.RepositoryRoot == ""`,
+	)
+}
+
+func TestMutationExecuteAttemptCannotReadThePublicBundleAfterConversion(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesOneImmutableDependencyView/no_public_reads_after_conversion",
+		goEnvironment,
+		"driver.go",
+		"storeFactory := dependencies.storeFactory",
+		"storeFactory := executionDependencies.StoreFactory",
+	)
+}
+
+func TestMutationExecuteAttemptCannotOverwriteThePrivateDependencyView(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestExecuteAttemptUsesOneImmutableDependencyView/private_view_is_immutable",
+		goEnvironment,
+		"driver.go",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\tif execution.RepositoryRoot == \"\"",
+		"dependencies := dependenciesFromExecution(executionDependencies)\n\tdependencies.proposalDisposition = nil\n\tif execution.RepositoryRoot == \"\"",
+	)
+}
+
+func TestMutationProductionDependencyLiteralsMustBeReviewed(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(
+		t,
+		"TestProductionDependencyLiteralsAreReviewed",
+		goEnvironment,
+		"driver.go",
+		"func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {\n\treturn ExecutionDependencies{",
+		"func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies {\n\t_ = dependencies{probe: probe}\n\treturn ExecutionDependencies{",
 	)
 }
 
