@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/BeomSeogKim/Partitur/internal/score"
 )
@@ -19,6 +20,43 @@ import (
 const requiredInitIgnore = "runs/\nwork/\n"
 
 const initTestCommandEnvironment = "PARTITUR_INIT_TEST_COMMAND"
+
+func TestInitScaffoldingDirtySourceRefusalExplainsTracking(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	repository := t.TempDir()
+	// init deliberately creates no cast. Supply and commit one first so run
+	// can reach the source-tree check with only init's scaffolding untracked.
+	if err := os.Mkdir(filepath.Join(repository, ".partitur"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, ".partitur", "cast.yaml"), []byte(`{"cast":"0.1","performers":{"worker":{"adapter":"codex","model":"fixture"}},"bindings":{"interview":{"performer":"worker"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "init")
+	runGit(t, repository, "config", "user.name", "Partitur Test")
+	runGit(t, repository, "config", "user.email", "partitur@example.invalid")
+	runGit(t, repository, "add", ".partitur/cast.yaml")
+	runGit(t, repository, "commit", "-m", "fixture")
+	environment := replaceEnvironment(os.Environ(), map[string]string{
+		"HOME": t.TempDir(), "PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	code, stdout, stderr := runCommandBinaryWithin(t, 10*time.Second, partitur, repository, environment, "init")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("init exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runCommandBinaryWithin(t, 10*time.Second, partitur, repository, environment, "run")
+	want := "run validation failed: source repository is dirty hint=\"commit or stash every tracked and untracked change before running; " +
+		"partitur init's own partitur.yaml and .partitur/.gitignore are meant to be tracked " +
+		"(git add partitur.yaml .partitur/.gitignore && git commit), while .partitur/runs/ and " +
+		".partitur/work/ are ignored by that file\"\n"
+	if code != 3 || stdout != "" || stderr != want {
+		t.Fatalf("run exit=%d stdout=%q stderr=%q, want dirty-source tracking hint %q", code, stdout, stderr, want)
+	}
+	assertCommandWitnessRunCount(t, repository, 0)
+}
 
 func TestInitCommandDispatchIsRegistered(t *testing.T) {
 	// Given

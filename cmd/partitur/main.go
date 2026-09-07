@@ -43,6 +43,11 @@ var (
 
 const initIgnoreContents = "runs/\nwork/\n"
 
+const dirtySourceHint = "commit or stash every tracked and untracked change before running; " +
+	"partitur init's own partitur.yaml and .partitur/.gitignore are meant to be tracked " +
+	"(git add partitur.yaml .partitur/.gitignore && git commit), while .partitur/runs/ and " +
+	".partitur/work/ are ignored by that file"
+
 const initScoreContents = `score: "0.2"
 name: draft
 revision: 1
@@ -316,8 +321,10 @@ func runWithReaders(
 		}
 		if result.RunID == "" {
 			switch {
-			case errors.Is(result.Err, workspace.ErrDirtySource),
-				errors.Is(result.Err, workspace.ErrExternalMergeDriver),
+			case errors.Is(result.Err, workspace.ErrDirtySource):
+				fmt.Fprintf(stderr, "run validation failed: %v hint=%q\n", result.Err, dirtySourceHint)
+				return 3
+			case errors.Is(result.Err, workspace.ErrExternalMergeDriver),
 				errors.Is(result.Err, acceptance.ErrUnsupportedCriteria):
 				fmt.Fprintf(stderr, "run validation failed: %v\n", result.Err)
 				return 3
@@ -350,8 +357,25 @@ func runWithReaders(
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: partitur <command>")
-	fmt.Fprintln(w, "commands: version, init, validate, run, resume, answer, approve, amend, apply, promote-score, cancel, status, logs")
+	fmt.Fprintln(w, `usage: partitur <command>
+  partitur init
+  partitur validate
+  partitur answer  <decision-id> --answer <text> | --answer-file <path>
+  partitur approve <decision-id> --approve
+                                | --approve --override <artifact-instance-id>:<finding-id>
+                                    [--override <artifact-instance-id>:<finding-id>]... --reason <text>
+                                | --reject [--reason <text>]
+                                | --reject --reason <text>
+  partitur amend   [<run-id>] --patch <path>
+                   --reason <text> [--claimed-impact <path>]
+  partitur cancel  [<run-id>]
+  partitur run
+  partitur resume  [<run-id>]
+  partitur status  [<run-id>] [--json]
+  partitur logs    [<run-id>] [--jsonl] [--follow]
+  partitur apply   <run-id> [--recover]
+  partitur promote-score <run-id> [--recover]
+  partitur version`)
 }
 
 func initializeRepository() error {
