@@ -178,8 +178,9 @@ func TestDraftInterviewConvergesThroughDeliveredScoreBase(t *testing.T) {
 
 // runScoreBaseProposalResume turns a delivered-identity mismatch into the
 // durable stale-rejection assertion it represents. Without the test-side
-// cancellation, a rejected blocking proposal has no route or request that can
-// make the live planner quiescent, so a generic process timeout obscures the
+// cancellation, the corrupted delivered base makes every decision-resume
+// successor stale again. That valid continuation is bounded by the active
+// wall-clock budget, not retry policy; waiting for it would obscure the
 // stale-check evidence this witness is meant to hold.
 func runScoreBaseProposalResume(
 	t *testing.T,
