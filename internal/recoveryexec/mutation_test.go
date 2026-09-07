@@ -21,6 +21,37 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/mutationtest"
 )
 
+func TestMutationDurableRecoveryFailureReplans(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	for _, test := range []struct {
+		name, file, before, after, witness string
+	}{
+		{
+			name: "attempt outcome", file: "handlers.go",
+			before:  "case driver.OutcomeFailed:\n\t\treturn ErrRunFailedDuringRecovery",
+			after:   "case driver.OutcomeFailed:\n\t\treturn fmt.Errorf(\"recovery attempt execution ended %s\", outcome)",
+			witness: "TestRecoveredAttemptOutcomeMapsDurableRunStatesToReplanSentinels/FAILED",
+		},
+		{
+			name: "kind handler replan", file: "executor.go",
+			before: " || errors.Is(err, ErrRunFailedDuringRecovery)", after: "",
+			witness: "TestFailureDuringRecoveryReplansToTheTerminalRow",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			contents, err := os.ReadFile(test.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if count := strings.Count(string(contents), test.before); count != 1 {
+				t.Fatalf("mutation anchor matches %d times, want exactly one", count)
+			}
+			assertRecoveryMutationKilled(t, test.witness, goEnvironment,
+				filepath.Join("internal", "recoveryexec", test.file), test.before, test.after)
+		})
+	}
+}
+
 func TestMutationRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t)

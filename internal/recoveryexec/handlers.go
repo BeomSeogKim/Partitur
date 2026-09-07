@@ -703,7 +703,7 @@ func executeRecoveredAttemptAtBase(
 }
 
 // recoveredAttemptOutcome maps what a recovery-owned attempt ended as onto what the executor
-// should see. Cancellation and WAITING_HUMAN are not failures: the driver has already durably
+// should see. CANCELLED, WAITING_HUMAN, and FAILED are durable outcomes: the driver has already
 // changed the run state, and reporting an error here would make `resume` call an ordinary
 // terminal or quiescent result an operational interruption. The sentinels make the executor
 // replan so C.1 supplies the command outcome instead of this handler inventing a second exit.
@@ -715,6 +715,8 @@ func recoveredAttemptOutcome(outcome driver.Outcome) error {
 		return ErrRunCancelledDuringRecovery
 	case driver.OutcomeWaitingHuman:
 		return ErrRunWaitingHumanDuringRecovery
+	case driver.OutcomeFailed:
+		return ErrRunFailedDuringRecovery
 	default:
 		return fmt.Errorf("recovery attempt execution ended %s", outcome)
 	}

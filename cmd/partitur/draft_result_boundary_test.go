@@ -267,6 +267,28 @@ func TestResumeRecoveredAttemptWaitingHumanIsQuiescent(t *testing.T) {
 	assertDraftBlockingResult(t, repository, runID, 1)
 }
 
+func TestResumeRecoveredAttemptFailureReturnsTerminalExit(t *testing.T) {
+	root := repositoryRoot(t)
+	bin := t.TempDir()
+	partitur := buildE2EBinary(t, root, bin, "partitur")
+	buildE2EBinary(t, root, bin, "partitur-adapter-codex")
+	buildE2EBinary(t, root, bin, "partitur-trampoline")
+	vendor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, environment := draftResultRepository(t, bin, vendor, "empty")
+	child := pauseRunAtReceipt(t, partitur, repository, environment, "movement.movement.started")
+	runID := routedProposalRunID(t, repository)
+	killPausedRun(t, child)
+
+	assertDraftResultRecoveryFixedPoint(t, partitur, repository, environment, string(runID), expectedFailure{
+		event: runstate.EventAttemptFailed, kind: "task_failed", reason: "draft_no_blocking_output",
+		terminalReason: "retries_exhausted", runReason: "movement_failed",
+	})
+	assertDraftNoBlockingFailure(t, repository, runID)
+}
+
 func TestRecoverySelectedInitialAttemptRoutesProposal(t *testing.T) {
 	root := repositoryRoot(t)
 	bin := t.TempDir()

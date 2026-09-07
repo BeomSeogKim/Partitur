@@ -1507,8 +1507,51 @@ func TestCancellationDuringRecoveryReplansToTheTerminalRow(t *testing.T) {
 	}
 }
 
+func TestFailureDuringRecoveryReplansToTheTerminalRow(t *testing.T) {
+	store, authority := handlerStore(t, true)
+	load := func(context.Context) (recovery.Input, error) {
+		state, err := authority.State()
+		if err != nil {
+			return recovery.Input{}, err
+		}
+		return recovery.Input{Projection: recovery.Projection{State: state, CurrentHeadAttempt: handlerAttempt(state)}}, nil
+	}
+	executor := &Executor{
+		Store: store, RunID: "run-1", Driver: authority, Load: load,
+		// CoreFinalizer is the existing kind-handler injection seam. Use it to
+		// isolate the sentinel consumer; the real attempt producer is held by
+		// TestResumeRecoveredAttemptFailureReturnsTerminalExit in cmd/partitur.
+		CoreFinalizer: func(_ context.Context, _ *runstore.Store, _ runstate.RunID) error {
+			if _, err := authority.Append(runstate.Event{
+				RunID: "run-1", ScoreRevision: 1, Type: runstate.EventRunFailed,
+				Payload: handlerPayload(t, map[string]any{"reason": "budget_exhausted"}),
+			}, "test.run.failed"); err != nil {
+				return err
+			}
+			return ErrRunFailedDuringRecovery
+		},
+	}
+	input, err := load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.execute(context.Background(), input, recovery.Decision{
+		CaseID: recovery.CaseFinalizationRebuild,
+		Action: &recovery.Action{Kind: recovery.ActionRebuildFinalization},
+	})
+	if err != nil || result.Outcome != OutcomeFailed || result.Replans != 1 {
+		t.Fatalf("durable failure result=%+v error=%v, want FAILED after one replan", result, err)
+	}
+	if len(result.Steps) != 0 || !slices.Equal(result.Kinds, []recovery.ActionKind{recovery.ActionRebuildFinalization, recovery.ActionTerminalCleanup}) {
+		t.Fatalf("steps=%v kinds=%v, want kind handler followed by terminal cleanup", result.Steps, result.Kinds)
+	}
+	if result.Decision.CaseID != recovery.CaseTerminal {
+		t.Fatalf("final case=%s, want terminal row", result.Decision.CaseID)
+	}
+}
+
 // Executor tests inject these sentinels, so they cannot see whether the attempt handler still
-// produces them. Pin the mappings directly: both outcomes already changed durable run state and
+// produces them. Pin the mappings directly: these outcomes already changed durable run state and
 // must be replanned instead of becoming execution failures.
 func TestRecoveredAttemptOutcomeMapsDurableRunStatesToReplanSentinels(t *testing.T) {
 	for _, test := range []struct {
@@ -1518,6 +1561,7 @@ func TestRecoveredAttemptOutcomeMapsDurableRunStatesToReplanSentinels(t *testing
 		{outcome: driver.OutcomeSucceeded, want: nil},
 		{outcome: driver.OutcomeCancelled, want: ErrRunCancelledDuringRecovery},
 		{outcome: driver.OutcomeWaitingHuman, want: ErrRunWaitingHumanDuringRecovery},
+		{outcome: driver.OutcomeFailed, want: ErrRunFailedDuringRecovery},
 	} {
 		t.Run(string(test.outcome), func(t *testing.T) {
 			if err := recoveredAttemptOutcome(test.outcome); !errors.Is(err, test.want) {
@@ -1527,10 +1571,10 @@ func TestRecoveredAttemptOutcomeMapsDurableRunStatesToReplanSentinels(t *testing
 	}
 	// Everything else stays an execution failure rather than silently succeeding.
 	for _, outcome := range []driver.Outcome{
-		driver.OutcomeFailed, driver.OutcomeHalted, driver.OutcomeInterrupted,
+		driver.OutcomeHalted, driver.OutcomeInterrupted,
 	} {
 		err := recoveredAttemptOutcome(outcome)
-		if err == nil || errors.Is(err, ErrRunCancelledDuringRecovery) || errors.Is(err, ErrRunWaitingHumanDuringRecovery) {
+		if err == nil || errors.Is(err, ErrRunCancelledDuringRecovery) || errors.Is(err, ErrRunWaitingHumanDuringRecovery) || errors.Is(err, ErrRunFailedDuringRecovery) {
 			t.Fatalf("outcome %s mapped to %v", outcome, err)
 		}
 	}
