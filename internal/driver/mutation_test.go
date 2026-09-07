@@ -115,7 +115,7 @@ func TestMutationLiveMovementCompositionTerminalSerializesCancellationAfterEvide
 func TestMutationPrepareMovementBaseUsesIdentityForZeroContributors(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestPrepareMovementBaseUsesIdentityForZeroContributors(t)
-	assertDriverMutationKilled(t, "TestPrepareMovementBaseUsesIdentityForZeroContributors", goEnvironment, "movement_composition.go", "if len(contributors) == 0 {", "if len(contributors) == 1 {")
+	assertDriverMutationKilled(t, "TestPrepareMovementBaseUsesIdentityForZeroContributors", goEnvironment, "movement_composition.go", "if len(contributors) == 0 {\n\t\thash, err := movementCompositionDependencyHash(string(movementID), input.BaseTree)", "if len(contributors) == 1 {\n\t\thash, err := movementCompositionDependencyHash(string(movementID), input.BaseTree)")
 }
 
 func TestMutationComposeMovementBaseReportsEachMissingOperand(t *testing.T) {
@@ -131,7 +131,7 @@ func TestMutationComposeMovementBaseReportsEachMissingOperand(t *testing.T) {
 func TestMutationLiveCompositionConflictStopsBeforeCreatingTargetAttempt(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestLiveCompositionConflictStopsBeforeCreatingTargetAttempt(t)
-	assertDriverMutationKilled(t, "TestLiveCompositionConflictStopsBeforeCreatingTargetAttempt", goEnvironment, "movement_composition.go", "return MovementBase{}, ErrCompositionTerminalized", "return MovementBase{}, errors.New(\"driver: injected non-terminal composition failure\")")
+	assertDriverMutationKilled(t, "TestLiveCompositionConflictStopsBeforeCreatingTargetAttempt", goEnvironment, "movement_composition.go", "return MovementBase{}, ErrCompositionTerminalized\n\t}", "return MovementBase{}, errors.New(\"driver: injected non-terminal composition failure\")\n\t}")
 }
 
 func TestMutationLiveFanInCreatesTargetAtPinnedBaseCommit(t *testing.T) {
@@ -623,7 +623,7 @@ func TestMutationReviewSubjectInputRendersReservedBriefContract(t *testing.T) {
 func TestMutationCandidateConflictFailsRunAtCandidateScope(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestComposeCandidateConflictFailsRunAtCandidateScope(t)
-	assertDriverMutationKilled(t, "TestComposeCandidateConflictFailsRunAtCandidateScope", goEnvironment, "candidate_composition.go", "return ErrCompositionTerminalized", "return errors.New(\"driver: injected non-terminal candidate composition failure\")")
+	assertDriverMutationKilled(t, "TestComposeCandidateConflictFailsRunAtCandidateScope", goEnvironment, "candidate_composition.go", "return ErrCompositionTerminalized\n\t}", "return errors.New(\"driver: injected non-terminal candidate composition failure\")\n\t}")
 }
 
 func TestMutationCandidateCompositionRejectsDeclarationOrder(t *testing.T) {
@@ -699,8 +699,8 @@ func assertDriverMutationKilledAt(t *testing.T, testName string, goEnvironment m
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count := strings.Count(string(contents), before); count == 0 {
-		t.Fatalf("mutation anchor %q is absent from %s", before, sourcePath)
+	if count := strings.Count(string(contents), before); count != 1 {
+		t.Fatalf("mutation anchor %q occurs %d times in %s, want exactly one", before, count, sourcePath)
 	}
 	backup, err := os.CreateTemp(t.TempDir(), "partitur-mutation-backup-")
 	if err != nil {
@@ -734,7 +734,7 @@ func assertDriverMutationKilledAt(t *testing.T, testName string, goEnvironment m
 	if err := copyFile(backupPath, sourcePath); err != nil {
 		t.Fatal(err)
 	}
-	mutated := strings.ReplaceAll(string(contents), before, after)
+	mutated := strings.Replace(string(contents), before, after, 1)
 	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -55,7 +55,7 @@ func TestMutationDurableRecoveryFailureReplans(t *testing.T) {
 func TestMutationRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t *testing.T) {
 	goEnvironment := mutationGoEnvironment(t)
 	TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt(t)
-	assertRecoveryMutationKilled(t, "TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt", goEnvironment, filepath.Join("internal", "driver", "movement_composition.go"), "return MovementBase{}, ErrCompositionTerminalized", "return MovementBase{}, errors.New(\"driver: injected non-terminal composition failure\")")
+	assertRecoveryMutationKilled(t, "TestRecoveryCompositionTerminalStopsBeforeCreatingTargetAttempt", goEnvironment, filepath.Join("internal", "driver", "movement_composition.go"), "return MovementBase{}, ErrCompositionTerminalized\n}", "return MovementBase{}, errors.New(\"driver: injected non-terminal composition failure\")\n}")
 }
 
 func TestMutationRecoveryFanInSuccessorMaterializesAtComposedBase(t *testing.T) {
@@ -334,8 +334,8 @@ func assertRecoveryMutationOutcome(t *testing.T, want mutationtest.Outcome, test
 		t.Fatal(err)
 	}
 	for _, replacement := range replacements {
-		if count := strings.Count(string(contents), replacement.before); count == 0 {
-			t.Fatalf("mutation anchor %q is absent from %s", replacement.before, sourcePath)
+		if count := strings.Count(string(contents), replacement.before); count != 1 {
+			t.Fatalf("mutation anchor %q occurs %d times in %s, want exactly one", replacement.before, count, sourcePath)
 		}
 	}
 	backup, err := os.CreateTemp(t.TempDir(), "partitur-mutation-backup-")
@@ -372,7 +372,7 @@ func assertRecoveryMutationOutcome(t *testing.T, want mutationtest.Outcome, test
 	}
 	mutated := string(contents)
 	for _, replacement := range replacements {
-		mutated = strings.ReplaceAll(mutated, replacement.before, replacement.after)
+		mutated = strings.Replace(mutated, replacement.before, replacement.after, 1)
 	}
 	if err := os.WriteFile(sourcePath, []byte(mutated), 0o600); err != nil {
 		t.Fatal(err)
