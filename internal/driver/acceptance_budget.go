@@ -64,6 +64,8 @@ func TerminalizeAcceptanceBudget(ctx context.Context, terminalization Acceptance
 	}, "attempt.failed.budget_exhausted"); err != nil {
 		return stopped(result, err)
 	}
+	// Budget exhaustion is immediately terminal, so Arm 2 cannot materialize
+	// a successor and needs only the terminal lifecycle probe from this bundle.
 	terminal, handled := realizeRecordedNoneDisposition(ctx, result, store, terminalization.Authority, control, dependencies{probe: terminalization.Probe})
 	if !handled {
 		return interrupted(result, errors.New("driver: budget exhaustion has no terminal realization"))
