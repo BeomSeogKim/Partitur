@@ -383,7 +383,7 @@ func copyDraftResultMutationRepository(destination, source string) error {
 		if err != nil {
 			return err
 		}
-		if relative == ".git" || relative == ".codegraph" {
+		if relative == ".git" || relative == ".codegraph" || relative == ".partitur" {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}

@@ -187,6 +187,34 @@ func TestCopyFaultpointMutationRepositoryGitFileEntry(t *testing.T) {
 	}
 }
 
+func TestCopyFaultpointMutationRepositorySkipsPartiturStateDirectory(t *testing.T) {
+	source := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "copy")
+	for path, contents := range map[string]string{
+		filepath.Join(".partitur", "runs", "some-run", "journal.jsonl"):           "journal\n",
+		filepath.Join(".partitur", "work", "some-attempt", "worktree", "file.go"): "package fixture\n",
+		"z-after-partitur.txt": "copied\n",
+	} {
+		path = filepath.Join(source, path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := copyFaultpointMutationRepository(destination, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, ".partitur")); !os.IsNotExist(err) {
+		t.Fatalf("copied .partitur directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "z-after-partitur.txt")); err != nil {
+		t.Fatalf("entry after .partitur was not copied: %v", err)
+	}
+}
+
 func copyFaultpointMutationRepository(destination, source string) error {
 	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -196,7 +224,7 @@ func copyFaultpointMutationRepository(destination, source string) error {
 		if err != nil {
 			return err
 		}
-		if relative == ".git" {
+		if relative == ".git" || relative == ".partitur" {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}

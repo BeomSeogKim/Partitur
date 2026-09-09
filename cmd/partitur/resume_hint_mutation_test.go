@@ -223,7 +223,7 @@ func copyDecisionResumeHintMutationRepository(t *testing.T) string {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() && (relative == ".git" || relative == filepath.Join(".partitur", "work")) {
+		if entry.IsDir() && (relative == ".git" || relative == ".partitur") {
 			return filepath.SkipDir
 		}
 		target := filepath.Join(destination, relative)
