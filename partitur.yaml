@@ -436,7 +436,7 @@ policy:
     - "internal/status/*.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 150
+    active_wall_clock_min: 60
     retries_per_movement: 1
   amendment:
     auto: "off"
