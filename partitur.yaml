@@ -1,108 +1,24 @@
 score: "0.2"
-name: issue-439-mutation-copy-helpers-skip-partitur
+name: reference-workflow
 revision: 1
 status: finalized
 
 goal: |
-  Fix issue #439: every `-tags=mutation` copy helper that clones this repository from its root
-  into a temp directory must skip `.partitur`, Partitur's own state directory, exactly as it
-  already skips `.git`. There are 18 such helpers. All but one copy `.partitur/**` today.
+  Exercise one real, recovery-capable Partitur write attempt against this repository,
+  and let `apply` carry its result onto the checkout.
 
 context: |
-  Each mutation suite clones the repository into a temp dir, edits one source file there, and
-  runs a child `go test`. The helpers walk from the repository root (`runtime.Caller` + `../..`)
-  and skip `.git`, but not `.partitur`. So every clone carries `.partitur/runs` (journals) and,
-  on a machine where a run is in flight or left residue, the full attempt checkouts under
-  `.partitur/work/<runID>/<attempt>/worktree`.
-
-  Measured on this machine against the real `copyFaultpointMutationRepository`:
-
-    .partitur/work empty:
-      COPIED TOTAL:      482 files, 7,028,390 bytes
-      COPIED .partitur:   84 files,   286,069 bytes   (17.4% of files, 4.1% of bytes)
-
-    with one 2 MB file planted at .partitur/work/probe/worktree/big.bin:
-      COPIED TOTAL:      484 files, 9,028,407 bytes
-      PROBE PRESENT IN COPY: <tmp>/copy/.partitur/work/probe/worktree/big.bin
-
-  Nothing is incorrect today — Go ignores dot-directories, so a copied `.partitur` is never
-  compiled. The costs are wasted I/O across 37 static call sites, and test behaviour coupled to
-  ambient run state. This is the copy-helper half of the defect class #400/#438 closed for the
-  repository-walking denominators, and it follows #433/#434, which fixed `.git` handling in the
-  same helpers.
-
-  THE ENUMERATION (18 sites, derived by
-  `grep -rn 'relative == "\.git"' --include='*_test.go' .`). Four distinct guard shapes:
-
-    Shape A — `if relative == ".git" {` with a nested `entry.IsDir()` test (11 sites):
-      cmd/partitur/prepare_quiesce_mutation_test.go:167          copyPrepareQuiesceRepository
-      internal/driver/mutation_test.go:829                       copyMutationRepository
-      internal/protectedpath/mutation_test.go:146                copyRepository
-      internal/runstate/amendment_norms_mutation_test.go:408     copyRunstateMutationRepositoryFrom
-      internal/faultpoint/mutation_test.go:199                   copyFaultpointMutationRepository
-      internal/amendment/mutation_test.go:86                     copyRepository
-      internal/amendmentexec/mutation_test.go:95                 copyMutationRepository
-      internal/recoveryconsequence/mutation_test.go:177          copyMutationRepository
-      internal/executiondep/mutation_test.go:161                 copyRepository
-      internal/runstore/mutation_test.go:181                     copyRunstoreMutationRepository
-      internal/recoveryexec/mutation_test.go:433                 copyMutationRepository
-
-    Shape B — `if relative == ".git" && entry.IsDir() {` (4 sites):
-      integration/composition/mutation_test.go:145               copyCompositionMutationRepository
-      internal/launch/mutation_test.go:118                       copyLaunchMutationRepository
-      internal/status/mutation_test.go:136                       copyStatusMutationRepository
-      internal/criterionexec/mutation_test.go:72                 copyCriterionExecMutationRepository
-
-    Shape C — `if relative == ".git" || relative == ".codegraph" {` (2 sites):
-      cmd/partitur/draft_result_boundary_mutation_test.go:386    copyDraftResultMutationRepository
-      internal/recovery/planner_acceptance_worktree_mutation_test.go:79
-                                                                copyRecoveryMutationRepository
-
-    Shape D — already partially guarded (1 site):
-      cmd/partitur/resume_hint_mutation_test.go:226              copyDecisionResumeHintMutationRepository
-        `if entry.IsDir() && (relative == ".git" || relative == filepath.Join(".partitur", "work"))`
-        It skips `.partitur/work` but still copies `.partitur/runs`. Widen it to `.partitur`.
-
-  Line numbers are from commit 33601f56 and may drift; the helper NAMES are authoritative.
-
-  DELIBERATELY EXCLUDED, after inspection — do not "fix" these:
-    cmd/partitur/cross_edge_semantic_recovery_faultprobe_test.go:188  copyRecoveryTree
-      copies `.partitur/work/<runID>/*/worktree` ON PURPOSE and then runs `git worktree repair`
-      over it. Skipping `.partitur` there would break the test.
-    internal/docmarker/remaining_decomposition_mutation_test.go:341
-      copies only `docs` and `internal` by name; never walks the root.
-    cmd/partitur/e2e_test.go:1744, cmd/partitur/init_test.go:261
-      walk a `t.TempDir()` root, not the repository.
-    internal/recovery/unit_deferral_test.go:76, internal/runstate/recovery_coverage_test.go:234
-      denominator walkers; already excluded by #438.
-
-  REGRESSION-COVERAGE DECISION (made deliberately; hold the writer to it):
-  Per-helper behavioural tests would be ~18 near-identical tests, and four of the helpers cannot
-  be driven by a fixture at all. Extending #438's two tests does not fit: those exercise
-  `unitOwnedDeferralBoundary` and `hasNonTestAppendSite` — denominator walkers, not copy helpers,
-  and they carry no build constraint while every copy helper is behind `//go:build mutation`.
-  So this score takes two layers:
-
-    1. ONE INVENTORY WITNESS covering all 18 sites, in the #425/#432 / `catalog_lock_test.go` /
-       `docclaim/manifest_test.go` convention this repository already uses: scan the source text,
-       enumerate every root-walking copy helper, and assert each one carries the `.partitur` skip.
-       This is the only layer that also catches a NEW helper landing without the skip, and the
-       only one that reaches shape D and the other non-drivable helpers. It must be UNTAGGED so a
-       plain `go test` sees it — the mutation-tagged suites are invisible to `./...` (see #435-era
-       lesson: `./...` skips build-tag suites entirely).
-
-    2. THREE BEHAVIOURAL TESTS, one per drivable guard shape (A, B, C), each driving the REAL
-       helper against a fixture that contains `.partitur`. Source text is not behaviour; these
-       prove the skip actually takes effect. Shape D's helper takes only `*testing.T` and derives
-       its own root, so it cannot be driven by a fixture without a refactor this score forbids;
-       it is covered by layer 1 alone, and that is a known, accepted gap.
+  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
+  change only reference-workflow/marker.txt; its base content is deliberately different
+  from the required result so that the captured change set is not a no-op, and so that
+  the checkout `apply` runs against initially differs from the candidate.
 
 verification:
   expectation:
-    intent: write-basic-tests
+    intent: none
     apply_gate:
       require: [verified, approved]
-  final_movement: confirm
+  final_movement: check
 
 parts:
   writer:
@@ -112,331 +28,43 @@ parts:
     read_only: true
 
 movements:
-  - id: skip-state-directory-in-copy-helpers
+  - id: write-marker
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Fix issue #439 in this repository, red-first. Everything you write is English.
+      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
+      partitur reference workflow
 
-      Step 0 — RE-DERIVE THE ENUMERATION YOURSELF, then reconcile.
-
-      Do not take the score's list on trust. Independently enumerate every `_test.go` copy helper
-      that walks this repository from its root, using at least:
-
-        grep -rn 'relative == "\.git"' --include='*_test.go' .
-        grep -rn 'func copy' --include='*_test.go' .
-        grep -rn 'filepath.WalkDir' --include='*_test.go' .
-
-      Do NOT pipe any of these through `head` or otherwise truncate them. Count the denominator
-      honestly: report the total number of hits for each command and the number of helpers you
-      classified as in scope.
-
-      Then reconcile your list against the score's 18 sites and its explicit exclusion list.
-      Report the comparison explicitly: sites in both, sites you found that the score does not
-      list, sites the score lists that you did not find. If the two lists differ AT ALL, say so
-      and explain each difference BEFORE editing anything. Do not silently adopt either list.
-      If you conclude the score's enumeration is wrong, say so and stop rather than proceeding
-      on a denominator you do not believe.
-
-      Step 1 — red-first, on TWO representative helpers of DIFFERENT shapes.
-
-      Construct ambient state in your worktree:
-
-        .partitur/work/probe/worktree/probe.txt        (any content)
-
-      Then demonstrate, for `copyFaultpointMutationRepository` (shape A, internal/faultpoint) and
-      `copyCriterionExecMutationRepository` (shape B, internal/criterionexec), that the copy
-      CURRENTLY INCLUDES that file. Drive the real helpers — write a temporary mutation-tagged
-      test in each package that calls the helper with the repository root as source and stats
-      `<destination>/.partitur/work/probe/worktree/probe.txt`. Run them and record that the file
-      IS present. Quote the observation in your report.
-
-      If either helper does not copy the probe, stop and say so: the premise does not hold.
-
-      Delete those temporary probe tests before you finish; they are scaffolding for step 1 only.
-      The permanent tests are step 3's.
-
-      Step 2 — add the skip to ALL 18 helpers, preserving each site's existing shape.
-
-      This is the whole change. Add `.partitur` alongside `.git`, in the shape that site already
-      uses. Do NOT restructure, do NOT extract a shared helper, do NOT reorder the walk body, and
-      do NOT change any signature. Consolidating these helpers is #315's territory and is out of
-      scope here.
-
-      Shape A sites become:
-
-          if relative == ".git" || relative == ".partitur" {
-              if entry.IsDir() {
-                  return filepath.SkipDir
-              }
-              return nil
-          }
-
-      The `entry.IsDir()` distinction is #434's fix and MUST survive: a `.git` FILE (linked
-      worktree gitdir pointer) still has to skip only that entry, not the rest of the root.
-
-      Shape B sites keep their form:
-
-          if (relative == ".git" || relative == ".partitur") && entry.IsDir() {
-
-      Shape C sites keep their form:
-
-          if relative == ".git" || relative == ".codegraph" || relative == ".partitur" {
-
-      Shape D (`copyDecisionResumeHintMutationRepository`) widens `.partitur/work` to `.partitur`:
-
-          if entry.IsDir() && (relative == ".git" || relative == ".partitur") {
-
-      `filepath.Join(".partitur", "work")` disappears; check whether that leaves an unused import
-      and remove it only if YOUR change orphaned it.
-
-      Step 3 — permanent regression coverage. Two layers, exactly as decided in the score context.
-
-      Layer 1 — the inventory witness. One new UNTAGGED test file:
-
-        internal/protectedpath/mutation_copy_helper_partitur_test.go
-        func TestMutationCopyHelpersExcludePartiturStateDirectory
-
-      It must carry NO build constraint, so a plain `go test` runs it. `internal/protectedpath` is
-      its home because that package already owns `.partitur` exclusion for change-set capture
-      (`:(exclude).partitur/**`), and it has untagged production source so an untagged test file
-      compiles there.
-
-      The witness reads source TEXT from the repository root (`filepath.Join("..", "..")`) — it
-      must not import the packages under test, and must work even though every helper it inspects
-      is behind `//go:build mutation`. It must:
-
-        - walk the repository for `_test.go` files, skipping `.git` and `.partitur` itself;
-        - find every root-walking copy helper by the same predicate you settled in step 0;
-        - assert that the set it finds equals a PINNED list of the 18 sites (package path +
-          helper name), so that a NEW helper landing without the skip fails this test rather than
-          being silently outside the denominator, and so that a removed helper also fails;
-        - assert each of the 18 guards names `.partitur`;
-        - carry the excluded helpers from the score context as a separate pinned exclusion list
-          with a comment giving the reason for each, so the exclusions are reviewed rather than
-          invisible.
-
-      Pin the list explicitly. Do not compute the expected count from the same scan that produces
-      the actual count — that is a tautology and would pass against the unfixed tree.
-
-      Layer 2 — three behavioural tests, one per drivable shape, each in a mutation-tagged file in
-      the helper's own package, with these exact names:
-
-        internal/faultpoint     TestCopyFaultpointMutationRepositorySkipsPartiturStateDirectory
-        internal/criterionexec  TestCopyCriterionExecMutationRepositorySkipsPartiturStateDirectory
-        internal/recovery       TestCopyRecoveryMutationRepositorySkipsPartiturStateDirectory
-
-      Each must build a fixture SOURCE DIRECTORY under `t.TempDir()` containing at least:
-
-        .partitur/runs/some-run/journal.jsonl
-        .partitur/work/some-attempt/worktree/file.go
-        z-after-partitur.txt      (an entry sorting AFTER ".partitur", to prove the walk continued)
-
-      then call the package's REAL helper with `(destination, source)` and assert that
-      `.partitur` was NOT copied, and that `z-after-partitur.txt` WAS. Model them on
-      `TestCopyFaultpointMutationRepositoryGitFileEntry`, which #434 already added to
-      internal/faultpoint — same file, same style. Use the real helper, never a reimplementation.
-
-      All three helpers already take `(destination, source string) error`, so no refactor is
-      needed. If you find one that does not, stop and report rather than changing its signature.
-
-      Step 4 — prove the pins are red on the unfixed tree.
-
-      Every grep-pinned acceptance criterion below must return rc=1 BEFORE the fix. Verify this:
-      stash your step-2 edits (keep the new tests), run each pinned command, and confirm each
-      fails. Report what you observed for each of the four pinned criteria. A pin that is green
-      on the unfixed tree locks nothing.
-
-      Step 5 — remove the ambient fixture and confirm the tree.
-
-      Delete `.partitur/work/probe/` and, if `.partitur/work` or `.partitur` did not exist before
-      you started, remove those too. Then confirm `git status --porcelain` shows only intended
-      changes: 18 modified mutation test files across 16 packages, plus the new test files.
-
-      Step 6 — verify. Run every acceptance command below yourself.
-
-      NEVER run `go test -tags=mutation ./...` — the whole-repository mutation battery starves
-      this machine (#316). Only the packages named in the criteria.
-
-      Two measured facts you need, so you do not misread a red:
-
-        - `internal/driver`'s UNTAGGED `TestLive*` tests FAIL on this machine, on unmodified
-          `main`, for a reason unrelated to this issue: they assume performer-adapter resolution
-          fails, and this machine has `codex` and `claude` installed on PATH. That is why the
-          driver criterion below is restricted to `-run 'TestMutation'`. Do not try to fix them
-          and do not report them as caused by your change.
-        - `cmd/partitur`'s mutation battery measured 585s even when scoped to the tests that
-          reach the touched helpers, so it is deliberately reduced to a compile-only gate. The
-          inventory witness is what covers cmd/partitur's three helpers.
+      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
     outputs:
-      - id: partitur-skip-change-set
+      - id: marker-change
         kind: change_set
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: inventory-witness
-          run: ["sh", "-c", "go test -count=1 -run 'TestMutationCopyHelpersExcludePartiturStateDirectory$' -v ./internal/protectedpath/ | grep -q '^--- PASS: TestMutationCopyHelpersExcludePartiturStateDirectory'"]
-          timeout_min: 10
-        - id: faultpoint-shape-a-regression
-          run: ["sh", "-c", "go test -tags=mutation -count=1 -run 'TestCopyFaultpointMutationRepositorySkipsPartiturStateDirectory$' -v ./internal/faultpoint/ | grep -q '^--- PASS: TestCopyFaultpointMutationRepositorySkipsPartiturStateDirectory'"]
-          timeout_min: 10
-        - id: criterionexec-shape-b-regression
-          run: ["sh", "-c", "go test -tags=mutation -count=1 -run 'TestCopyCriterionExecMutationRepositorySkipsPartiturStateDirectory$' -v ./internal/criterionexec/ | grep -q '^--- PASS: TestCopyCriterionExecMutationRepositorySkipsPartiturStateDirectory'"]
-          timeout_min: 10
-        - id: recovery-shape-c-regression
-          run: ["sh", "-c", "go test -tags=mutation -count=1 -run 'TestCopyRecoveryMutationRepositorySkipsPartiturStateDirectory$' -v ./internal/recovery/ | grep -q '^--- PASS: TestCopyRecoveryMutationRepositorySkipsPartiturStateDirectory'"]
-          timeout_min: 10
-        - id: touched-package-mutation
-          run: ["go", "test", "-tags=mutation", "-count=1", "-p", "1",
-                "./integration/composition/", "./internal/amendment/", "./internal/amendmentexec/",
-                "./internal/criterionexec/", "./internal/executiondep/", "./internal/faultpoint/",
-                "./internal/launch/", "./internal/protectedpath/", "./internal/recovery/",
-                "./internal/recoveryconsequence/", "./internal/recoveryexec/",
-                "./internal/runstate/", "./internal/runstore/", "./internal/status/"]
-          timeout_min: 30
-        - id: driver-mutation
-          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "TestMutation", "./internal/driver/"]
-          timeout_min: 15
-        - id: cmd-partitur-mutation-compiles
-          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./cmd/partitur/"]
-          timeout_min: 10
+        - id: marker-written
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
 
-  - id: confirm
+  - id: check
     part: verifier
-    needs: [skip-state-directory-in-copy-helpers]
+    needs: [write-marker]
     grants: [repo_read, shell]
     instruction: |
-      Confirm the issue #439 fix. Change no file in this repository. Report in English.
-
-      1. RE-DERIVE THE ENUMERATION A THIRD TIME, independently.
-
-      Do not take the score's 18 sites or the writer's list on trust. Run your own greps for
-      root-walking copy helpers in `_test.go` files. Do not truncate any output; report the raw
-      hit count for each command you ran and how many helpers you judged in scope.
-
-      Then state plainly:
-        - Is every site you found guarded with a `.partitur` skip?
-        - Did the writer MISS any site? Name it.
-        - Did the writer guard anything that should NOT be guarded? In particular confirm
-          `copyRecoveryTree` in cmd/partitur/cross_edge_semantic_recovery_faultprobe_test.go was
-          NOT changed — it copies `.partitur/work/<runID>/*/worktree` on purpose and then runs
-          `git worktree repair`; guarding it would break that test.
-        - Does your count agree with the score's 18 and with the writer's? If any of the three
-          numbers differ, that disagreement is the finding — report it rather than picking one.
-
-      2. Nothing was refactored beyond the skip.
-
-      For each of the 18 sites, confirm the ONLY change is the added `.partitur` term. No shared
-      helper was extracted, no walk body reordered, no signature changed, no adjacent code
-      "improved". Confirm #434's `entry.IsDir()` distinction survives everywhere it existed: a
-      root `.git` FILE must still skip only that entry, not the rest of the root. A site where
-      the writer collapsed that back into an unconditional `SkipDir` is a regression of #433 and
-      must be reported as a failure even though the new tests pass.
-
-      Confirm shape D (`copyDecisionResumeHintMutationRepository`) was WIDENED from
-      `.partitur/work` to `.partitur`, not left as it was and not narrowed.
-
-      3. The red-first evidence is real.
-
-      The writer's report must show that, before the fix, the real `copyFaultpointMutationRepository`
-      and `copyCriterionExecMutationRepository` copied a probe file from under `.partitur/work/`.
-      Reproduce the reasoning yourself from the walk bodies at the pre-fix revision (`git show`
-      the previous revision of those files). Say which observation supports your conclusion.
-
-      Then check the writer's step-4 claim: each of the four grep-pinned criteria returned rc=1
-      on the unfixed tree. Verify at least one of them yourself by reasoning about what the pinned
-      command prints when the named test does not exist. A pin that would have been green before
-      the fix locks nothing — report that as a failure.
-
-      4. The regression coverage is what the score chose, and it works.
-
-      - `TestMutationCopyHelpersExcludePartiturStateDirectory` exists in
-        internal/protectedpath, carries NO build constraint (so a plain `go test` runs it), reads
-        source text rather than importing the mutation-tagged packages, and pins an explicit list
-        of the 18 sites rather than deriving the expectation from the same scan that produces the
-        actual value. Read the assertion carefully and say whether it could pass vacuously — for
-        example if the scan found zero helpers, or if expected and actual come from one source.
-      - It would FAIL against the unfixed tree. Say which observation supports that.
-      - A NEW copy helper added without the skip would fail it. Say whether that actually holds.
-      - The three behavioural tests exist with the exact names below, are mutation-tagged, drive
-        the REAL helper (not a reimplementation), and place an entry sorting AFTER `.partitur` in
-        the fixture so a truncated walk is detectable:
-            TestCopyFaultpointMutationRepositorySkipsPartiturStateDirectory
-            TestCopyCriterionExecMutationRepositorySkipsPartiturStateDirectory
-            TestCopyRecoveryMutationRepositorySkipsPartiturStateDirectory
-      - Shape D is covered by the witness only. Confirm that gap is real and stated, not papered
-        over with a test that does not actually drive that helper.
-
-      5. Scope.
-
-      Changed files are confined to the 16 touched packages' Go files. No production (non-test)
-      Go file changed — this issue is entirely in test helpers; a production change is out of
-      scope and must be reported. No documentation, no configuration, no `partitur.yaml`, no
-      `.partitur/cast.yaml`. Confirm `.partitur` holds no leftover probe fixture and
-      `git status --porcelain` is clean after you run the suites.
-
-      6. Known machine facts — do not misattribute.
-
-      `internal/driver`'s untagged `TestLive*` tests fail on this machine on unmodified `main`,
-      because they assume performer-adapter resolution fails and this machine has `codex` and
-      `claude` on PATH. They are unrelated to this change. `cmd/partitur`'s mutation battery is
-      deliberately reduced to a compile-only gate because it measured 585s even when scoped.
-      Note both as accepted limitations of this run's evidence; do not report them as defects of
-      the writer's work, and do not claim the full battery was run when it was not.
-
-      If any point above does not hold, say so plainly rather than passing it.
-    inputs: [partitur-skip-change-set]
+      Confirm that reference-workflow/marker.txt holds exactly the line
+      `partitur reference workflow` followed by one LF byte, and nothing else.
+      Report what you observed. Change no file.
+    inputs: [marker-change]
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: inventory-witness
-          run: ["sh", "-c", "go test -count=1 -run 'TestMutationCopyHelpersExcludePartiturStateDirectory$' -v ./internal/protectedpath/ | grep -q '^--- PASS: TestMutationCopyHelpersExcludePartiturStateDirectory'"]
-          timeout_min: 10
-        - id: shape-regressions
-          run: ["sh", "-c", "go test -tags=mutation -count=1 -run 'SkipsPartiturStateDirectory$' -v ./internal/faultpoint/ ./internal/criterionexec/ ./internal/recovery/ | grep -c '^--- PASS: TestCop.*SkipsPartiturStateDirectory' | grep -qx 3"]
-          timeout_min: 15
-        - id: touched-package-mutation
-          run: ["go", "test", "-tags=mutation", "-count=1", "-p", "1",
-                "./integration/composition/", "./internal/amendment/", "./internal/amendmentexec/",
-                "./internal/criterionexec/", "./internal/executiondep/", "./internal/faultpoint/",
-                "./internal/launch/", "./internal/protectedpath/", "./internal/recovery/",
-                "./internal/recoveryconsequence/", "./internal/recoveryexec/",
-                "./internal/runstate/", "./internal/runstore/", "./internal/status/"]
-          timeout_min: 30
-        - id: driver-mutation
-          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "TestMutation", "./internal/driver/"]
-          timeout_min: 15
-        - id: cmd-partitur-mutation-compiles
-          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./cmd/partitur/"]
-          timeout_min: 10
+        - id: marker-is-reference-workflow
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
       human_gate: always
 
 policy:
-  allowed_paths:
-    - "cmd/partitur/*.go"
-    - "integration/composition/*.go"
-    - "internal/amendment/*.go"
-    - "internal/amendmentexec/*.go"
-    - "internal/criterionexec/*.go"
-    - "internal/driver/*.go"
-    - "internal/executiondep/*.go"
-    - "internal/faultpoint/*.go"
-    - "internal/launch/*.go"
-    - "internal/protectedpath/*.go"
-    - "internal/recovery/*.go"
-    - "internal/recoveryconsequence/*.go"
-    - "internal/recoveryexec/*.go"
-    - "internal/runstate/*.go"
-    - "internal/runstore/*.go"
-    - "internal/status/*.go"
+  allowed_paths: ["reference-workflow/marker.txt"]
   side_effects: []
   budget:
-    active_wall_clock_min: 60
-    retries_per_movement: 1
+    active_wall_clock_min: 15
+    retries_per_movement: 0
   amendment:
     auto: "off"
