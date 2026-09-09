@@ -166,6 +166,27 @@ func TestMutationProbeNotifyFailureDoesNotContinue(t *testing.T) {
 	}
 }
 
+func TestCopyFaultpointMutationRepositoryGitFileEntry(t *testing.T) {
+	source := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "copy")
+	if err := os.WriteFile(filepath.Join(source, ".git"), []byte("gitdir: elsewhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "z-after-git"), []byte("copied\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyFaultpointMutationRepository(destination, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "z-after-git")); err != nil {
+		t.Fatalf("entry after .git was not copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("copied .git file: %v", err)
+	}
+}
+
 func copyFaultpointMutationRepository(destination, source string) error {
 	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -176,7 +197,10 @@ func copyFaultpointMutationRepository(destination, source string) error {
 			return err
 		}
 		if relative == ".git" {
-			return filepath.SkipDir
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		target := filepath.Join(destination, relative)
 		if entry.IsDir() {
