@@ -1,24 +1,67 @@
 score: "0.2"
-name: reference-workflow
+name: issue-400-partitur-state-directory-in-test-denominators
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Fix issue #400: the two repository-root filesystem walks in this repository's tests must
+  not descend into `.partitur`, Partitur's own state directory. A run leaves full
+  repository copies under `.partitur/work/<run>/<attempt>/worktree/`, and those copies
+  become part of the walks' denominator.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  Two tests establish their denominator by walking the repository from its root. Neither
+  excludes `.partitur`, so every attempt worktree Partitur itself creates is measured as if
+  it were product code.
+
+  Site 1 — internal/recovery/unit_deferral_test.go
+    `unitOwnedDeferralBoundary` (line ~71) walks `filepath.Join("..", "..")` and skips a
+    directory only when its name is in `unitOwnedDeferralExcluded` (line ~22), currently
+    {.git, docs, spikes, reference-workflow, vendor}. `TestUnitOwnedDeferralBoundary` then
+    counts declarations of `UnitOwnedDeferral` and requires exactly one. A single copy of
+    internal/recovery/unit_deferral.go under `.partitur/work/**/worktree/` makes it two.
+    Observed on this repository before this score was written:
+
+      --- FAIL: TestUnitOwnedDeferralBoundary (0.05s)
+          unit_deferral_test.go:53: UnitOwnedDeferral declarations = 2 at
+            .partitur/work/fake-run/fake-attempt/worktree/internal/recovery/unit_deferral.go,
+            internal/recovery/unit_deferral.go, want 1
+
+  Site 2 — internal/runstate/recovery_coverage_test.go
+    `hasNonTestAppendSite` (line ~219) walks `filepath.Join("..", "..")` and skips a
+    directory only when its name is `.git` (line ~239). It is reached from
+    `TestDerivedEventSourceProjectionLock` in
+    internal/runstate/derived_event_source_projection_test.go:44. It parses every
+    non-test `.go` file it meets and fails the test on a parse error, and it stops at the
+    first append site it finds — and `.partitur` sorts before every source directory, so a
+    stale copy is what answers the question. An interrupted attempt worktree holding one
+    half-written Go file is enough to red it. Observed on this repository:
+
+      --- FAIL: TestDerivedEventSourceProjectionLock (0.01s)
+          derived_event_source_projection_test.go:44:
+            ../../.partitur/work/fake-run/fake-attempt/worktree/internal/recovery/broken.go:3:14:
+            expected ')', found '{'
+
+  Neither test file carries a build constraint; both compile under a plain `go test`.
+
+  Both fixtures above were removed again before this score was committed. `.partitur/work`
+  is empty in this checkout, and it does not exist at all in an attempt worktree, so both
+  guards are GREEN in your worktree before you change anything. Constructing the polluted
+  state is therefore part of the work, not something you can wait to observe.
+
+  Anything written under `.partitur/` inside your worktree is invisible to the change set:
+  change-set capture stages with `:(exclude).partitur/**`
+  (internal/protectedpath/protectedpath.go, used at internal/workspace/change_set.go), and
+  `.partitur/.gitignore` already lists `work/`. Go's own tooling ignores directories whose
+  name begins with `.`, so a `.go` file under `.partitur` is never part of any package and
+  cannot break a build.
 
 verification:
   expectation:
-    intent: none
+    intent: write-basic-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +71,227 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: exclude-state-directory
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Fix issue #400 in this repository, red-first. Work only in internal/recovery and
+      internal/runstate. Everything you write is English.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      Step 1 — construct the polluted state and observe both guards go red.
+
+      Create, by hand, under your worktree:
+
+        .partitur/work/issue-400-manual/worktree/internal/recovery/unit_deferral.go
+            — a byte-for-byte copy of internal/recovery/unit_deferral.go
+        .partitur/work/issue-400-manual/worktree/internal/recovery/broken.go
+            — a `.go` file that does not parse, e.g.
+
+                package recovery
+
+                func broken( {
+
+      Then run each guard on its own, one package per command, because the unparseable
+      file reds the other package too while the fix is absent:
+
+        go test -count=1 -run 'TestUnitOwnedDeferralBoundary$' -v ./internal/recovery/
+        go test -count=1 -run 'TestDerivedEventSourceProjectionLock$' -v ./internal/runstate/
+
+      Both must FAIL, and both failure messages must name a path under `.partitur/`. Quote
+      both failures verbatim in your report. If either one passes, stop and say so: the
+      premise of this fix does not hold and nothing below should be applied.
+
+      Step 2 — exclude the state directory. Two edits, nothing else.
+
+        internal/recovery/unit_deferral_test.go
+          Add `".partitur"` as one more key to `unitOwnedDeferralExcluded`. Keep the map's
+          existing name-keyed convention — do not convert it to a root-anchored check, do
+          not add any other key, do not touch the surrounding comment beyond what an added
+          key requires.
+
+        internal/runstate/recovery_coverage_test.go
+          In `hasNonTestAppendSite`'s walk, extend the directory guard so it skips
+          `.partitur` exactly as it already skips `.git`:
+
+              if entry.Name() == ".git" || entry.Name() == ".partitur" {
+                  return filepath.SkipDir
+              }
+
+      Do not refactor either walker, do not extract a shared helper, do not change any
+      other file in either package, and do not touch any other package.
+
+      Step 3 — confirm green WITH the fixtures from step 1 still present.
+
+        go test -count=1 -run 'TestUnitOwnedDeferralBoundary$' -v ./internal/recovery/
+        go test -count=1 -run 'TestDerivedEventSourceProjectionLock$' -v ./internal/runstate/
+
+      Both must now PASS while `.partitur/work/issue-400-manual/` still exists. Say so in
+      your report.
+
+      Step 4 — add a permanent regression test to each package.
+
+      Step 1's evidence is ambient: it depends on a directory that does not exist in CI and
+      does not exist in a fresh checkout. Each package therefore gets one test that builds
+      the polluted state itself, so the exclusion is locked where nobody has run Partitur.
+      Use exactly these names:
+
+        internal/recovery : TestUnitOwnedDeferralBoundaryIgnoresPartiturStateDirectory
+        internal/runstate : TestDerivedEventSourceAppendWalkIgnoresPartiturStateDirectory
+
+      Put each in a new `_test.go` file in its own package. Neither may carry a build
+      constraint — the guards they protect do not.
+
+      Both tests must:
+        - create their fixture under `.partitur/work/<a name unique to that test>/worktree/`,
+          relative to the repository root (`filepath.Join("..", "..")`), NOT under
+          `t.TempDir()`: the walkers derive their own root and cannot be pointed elsewhere,
+          and pointing them elsewhere would mean refactoring them, which this movement
+          forbids;
+        - drive the package's existing in-package walker rather than a reimplementation of
+          it — `unitOwnedDeferralBoundary(t)` in internal/recovery,
+          `hasNonTestAppendSite(t, <eventType>)` in internal/runstate;
+        - restore the repository exactly as they found it via `t.Cleanup`, including NOT
+          leaving `.partitur/` or `.partitur/work/` behind if either was absent when the
+          test started. Record what existed before you create anything, and remove exactly
+          what you created.
+
+      internal/recovery's test writes a copy of internal/recovery/unit_deferral.go into its
+      fixture (read the real file; do not retype its contents) and then requires
+      `unitOwnedDeferralBoundary(t)` to return exactly one declaration, equal to
+      `unitOwnedDeferralDeclaration`.
+
+      internal/runstate's test writes an unparseable `.go` file into its fixture and then
+      requires `hasNonTestAppendSite(t, eventType)` to return true — it fatals the test on a
+      parse error, so surviving the call at all is the assertion. Choose an `eventType` that
+      genuinely has a non-test append site in this repository; verify your choice returns
+      true with the fixture absent before you rely on it.
+
+      Step 5 — remove the step 1 fixtures.
+
+      Delete `.partitur/work/issue-400-manual/` entirely, and delete `.partitur/work` and
+      `.partitur` too if they did not exist before you started. Then confirm
+      `git status --porcelain` shows only your intended edits: two modified test files and
+      two new test files, all under internal/recovery and internal/runstate.
+
+      Step 6 — verify. All of these must succeed from the repository root:
+
+        go build ./...
+        go test -count=1 ./internal/recovery/ ./internal/runstate/
+        go test -tags=mutation -count=1 ./internal/recovery/ ./internal/runstate/
+
+      Never run `go test -tags=mutation ./...` — the whole-repository mutation battery
+      starves this machine (#316). Only the two packages above.
     outputs:
-      - id: marker-change
+      - id: state-directory-exclusion
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: recovery-guard
+          run: ["sh", "-c", "go test -count=1 -run 'TestUnitOwnedDeferralBoundary$' -v ./internal/recovery/ | grep -q '^--- PASS: TestUnitOwnedDeferralBoundary ('"]
+          timeout_min: 10
+        - id: runstate-guard
+          run: ["sh", "-c", "go test -count=1 -run 'TestDerivedEventSourceProjectionLock$' -v ./internal/runstate/ | grep -q '^--- PASS: TestDerivedEventSourceProjectionLock ('"]
+          timeout_min: 10
+        - id: recovery-state-directory-regression
+          run: ["sh", "-c", "go test -count=1 -run 'TestUnitOwnedDeferralBoundaryIgnoresPartiturStateDirectory$' -v ./internal/recovery/ | grep -q '^--- PASS: TestUnitOwnedDeferralBoundaryIgnoresPartiturStateDirectory ('"]
+          timeout_min: 10
+        - id: runstate-state-directory-regression
+          run: ["sh", "-c", "go test -count=1 -run 'TestDerivedEventSourceAppendWalkIgnoresPartiturStateDirectory$' -v ./internal/runstate/ | grep -q '^--- PASS: TestDerivedEventSourceAppendWalkIgnoresPartiturStateDirectory ('"]
+          timeout_min: 10
+        - id: package-tests
+          run: ["go", "test", "-count=1", "./internal/recovery/", "./internal/runstate/"]
+          timeout_min: 20
+        - id: package-mutation-tests
+          run: ["go", "test", "-tags=mutation", "-count=1", "./internal/recovery/", "./internal/runstate/"]
+          timeout_min: 25
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [exclude-state-directory]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the issue #400 fix. Change no file in this repository. Report in English.
+
+      Check and report each of the following, saying plainly which hold and which do not.
+
+      1. Exclusion is exactly the state directory, and nothing wider.
+         internal/recovery/unit_deferral_test.go: `unitOwnedDeferralExcluded` gained exactly
+         one key, `".partitur"`, and lost none. A key such as `.codegraph`, `internal`,
+         `testdata`, or anything that could hide a genuine second declaration of
+         `UnitOwnedDeferral` is a failure of this movement, not a bonus.
+         internal/runstate/recovery_coverage_test.go: `hasNonTestAppendSite`'s directory
+         guard now skips `.git` and `.partitur` and nothing else, and the rest of the walk
+         body — the `.go`/`_test.go` suffix filter, the types.go/apply.go exemptions, the
+         `SkipAll` on the first hit — is unchanged.
+
+      2. Neither walker was refactored. Both still derive their root from
+         `filepath.Join("..", "..")`; no shared helper was extracted; no signature changed.
+
+      3. The red-first evidence is real. The writer's report must quote two failures, one
+         per package, each naming a path under `.partitur/`. Reproduce it yourself: build
+         the same polluted state under `.partitur/work/<your own name>/worktree/`, check out
+         nothing and edit nothing, and confirm that the two guards pass WITH the fixture
+         present under the current code. Then remove your fixture and confirm
+         `git status --porcelain` is unchanged by your check. If you cannot construct the
+         state without writing to the repository, say so and reason the case out from the
+         walk bodies instead — do not report it as verified when you did not verify it.
+
+      4. The two regression tests do what their names claim.
+         - `TestUnitOwnedDeferralBoundaryIgnoresPartiturStateDirectory` and
+           `TestDerivedEventSourceAppendWalkIgnoresPartiturStateDirectory` exist, carry no
+           build constraint, and call the package's real walker, not a copy of it.
+         - Each creates its fixture under the repository's own `.partitur/work/`, because
+           the walkers cannot be pointed at a temporary directory — and each restores the
+           repository exactly, creating no `.partitur/` or `.partitur/work/` that outlives
+           the test. Read the cleanup code and say whether it is correct for the case where
+           `.partitur/work` did not exist beforehand.
+         - Each would FAIL against the unfixed walker. Establish this by reasoning from the
+           walk bodies and the fixture contents, and say which observation supports it.
+         - Confirm `git status --porcelain` is clean after running them.
+
+      5. Scope. Exactly four files changed, all under internal/recovery and
+         internal/runstate: the two guard test files, modified; two new test files. No
+         production file, no documentation, no configuration, no other package. `.partitur`
+         holds no leftover fixture. Name any file that does not fit.
+
+      If any point above does not hold, say so rather than passing it.
+    inputs: [state-directory-exclusion]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: recovery-guard
+          run: ["sh", "-c", "go test -count=1 -run 'TestUnitOwnedDeferralBoundary$' -v ./internal/recovery/ | grep -q '^--- PASS: TestUnitOwnedDeferralBoundary ('"]
+          timeout_min: 10
+        - id: runstate-guard
+          run: ["sh", "-c", "go test -count=1 -run 'TestDerivedEventSourceProjectionLock$' -v ./internal/runstate/ | grep -q '^--- PASS: TestDerivedEventSourceProjectionLock ('"]
+          timeout_min: 10
+        - id: recovery-state-directory-regression
+          run: ["sh", "-c", "go test -count=1 -run 'TestUnitOwnedDeferralBoundaryIgnoresPartiturStateDirectory$' -v ./internal/recovery/ | grep -q '^--- PASS: TestUnitOwnedDeferralBoundaryIgnoresPartiturStateDirectory ('"]
+          timeout_min: 10
+        - id: runstate-state-directory-regression
+          run: ["sh", "-c", "go test -count=1 -run 'TestDerivedEventSourceAppendWalkIgnoresPartiturStateDirectory$' -v ./internal/runstate/ | grep -q '^--- PASS: TestDerivedEventSourceAppendWalkIgnoresPartiturStateDirectory ('"]
+          timeout_min: 10
+        - id: package-tests
+          run: ["go", "test", "-count=1", "./internal/recovery/", "./internal/runstate/"]
+          timeout_min: 20
+        - id: package-mutation-tests
+          run: ["go", "test", "-tags=mutation", "-count=1", "./internal/recovery/", "./internal/runstate/"]
+          timeout_min: 25
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/recovery/*.go"
+    - "internal/runstate/*.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 60
+    retries_per_movement: 1
   amendment:
     auto: "off"
