@@ -250,6 +250,23 @@ movements:
       the run captures the change set.
 
       Then run every acceptance command below yourself, and report each result.
+
+      Constraint 5 — tolerate a non-repository root. Five existing tests drive
+      terminalCleanup against fixture roots that are NOT git repositories:
+        TestIncompleteAttemptBudgetExhaustionRealizesRecordedDisposition
+        TestStagedAcceptanceFailureRealizesRecordedDisposition
+        TestCancellationDuringRecoveryReplansToTheTerminalRow
+        TestFailureDuringRecoveryReplansToTheTerminalRow
+        TestRecoveryPreprocessingRemovesTerminalPreparePlan
+      In both prior attempts of this movement, `git worktree list --porcelain`
+      inside terminalCleanup failed those five with exit 128
+      "fatal: not a git repository". Deregistration must be best-effort with
+      respect to that one condition: when the root is not a git repository
+      (or the listing fails with exactly that error class), skip deregistration
+      and proceed to the directory removal as before — without masking any
+      other git failure. All five tests above must pass unchanged; do not edit
+      them.
+
     outputs:
       - id: worktree-deregistration-change-set
         kind: change_set
