@@ -528,6 +528,118 @@ func recoveryGitText(t *testing.T, root string, args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
+func TestTerminalCleanupDeregistersItsAttemptWorktrees(t *testing.T) {
+	fixture := recoveryChangeSetFixture(t)
+	defer fixture.driver.Release()
+	runRoot := filepath.Join(fixture.store.RepositoryRoot(), ".partitur", "work", string(fixture.runID))
+	attemptWorktree := filepath.Join(runRoot, string(fixture.attemptID), "worktree")
+	resolvedRunRoot := resolvedTestPath(t, runRoot)
+	if !slices.Contains(recoveryWorktreePaths(t, fixture.store.RepositoryRoot()), resolvedTestPath(t, attemptWorktree)) {
+		t.Fatal("attempt worktree is not registered before terminal cleanup")
+	}
+	if info, err := os.Stat(attemptWorktree); err != nil || !info.IsDir() {
+		t.Fatalf("attempt worktree is not live before terminal cleanup: %v", err)
+	}
+
+	cleanup := func() error {
+		return terminalCleanup(context.Background(), HandlerContext{
+			Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID,
+		}, recovery.Action{})
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	for _, worktree := range recoveryWorktreePaths(t, fixture.store.RepositoryRoot()) {
+		if pathWithinTestRoot(resolvedRunRoot, worktree) {
+			t.Fatalf("run worktree registration survived terminal cleanup: %s", worktree)
+		}
+	}
+	if _, err := os.Stat(runRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("run staging root still exists after terminal cleanup: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("replayed terminal cleanup: %v", err)
+	}
+}
+
+func TestTerminalCleanupKeepsInterruptedRunWorktreeRegistrations(t *testing.T) {
+	// Appendix C.2 RC-RESUME-016/017/018 require an interrupted run's worktree to survive for recovery.
+	fixture := recoveryChangeSetFixture(t)
+	defer fixture.driver.Release()
+	root := fixture.store.RepositoryRoot()
+	interrupted := filepath.Join(root, ".partitur", "work", "interrupted-run", "attempt", "worktree")
+	stale := filepath.Join(root, "user-worktrees", "stale")
+	for _, worktree := range []string{interrupted, stale} {
+		if err := os.MkdirAll(filepath.Dir(worktree), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		recoveryGitText(t, root, "worktree", "add", "--detach", worktree, "HEAD")
+	}
+	resolvedInterrupted := resolvedTestPath(t, interrupted)
+	resolvedStale := resolvedTestPath(t, stale)
+	registered := recoveryWorktreePaths(t, root)
+	if !slices.Contains(registered, resolvedInterrupted) || !slices.Contains(registered, resolvedStale) {
+		t.Fatalf("guard worktrees are not registered before terminal cleanup: %v", registered)
+	}
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+	if staleEntry := recoveryWorktreeEntry(t, root, resolvedStale); !strings.Contains(staleEntry, "\nprunable ") {
+		t.Fatalf("stale user worktree is not prunable before terminal cleanup: %q", staleEntry)
+	}
+
+	if err := terminalCleanup(context.Background(), HandlerContext{
+		Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID,
+	}, recovery.Action{}); err != nil {
+		t.Fatal(err)
+	}
+	registered = recoveryWorktreePaths(t, root)
+	if !slices.Contains(registered, resolvedInterrupted) {
+		t.Fatal("interrupted run worktree registration was removed")
+	}
+	if info, err := os.Stat(interrupted); err != nil || !info.IsDir() {
+		t.Fatalf("interrupted run worktree directory was removed: %v", err)
+	}
+	if !slices.Contains(registered, resolvedStale) {
+		t.Fatal("stale user worktree registration was removed")
+	}
+}
+
+func recoveryWorktreePaths(t *testing.T, root string) []string {
+	t.Helper()
+	var paths []string
+	for _, line := range strings.Split(recoveryGitText(t, root, "worktree", "list", "--porcelain"), "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func recoveryWorktreeEntry(t *testing.T, root, path string) string {
+	t.Helper()
+	for _, entry := range strings.Split(recoveryGitText(t, root, "worktree", "list", "--porcelain"), "\n\n") {
+		if strings.HasPrefix(entry, "worktree "+path+"\n") {
+			return entry
+		}
+	}
+	return ""
+}
+
+func resolvedTestPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+func pathWithinTestRoot(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
 func completeRecoveryWriter(t *testing.T, fixture recoveryChangeSetFixtureState) {
 	t.Helper()
 	input, err := fixture.store.LoadRunInput(fixture.runID)

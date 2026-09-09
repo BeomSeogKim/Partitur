@@ -768,6 +768,10 @@ func terminalCleanup(_ context.Context, execution HandlerContext, _ recovery.Act
 		return err
 	}
 	return errors.Join(
+		workspace.RemoveRegisteredWorktreesUnder(
+			execution.Store.RepositoryRoot(),
+			filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID)),
+		),
 		os.RemoveAll(filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID))),
 		criterionexec.CleanupRunTemporary(execution.RunID),
 	)

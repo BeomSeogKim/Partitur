@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -312,6 +313,81 @@ func samePath(left, right string) (bool, error) {
 		return false, err
 	}
 	return leftResolved == rightResolved, nil
+}
+
+// RemoveRegisteredWorktreesUnder removes only Git worktree registrations whose
+// recorded paths are descendants of ownedRoot.
+func RemoveRegisteredWorktreesUnder(repositoryRoot, ownedRoot string) error {
+	git, err := newSystemGit()
+	if err != nil {
+		return err
+	}
+	listed, err := git.Run(repositoryRoot, nil, "worktree", "list", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if listed.exitCode != 0 {
+		if listed.exitCode == 128 && strings.Contains(string(listed.stderr), "not a git repository") {
+			return nil
+		}
+		return gitFailure("worktree list --porcelain", listed)
+	}
+	resolvedRoot, err := resolvePathWithMissingSuffix(ownedRoot)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, line := range strings.Split(string(listed.stdout), "\n") {
+		worktree, found := strings.CutPrefix(line, "worktree ")
+		if !found {
+			continue
+		}
+		resolvedWorktree, err := resolvePathWithMissingSuffix(worktree)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		relative, err := filepath.Rel(resolvedRoot, resolvedWorktree)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		removed, err := git.Run(repositoryRoot, nil, "worktree", "remove", "--force", worktree)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if removed.exitCode != 0 {
+			failures = append(failures, gitFailure("worktree remove --force", removed))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func resolvePathWithMissingSuffix(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	existing := absolute
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(existing)
+		if err == nil {
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return resolved, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(existing))
+		existing = parent
+	}
 }
 
 func rejectExternalMergeDrivers(
