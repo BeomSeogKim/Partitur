@@ -21,6 +21,7 @@ const unitOwnedDeferralDeclaration = "internal/recovery/unit_deferral.go"
 // denominator by default rather than outside it.
 var unitOwnedDeferralExcluded = map[string]bool{
 	".git":               true,
+	".partitur":          true,
 	"docs":               true,
 	"spikes":             true,
 	"reference-workflow": true,
