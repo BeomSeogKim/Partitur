@@ -2713,6 +2713,10 @@ type waitingAdapterFixture struct {
 
 type proposalDispositionFixture struct{}
 
+type adapterResolutionFailureFixture struct {
+	t *testing.T
+}
+
 func newResolvedRequestFixture(t *testing.T) *resolvedRequestFixture {
 	return newResolvedRequestFixtureFor(t, sliceScore(), "inspect")
 }
@@ -2853,6 +2857,16 @@ func (proposalDispositionFixture) PrepareAdapterProposal(context.Context, Adapte
 
 func (fixture *waitingAdapterFixture) Resolve(adapterID string) (string, error) {
 	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+func (adapterResolutionFailureFixture) Resolve(string) (string, error) {
+	return "", errors.New("fixture adapter resolution failure")
+}
+
+func (fixture adapterResolutionFailureFixture) Execute(context.Context, adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	fixture.t.Helper()
+	fixture.t.Fatal("adapter execution reached after resolution failure")
+	return adapter.ExecuteReport{}, nil
 }
 
 func (fixture *waitingAdapterFixture) Execute(_ context.Context, plan adapter.ExecutePlan) (adapter.ExecuteReport, error) {
@@ -3195,8 +3209,10 @@ func TestLiveMaterializesRecordedSuccessorByRecordedDisposition(t *testing.T) {
 				t.Fatalf("one-step decision = %+v, want materialized %s successor %s", decision, test.wantReason, test.wantPerformer)
 			}
 
+			dependencies := testDependencies()
+			dependencies.client = adapterResolutionFailureFixture{t: t}
 			result := liveMaterializeSuccessor(
-				context.Background(), Result{RunID: runID}, store, authority, nil, testDependencies(), input,
+				context.Background(), Result{RunID: runID}, store, authority, nil, dependencies, input,
 			)
 			if result.Outcome != OutcomeInterrupted || result.Err == nil {
 				t.Fatalf("result=%+v, want adapter-resolution interruption after durable selection", result)
@@ -3305,12 +3321,14 @@ func TestLiveSuccessorMaterializesAtMovementBase(t *testing.T) {
 func TestLiveFallbackChainNeverRevisitsEarlierPerformer(t *testing.T) {
 	store, authority, runID, input, _ := liveChargedSuccessorFixture(t, "fallback")
 	defer authority.Release()
+	dependencies := testDependencies()
+	dependencies.client = adapterResolutionFailureFixture{t: t}
 	for _, wantPerformer := range []string{"backup-a", "backup-b"} {
 		decision := recovery.PlanBetweenUnit(input.Projection)
 		if decision.Action == nil || decision.Action.PendingSuccessor == nil || decision.Action.PendingSuccessor.Performer != wantPerformer {
 			t.Fatalf("pending successor=%+v, want %q", decision.Action, wantPerformer)
 		}
-		result := liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, testDependencies(), input)
+		result := liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, dependencies, input)
 		if result.Outcome != OutcomeInterrupted || result.Err == nil {
 			t.Fatalf("materialization result=%+v", result)
 		}
@@ -3642,13 +3660,15 @@ func assertLiveSchedulerKind(t *testing.T, store *runstore.Store, authority *run
 func TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap(t *testing.T) {
 	store, authority, runID, input, _ := liveChargedSuccessorFixture(t, "quality_retry")
 	defer authority.Release()
+	dependencies := testDependencies()
+	dependencies.client = adapterResolutionFailureFixture{t: t}
 	current := input.Projection.CurrentHeadAttempt
 	if current == nil || input.Projection.Scheduler.PendingSuccessor == nil {
 		t.Fatal("charged successor fixture is incomplete")
 	}
 	current.FailureClassification.RetriesPerMovement = 0
 	current.FailureClassification.Fallbacks = nil
-	result := liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, testDependencies(), input)
+	result := liveMaterializeSuccessor(context.Background(), Result{RunID: runID}, store, authority, nil, dependencies, input)
 	if result.Outcome != OutcomeInterrupted || result.Err == nil {
 		t.Fatalf("result=%+v, want selection then adapter-resolution interruption", result)
 	}
