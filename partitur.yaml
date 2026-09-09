@@ -1,24 +1,114 @@
 score: "0.2"
-name: reference-workflow
+name: issue-440-live-tests-construct-resolution-failure
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Fix issue #440: three untagged tests in `internal/driver` must construct the adapter-resolution
+  failure they assert, instead of inheriting it from whatever the operator's `PATH` happens to
+  lack. Today they are green only by accident of the machine.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  THE THREE TESTS (all in `internal/driver/driver_test.go`, all untagged):
+
+    TestLiveMaterializesRecordedSuccessorByRecordedDisposition   (line ~3172, two subtests)
+    TestLiveFallbackChainNeverRevisitsEarlierPerformer           (line ~3305)
+    TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap           (line ~3642)
+
+  Each drives `liveMaterializeSuccessor` with `testDependencies()` and asserts that the run stops
+  at `performer.selected` — that is, that the adapter could not be resolved. None of them
+  constructs that condition; they inherit it from the ambient `PATH`.
+
+  THE TRIGGER, MEASURED ON a5643ee4 (this is a correction to the issue text, which blamed the
+  vendor CLIs; see the correcting comment on #440):
+
+  Base PATH is a scratch directory holding only `go` and `git` symlinks, plus
+  `/usr/bin:/bin:/usr/sbin:/sbin`. The two variables are whether `$HOME/go/bin` (which holds
+  `partitur-adapter-codex`, `partitur-adapter-claude`, `partitur-trampoline`) and
+  `/opt/homebrew/bin` (which holds the real `codex` and `claude` CLIs) are prepended.
+
+    #  $HOME/go/bin  /opt/homebrew/bin   Materializes   FallbackChain   RetryPolicyAttemptCap
+    A       no              no              PASS            PASS               PASS
+    B      yes              no              FAIL            FAIL               FAIL
+    C       no             yes              PASS            PASS               PASS
+    D      yes             yes              FAIL            FAIL               FAIL
+
+  `/opt/homebrew/bin` is irrelevant in both directions. `$HOME/go/bin` alone is sufficient. The
+  vendor CLI is the adapter shim's dependency, not the core's, and is never consulted at the point
+  these tests stop.
+
+  WHY. The fixture's performers all bind `adapter: codex`, so `internal/adapter.resolveExecutable`
+  (`internal/adapter/client.go`) looks for the literal name `partitur-adapter-codex` on `PATH`.
+  `internal/driver/driver.go:621` calls `dependencies.client.Resolve(performer.Adapter)`
+  immediately after appending `performer.selected`; on failure the driver returns `interrupted`
+  with `performer.selected` last, which is exactly what these tests assert. When `$HOME/go/bin` is
+  on `PATH` that resolve SUCCEEDS, the driver continues to `resolveTrampoline` —
+  `testDependencies()` returns the absolute `/unused/trampoline`, which passes the absoluteness
+  check — and `execution.started` is appended. Three different-looking symptoms, one cause:
+
+    TestLiveMaterializesRecordedSuccessorByRecordedDisposition
+      driver_test.go:3218: durable event order=[... performer.selected attempt.failed
+                           performer.selected execution.started], want [... performer.selected
+                           attempt.failed performer.selected]
+    TestLiveFallbackChainNeverRevisitsEarlierPerformer
+      driver_test.go:3317: illegal transition: attempt.failed: attempt is not in a legal source state
+    TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap
+      driver_test.go:3660: last event=execution.started, want successor selection without a
+                           retry-policy attempt cap
+
+  BLAST RADIUS IS EXACTLY THESE THREE. Full `go test -count=1 ./internal/driver/` (about 60s):
+  row B fails only on them, with no other failure; row C is fully green. So "the whole package is
+  green when resolution succeeds" is the definition of fixed, and it is reachable.
+
+  MECHANISM DECISION — read this before choosing an implementation.
+
+  `t.Setenv("PATH", t.TempDir())` is NOT a safe minimal shape here, even though the file already
+  uses `t.Setenv("PATH", ...)` three times (`readerSuccessDependencies` and friends, which PREPEND
+  a fake-adapter directory so resolution SUCCEEDS). `liveMaterializeSuccessor` calls
+  `PrepareSuccessorBase` and `workspace.CreateRecoveredAttemptAtBase` BEFORE the adapter resolve,
+  and the workspace layer resolves git through `exec.LookPath("git")`
+  (`internal/workspace/git.go:47`). An emptied `PATH` breaks the fixture before it reaches the
+  assertion, turning a real red into a differently-shaped red. A hand-curated `PATH` that keeps
+  git but drops `$HOME/go/bin` is possible but re-introduces the same ambient coupling one layer
+  down.
+
+  The repository already owns a better mechanism. `dependencies.client` is an injectable
+  `AdapterExecutor` (`internal/driver/types.go:159`, two methods: `Resolve` and `Execute`), and
+  three fixture clients in `driver_test.go` already implement `Resolve` —
+  `waitingAdapterFixture`, `completedAdapterFixture`, `deliveredInputAdapterFixture`, each
+  returning `"/fixture/partitur-adapter-" + adapterID, nil`. A fixture whose `Resolve` returns an
+  ERROR constructs the asserted premise directly, with no `PATH` involvement at all. That is the
+  expected shape. The writer may choose otherwise, but must then defend the choice against the
+  git-lookup problem above; the acceptance criteria run the package under BOTH environments and
+  will not accept an implementation that only works under one.
+
+  SCOPE IS THE POINT OF THIS ISSUE. Only `internal/driver/driver_test.go` changes: the three
+  tests, plus at most one small shared helper (a fixture type and, if useful, a one-line
+  `dependencies` constructor) in that same file. No production file. No other test. In particular
+  `TestLiveSuccessorMaterializesAtMovementBase` and the `readerSuccessDependencies` family are
+  green today and must be left exactly as they are.
+
+  FACTS THE WRITER WOULD OTHERWISE HAVE TO REDISCOVER:
+    - No test in `internal/driver` calls `t.Parallel()`, so `t.Setenv` would be legal there; that
+      is not the reason it is rejected above.
+    - None of the three tests is a mutation witness. `internal/driver/mutation_test.go` names
+      about thirty witness tests and none of them is one of these three; its anchors are strings
+      in production sources. So the mutation battery is not the gate for this change — but
+      `driver_test.go` is untagged and therefore compiled into the `-tags=mutation` build too, so
+      a compile-only mutation gate is included below and must stay green.
+    - NEVER run `go test -tags=mutation ./...`. The whole-repository mutation battery starves this
+      machine (#316). Only the one package named in the criteria.
+
+  This score temporarily replaces the committed reference-workflow score because `partitur run`
+  reads only `<repo>/partitur.yaml` and takes no score operand (#435). It is reverted before the
+  pull request; only the `driver_test.go` change is meant to land.
 
 verification:
   expectation:
-    intent: none
+    intent: pass-existing-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +118,228 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: construct-resolution-failure
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Fix issue #440 in this repository, red-first. Everything you write is English.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      Two PATHs are used throughout. Define them exactly, and never rely on the inherited one:
+
+        RESOLUTION-SUCCEEDS   PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        RESOLUTION-FAILS      PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+      The only difference is `$HOME/go/bin`, which holds `partitur-adapter-codex`. Both keep `go`
+      and `git` reachable; that is why the second one is a curated list and not an empty directory.
+
+      Step 0 — REPRODUCE THE TRIGGER YOURSELF. Do not take the score's matrix on trust.
+
+      From the repository root, run the three tests under each PATH:
+
+        env PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+          go test -count=1 -v -run '^(TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap|TestLiveFallbackChainNeverRevisitsEarlierPerformer|TestLiveMaterializesRecordedSuccessorByRecordedDisposition)$' ./internal/driver/
+
+        env PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+          go test -count=1 -v -run '^(TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap|TestLiveFallbackChainNeverRevisitsEarlierPerformer|TestLiveMaterializesRecordedSuccessorByRecordedDisposition)$' ./internal/driver/
+
+      Confirm `command -v partitur-adapter-codex` under each. Report both outcomes verbatim. If
+      the first is not red or the second is not green, STOP and report: the premise does not hold
+      on this machine and nothing below is meaningful.
+
+      Step 1 — read the failure path before touching it.
+
+      Read `internal/driver/driver.go` around line 621 (`dependencies.client.Resolve`), the
+      `AdapterExecutor` interface in `internal/driver/types.go`, `resolveExecutable` in
+      `internal/adapter/client.go`, and the existing fixture clients in `driver_test.go` that
+      already implement `Resolve`. State in one paragraph, in your report, which injection point
+      you will use and why the alternative you rejected is worse. If you are considering
+      `t.Setenv("PATH", ...)`, address `exec.LookPath("git")` in `internal/workspace/git.go`
+      explicitly: `PrepareSuccessorBase` and `workspace.CreateRecoveredAttemptAtBase` both run
+      before the adapter resolve.
+
+      Step 2 — make the three tests construct their own premise.
+
+      Change ONLY `internal/driver/driver_test.go`. Change ONLY the three named tests, plus at
+      most one small shared helper in that same file if all three need it.
+
+      What must NOT change:
+        - Every assertion stays exactly as strong as it is now. The expected event-order slice in
+          `TestLiveMaterializesRecordedSuccessorByRecordedDisposition`, the
+          `[]string{"worker", "backup-a", "backup-b"}` performer list in
+          `TestLiveFallbackChainNeverRevisitsEarlierPerformer`, and the
+          `EventPerformerSelected` last-event check in
+          `TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap` are the subject of these tests.
+          Loosening any of them to accommodate a resolution that now succeeds is the exact
+          failure this issue exists to prevent, and will be rejected.
+        - No `t.Skip`, no build constraint, no environment sniffing ("skip if the adapter is
+          present"). A test that disappears on this machine is not fixed.
+        - No production (non-test) file. No other test, including
+          `TestLiveSuccessorMaterializesAtMovementBase` and the `readerSuccessDependencies`,
+          `artifactFreeSuccessDependencies` and `reviewSuccessDependencies` helpers, which
+          PREPEND a fake adapter directory so resolution succeeds and are correct as they stand.
+        - `testDependencies()` itself. Other tests depend on it resolving through the real client;
+          add your fixture alongside it rather than changing it.
+
+      If your helper's `Execute` can never legitimately be called, make it fail loudly rather than
+      returning a zero value, so a future change that reaches it is caught.
+
+      Step 3 — prove the pins were red before the fix.
+
+      Each of the three grep-pinned criteria below must return rc=1 on the UNFIXED tree under the
+      RESOLUTION-SUCCEEDS PATH. Verify this: stash your step-2 edit, run each of the three pinned
+      commands exactly as written in the criteria, record the exit status, restore your edit.
+      Report all three exit statuses. A pin that is already green before the fix locks nothing.
+
+      Step 4 — prove the fix holds under BOTH environments.
+
+      Run, and report the tail of each:
+
+        env PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin go test -count=1 ./internal/driver/
+        env PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin           go test -count=1 ./internal/driver/
+
+      Both must be `ok`. Each takes about 60 seconds. The first one is the issue's definition of
+      fixed; the second proves you did not trade one ambient dependency for another.
+
+      Step 5 — confirm the scope.
+
+      `git status --porcelain` and `git diff --stat` must show exactly one modified file:
+      `internal/driver/driver_test.go`. Report both outputs verbatim. Do not commit; the run
+      captures the change set.
+
+      Then run every acceptance command below yourself, and report each result.
     outputs:
-      - id: marker-change
+      - id: resolution-failure-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: materializes-pinned-under-resolution-succeeds
+          run: ["sh", "-c", "PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; go test -count=1 -run '^TestLiveMaterializesRecordedSuccessorByRecordedDisposition$' -v ./internal/driver/ | grep -q '^--- PASS: TestLiveMaterializesRecordedSuccessorByRecordedDisposition'"]
+          timeout_min: 10
+        - id: fallback-chain-pinned-under-resolution-succeeds
+          run: ["sh", "-c", "PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; go test -count=1 -run '^TestLiveFallbackChainNeverRevisitsEarlierPerformer$' -v ./internal/driver/ | grep -q '^--- PASS: TestLiveFallbackChainNeverRevisitsEarlierPerformer'"]
+          timeout_min: 10
+        - id: retry-cap-pinned-under-resolution-succeeds
+          run: ["sh", "-c", "PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; go test -count=1 -run '^TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap$' -v ./internal/driver/ | grep -q '^--- PASS: TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap'"]
+          timeout_min: 10
+        - id: driver-package-under-resolution-succeeds
+          run: ["sh", "-c", "PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; command -v partitur-adapter-codex >/dev/null || exit 1; go test -count=1 ./internal/driver/"]
+          timeout_min: 15
+        - id: driver-package-under-resolution-fails
+          run: ["sh", "-c", "PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; command -v partitur-adapter-codex >/dev/null && exit 1; go test -count=1 ./internal/driver/"]
+          timeout_min: 15
+        - id: mutation-build-compiles
+          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./internal/driver/"]
+          timeout_min: 10
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [construct-resolution-failure]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the issue #440 fix. Change no file in this repository. Report in English.
+
+      The two PATHs, used exactly as written:
+
+        RESOLUTION-SUCCEEDS   PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        RESOLUTION-FAILS      PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+      1. SCOPE. Exactly one file changed: `internal/driver/driver_test.go`. Check with
+      `git status --porcelain` and `git diff --stat`, and report both verbatim. Any production
+      file, any other test file, any documentation, `partitur.yaml` or `.partitur/cast.yaml`
+      change is a scope violation and a failure — say so rather than passing it.
+
+      2. WITHIN THAT FILE, ONLY THE THREE TESTS. Read `git diff internal/driver/driver_test.go` in
+      full. The changed hunks must be confined to:
+          TestLiveMaterializesRecordedSuccessorByRecordedDisposition
+          TestLiveFallbackChainNeverRevisitsEarlierPerformer
+          TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap
+      plus at most one small shared helper added in the same file. Confirm `testDependencies()`
+      itself is unchanged, and that `readerSuccessDependencies`, `artifactFreeSuccessDependencies`
+      and `reviewSuccessDependencies` are unchanged — those PREPEND a fake adapter directory so
+      resolution succeeds, and are correct as they stand. Name any other hunk you find.
+
+      3. THE ASSERTIONS ARE NOT WEAKER. This is the finding most likely to be missed, so do it
+      line by line rather than by impression. Compare against the pre-change revision:
+          - the expected durable event-order slice in the materializes test — same elements, same
+            order, still an exact `slices.Equal`;
+          - `[]string{"worker", "backup-a", "backup-b"}` in the fallback-chain test, still an
+            exact `slices.Equal`;
+          - the `EventPerformerSelected` last-event check in the retry-cap test, still an exact
+            comparison on the LAST journal event.
+      Also confirm there is no `t.Skip`, no build constraint, and no "skip if the adapter binary
+      is present" sniffing anywhere in the diff. Any of those means the test no longer runs on the
+      machines that exposed the bug, which is a failure even though every criterion is green.
+
+      4. THE PREMISE IS NOW CONSTRUCTED, NOT INHERITED. State, in your own words, how each of the
+      three tests now makes adapter resolution fail, and confirm that mechanism does not read the
+      ambient `PATH`. If the writer chose a `PATH`-based mechanism instead, check explicitly that
+      `git` is still reachable on the constructed `PATH` — `PrepareSuccessorBase` and
+      `workspace.CreateRecoveredAttemptAtBase` run before the adapter resolve and the workspace
+      layer calls `exec.LookPath("git")` (`internal/workspace/git.go`). A `PATH` without git makes
+      the test fail for a different reason, or pass for one.
+
+      5. THE RED-FIRST EVIDENCE IS REAL. The writer claims all three pinned criteria returned rc=1
+      on the unfixed tree under RESOLUTION-SUCCEEDS. Verify at least one yourself: restore the
+      pre-change `driver_test.go` into a scratch copy of the repository (do NOT modify this
+      worktree — use `git show <rev>:internal/driver/driver_test.go` into a copy under your own
+      temporary directory, or reason from the pre-change source if a copy is impractical), and
+      establish that the pinned command would have printed no `--- PASS:` line for that test. Say
+      which observation supports your conclusion.
+
+      6. RE-RUN THE MATRIX SPOT-CHECKS YOURSELF. Run the three tests under BOTH PATHs and confirm
+      all three pass under each:
+
+        env PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+          go test -count=1 -v -run '^(TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap|TestLiveFallbackChainNeverRevisitsEarlierPerformer|TestLiveMaterializesRecordedSuccessorByRecordedDisposition)$' ./internal/driver/
+
+        env PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+          go test -count=1 -v -run '^(TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap|TestLiveFallbackChainNeverRevisitsEarlierPerformer|TestLiveMaterializesRecordedSuccessorByRecordedDisposition)$' ./internal/driver/
+
+      Confirm `command -v partitur-adapter-codex` finds the binary under the first PATH and not
+      under the second — otherwise the two environments are not actually different and the whole
+      check is vacuous. Report both.
+
+      7. THE PACKAGE, NOT JUST THE THREE. `go test -count=1 ./internal/driver/` must be `ok` under
+      BOTH PATHs. That is the issue's definition of fixed. Each run takes about 60 seconds.
+
+      8. NEVER run `go test -tags=mutation ./...` (#316). The mutation gate here is compile-only
+      and is in the criteria below.
+
+      If any point above does not hold, say so plainly rather than passing it.
+    inputs: [resolution-failure-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: three-tests-pinned-under-resolution-succeeds
+          run: ["sh", "-c", "PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; command -v partitur-adapter-codex >/dev/null || exit 1; go test -count=1 -run '^(TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap|TestLiveFallbackChainNeverRevisitsEarlierPerformer|TestLiveMaterializesRecordedSuccessorByRecordedDisposition)$' -v ./internal/driver/ | grep -c '^--- PASS: TestLive' | grep -qx 3"]
+          timeout_min: 10
+        - id: three-tests-pinned-under-resolution-fails
+          run: ["sh", "-c", "PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; command -v partitur-adapter-codex >/dev/null && exit 1; go test -count=1 -run '^(TestLiveSuccessorDoesNotApplyRetryPolicyAttemptCap|TestLiveFallbackChainNeverRevisitsEarlierPerformer|TestLiveMaterializesRecordedSuccessorByRecordedDisposition)$' -v ./internal/driver/ | grep -c '^--- PASS: TestLive' | grep -qx 3"]
+          timeout_min: 10
+        - id: driver-package-under-resolution-succeeds
+          run: ["sh", "-c", "PATH=$HOME/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; command -v partitur-adapter-codex >/dev/null || exit 1; go test -count=1 ./internal/driver/"]
+          timeout_min: 15
+        - id: driver-package-under-resolution-fails
+          run: ["sh", "-c", "PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH; command -v partitur-adapter-codex >/dev/null && exit 1; go test -count=1 ./internal/driver/"]
+          timeout_min: 15
+        - id: mutation-build-compiles
+          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./internal/driver/"]
+          timeout_min: 10
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/adapter/*.go"
+    - "internal/driver/*.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 150
+    retries_per_movement: 1
   amendment:
     auto: "off"
