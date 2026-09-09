@@ -1,141 +1,24 @@
 score: "0.2"
-name: issue-402-deregister-attempt-worktrees
+name: reference-workflow
 revision: 1
 status: finalized
 
 goal: |
-  Fix issue #402: terminal cleanup deletes a run's attempt worktree *directories* but never
-  deregisters them from Git, so `.git/worktrees` metadata accumulates in every repository
-  Partitur runs in. Terminal cleanup must drop the registrations it owns — and only those.
+  Exercise one real, recovery-capable Partitur write attempt against this repository,
+  and let `apply` carry its result onto the checkout.
 
 context: |
-  THE DEFECT, LOCATED.
-
-  Creation: `internal/workspace/attempt.go`, `(*Run).createAttempt` runs
-  `git worktree add --detach <attemptRoot>/worktree <baseCommit>` (about line 62). That is the
-  only production path in this repository that registers a worktree in the user's repository.
-
-  Deletion: `internal/recoveryexec/handlers.go`, `terminalCleanup` (about line 743) ends with
-
-      return errors.Join(
-          os.RemoveAll(filepath.Join(execution.Store.RepositoryRoot(), ".partitur", "work", string(execution.RunID))),
-          criterionexec.CleanupRunTemporary(execution.RunID),
-      )
-
-  `os.RemoveAll` deletes the directory tree out from under Git. No `git worktree remove`, no
-  `git worktree prune`, anywhere in the tree. The registration survives as `prunable`.
-  `terminalCleanup` is the single terminal-cleanup handler (registered at handlers.go line 84 for
-  `recovery.ActionTerminalCleanup`), and `cmd/partitur/main.go` reaches it through the recovery
-  executor at the end of every run, which is why the leak is per-run and unbounded.
-
-  MEASURED, ON THIS TREE — do not take it on trust, but do not re-derive it blindly either.
-
-  A probe test in `internal/recoveryexec` built the standard fixture, called `terminalCleanup`
-  directly, and listed worktrees before and after. Before: the attempt worktree is registered and
-  live. After: the directory is gone and the registration remains, printed by
-  `git worktree list --porcelain` as
-
-      worktree <root>/.partitur/work/<run-id>/<attempt-id>/worktree
-      HEAD <oid>
-      detached
-      prunable gitdir file points to non-existent location
-
-  That is exactly the issue's symptom, reproduced at unit level in 0.36 s.
-
-  GIT FACTS, MEASURED WITH git 2.50.1 (the repository requires >= 2.47, `internal/workspace/git.go`):
-
-    - `git worktree remove --force <path>` returns 0 on a live worktree, on a worktree with
-      uncommitted and untracked changes, AND on one whose directory was already deleted (the
-      `prunable` case). In every case the registration is dropped.
-    - `git worktree remove --force <path>` returns 128 — `fatal: '<path>' is not a working tree` —
-      when the path is not registered. So a path that was never registered must not be passed.
-    - When the last worktree registration goes, Git removes `.git/worktrees` entirely.
-    - `git worktree list --porcelain` prints the worktree paths Git recorded, which are
-      SYMLINK-RESOLVED. On macOS `t.TempDir()` returns `/var/folders/...` while the listing prints
-      `/private/var/folders/...`, and `/tmp` prints as `/private/tmp`. An implementation that
-      prefix-matches the listing against an unresolved repository root matches nothing and
-      silently does nothing. `internal/workspace/git.go` already owns the right tool for this:
-      `samePath` resolves both sides with `filepath.EvalSymlinks`.
-
-  WHAT THE SPEC SAYS — READ THIS BEFORE PROPOSING A DESIGN CHANGE.
-
-    - `docs/DESIGN.md` §1 (lines ~158-160) makes `<repo>/.partitur/work/<run-id>/<attempt-id>/`
-      non-authoritative, agent-writable staging.
-    - `docs/DESIGN.md` §5 "Git worktrees" (line ~1966) says each attempt gets a fresh worktree; it
-      does not say how the worktree is retired.
-    - Appendix C.1 `RC-RESUME-002` (line ~6631) requires terminal cleanup to "finish any residual
-      non-journal cleanup: remove a stale `driver.lease` or quiesced sidecar, an orphan plan
-      record, and both run staging roots".
-    - Appendix C.2 `RC-RESUME-016`, `RC-RESUME-017`, `RC-RESUME-018` (lines ~6674-6676) require a
-      NON-terminal run's surviving worktree to remain usable: recovery captures the change set,
-      re-runs post-hoc verification, and pins the acceptance subject FROM that worktree, and
-      records `attempt.failed {reason: worktree_lost}` when it is gone.
-
-    Dropping a terminal run's own registration is a conforming way to remove that run's staging
-    root; no clause pins the leaking behaviour. So NO `docs/DESIGN.md` EDIT IS REQUIRED, and none
-    is permitted here: `docs/DESIGN.clause-staging.json` pins DESIGN.md by blob
-    (`input_blob: 7131f30447046ebc51fae55997e72480c49ffe91`, which is its current hash) and
-    `internal/docclause` reads that pin. Editing the specification is a different, larger change
-    with its own review; if you believe it is required, STOP and say so instead of doing it.
-
-    `RC-RESUME-016/017/018` are what makes scope a correctness property, not tidiness: the
-    deregistration must be reachable ONLY from terminal cleanup, and must touch only the
-    registrations under the terminating run's own staging root. An interrupted run's worktree —
-    another run in the same repository, or the same repository's other work — must survive.
-
-  THE TEST SEAM ALREADY EXISTS.
-
-  `internal/recoveryexec/executor_test.go` has `recoveryChangeSetFixture(t)` (line ~678). It
-  builds a real Git repository under `t.TempDir()`, runs the real `validate.Prepare`,
-  `workspace.Start`, and `started.Run.CreateAttempt("write")` — the real `git worktree add` — and
-  returns `{store, driver, runID, attemptID}`. `terminalCleanup` is package-internal and directly
-  callable:
-
-      terminalCleanup(context.Background(),
-          HandlerContext{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID},
-          recovery.Action{})
-
-  A second, unrelated registration is one `git worktree add --detach` away (see
-  `recoveryGitText` at executor_test.go line ~520 for the git helper this file already uses). No
-  nested `partitur run` is needed, and the whole check runs in well under a second.
-
-  Because the fixture root is a `t.TempDir()` under a symlinked path on this machine, a test
-  written this way also catches the symlink hazard above for free — an implementation that
-  compares unresolved paths will fail it here.
-
-  FACTS THE WRITER WOULD OTHERWISE HAVE TO REDISCOVER:
-
-    - `internal/recoveryexec` already imports `internal/workspace`, so a helper may live in either
-      package. `internal/workspace` owns the hardened Git invocation (`systemGit`, `gitOutput`,
-      `GitInvocationBound`) and is where `git worktree add` lives; reaching for `os/exec` directly
-      in `recoveryexec` would be a second, unhardened Git path.
-    - `internal/workspace` has NO mutation suite. `internal/recoveryexec` does
-      (`internal/recoveryexec/mutation_test.go`), and its anchors are exact source strings in
-      `internal/recoveryexec/handlers.go`:
-          "case driver.OutcomeFailed:\n\t\treturn ErrRunFailedDuringRecovery"
-          "workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)"
-          "func defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {"
-      None of them is inside `terminalCleanup`, and each must still occur exactly once (#432) —
-      there is a criterion below that checks this.
-    - NEVER run `go test -tags=mutation ./...`. The whole-repository mutation battery starves this
-      machine (#316). Only the compile-only gate named in the criteria.
-    - `cmd/partitur/kill_harness_test.go`'s `resumeOwnedResiduals` (line ~2277) is a mechanical
-      mirror of `terminalCleanup`'s FILESYSTEM residue families. Git registrations are not a
-      filesystem path family and that helper does not enumerate them; it is out of scope here and
-      must not be touched.
-    - Terminal cleanup can be replayed (`RC-RESUME-002` re-runs it), so the new step must be safe
-      to run twice.
-
-  This score temporarily replaces the committed reference-workflow score because `partitur run`
-  reads only `<repo>/partitur.yaml` and takes no score operand (#435). It is reverted before the
-  pull request; only the `internal/` change is meant to land.
+  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
+  change only reference-workflow/marker.txt; its base content is deliberately different
+  from the required result so that the captured change set is not a no-op, and so that
+  the checkout `apply` runs against initially differs from the candidate.
 
 verification:
   expectation:
-    intent: pass-existing-tests
+    intent: none
     apply_gate:
       require: [verified, approved]
-  final_movement: confirm
+  final_movement: check
 
 parts:
   writer:
@@ -145,238 +28,43 @@ parts:
     read_only: true
 
 movements:
-  - id: deregister-attempt-worktrees
+  - id: write-marker
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Fix issue #402 in this repository, red-first. Everything you write is English.
+      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
+      partitur reference workflow
 
-      Step 0 — REPRODUCE THE LEAK YOURSELF, at unit level.
-
-      Read `terminalCleanup` in `internal/recoveryexec/handlers.go` and
-      `recoveryChangeSetFixture` in `internal/recoveryexec/executor_test.go`. Then write a
-      throwaway probe test in `internal/recoveryexec` that builds the fixture, prints
-      `git worktree list --porcelain` for `fixture.store.RepositoryRoot()`, calls
-
-          terminalCleanup(context.Background(),
-              HandlerContext{Store: fixture.store, Driver: fixture.driver, RunID: fixture.runID},
-              recovery.Action{})
-
-      and prints the listing again. Report both listings verbatim. You must see the run's
-      attempt worktree registration survive, marked `prunable`. If you do not, STOP and report:
-      the premise does not hold and nothing below is meaningful. Delete the probe afterwards —
-      the real tests are step 2.
-
-      Step 1 — decide the shape, and defend it in one paragraph in your report.
-
-      The registration must be dropped by Git, not by deleting metadata. Measured facts you may
-      rely on (they are in this score's context, with the exact commands):
-      `git worktree remove --force` succeeds on a live worktree, on a dirty one, and on one whose
-      directory is already gone; it fails with exit 128 on a path that is not registered;
-      `git worktree list --porcelain` reports symlink-RESOLVED paths.
-
-      Constraints your shape must satisfy, all four:
-
-        (a) It removes the registrations of the run that is terminating.
-        (b) It removes NOTHING else. Not another run's registrations — an interrupted run's
-            worktree is what Appendix C.2 `RC-RESUME-016/017/018` recover from — and not a
-            registration the user made. A bare repository-wide `git worktree prune` fails this and
-            will be rejected: it is scoped by whether a directory happens to be missing, not by
-            ownership.
-        (c) It is safe to run twice: `RC-RESUME-002` can replay terminal cleanup.
-        (d) It goes through the repository's hardened Git invocation. `internal/workspace` owns
-            `systemGit`/`gitOutput` and already runs `git worktree add`; do not open a second,
-            unhardened `os/exec` Git path in `internal/recoveryexec`.
-
-      Also state how your shape survives the symlink hazard: if you match paths from
-      `git worktree list --porcelain` against the repository root, resolve both sides
-      (`filepath.EvalSymlinks`, as `samePath` in `internal/workspace/git.go` already does), or
-      explain why your shape does no path matching at all.
-
-      Step 2 — write the two tests FIRST, with these exact names.
-
-      In `internal/recoveryexec` (the fixture and the handler both live there):
-
-        TestTerminalCleanupDeregistersItsAttemptWorktrees
-          Build the fixture. ASSERT FIRST that the attempt worktree IS registered and live —
-          the constructed premise must be checked, not assumed. Then call `terminalCleanup` as
-          above. Then assert `git worktree list --porcelain` contains NO entry for the run's
-          staging root, and that the run's staging directory is gone. Call `terminalCleanup` a
-          second time and assert it still returns no error (replay safety).
-
-        TestTerminalCleanupKeepsInterruptedRunWorktreeRegistrations
-          THIS IS THE RECOVERY-SEMANTICS GUARD; name it as such in a comment citing Appendix C.2
-          `RC-RESUME-016/017/018`. Build the fixture, then register a second worktree that
-          terminal cleanup does not own — another run id under `.partitur/work/`, added with
-          `git worktree add --detach` — and assert it is registered. Run terminal cleanup for the
-          fixture's run only. Assert the second registration AND its directory both SURVIVE.
-          Also register a stale worktree that is not Partitur's at all (add one outside
-          `.partitur/work/`, then delete its directory so it lists as `prunable`) and assert that
-          it survives too: this is what separates ownership-scoped removal from
-          `git worktree prune`.
-
-      Both tests must FAIL on the unfixed tree. Prove it: with only the tests in place and no
-      production change, run each pinned criterion command exactly as written below, record the
-      exit status, and report all of them. `TestTerminalCleanupDeregistersItsAttemptWorktrees`
-      must be red; the guard test may already be green before the fix — say which, and if it is
-      green, say in one line what it will catch that the first test cannot.
-
-      Step 3 — implement the smallest production change that makes them pass.
-
-      Production edits are minimal and confined to `internal/recoveryexec` and
-      `internal/workspace`. No refactor, no rename, no reformatting of code you did not have to
-      change, no new package, no new configuration, no exported surface beyond the one helper you
-      actually need. Do not touch `docs/DESIGN.md` — its bytes are pinned by
-      `docs/DESIGN.clause-staging.json` and no clause requires changing. Do not touch
-      `cmd/partitur/kill_harness_test.go`. Do not weaken or delete any existing test.
-
-      Whatever error the deregistration produces must be surfaced, not swallowed:
-      `terminalCleanup` already joins its failures with `errors.Join`.
-
-      Step 4 — prove it holds.
-
-      Run and report the tail of each:
-
-        go build ./...
-        go test -count=1 ./internal/recoveryexec/          # about 17 s
-        go test -count=1 ./internal/workspace/             # about 21 s
-        go test -tags=mutation -count=1 -run '^$' ./internal/recoveryexec/
-
-      Step 5 — confirm the scope.
-
-      `git status --porcelain` and `git diff --stat` must show only files under
-      `internal/recoveryexec/` and `internal/workspace/`. Report both verbatim. Do not commit;
-      the run captures the change set.
-
-      Then run every acceptance command below yourself, and report each result.
+      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
     outputs:
-      - id: worktree-deregistration-change-set
+      - id: marker-change
         kind: change_set
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: deregisters-pinned
-          run: ["sh", "-c", "go test -count=1 -run '^TestTerminalCleanupDeregistersItsAttemptWorktrees$' -v ./internal/recoveryexec/ | grep -q '^--- PASS: TestTerminalCleanupDeregistersItsAttemptWorktrees'"]
-          timeout_min: 10
-        - id: interrupted-run-guard-pinned
-          run: ["sh", "-c", "go test -count=1 -run '^TestTerminalCleanupKeepsInterruptedRunWorktreeRegistrations$' -v ./internal/recoveryexec/ | grep -q '^--- PASS: TestTerminalCleanupKeepsInterruptedRunWorktreeRegistrations'"]
-          timeout_min: 10
-        - id: recoveryexec-package
-          run: ["go", "test", "-count=1", "./internal/recoveryexec/"]
-          timeout_min: 15
-        - id: workspace-package
-          run: ["go", "test", "-count=1", "./internal/workspace/"]
-          timeout_min: 15
-        - id: mutation-build-compiles
-          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./internal/recoveryexec/"]
-          timeout_min: 10
-        - id: mutation-anchors-still-unique
-          run: ["sh", "-c", "f=internal/recoveryexec/handlers.go; for a in 'return ErrRunFailedDuringRecovery' 'workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)' 'func defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {'; do n=$(grep -cF \"$a\" \"$f\"); test \"$n\" = 1 || exit 1; done"]
-          timeout_min: 5
+        - id: marker-written
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
 
-  - id: confirm
+  - id: check
     part: verifier
-    needs: [deregister-attempt-worktrees]
+    needs: [write-marker]
     grants: [repo_read, shell]
     instruction: |
-      Confirm the issue #402 fix. Change no file in this repository. Report in English.
-
-      This is the first Partitur-driven run whose fix touches production code, so scope and
-      recovery semantics matter more than the green criteria.
-
-      1. SCOPE. `git status --porcelain` and `git diff --stat`; report both verbatim. Every
-      changed file must be under `internal/recoveryexec/` or `internal/workspace/`. A change to
-      `docs/DESIGN.md`, `docs/DESIGN.clause-staging.json`, `cmd/partitur/**`, `partitur.yaml`,
-      `.partitur/cast.yaml`, or any other package is a scope violation and a failure — say so
-      rather than passing it. Read the whole diff, not a summary of it.
-
-      2. THE PRODUCTION CHANGE IS MINIMAL. Name every production (non-test) hunk and say why each
-      one is necessary for deregistration. Renames, reformatting, extracted helpers that only one
-      caller uses, new exported surface beyond the one helper the fix needs, and "while I was
-      here" edits are findings, not neutral. Confirm no existing test was weakened or deleted:
-      compare the diff against the pre-change revision for every test file it touches.
-
-      3. THE DEREGISTRATION IS OWNERSHIP-SCOPED. This is the finding most likely to be missed.
-      Establish, by reading the code rather than by trusting the tests, that the change removes
-      only registrations belonging to the terminating run's staging root
-      (`<repo>/.partitur/work/<run-id>/`). If it calls `git worktree prune` with repository-wide
-      effect, or removes every registration whose directory is missing, that is a FAILURE even
-      with all criteria green: Appendix C.2 `RC-RESUME-016`, `RC-RESUME-017` and `RC-RESUME-018`
-      recover an interrupted run FROM its surviving worktree, and `docs/DESIGN.md` line ~6674
-      onward is the text to check that against. Quote the lines of the implementation that
-      establish the scope.
-
-      4. THE GUARD TEST ACTUALLY GUARDS. Read
-      `TestTerminalCleanupKeepsInterruptedRunWorktreeRegistrations` line by line. It must
-      (i) assert the second registration exists BEFORE cleanup, (ii) run terminal cleanup for the
-      fixture's run only, (iii) assert the other run's registration and its directory both
-      survive, and (iv) cover a stale registration outside `.partitur/work/` that must also
-      survive. A test that only checks a live directory does not distinguish the fix from
-      `git worktree prune` — say so if that is what you find. Then verify the guard bites: make a
-      scratch copy of the repository OUTSIDE this worktree (do NOT modify this worktree),
-      replace the scoped removal with a repository-wide `git worktree prune` there, and report
-      whether the guard test fails. If a scratch copy is impractical, say exactly why and
-      reason from the source instead.
-
-      5. THE RED-FIRST EVIDENCE IS REAL. The writer claims the `deregisters-pinned` command
-      returned rc=1 on the unfixed tree. Verify it yourself: from a scratch copy of the repository
-      with the production change reverted but the tests kept (`git show`/`git diff` into a
-      directory under your own temporary directory), run that exact pinned command and report the
-      exit status. Say which observation supports your conclusion.
-
-      6. NO SPECIFICATION DRIFT. Confirm `docs/DESIGN.md` is byte-identical to the pre-change
-      revision (`git diff --stat` covers it) and that `docs/DESIGN.clause-staging.json`'s
-      `input_blob` still equals `git hash-object docs/DESIGN.md`. If the writer argued that a
-      spec edit was required and made one anyway, that is a failure — report it as such.
-
-      7. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
-
-        go build ./...
-        go test -count=1 -v -run '^TestTerminalCleanupDeregistersItsAttemptWorktrees$' ./internal/recoveryexec/
-        go test -count=1 -v -run '^TestTerminalCleanupKeepsInterruptedRunWorktreeRegistrations$' ./internal/recoveryexec/
-        go test -count=1 ./internal/recoveryexec/
-        go test -count=1 ./internal/workspace/
-
-      8. NEVER run `go test -tags=mutation ./...` (#316). The mutation gate here is compile-only,
-      plus the anchor-uniqueness check, and both are in the criteria below.
-
-      If any point above does not hold, say so plainly rather than passing it.
-    inputs: [worktree-deregistration-change-set]
+      Confirm that reference-workflow/marker.txt holds exactly the line
+      `partitur reference workflow` followed by one LF byte, and nothing else.
+      Report what you observed. Change no file.
+    inputs: [marker-change]
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: both-tests-pinned
-          run: ["sh", "-c", "go test -count=1 -run '^(TestTerminalCleanupDeregistersItsAttemptWorktrees|TestTerminalCleanupKeepsInterruptedRunWorktreeRegistrations)$' -v ./internal/recoveryexec/ | grep -c '^--- PASS: TestTerminalCleanup' | grep -qx 2"]
-          timeout_min: 10
-        - id: recoveryexec-package
-          run: ["go", "test", "-count=1", "./internal/recoveryexec/"]
-          timeout_min: 15
-        - id: workspace-package
-          run: ["go", "test", "-count=1", "./internal/workspace/"]
-          timeout_min: 15
-        - id: design-unchanged
-          run: ["sh", "-c", "test \"$(git hash-object docs/DESIGN.md)\" = 7131f30447046ebc51fae55997e72480c49ffe91"]
-          timeout_min: 5
-        - id: mutation-build-compiles
-          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./internal/recoveryexec/"]
-          timeout_min: 10
-        - id: mutation-anchors-still-unique
-          run: ["sh", "-c", "f=internal/recoveryexec/handlers.go; for a in 'return ErrRunFailedDuringRecovery' 'workspace.CreateRecoveredAttemptAtBase(execution.Store, execution.Driver, input, movementID, baseCommit)' 'func defaultKindsWithExecutionDependencies(attemptDependencies driver.ExecutionDependencies) map[recovery.ActionKind]StepHandler {'; do n=$(grep -cF \"$a\" \"$f\"); test \"$n\" = 1 || exit 1; done"]
-          timeout_min: 5
+        - id: marker-is-reference-workflow
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
       human_gate: always
 
 policy:
-  allowed_paths:
-    - "internal/recoveryexec/*.go"
-    - "internal/workspace/*.go"
+  allowed_paths: ["reference-workflow/marker.txt"]
   side_effects: []
   budget:
-    active_wall_clock_min: 150
-    retries_per_movement: 1
+    active_wall_clock_min: 15
+    retries_per_movement: 0
   amendment:
     auto: "off"
