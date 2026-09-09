@@ -361,6 +361,27 @@ func TestMutationQuiesceReceiptRequiresContiguousRounds(t *testing.T) {
 	}
 }
 
+func TestCopyRunstateMutationRepositoryGitFileEntry(t *testing.T) {
+	source := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "copy")
+	if err := os.WriteFile(filepath.Join(source, ".git"), []byte("gitdir: elsewhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "z-after-git"), []byte("copied\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyRunstateMutationRepositoryFrom(destination, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "z-after-git")); err != nil {
+		t.Fatalf("entry after .git was not copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("copied .git file: %v", err)
+	}
+}
+
 func copyRunstateMutationRepository(t *testing.T) string {
 	t.Helper()
 	_, currentFile, _, ok := runtime.Caller(0)
@@ -369,18 +390,28 @@ func copyRunstateMutationRepository(t *testing.T) string {
 	}
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
 	copyRoot := filepath.Join(t.TempDir(), "partitur-mutation-copy")
-	if err := filepath.WalkDir(repositoryRoot, func(path string, entry os.DirEntry, err error) error {
+	if err := copyRunstateMutationRepositoryFrom(copyRoot, repositoryRoot); err != nil {
+		t.Fatal(err)
+	}
+	return copyRoot
+}
+
+func copyRunstateMutationRepositoryFrom(destination, source string) error {
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		relative, err := filepath.Rel(repositoryRoot, path)
+		relative, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
 		}
 		if relative == ".git" {
-			return filepath.SkipDir
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		target := filepath.Join(copyRoot, relative)
+		target := filepath.Join(destination, relative)
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o700)
 		}
@@ -410,8 +441,5 @@ func copyRunstateMutationRepository(t *testing.T) string {
 			return copyErr
 		}
 		return closeErr
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return copyRoot
+	})
 }
