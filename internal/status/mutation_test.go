@@ -133,7 +133,7 @@ func copyStatusMutationRepository(destination, source string) error {
 		if err != nil {
 			return err
 		}
-		if relative == ".git" && entry.IsDir() {
+		if (relative == ".git" || relative == ".partitur") && entry.IsDir() {
 			return filepath.SkipDir
 		}
 		target := filepath.Join(destination, relative)

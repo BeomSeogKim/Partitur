@@ -178,7 +178,7 @@ func copyRunstoreMutationRepository(t *testing.T) string {
 		if err != nil {
 			return err
 		}
-		if relative == ".git" {
+		if relative == ".git" || relative == ".partitur" {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}

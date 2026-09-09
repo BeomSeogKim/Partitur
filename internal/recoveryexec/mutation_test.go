@@ -430,7 +430,7 @@ func copyMutationRepository(destination, source string) error {
 		if err != nil {
 			return err
 		}
-		if relative == ".git" {
+		if relative == ".git" || relative == ".partitur" {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
