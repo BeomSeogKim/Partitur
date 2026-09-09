@@ -236,7 +236,7 @@ func hasNonTestAppendSite(t *testing.T, eventType string) bool {
 			return err
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" {
+			if entry.Name() == ".git" || entry.Name() == ".partitur" {
 				return filepath.SkipDir
 			}
 			return nil
