@@ -1,24 +1,48 @@
 score: "0.2"
-name: reference-workflow
+name: issue-433-worktree-git-file-skipdir
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Fix issue #433: the mutation-suite copy helpers in internal/faultpoint and
+  internal/runstate must not truncate the copied tree when the repository root
+  `.git` entry is a regular file instead of a directory.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  In a linked Git worktree (`git worktree add`), the repository root `.git` is a
+  regular file holding a gitdir pointer, not a directory. Both helpers below walk
+  the repository with filepath.WalkDir and return filepath.SkipDir for the
+  relative path `.git`. For a *file* entry, SkipDir skips the remaining entries of
+  the containing directory — the repository root — so the copy is silently
+  incomplete and the suites fail with a confusing downstream red.
+
+  The two affected helpers, both behind the `mutation` build tag:
+    - internal/faultpoint/mutation_test.go        copyFaultpointMutationRepository
+    - internal/runstate/amendment_norms_mutation_test.go  copyRunstateMutationRepository
+
+  Other packages in this repository already carry the intended shape, for example
+  cmd/partitur/prepare_quiesce_mutation_test.go and internal/amendment/mutation_test.go:
+
+      if relative == ".git" {
+          if entry.IsDir() {
+              return filepath.SkipDir
+          }
+          return nil
+      }
+
+  internal/runstate/recovery_coverage_test.go already guards on entry.IsDir() and
+  is not part of this fix.
+
+  Because the helpers live behind `//go:build mutation`, a plain `go test` of
+  these packages does not compile them; the regression tests below are therefore
+  reached with `-tags mutation`.
 
 verification:
   expectation:
-    intent: none
+    intent: write-basic-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +52,149 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: fix-copy-helpers
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Fix issue #433 in this repository, red-first.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      Step 1 — write the failing tests first, and observe them fail.
+
+      Add exactly one new test to each of the two packages, with these exact names:
+
+        internal/faultpoint  : TestCopyFaultpointMutationRepositoryGitFileEntry
+        internal/runstate    : TestCopyRunstateMutationRepositoryGitFileEntry
+
+      Both test files must carry the `//go:build mutation` constraint, because the
+      helpers under test do. Put each test in the file that already holds its
+      helper, or in a new `_test.go` file in the same package — your choice.
+
+      Each test must build a temporary source directory containing, directly at
+      its root, a regular file named `.git` (any content — a gitdir pointer line
+      is realistic) plus at least one other entry that sorts AFTER `.git` in
+      lexical order (filepath.WalkDir walks in lexical order, so an entry sorting
+      before `.git` would not detect the truncation). Then it must invoke the
+      package's own copy helper against that directory and assert that the entry
+      sorting after `.git` was copied, and that `.git` itself was NOT copied.
+
+      Use the real helper, not a reimplementation:
+        - copyFaultpointMutationRepository(destination, source string) error
+        - copyRunstateMutationRepository(t *testing.T) string
+      copyRunstateMutationRepository takes no source argument — it derives the
+      repository root from runtime.Caller. If its current signature cannot be
+      driven by a fixture directory, refactor it so the walk body is callable
+      with an explicit (destination, source) pair, and keep the existing caller
+      working unchanged.
+
+      Run the tests and confirm they FAIL before you change the walk bodies. Say
+      in your report what the failure looked like.
+
+      Step 2 — make them pass.
+
+      In both helpers, replace the unconditional
+
+          if relative == ".git" {
+              return filepath.SkipDir
+          }
+
+      with the guarded shape already used elsewhere in this repository:
+
+          if relative == ".git" {
+              if entry.IsDir() {
+                  return filepath.SkipDir
+              }
+              return nil
+          }
+
+      A `.git` DIRECTORY must still be skipped whole (SkipDir). A `.git` FILE must
+      skip only that entry (nil), leaving the rest of the root directory to be
+      walked.
+
+      Step 3 — verify.
+
+      These must all succeed from the repository root:
+
+        go build ./...
+        go test ./internal/faultpoint/... ./internal/runstate/...
+        go test -tags mutation -run 'GitFileEntry$' -v ./internal/faultpoint/ ./internal/runstate/
+
+      Do not run the full mutation battery; it is long and is run separately after
+      this change lands.
+
+      Scope: change only Go files in internal/faultpoint and internal/runstate.
+      Change no other package, no documentation, and no configuration. Do not
+      "improve" adjacent code. Everything you write is English.
     outputs:
-      - id: marker-change
+      - id: fix-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: package-tests
+          run: ["go", "test", "./internal/faultpoint/...", "./internal/runstate/..."]
+          timeout_min: 15
+        - id: faultpoint-gitfile-regression
+          run: ["sh", "-c", "go test -tags mutation -run 'TestCopyFaultpointMutationRepositoryGitFileEntry$' -v ./internal/faultpoint/ | grep -q '^--- PASS: TestCopyFaultpointMutationRepositoryGitFileEntry'"]
+          timeout_min: 15
+        - id: runstate-gitfile-regression
+          run: ["sh", "-c", "go test -tags mutation -run 'TestCopyRunstateMutationRepositoryGitFileEntry$' -v ./internal/runstate/ | grep -q '^--- PASS: TestCopyRunstateMutationRepositoryGitFileEntry'"]
+          timeout_min: 15
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [fix-copy-helpers]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the issue #433 fix. Change no file.
+
+      Check and report each of the following:
+
+      1. Both copy helpers now guard on entry.IsDir() before returning
+         filepath.SkipDir for the root `.git` entry, and return nil for the file
+         case:
+           internal/faultpoint/mutation_test.go
+           internal/runstate/amendment_norms_mutation_test.go
+
+      2. Both new tests exist, carry the `//go:build mutation` constraint, drive
+         the package's real copy helper (not a reimplementation), and place an
+         entry that sorts AFTER `.git` in the fixture root — without that entry
+         the test cannot observe the truncation this issue is about.
+
+      3. The tests genuinely fail against the unfixed helper. Verify this outside
+         the repository: copy the two helpers' walk bodies into a scratch program
+         under your own temporary directory, or reason it out explicitly from
+         filepath.WalkDir's documented SkipDir semantics for a non-directory
+         entry. Do not modify any file in this repository to check it.
+
+      4. Nothing outside internal/faultpoint and internal/runstate changed, and
+         no unrelated edits were made inside them.
+
+      Report what you observed, in English. If anything above does not hold, say
+      so plainly rather than passing it.
+    inputs: [fix-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: package-tests
+          run: ["go", "test", "./internal/faultpoint/...", "./internal/runstate/..."]
+          timeout_min: 15
+        - id: gitfile-regressions
+          run: ["sh", "-c", "go test -tags mutation -run 'GitFileEntry$' -v ./internal/faultpoint/ ./internal/runstate/ | grep -c '^--- PASS: TestCop.*GitFileEntry' | grep -qx 2"]
+          timeout_min: 15
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/faultpoint/*.go"
+    - "internal/runstate/*.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 60
+    retries_per_movement: 1
   amendment:
     auto: "off"
