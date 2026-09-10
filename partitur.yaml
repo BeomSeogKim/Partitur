@@ -1,24 +1,139 @@
 score: "0.2"
-name: reference-workflow
+name: issue-316-execute-cancellation-liveness-bound
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Fix issue #316 at the layer this run owns: the three wall-clock-bounded cancellation tests in
+  `internal/adapter/execute_test.go` are pinned at `2*time.Second`, which under the mutation
+  gate's own load measures the scheduler rather than the cancellation path. Replace the three
+  literals with one shared, named liveness bound of `6 * time.Second`, and add a guard test that
+  keeps that bound strictly inside the window where it still proves something.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  THE DEFECT, LOCATED.
+
+  `internal/adapter/execute_test.go` has a helper at line ~994:
+
+      // executeWithin bounds Execute so that losing the cancellation deadline fails this test
+      // by name instead of hanging the package. The guards under test are deadlines: deleting
+      // one makes the call wait forever, and a package-level timeout hides which test broke.
+      func executeWithin(t *testing.T, client *Client, plan ExecutePlan, limit time.Duration) (ExecuteReport, error)
+
+  Thirteen call sites pass a limit. Ten pass `30*time.Second`. Three pass `2*time.Second`:
+
+      execute_test.go:575   TestExecuteCancelAfterEOFStillArmsTheGrace       (line 527)
+      execute_test.go:673   TestExecuteCancellationDuringLaunchEndsTheCall   (line 649)
+      execute_test.go:889   TestExecuteCancellationBoundsBlockedRequestWrites (line 834)
+
+  Those three are exactly the tests issue #316 reports red under `go test -tags=mutation ./...`,
+  with the failure text produced by `executeWithin`'s own `t.Fatalf`:
+
+      execute_test.go:573: Execute did not return within 2s: the cancellation deadline is not bounding this window
+
+  MEASURED, AND RECORDED ON THE ISSUE — do not re-derive this, and do not contradict it without
+  a measurement of your own.
+
+    - Same machine, same tag, same commit, back to back:
+      `go test -tags=mutation -count=1 -timeout=20m ./internal/adapter/` — ok, 30.4s.
+      `go test -tags=mutation -count=1 -timeout=40m ./...`              — FAIL, 106.0s for the
+      same package. 3.5x, and only the alongside run misses the 2-second bounds.
+    - The overrun subtests land at 2.23s-2.59s; the parent tests at 4.59s-4.92s.
+    - The same tests in isolation are 3/3 green, and CI's ubuntu mutation job is green.
+    - Sampled during a starved run on a 12-core machine: load average 17-27, 7-10 concurrent
+      `go` processes, 11-17 concurrent test binaries.
+
+  So the bound is not measuring the cancellation path under load; it is measuring the scheduler.
+
+  THE AGREED FIX (design gate, two parties, 2026-09-10 — implement it, do not redesign it).
+
+  One shared named constant in `internal/adapter/execute_test.go`, replacing all three literals:
+
+      // Must remain strictly greater than the injected 20ms cancellation grace
+      // and strictly less than incidentalTestDeadline so the launch-watcher
+      // oracle cannot be satisfied by the client's own deadline.
+      const executeCancellationLivenessBound = 6 * time.Second
+
+  6s was chosen over 8s under an upper-margin challenge: it is ~1.30x the conservatively read
+  4.6s worst observation above, and it leaves 4s of separation from the 10s ceiling instead of 2s.
+
+  WHY THE BOUND IS TWO-SIDED, PER SITE. This is the part a naive "just raise the number" change
+  gets wrong, and it is what the new guard test exists to hold.
+
+    - At :575 and :889 the client's 10s deadline timer is stopped at the `probed:` label
+      (`internal/adapter/execute.go:247-253`), and both tests assert
+      `strings.Contains(err, "cancel completion grace expired")`. The client deadline cannot
+      satisfy those oracles.
+    - At :673 the launch runs under `context.WithDeadline` (`execute.go:58-75`), so the client's
+      10s deadline IS live, and the test asserts only `err != nil`. That is the one genuine
+      tautology race, and the existing comment at :671-672 says so:
+      "Bounded well below the client's own 10s deadline: without the launch watcher that
+      deadline is what ends the call, and the test would pass for the wrong reason."
+      A bound at or above `incidentalTestDeadline` turns that test into a tautology.
+    - The lower side: every one of these clients is built with a 20ms cancellation grace
+      (`newClient(..., incidentalTestDeadline, 20*time.Millisecond)`), so a bound at or below
+      20ms would fail before the mechanism under test can run at all.
+
+  WHAT MUST NOT MOVE.
+
+    - `incidentalTestDeadline = 10 * time.Second` (`internal/adapter/client_test.go:42`) has 35
+      usages across the package and `fixtureOwnerReapTimeout = incidentalTestDeadline / 2`
+      (`client_test.go:47`) is derived from it. NEITHER may be touched by this change.
+    - No `-p` may be added to any gate. `.github/workflows/go.yml` currently passes `-p` nowhere,
+      and issue #316's own direction 2 is a separate, larger decision with a separate PR; this
+      repository's lesson is that `-p 1` is not how CI runs, so a bound added here would make the
+      local gate diverge from the gate that actually guards `main`.
+    - No production (non-test) file changes. This defect is entirely in the test bound.
+
+  THE MUTATION PROOF, AND ONE REFINEMENT THE DESIGN GATE COULD NOT SEE.
+
+  `internal/adapter` has NO mutation-tagged suite today (`grep -rl 'go:build mutation'` lists 30
+  files; none is in `internal/adapter`). The convention for adding one is fixed and small — see
+  `internal/launch/mutation_test.go` (138 lines, two mutations plus one copy helper): copy the
+  repository into `t.TempDir()` skipping `.git` and `.partitur`, assert the anchor string occurs
+  exactly once, rewrite it, re-read to confirm the rewrite applied, then drive the child through
+  `internal/mutationtest`:
+
+      result := mutationtest.Run(ctx, mutationtest.Child{
+          Dir: copyRoot, Package: "./internal/adapter",
+          TestPattern: "<name>", TestNames: []string{"<name>"},
+          Environment: environment.ChildEnvironment(os.Environ(), "PARTITUR_MUTATION_CHILD=1"),
+      })
+      if result.Outcome != mutationtest.Killed { t.Fatalf(...) }
+
+  Because the copy is a throwaway, the mutation is self-restoring: this working tree is never
+  written to.
+
+  THE REFINEMENT: the design gate asked for the mutation (bound -> `incidentalTestDeadline`) to
+  kill BOTH the guard test AND `TestExecuteCancellationDuringLaunchEndsTheCall`. It kills only the
+  guard test, and that is a property of the fix, not a gap in it. With the launch watcher intact,
+  `TestExecuteCancellationDuringLaunchEndsTheCall` returns in milliseconds and passes at ANY
+  limit; the mutation makes it tautological, not red. `internal/mutationtest`'s classifier
+  (`child.go:190-205`) only reports `Killed` when EVERY targeted test failed, so naming both tests
+  as targets would report "mixed outcomes" and the criterion could never pass. The mutation
+  criterion below therefore targets the guard test alone — which is precisely why the design gate
+  required the guard test to exist. The writer still runs the launch test in the mutated copy and
+  reports what it does, so the tautology is recorded rather than assumed.
+
+  WHAT IS NOT IN THIS RUN.
+
+  The design gate's fifth criterion — "run the three tests under the documented 3.5x starvation
+  control; main is red, 6s must pass" — is a MEASUREMENT, not a deterministic assertion. No
+  portable starvation generator exists in this package (verified: no GOMAXPROCS or load-control
+  precedent anywhere in `internal/adapter`'s tests), and a criterion that manufactured load would
+  be flaky in exactly the way this issue is about. It is discharged after apply, by the
+  full-battery comparison, not here. Do not attempt to build one.
+
+  This score temporarily replaces the committed reference-workflow score because `partitur run`
+  reads only `<repo>/partitur.yaml` and takes no score operand (#435). It is reverted before the
+  pull request; only the `internal/adapter/` change is meant to land.
 
 verification:
   expectation:
-    intent: none
+    intent: pass-existing-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +143,319 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: bound-execute-cancellation-liveness
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Fix issue #316 in this repository, red-first. Everything you write is English.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      The design is already agreed and is in this score's context. Your job is to implement it
+      exactly and to prove it, not to reopen it. If you believe the design is wrong, STOP and say
+      so in your report instead of changing it.
+
+      Step 0 — CONFIRM THE GROUND, cheaply.
+
+      Report the output of each, verbatim:
+
+        grep -n 'executeWithin(t, client, plan, 2\*time.Second)' internal/adapter/execute_test.go
+        grep -n 'incidentalTestDeadline      = 10 \* time.Second' internal/adapter/client_test.go
+        grep -rl 'go:build mutation' internal/adapter/ ; echo "rc=$?"
+
+      You must see exactly three `2*time.Second` call sites, the 10s deadline constant, and no
+      mutation-tagged file in `internal/adapter`. If any of that does not hold, STOP: the tree is
+      not the one this score was written against.
+
+      Step 1 — RED FIRST, in two layers. Both layers go in your report.
+
+      Layer 1 (baseline). Before editing anything, run every acceptance command in this movement
+      exactly as written below and record each exit status. The four artifact criteria
+      (`liveness-bound-declared-once`, `three-sites-use-the-bound`, `liveness-guard-pinned`,
+      `mutation-proof`) must be nonzero, because none of what they name exists yet. Say so
+      plainly: this layer is an absence check, and on its own it is weak evidence.
+
+      Layer 2 (the load-bearing red). This is the one that matters, and you must produce it BY
+      HAND before you write the mutation test that automates it.
+
+        - Introduce the constant with the WRONG value first:
+          `const executeCancellationLivenessBound = incidentalTestDeadline`, wire the three call
+          sites to it, and write the guard test (step 3). Run
+
+              go test -count=1 -v -run '^TestExecuteCancellationLivenessBoundStaysInsideClientDeadline$' ./internal/adapter/
+
+          It MUST fail, and the failure text must name the violated strict upper bound. Quote the
+          failure verbatim.
+        - In the same wrong-value tree, also run
+
+              go test -count=1 -v -run '^TestExecuteCancellationDuringLaunchEndsTheCall$' ./internal/adapter/
+
+          and report its exit status and duration. Expect it to PASS in milliseconds. State in
+          one sentence what that means: at a bound equal to the client's own deadline that test
+          becomes a tautology rather than a failure, which is why the guard test has to exist.
+        - Repeat the first command with `const executeCancellationLivenessBound = 20 * time.Millisecond`
+          and confirm the guard fails on the LOWER bound too, naming it. Quote it.
+        - Then set the value to `6 * time.Second` and confirm the guard passes.
+
+      Do not skip Layer 2 or reconstruct it from reasoning. If a command is blocked by your
+      sandbox, say exactly which and how, and do not report a blocked command as evidence.
+
+      Step 2 — the constant and the three call sites.
+
+      In `internal/adapter/execute_test.go`, declare exactly once, with exactly this comment and
+      value:
+
+          // Must remain strictly greater than the injected 20ms cancellation grace
+          // and strictly less than incidentalTestDeadline so the launch-watcher
+          // oracle cannot be satisfied by the client's own deadline.
+          const executeCancellationLivenessBound = 6 * time.Second
+
+      Place it near the top of the file, above the first test that uses it. Replace the
+      `2*time.Second` argument at all three `executeWithin` call sites (:575, :673, :889) with
+      `executeCancellationLivenessBound`, so the file contains that call form exactly three times
+      and no `executeWithin(..., 2*time.Second)` at all. Change nothing else about those three
+      tests: not their assertions, not their fixtures, not their subtable entries.
+
+      The existing comment at :671-672 explains the launch-site tautology. Keep it. You may
+      rewrite it only to name the constant instead of "2s"; do not delete it and do not reflow the
+      surrounding code.
+
+      Other `2*time.Second` occurrences in the package (`client_test.go:763,781`,
+      `execute_test.go:753`) are NOT `executeWithin` limits and are out of scope. Leave them.
+
+      Step 3 — the guard test, in `internal/adapter/execute_test.go`.
+
+          func TestExecuteCancellationLivenessBoundStaysInsideClientDeadline(t *testing.T) {
+
+      It asserts, with STRICT inequalities and a failure message that names which side was
+      violated:
+
+          20*time.Millisecond < executeCancellationLivenessBound < incidentalTestDeadline
+
+      Say in a comment what each side buys: the lower side is the injected cancellation grace
+      every one of these clients is built with, so a bound at or below it fails before the
+      mechanism under test can run; the upper side is the client's own deadline, and a bound at
+      or above it lets `TestExecuteCancellationDuringLaunchEndsTheCall` pass for the wrong reason
+      (`execute.go:58-75`). This is a pure arithmetic test: it starts no process, takes no
+      wall-clock time, and must not.
+
+      Step 4 — the mutation proof, in ONE new file `internal/adapter/mutation_test.go`.
+
+      Follow `internal/launch/mutation_test.go` — read it first; it is the closest and smallest
+      instance of the convention, and your file should look like it.
+
+          //go:build mutation
+          func TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline(t *testing.T) {
+
+      It must:
+        - copy the repository into `t.TempDir()` with a local copy helper that skips the `.git`
+          and `.partitur` directories (#439/#443 — copying `.partitur` copies run state and is a
+          landed defect; do not reintroduce it),
+        - assert the anchor `const executeCancellationLivenessBound = 6 * time.Second` occurs
+          EXACTLY ONCE in the copy's `internal/adapter/execute_test.go`, failing with the count if
+          not (#432: an anchor that stops matching makes a mutation test silently vacuous),
+        - replace it with `const executeCancellationLivenessBound = incidentalTestDeadline`,
+        - re-read the file and confirm the replacement applied and the original is gone,
+        - drive the child through `internal/mutationtest` with
+          `TestPattern`/`TestNames` naming ONLY
+          `TestExecuteCancellationLivenessBoundStaysInsideClientDeadline`, and require
+          `result.Outcome == mutationtest.Killed`, reporting `result.Diagnostic()` otherwise.
+
+      Do NOT add `TestExecuteCancellationDuringLaunchEndsTheCall` as a second target: the
+      classifier at `internal/mutationtest/child.go:190-205` reports `Killed` only when every
+      target failed, and that test passes under this mutation (you measured it in step 1). Instead,
+      after the criterion is green, run once by hand in a scratch copy outside this worktree the
+      same mutation with the launch test as the target, and report what the classifier says. That
+      observation belongs in your report, not in the test.
+
+      Give the child a context timeout with real headroom (`internal/launch` uses 90s; the adapter
+      test package is larger — 240s is appropriate). The child compiles the copy, so it is not
+      instant.
+
+      Step 5 — prove it holds. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/adapter/
+        go test -count=1 ./internal/adapter/                     # about 33s on a quiet machine
+        go test -count=1 -v -run '^(TestExecuteCancelAfterEOFStillArmsTheGrace|TestExecuteCancellationDuringLaunchEndsTheCall|TestExecuteCancellationBoundsBlockedRequestWrites)$' ./internal/adapter/
+        go test -tags=mutation -count=1 -run '^$' ./internal/adapter/
+        go test -tags=mutation -count=1 -v -run '^TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline$' ./internal/adapter/
+
+      NEVER run `go test -tags=mutation ./...`. That whole-repository battery is the load this
+      issue is about; running it here would red unrelated tests and tell you nothing. Every tagged
+      command you run is scoped to `./internal/adapter/`.
+
+      Step 6 — confirm the scope. Report `git status --porcelain` and `git diff --stat` verbatim.
+      Exactly two paths may appear, both under `internal/adapter/`:
+      `execute_test.go` (modified) and `mutation_test.go` (new). No production file, no other
+      package, no `client_test.go`, no `.github/`, no `docs/`, no `partitur.yaml`, no
+      `.partitur/cast.yaml`. Do not commit; the run captures the change set.
+
+      Then run every acceptance command below yourself and report each result.
     outputs:
-      - id: marker-change
+      - id: execute-cancellation-liveness-bound-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet-adapter
+          run: ["go", "vet", "./internal/adapter/"]
+          timeout_min: 10
+        - id: liveness-bound-declared-once
+          run: ["sh", "-c", "f=internal/adapter/execute_test.go; test \"$(grep -cF 'const executeCancellationLivenessBound = 6 * time.Second' $f)\" = 1 && test \"$(grep -rlF 'const executeCancellationLivenessBound' internal/adapter/ | wc -l | tr -d ' ')\" = 1"]
+          timeout_min: 5
+        - id: three-sites-use-the-bound
+          run: ["sh", "-c", "f=internal/adapter/execute_test.go; test \"$(grep -cF 'executeWithin(t, client, plan, executeCancellationLivenessBound)' $f)\" = 3 && test \"$(grep -cF 'executeWithin(t, client, plan, 2*time.Second)' $f)\" = 0"]
+          timeout_min: 5
+        - id: cancellation-tests-pinned
+          run: ["sh", "-c", "f=internal/adapter/execute_test.go; for n in TestExecuteCancelAfterEOFStillArmsTheGrace TestExecuteCancellationDuringLaunchEndsTheCall TestExecuteCancellationBoundsBlockedRequestWrites; do grep -qF \"func $n(t *testing.T) {\" $f || exit 1; done; go test -count=1 -run '^(TestExecuteCancelAfterEOFStillArmsTheGrace|TestExecuteCancellationDuringLaunchEndsTheCall|TestExecuteCancellationBoundsBlockedRequestWrites)$' -v ./internal/adapter/ | grep -c '^--- PASS: TestExecuteCancel' | grep -qx 3"]
+          timeout_min: 15
+        - id: liveness-guard-pinned
+          run: ["sh", "-c", "grep -qF \"func TestExecuteCancellationLivenessBoundStaysInsideClientDeadline(t *testing.T) {\" internal/adapter/execute_test.go && go test -count=1 -run '^TestExecuteCancellationLivenessBoundStaysInsideClientDeadline$' -v ./internal/adapter/ | grep -q '^--- PASS: TestExecuteCancellationLivenessBoundStaysInsideClientDeadline'"]
+          timeout_min: 10
+        - id: adapter-package
+          run: ["go", "test", "-count=1", "./internal/adapter/"]
+          timeout_min: 20
+        - id: mutation-build-compiles
+          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./internal/adapter/"]
+          timeout_min: 10
+        - id: mutation-proof
+          run: ["sh", "-c", "grep -qF \"func TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline(t *testing.T) {\" internal/adapter/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline$' -v ./internal/adapter/ | grep -q '^--- PASS: TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline'"]
+          timeout_min: 25
+        - id: deadline-constants-untouched
+          run: ["sh", "-c", "f=internal/adapter/client_test.go; test \"$(grep -cF 'incidentalTestDeadline      = 10 * time.Second' $f)\" = 1 && test \"$(grep -cF 'fixtureOwnerReapTimeout   = incidentalTestDeadline / 2' $f)\" = 1 && test -z \"$(git status --porcelain -- internal/adapter/client_test.go)\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ | grep -v 'internal/adapter/')\" && test -z \"$(git status --porcelain -- internal/adapter/ | grep -v 'internal/adapter/execute_test.go' | grep -v 'internal/adapter/mutation_test.go')\" && test -z \"$(git status --porcelain -- cmd/ docs/ integration/ .github/ go.mod go.sum)\""]
+          timeout_min: 5
+        - id: gates-carry-no-parallelism-bound
+          run: ["sh", "-c", "test \"$(grep -cF ' -p ' .github/workflows/go.yml)\" = 0"]
+          timeout_min: 5
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [bound-execute-cancellation-liveness]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the issue #316 fix. Change no file in this repository. Report in English.
+
+      This change is small enough that the only way it can be wrong is in what it fails to hold.
+      Spend your effort on points 3, 4 and 5.
+
+      1. SCOPE. `git status --porcelain` and `git diff --stat`; report both verbatim. Exactly two
+      paths may appear: `internal/adapter/execute_test.go` (modified) and
+      `internal/adapter/mutation_test.go` (new). A change to `internal/adapter/client_test.go`,
+      to any production file, to `.github/workflows/go.yml`, to `docs/`, to `partitur.yaml` or to
+      `.partitur/cast.yaml` is a scope violation and a failure — say so rather than passing it.
+      Read the whole diff, not a summary of it.
+
+      2. THE THREE SITES, AND ONLY THOSE. Confirm the constant is declared exactly once with the
+      value `6 * time.Second` and the two-sided comment; that all three `executeWithin` limits at
+      the old :575/:673/:889 sites now read `executeCancellationLivenessBound`; that no
+      `executeWithin` call passes `2*time.Second`; and that the `2*time.Second` occurrences in
+      `client_test.go:763,781` and `execute_test.go:753` — which are NOT `executeWithin` limits —
+      were left alone. Confirm no assertion inside those three tests was weakened, deleted or
+      reworded: compare each against the pre-change revision line by line. A raised bound paired
+      with a loosened assertion is the failure mode this movement exists to catch.
+
+      3. `incidentalTestDeadline` AND `fixtureOwnerReapTimeout` DID NOT MOVE. `client_test.go:42`
+      must still read `incidentalTestDeadline      = 10 * time.Second` and `:47` must still read
+      `fixtureOwnerReapTimeout   = incidentalTestDeadline / 2`. Quote both lines from the working
+      tree. The whole point of the new bound is that it sits strictly inside a ceiling that did
+      not move to accommodate it.
+
+      4. THE GUARD TEST ACTUALLY GUARDS, ON BOTH SIDES. Read
+      `TestExecuteCancellationLivenessBoundStaysInsideClientDeadline` line by line. It must use
+      STRICT inequalities on both sides (`>` and `<`, not `>=`/`<=`), compare against
+      `incidentalTestDeadline` by name rather than against a re-typed `10 * time.Second` literal,
+      and name the violated side in its failure message. Then verify it bites, in a scratch copy
+      of the repository OUTSIDE this worktree (do NOT modify this worktree): set the constant to
+      `incidentalTestDeadline` and report whether the guard fails; set it to
+      `20 * time.Millisecond` and report whether the guard fails. Both must fail. If a scratch
+      copy is impractical, say exactly why and reason from the source instead — and mark the
+      conclusion as unmeasured.
+
+      5. THE MUTATION PROOF IS REAL, AND ITS SCOPE IS HONEST. Read
+      `internal/adapter/mutation_test.go`. Confirm: it carries `//go:build mutation`; its copy
+      helper skips `.git` AND `.partitur` (#439/#443); it asserts the anchor occurs exactly once
+      and fails with the count otherwise; it re-reads after writing to confirm the mutation
+      applied; and it requires `mutationtest.Killed`. Then confirm the thing most likely to be
+      glossed over: the writer's report must state that
+      `TestExecuteCancellationDuringLaunchEndsTheCall` SURVIVES this mutation (it returns in
+      milliseconds at any limit) and that this is why the guard test is the mutation's target. If
+      the report instead claims the launch test is killed by it, that claim is false and you must
+      say so — `internal/mutationtest/child.go:190-205` reports `Killed` only when every target
+      failed.
+
+      6. THE RED-FIRST EVIDENCE IS REAL. The writer claims the guard test fails when the constant
+      is set to `incidentalTestDeadline`. That is the same construction as point 4; say which of
+      your own observations supports the conclusion, and whether the writer's quoted failure text
+      matches what you saw. An absence check ("the criterion was red because the test did not
+      exist yet") is NOT sufficient evidence on its own — say so if that is all the writer has.
+
+      7. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/adapter/
+        go test -count=1 -v -run '^(TestExecuteCancelAfterEOFStillArmsTheGrace|TestExecuteCancellationDuringLaunchEndsTheCall|TestExecuteCancellationBoundsBlockedRequestWrites)$' ./internal/adapter/
+        go test -count=1 -v -run '^TestExecuteCancellationLivenessBoundStaysInsideClientDeadline$' ./internal/adapter/
+        go test -count=1 ./internal/adapter/
+        go test -tags=mutation -count=1 -v -run '^TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline$' ./internal/adapter/
+
+      8. NEVER run `go test -tags=mutation ./...` (#316 — that battery IS the load this issue is
+      about, and it will red unrelated tests). Every tagged command is scoped to
+      `./internal/adapter/`.
+
+      9. NO PARALLELISM BOUND SNUCK IN. Confirm `.github/workflows/go.yml` is unchanged and still
+      passes `-p` nowhere. Bounding the gate's concurrency is issue #316's direction 2 and is a
+      separate decision; a `-p` in this diff is a failure.
+
+      If any point above does not hold, say so plainly rather than passing it.
+    inputs: [execute-cancellation-liveness-bound-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet-adapter
+          run: ["go", "vet", "./internal/adapter/"]
+          timeout_min: 10
+        - id: liveness-bound-declared-once
+          run: ["sh", "-c", "f=internal/adapter/execute_test.go; test \"$(grep -cF 'const executeCancellationLivenessBound = 6 * time.Second' $f)\" = 1 && test \"$(grep -rlF 'const executeCancellationLivenessBound' internal/adapter/ | wc -l | tr -d ' ')\" = 1"]
+          timeout_min: 5
+        - id: three-sites-use-the-bound
+          run: ["sh", "-c", "f=internal/adapter/execute_test.go; test \"$(grep -cF 'executeWithin(t, client, plan, executeCancellationLivenessBound)' $f)\" = 3 && test \"$(grep -cF 'executeWithin(t, client, plan, 2*time.Second)' $f)\" = 0"]
+          timeout_min: 5
+        - id: cancellation-tests-pinned
+          run: ["sh", "-c", "f=internal/adapter/execute_test.go; for n in TestExecuteCancelAfterEOFStillArmsTheGrace TestExecuteCancellationDuringLaunchEndsTheCall TestExecuteCancellationBoundsBlockedRequestWrites; do grep -qF \"func $n(t *testing.T) {\" $f || exit 1; done; go test -count=1 -run '^(TestExecuteCancelAfterEOFStillArmsTheGrace|TestExecuteCancellationDuringLaunchEndsTheCall|TestExecuteCancellationBoundsBlockedRequestWrites)$' -v ./internal/adapter/ | grep -c '^--- PASS: TestExecuteCancel' | grep -qx 3"]
+          timeout_min: 15
+        - id: liveness-guard-pinned
+          run: ["sh", "-c", "grep -qF \"func TestExecuteCancellationLivenessBoundStaysInsideClientDeadline(t *testing.T) {\" internal/adapter/execute_test.go && go test -count=1 -run '^TestExecuteCancellationLivenessBoundStaysInsideClientDeadline$' -v ./internal/adapter/ | grep -q '^--- PASS: TestExecuteCancellationLivenessBoundStaysInsideClientDeadline'"]
+          timeout_min: 10
+        - id: adapter-package
+          run: ["go", "test", "-count=1", "./internal/adapter/"]
+          timeout_min: 20
+        - id: mutation-proof
+          run: ["sh", "-c", "grep -qF \"func TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline(t *testing.T) {\" internal/adapter/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline$' -v ./internal/adapter/ | grep -q '^--- PASS: TestMutationExecuteCancellationLivenessBoundMustStayBelowTheClientDeadline'"]
+          timeout_min: 25
+        - id: deadline-constants-untouched
+          run: ["sh", "-c", "f=internal/adapter/client_test.go; test \"$(grep -cF 'incidentalTestDeadline      = 10 * time.Second' $f)\" = 1 && test \"$(grep -cF 'fixtureOwnerReapTimeout   = incidentalTestDeadline / 2' $f)\" = 1 && test -z \"$(git status --porcelain -- internal/adapter/client_test.go)\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ | grep -v 'internal/adapter/')\" && test -z \"$(git status --porcelain -- internal/adapter/ | grep -v 'internal/adapter/execute_test.go' | grep -v 'internal/adapter/mutation_test.go')\" && test -z \"$(git status --porcelain -- cmd/ docs/ integration/ .github/ go.mod go.sum)\""]
+          timeout_min: 5
+        - id: gates-carry-no-parallelism-bound
+          run: ["sh", "-c", "test \"$(grep -cF ' -p ' .github/workflows/go.yml)\" = 0"]
+          timeout_min: 5
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/adapter/*_test.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 150
+    retries_per_movement: 1
   amendment:
     auto: "off"
