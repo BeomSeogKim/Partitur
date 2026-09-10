@@ -23,6 +23,24 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
+// Must remain strictly greater than the injected 20ms cancellation grace
+// and strictly less than incidentalTestDeadline so the launch-watcher
+// oracle cannot be satisfied by the client's own deadline.
+const executeCancellationLivenessBound = 6 * time.Second
+
+func TestExecuteCancellationLivenessBoundStaysInsideClientDeadline(t *testing.T) {
+	// The lower bound is the injected cancellation grace used by these clients;
+	// at or below it, the test fails before the cancellation mechanism can run.
+	if executeCancellationLivenessBound <= 20*time.Millisecond {
+		t.Fatalf("execute cancellation liveness bound %s must be strictly greater than the 20ms cancellation grace", executeCancellationLivenessBound)
+	}
+	// The upper bound is the client's own deadline; at or above it,
+	// TestExecuteCancellationDuringLaunchEndsTheCall can pass for the wrong reason (execute.go:58-75).
+	if executeCancellationLivenessBound >= incidentalTestDeadline {
+		t.Fatalf("execute cancellation liveness bound %s must be strictly less than the client deadline %s", executeCancellationLivenessBound, incidentalTestDeadline)
+	}
+}
+
 func TestRealFirstPartyAdaptersExecuteThroughGatedPeer(t *testing.T) {
 	binaries := t.TempDir()
 	buildAdapter(t, binaries, "claude")
@@ -572,7 +590,7 @@ func TestExecuteCancelAfterEOFStillArmsTheGrace(t *testing.T) {
 				&order,
 			)
 			plan.Cancel = cancel
-			report, err := executeWithin(t, client, plan, 2*time.Second)
+			report, err := executeWithin(t, client, plan, executeCancellationLivenessBound)
 			if err == nil || !strings.Contains(err.Error(), "cancel completion grace expired") {
 				t.Fatalf("report = %#v, error = %v", report, err)
 			}
@@ -670,7 +688,7 @@ func TestExecuteCancellationDuringLaunchEndsTheCall(t *testing.T) {
 	plan.Cancel = cancel
 	// Bounded well below the client's own 10s deadline: without the launch watcher that
 	// deadline is what ends the call, and the test would pass for the wrong reason.
-	report, err := executeWithin(t, client, plan, 2*time.Second)
+	report, err := executeWithin(t, client, plan, executeCancellationLivenessBound)
 	if err == nil {
 		t.Fatalf("report = %#v, error = %v", report, err)
 	}
@@ -886,7 +904,7 @@ func TestExecuteCancellationBoundsBlockedRequestWrites(t *testing.T) {
 				&order,
 			)
 			plan.Cancel = cancel
-			report, err := executeWithin(t, client, plan, 2*time.Second)
+			report, err := executeWithin(t, client, plan, executeCancellationLivenessBound)
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("report = %#v, error = %v", report, err)
 			}
