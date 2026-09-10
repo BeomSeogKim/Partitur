@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,17 +16,168 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
+	"github.com/BeomSeogKim/Partitur/internal/criterionexec"
+	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
+	"github.com/BeomSeogKim/Partitur/internal/runstate"
 )
 
-const helperEnv = "PARTITUR_CODEX_TEST_HELPER"
+const (
+	helperEnv            = "PARTITUR_CODEX_TEST_HELPER"
+	commandScratch       = "/tmp/puAaBfWYvoeryRIxI0VniavA/cAaBfXQS0fe-EVqvN7xI0Vg"
+	executeTestRunID     = "01a05f59-8be8-7abc-9123-123456789abc"
+	executeTestAttemptID = "01a05f5d-04b4-7def-8456-abcdef123456"
+)
 
 func TestMain(m *testing.M) {
 	if os.Getenv(helperEnv) != "" {
 		os.Exit(runHelper())
 	}
 	os.Exit(m.Run())
+}
+
+func TestChildEnvironmentPreservesUnrelatedVariablesRegressionGuard(t *testing.T) {
+	t.Parallel()
+
+	parent := []string{
+		"PATH=/bin",
+		"TMPDIR=/parent/tmpdir",
+		"GOMODCACHE=/parent/modules",
+		"TMP=/parent/tmp",
+		"GOPATH=/parent/gopath",
+		"TEMP=/parent/temp",
+		"GOTMPDIR=/parent/gotmp",
+		"GOCACHE=/parent/cache",
+		"TMPDIR=/parent/duplicate",
+		"EMPTY=",
+	}
+	want := []string{
+		"PATH=/bin",
+		"GOMODCACHE=/parent/modules",
+		"GOPATH=/parent/gopath",
+		"EMPTY=",
+		"TMPDIR=/scratch",
+		"TMP=/scratch",
+		"TEMP=/scratch",
+		"GOTMPDIR=/scratch",
+		"GOCACHE=/scratch/g",
+	}
+	if got := childEnvironment(parent, "/scratch"); !slices.Equal(got, want) {
+		t.Fatalf("child environment = %#v, want %#v", got, want)
+	}
+}
+
+func TestAttemptScratchLayoutMatchesCriterionRunLayout(t *testing.T) {
+	t.Parallel()
+
+	scratch, err := attemptScratchDirectory(executeTestRunID, executeTestAttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runTemporary, err := criterionexec.RunTemporaryDirectory(runstate.RunID(executeTestRunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	criterionAttempt, err := criterionexec.AttemptTemporaryDirectory(runstate.RunID(executeTestRunID), runstate.AttemptID(executeTestAttemptID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(runTemporary, "c"+strings.TrimPrefix(filepath.Base(criterionAttempt), "u"))
+	if scratch != want {
+		t.Fatalf("attempt scratch = %q, want %q", scratch, want)
+	}
+}
+
+func TestPrepareAttemptScratchRejectsContainmentInBothDirections(t *testing.T) {
+	runID := "01a08a3b-2950-70b3-8b5e-b4de30516598"
+	attemptID := "01a08a3c-2950-70b3-8b5e-b4de30516598"
+	runTemporary, err := criterionexec.RunTemporaryDirectory(runstate.RunID(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(runTemporary)
+	t.Cleanup(func() { _ = criterionexec.CleanupRunTemporary(runstate.RunID(runID)) })
+
+	if _, err := prepareAttemptScratch("/tmp", runID, attemptID); err == nil || !strings.Contains(err.Error(), "must not contain") {
+		t.Fatalf("workdir containing scratch error = %v", err)
+	}
+	scratch, err := attemptScratchDirectory(runID, attemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workdir := filepath.Join(scratch, "worktree")
+	if err := os.Mkdir(workdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareAttemptScratch(workdir, runID, attemptID); err == nil || !strings.Contains(err.Error(), "must not contain") {
+		t.Fatalf("scratch containing workdir error = %v", err)
+	}
+}
+
+func TestPreparedAttemptScratchIsRemovedByRunCleanup(t *testing.T) {
+	runID := runstate.RunID("01a08a3d-2950-70b3-8b5e-b4de30516598")
+	attemptID := "01a08a3e-2950-70b3-8b5e-b4de30516598"
+	_ = criterionexec.CleanupRunTemporary(runID)
+	t.Cleanup(func() { _ = criterionexec.CleanupRunTemporary(runID) })
+
+	scratch, err := prepareAttemptScratch(t.TempDir(), string(runID), attemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(scratch); err != nil {
+		t.Fatalf("prepared scratch: %v", err)
+	}
+	if err := criterionexec.CleanupRunTemporary(runID); err != nil {
+		t.Fatal(err)
+	}
+	runTemporary, err := criterionexec.RunTemporaryDirectory(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(runTemporary); !os.IsNotExist(err) {
+		t.Fatalf("run temporary after cleanup: %v", err)
+	}
+}
+
+func TestCriterionRunAcceptsAdapterProvisionedRunScratch(t *testing.T) {
+	runID := runstate.RunID(executeTestRunID)
+	attemptID := runstate.AttemptID(executeTestAttemptID)
+	_ = criterionexec.CleanupRunTemporary(runID)
+	t.Cleanup(func() { _ = criterionexec.CleanupRunTemporary(runID) })
+
+	root, worktree, trampoline := adapterCriterionFixture(t)
+	if _, err := prepareAttemptScratch(worktree, string(runID), string(attemptID)); err != nil {
+		t.Fatal(err)
+	}
+	command, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := criterionexec.Run(criterionexec.Config{
+		RunID:          runID,
+		AttemptID:      attemptID,
+		AttemptRoot:    filepath.Join(root, ".partitur", "work", string(runID), string(attemptID)),
+		Worktree:       worktree,
+		RepositoryRoot: root,
+		SubjectTree:    adapterGitText(t, root, "rev-parse", "HEAD^{tree}"),
+		TrampolinePath: trampoline,
+		RemainingMS:    10_000,
+		Probe:          faultpoint.Nop{},
+	}, acceptance.RunCriterionRequest{
+		ID:   "adapter-scratch-invariant",
+		Argv: []string{command},
+		RecordStarted: func(runstate.ProcessIdentity) (faultpoint.DurabilityReceipt, error) {
+			return faultpoint.DurabilityReceipt{Address: "test", Mutation: faultpoint.Mutation{
+				Kind: faultpoint.JournalAppend, EventType: string(runstate.EventCriterionStarted),
+				EventID: "id", Sequence: 1, Timestamp: "time", Path: "journal",
+			}}, nil
+		},
+	})
+	if result.Outcome != "PASS" || result.Err != nil {
+		t.Fatalf("criterion result = %#v", result)
+	}
 }
 
 func TestBuildCommandGrantCombinations(t *testing.T) {
@@ -44,7 +196,7 @@ func TestBuildCommandGrantCombinations(t *testing.T) {
 					Network: network,
 				}
 
-				command, err := buildCommand(request, true)
+				command, err := buildCommand(request, commandScratch, true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -82,7 +234,7 @@ func TestBuildCommandGrantCombinations(t *testing.T) {
 				}
 
 				addDirs := allFlagValues(command.args, "--add-dir")
-				wantDirs := []string{"/artifacts", "/external/shared"}
+				wantDirs := []string{commandScratch, "/artifacts", "/external/shared"}
 				if !slices.Equal(addDirs, wantDirs) {
 					t.Errorf("--add-dir values = %#v, want %#v", addDirs, wantDirs)
 				}
@@ -96,7 +248,7 @@ func TestBuildCommandReadOnlyMovement(t *testing.T) {
 
 	request := testRequest("/workspace", "/artifacts")
 	request.Grants.PathsRO = []string{"/reference/**"}
-	command, err := buildCommand(request, true)
+	command, err := buildCommand(request, commandScratch, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +256,8 @@ func TestBuildCommandReadOnlyMovement(t *testing.T) {
 		t.Fatalf("dir = %q", command.dir)
 	}
 	assertFlagValue(t, command.args, "-C", "/artifacts")
-	if slices.Contains(command.args, "--add-dir") {
-		t.Fatalf("read-only movement contains --add-dir: %#v", command.args)
+	if got, want := allFlagValues(command.args, "--add-dir"), []string{commandScratch}; !slices.Equal(got, want) {
+		t.Fatalf("--add-dir values = %#v, want %#v", got, want)
 	}
 	configs := allFlagValues(command.args, "-c")
 	for _, want := range []string{
@@ -128,7 +280,7 @@ func TestBuildCommandResumeEffortAndUnknownExtension(t *testing.T) {
 		"codex": json.RawMessage(`{"effort":"high","future_field":42}`),
 	}
 
-	command, err := buildCommand(request, true)
+	command, err := buildCommand(request, commandScratch, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +296,7 @@ func TestBuildCommandResumeEffortAndUnknownExtension(t *testing.T) {
 		}
 	}
 
-	fresh, err := buildCommand(request, false)
+	fresh, err := buildCommand(request, commandScratch, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +312,7 @@ func TestBuildCommandEscapesEffort(t *testing.T) {
 	request.Extensions = map[string]json.RawMessage{
 		"codex": json.RawMessage(`{"effort":"high\"value"}`),
 	}
-	command, err := buildCommand(request, true)
+	command, err := buildCommand(request, commandScratch, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +337,7 @@ func TestBuildCommandRejectsMalformedKnownFields(t *testing.T) {
 			if test.extend != nil {
 				request.Extensions = map[string]json.RawMessage{"codex": test.extend}
 			}
-			if _, err := buildCommand(request, true); err == nil {
+			if _, err := buildCommand(request, commandScratch, true); err == nil {
 				t.Fatal("expected error")
 			}
 		})
@@ -326,7 +478,7 @@ func TestExecuteAgainstHelperCLI(t *testing.T) {
 	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
 	configureHelper(t, "success", outputDir, argsFile, promptFile)
 
-	request := testRequest(workdir, outputDir)
+	request := executeTestRequest(workdir, outputDir)
 	request.Grants.PathsRW = []string{"src/**"}
 	request.Grants.Shell = true
 	request.Grants.Network = true
@@ -360,6 +512,62 @@ func TestExecuteAgainstHelperCLI(t *testing.T) {
 	}
 }
 
+func TestExecuteAgainstHelperCLIScratchEnvironment(t *testing.T) {
+	workdir := t.TempDir()
+	outputDir := t.TempDir()
+	environmentFile := filepath.Join(t.TempDir(), "environment.json")
+	configureHelper(t, "scratch-environment", outputDir, "", "")
+	t.Setenv("PARTITUR_CODEX_TEST_ENVIRONMENT", environmentFile)
+	parentTemporary := t.TempDir()
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "GOTMPDIR"} {
+		t.Setenv(key, parentTemporary)
+	}
+	t.Setenv("GOCACHE", filepath.Join(parentTemporary, "cache"))
+
+	request := executeTestRequest(workdir, outputDir)
+	scratch, err := attemptScratchDirectory(request.RunID, request.AttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := criterionexec.CleanupRunTemporary(runstate.RunID(request.RunID)); err != nil {
+			t.Errorf("clean run scratch: %v", err)
+		}
+	})
+	result, err := New(io.Discard).Execute(context.Background(), request, &recordingSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != protocol.OutcomeCompleted {
+		t.Fatalf("execute result = %#v", result)
+	}
+
+	var environment []string
+	readJSONFile(t, environmentFile, &environment)
+	values := make(map[string][]string, len(environment))
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = append(values[key], value)
+		}
+	}
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "GOTMPDIR"} {
+		if got, want := values[key], []string{scratch}; !slices.Equal(got, want) {
+			t.Fatalf("%s values = %#v, want %#v", key, got, want)
+		}
+	}
+	if got, want := values["GOCACHE"], []string{filepath.Join(scratch, "g")}; !slices.Equal(got, want) {
+		t.Fatalf("GOCACHE values = %#v, want %#v", got, want)
+	}
+	contents, err := os.ReadFile(filepath.Join(scratch, "helper-write"))
+	if err != nil {
+		t.Fatalf("helper write inside scratch: %v", err)
+	}
+	if string(contents) != "written" {
+		t.Fatalf("helper write = %q, want written", contents)
+	}
+}
+
 func TestServeExecuteRoundTrip(t *testing.T) {
 	workdir := t.TempDir()
 	outputDir := t.TempDir()
@@ -377,7 +585,7 @@ func TestServeExecuteRoundTrip(t *testing.T) {
 		"jsonrpc": "2.0",
 		"id":      "execute-1",
 		"method":  "execute",
-		"params":  testRequest(workdir, outputDir),
+		"params":  executeTestRequest(workdir, outputDir),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -461,13 +669,28 @@ func TestExecuteMissingEnvelopeIsTaskFailed(t *testing.T) {
 	outputDir := t.TempDir()
 	configureHelper(t, "no-envelope", outputDir, "", "")
 
-	result, err := New(io.Discard).Execute(context.Background(), testRequest(workdir, outputDir), &recordingSink{})
+	result, err := New(io.Discard).Execute(context.Background(), executeTestRequest(workdir, outputDir), &recordingSink{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Outcome != protocol.OutcomeFailed || result.Failure == nil ||
 		result.Failure.Kind != protocol.FailureTaskFailed ||
 		result.Failure.Detail != "result envelope missing" {
+		t.Fatalf("execute result = %#v", result)
+	}
+}
+
+func TestExecuteRejectsInvalidScratchIDs(t *testing.T) {
+	configureHelper(t, "success", t.TempDir(), "", "")
+	request := testRequest(t.TempDir(), t.TempDir())
+
+	result, err := New(io.Discard).Execute(context.Background(), request, &recordingSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != protocol.OutcomeFailed || result.Failure == nil ||
+		result.Failure.Kind != protocol.FailureProtocolError ||
+		!strings.Contains(result.Failure.Detail, "UUIDv7") {
 		t.Fatalf("execute result = %#v", result)
 	}
 }
@@ -494,7 +717,7 @@ func TestExecuteFailureFixtures(t *testing.T) {
 			configureHelper(t, test.mode, outputDir, "", "")
 			t.Setenv("PARTITUR_CODEX_TEST_FAILURE", test.evidence)
 
-			result, err := New(io.Discard).Execute(context.Background(), testRequest(workdir, outputDir), &recordingSink{})
+			result, err := New(io.Discard).Execute(context.Background(), executeTestRequest(workdir, outputDir), &recordingSink{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -507,7 +730,7 @@ func TestExecuteFailureFixtures(t *testing.T) {
 
 func TestExecuteMissingBinary(t *testing.T) {
 	t.Setenv(binaryEnv, filepath.Join(t.TempDir(), "missing-codex"))
-	result, err := New(io.Discard).Execute(context.Background(), testRequest(t.TempDir(), t.TempDir()), &recordingSink{})
+	result, err := New(io.Discard).Execute(context.Background(), executeTestRequest(t.TempDir(), t.TempDir()), &recordingSink{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +749,7 @@ func TestExecuteCancelledDuringInvocation(t *testing.T) {
 	resultCh := make(chan *protocol.ExecuteResult, 1)
 	errorCh := make(chan error, 1)
 	go func() {
-		result, err := New(io.Discard).Execute(ctx, testRequest(workdir, outputDir), sink)
+		result, err := New(io.Discard).Execute(ctx, executeTestRequest(workdir, outputDir), sink)
 		if err != nil {
 			errorCh <- err
 			return
@@ -559,7 +782,7 @@ func TestExecuteStaleResumeRetriesFresh(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args.jsonl")
 	configureHelper(t, "stale-then-success", outputDir, argsFile, "")
 
-	request := testRequest(workdir, outputDir)
+	request := executeTestRequest(workdir, outputDir)
 	request.SessionHint = json.RawMessage(`{"session_id":"stale-session"}`)
 	sink := &recordingSink{}
 	result, err := New(io.Discard).Execute(context.Background(), request, sink)
@@ -596,7 +819,7 @@ func TestRetryDiagnosticsAreAttemptBoundedAndSanitizedOnce(t *testing.T) {
 	outputDir := t.TempDir()
 	configureHelper(t, "stale-sensitive-then-success", outputDir, "", "")
 
-	request := testRequest(workdir, outputDir)
+	request := executeTestRequest(workdir, outputDir)
 	request.SessionHint = json.RawMessage(`{"session_id":"stale-session"}`)
 	var diagnostics bytes.Buffer
 	result, err := New(&diagnostics).Execute(context.Background(), request, &recordingSink{})
@@ -621,7 +844,7 @@ func TestCapturedSessionIsRedacted(t *testing.T) {
 
 	sink := &recordingSink{}
 	var diagnostics bytes.Buffer
-	result, err := New(&diagnostics).Execute(context.Background(), testRequest(workdir, outputDir), sink)
+	result, err := New(&diagnostics).Execute(context.Background(), executeTestRequest(workdir, outputDir), sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,6 +885,13 @@ func testRequest(workdir, outputDir string) *protocol.ExecuteRequest {
 		OutputDir: outputDir,
 		Budget:    protocol.Budget{RemainingMS: 330_001},
 	}
+}
+
+func executeTestRequest(workdir, outputDir string) *protocol.ExecuteRequest {
+	request := testRequest(workdir, outputDir)
+	request.RunID = executeTestRunID
+	request.AttemptID = executeTestAttemptID
+	return request
 }
 
 type recordingSink struct {
@@ -805,6 +1035,15 @@ func runHelper() int {
 		fmt.Println("not-json")
 		return 1
 	}
+	if mode == "scratch-environment" {
+		encoded, _ := json.Marshal(os.Environ())
+		if err := os.WriteFile(os.Getenv("PARTITUR_CODEX_TEST_ENVIRONMENT"), encoded, 0o600); err != nil {
+			return 94
+		}
+		if err := os.WriteFile(filepath.Join(os.Getenv("TMPDIR"), "helper-write"), []byte("written"), 0o600); err != nil {
+			return 95
+		}
+	}
 
 	sessionID := "helper-session"
 	if mode == "sensitive" {
@@ -862,4 +1101,52 @@ func readLines(t *testing.T, path string) []string {
 		t.Fatal(err)
 	}
 	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+func adapterCriterionFixture(t *testing.T) (string, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	adapterRunGit(t, root, "init")
+	adapterRunGit(t, root, "config", "user.name", "Partitur Test")
+	adapterRunGit(t, root, "config", "user.email", "partitur@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "tracked"), []byte("tracked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapterRunGit(t, root, "add", "tracked")
+	adapterRunGit(t, root, "commit", "-m", "fixture")
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	adapterRunGit(t, root, "worktree", "add", "--detach", worktree, "HEAD")
+
+	trampoline := filepath.Join(t.TempDir(), "partitur-trampoline")
+	repository, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", trampoline, "./cmd/partitur-trampoline")
+	build.Dir = repository
+	build.Env = os.Environ()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build trampoline: %v\n%s", err, output)
+	}
+	return root, worktree, trampoline
+}
+
+func adapterRunGit(t *testing.T, directory string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", arguments, err, output)
+	}
+}
+
+func adapterGitText(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", arguments, err)
+	}
+	return strings.TrimSpace(string(output))
 }
