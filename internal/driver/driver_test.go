@@ -1945,6 +1945,88 @@ func TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement(t *test
 	}
 }
 
+func TestLiveAdapterBudgetDeadlineNamesTheActiveBudget(t *testing.T) {
+	const remainingMS int64 = 50
+	result := executeAttemptWithContextEndingAdapter(t, context.Background(), remainingMS, nil)
+	if result.Outcome != OutcomeInterrupted || result.Reason != "" {
+		t.Fatalf("budget result = %+v, want INTERRUPTED with no reason", result)
+	}
+	var exhausted *ActiveBudgetExhaustedError
+	if !errors.As(result.Err, &exhausted) {
+		t.Fatalf("returned error = %T %v, want *ActiveBudgetExhaustedError", result.Err, result.Err)
+	}
+	if exhausted.RemainingAtStartMS != remainingMS {
+		t.Fatalf("remaining_at_start_ms = %d, want %d", exhausted.RemainingAtStartMS, remainingMS)
+	}
+	if !errors.Is(result.Err, context.DeadlineExceeded) {
+		t.Fatalf("returned error = %v, want context deadline exceeded in error chain", result.Err)
+	}
+}
+
+func TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions(t *testing.T) {
+	const remainingMS int64 = 60_000
+	t.Run("parent cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// A non-deadline adapter error holds the first conjunct false.
+		result := executeAttemptWithContextEndingAdapter(t, ctx, remainingMS, cancel)
+		var exhausted *ActiveBudgetExhaustedError
+		if result.Outcome != OutcomeInterrupted || result.Reason != "" || errors.As(result.Err, &exhausted) || !errors.Is(result.Err, context.Canceled) {
+			t.Fatalf("parent cancellation result = %+v", result)
+		}
+	})
+	t.Run("enclosing deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		// A deadline adapter error holds the first conjunct true and the cause conjunct false.
+		result := executeAttemptWithContextEndingAdapter(t, ctx, remainingMS, nil)
+		var exhausted *ActiveBudgetExhaustedError
+		if result.Outcome != OutcomeInterrupted || result.Reason != "" || errors.As(result.Err, &exhausted) || result.Err != context.DeadlineExceeded {
+			t.Fatalf("enclosing deadline result = %+v", result)
+		}
+	})
+}
+
+func executeAttemptWithContextEndingAdapter(t *testing.T, ctx context.Context, remainingMS int64, inFlight func()) Result {
+	t.Helper()
+	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
+	started, err := workspace.Start(preparation, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstore.New(preparation.RepositoryRoot, faultpoint.Nop{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.AcquireDriver(started.RunID, movementSeeds(preparation.Score))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Release()
+	input, err := store.LoadRunInput(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := started.Run.CreateAttempt("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []runstate.EventType{runstate.EventMovementReady, runstate.EventMovementStarted} {
+		if _, err := authority.Append(runstate.Event{
+			RunID: started.RunID, ScoreRevision: input.Score.Revision(), MovementID: attempt.MovementID, Type: eventType, Payload: []byte(`{}`),
+		}, faultpoint.ReceiptAddress("test.adapter-budget."+string(eventType))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dependencies := readerSuccessDependencies(t)
+	dependencies.client = &contextEndingAdapterFixture{inFlight: inFlight}
+	return ExecuteAttempt(ctx, AttemptExecution{
+		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
+		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
+		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: remainingMS,
+	}, executionDependenciesFrom(dependencies))
+}
+
 func TestExecuteAttemptRecordsWaitingHumanAsBlockedTerminal(t *testing.T) {
 	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
 	started, err := workspace.Start(preparation, faultpoint.Nop{})
@@ -2857,6 +2939,22 @@ func (proposalDispositionFixture) PrepareAdapterProposal(context.Context, Adapte
 
 func (fixture *waitingAdapterFixture) Resolve(adapterID string) (string, error) {
 	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+type contextEndingAdapterFixture struct {
+	inFlight func()
+}
+
+func (fixture *contextEndingAdapterFixture) Resolve(adapterID string) (string, error) {
+	return "/fixture/partitur-adapter-" + adapterID, nil
+}
+
+func (fixture *contextEndingAdapterFixture) Execute(ctx context.Context, _ adapter.ExecutePlan) (adapter.ExecuteReport, error) {
+	if fixture.inFlight != nil {
+		fixture.inFlight()
+	}
+	<-ctx.Done()
+	return adapter.ExecuteReport{}, ctx.Err()
 }
 
 func (adapterResolutionFailureFixture) Resolve(string) (string, error) {

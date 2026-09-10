@@ -650,6 +650,18 @@ func TestMutationWaivedNoOpWriterPinsCandidateRef(t *testing.T) {
 		}`, "_ = commit // mutation: waived candidate ref omitted")
 }
 
+func TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause(t *testing.T) {
+	goEnvironment := mutationGoEnvironment(t)
+	assertDriverMutationKilledUnique(t, "TestLiveAdapterBudgetDeadlineNamesTheActiveBudget", goEnvironment, "driver.go", `executeContext, cancel := context.WithTimeoutCause(
+		ctx,
+		budgetTimeout(remainingMS),
+		&ActiveBudgetExhaustedError{RemainingAtStartMS: remainingMS},
+	)`, `executeContext, cancel := context.WithTimeout(
+		ctx,
+		budgetTimeout(remainingMS),
+	)`)
+}
+
 func mutationGoEnvironment(t *testing.T) mutationtest.GoEnvironment {
 	t.Helper()
 	environment, err := mutationtest.SnapshotGoEnvironment()
