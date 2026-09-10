@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,38 +214,7 @@ func copyDecisionResumeHintMutationRepository(t *testing.T) string {
 	}
 	repository := filepath.Clean(filepath.Join(filepath.Dir(current), "..", ".."))
 	destination := filepath.Join(t.TempDir(), "partitur-mutation-copy")
-	if err := filepath.WalkDir(repository, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(repository, path)
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() && (relative == ".git" || relative == ".partitur") {
-			return filepath.SkipDir
-		}
-		target := filepath.Join(destination, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		}
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, contents, info.Mode().Perm())
-	}); err != nil {
+	if err := mutationtest.CopyRepository(destination, repository); err != nil {
 		t.Fatal(err)
 	}
 	return destination
