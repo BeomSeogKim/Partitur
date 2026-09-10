@@ -1,24 +1,236 @@
 score: "0.2"
-name: reference-workflow
+name: issue-441-name-the-budget-in-the-interrupt
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Fix issue #441's diagnostic half. When the run's active wall-clock budget expires while the
+  adapter is executing, `partitur run` today exits 6 with `detail="context deadline exceeded"`,
+  which names neither the budget nor how much of it was left when the call started, and does not
+  say whether resuming is legal. Introduce a typed cause carried out of the live adapter call and
+  render it: the interrupt line gains a `resume_condition` field, and a budget expiry renders a
+  detail that names the budget and its `remaining_at_start_ms`.
+
+  The outcome does not change. It stays INTERRUPTED, exit 6, nonterminal, with no new journal
+  event and no terminalization chain.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  THE DEFECT, LOCATED.
+
+  `internal/driver/driver.go:1084-1087` wraps the live adapter call in a budget deadline:
+
+      executeContext, cancel := context.WithTimeout(
+          ctx,
+          budgetTimeout(remainingMS),
+      )
+
+  `remainingMS` is the run's remaining active wall-clock budget in milliseconds
+  (`driver.go:547`, `execution.RemainingMS`; `budgetTimeout` at `driver.go:2190-2197` converts it
+  to a `time.Duration`). The adapter returns bare `ctx.Err()` when that deadline fires. The error
+  reaches `stopped()` (`driver.go:2685-2698`), matches none of its four sentinels, and falls
+  through `default:` to `interrupted()` (`driver.go:2700-2705`), which sets
+  `Outcome = OutcomeInterrupted`, clears `Reason`, and PRESERVES `Err`.
+  `cmd/partitur/main.go:350-352` then calls `renderRunInterruption` and returns 6.
+
+  So the operator sees:
+
+      run interrupted: run_id="…" state="nonterminal" resume="partitur resume …" detail="context deadline exceeded"
+
+  Three things are missing from that line and each of them costs a human a manual investigation:
+  which deadline expired (the run's own budget, or something enclosing it), how much budget the
+  call started with, and whether resuming is safe given that the adapter interval is still open.
+
+  WHAT THIS RUN DELIBERATELY DOES NOT FIX — READ THIS BEFORE YOU DESIGN ANYTHING.
+
+  `DESIGN.md:2338-2350` requires a terminal path for mid-flight exhaustion: "If the budget runs
+  out while an adapter or an acceptance command is running, the attempt must be terminalized
+  before the movement can fail," with the literal chain
+  `execution.stopped{budget_exhausted} -> attempt.failed{budget_exhausted} -> movement.failed -> run.failed`.
+  The live driver implements none of that for the ADAPTER arm. That is a genuine spec deviation,
+  and a two-party design gate on 2026-09-10 split it out deliberately:
+
+    - THIS run (#441) is the DIAGNOSTIC half: a typed error plus a renderer. Outcome, exit code,
+      state and journal are untouched.
+    - The CONFORMANCE repair is issue #447 and is OUT OF SCOPE HERE.
+
+  Therefore: do NOT append `execution.stopped`, do NOT call `TerminalizeAcceptanceBudget`
+  (`internal/driver/acceptance_budget.go:17`), do NOT touch `classifyAttemptFailure`, do NOT
+  change `Outcome`, `Reason`, or the exit code, and do NOT add a field to `driver.Result`. One
+  acceptance criterion below (`no-terminalization-vocabulary`) enforces that fence mechanically,
+  and the verifier movement checks it again by reading the whole diff. If you believe the
+  conformance repair belongs here, STOP and say so in your report; do not implement it.
+
+  THE AGREED DESIGN (design gate, two parties, 2026-09-10 — implement it, do not redesign it).
+
+  1. A typed error in a NEW file `internal/driver/budget.go`:
+
+         type ActiveBudgetExhaustedError struct {
+             RemainingAtStartMS int64
+         }
+
+     with a pointer receiver `Error() string` returning EXACTLY
+
+         active execution budget expired: remaining_at_start_ms=%d; live budget terminalization was not recorded
+
+     (`%d` is `RemainingAtStartMS`), and a pointer receiver `Unwrap() error` returning
+     `context.DeadlineExceeded`, so every existing `errors.Is(err, context.DeadlineExceeded)`
+     caller keeps working. A STRUCT, not a sentinel, because the remaining-at-start value is
+     carried on it. The naming precedent for driver-owned budget errors is
+     `ErrCompositionBudgetExhausted` (`internal/driver/movement_composition.go:24`), which is a
+     sentinel because it carries nothing; this one carries a value, so it is a type.
+
+  2. `context.WithTimeoutCause` at `driver.go:1084-1087`, with the typed error as the cause:
+
+         executeContext, cancel := context.WithTimeoutCause(
+             ctx,
+             budgetTimeout(remainingMS),
+             &ActiveBudgetExhaustedError{RemainingAtStartMS: remainingMS},
+         )
+
+     Construct the cause INLINE, inside the call. Do not hoist it into a named variable: the
+     mutation proof below replaces this whole call with the original `context.WithTimeout` form,
+     and a hoisted variable would become unused and turn the mutation into a compile failure
+     instead of a killed test.
+
+  3. Read the cause BEFORE `cancel()`. `cancel()` is at `driver.go:1105`, immediately after the
+     `dependencies.client.Execute(...)` call returns. THIS ORDERING IS LOAD-BEARING: after
+     `cancel()` runs, `context.Cause(executeContext)` reports `context.Canceled` and the typed
+     cause is gone forever. So capture it first:
+
+         executeCause := context.Cause(executeContext)
+         cancel()
+         err = activeBudgetError(err, executeCause)
+
+     `activeBudgetError` is a small helper (put it in `budget.go`) that substitutes ONLY under
+     both conjuncts:
+
+         // activeBudgetError names the run's own active budget as the reason the adapter context
+         // ended. It substitutes only when the adapter reported a deadline AND the deadline that
+         // fired is the one this call installed. A parent cancellation, or an enclosing deadline
+         // that is not ours, keeps its ordinary interruption error.
+         func activeBudgetError(err, cause error) error {
+             if !errors.Is(err, context.DeadlineExceeded) {
+                 return err
+             }
+             var exhausted *ActiveBudgetExhaustedError
+             if !errors.As(cause, &exhausted) {
+                 return err
+             }
+             return exhausted
+         }
+
+     Both conjuncts matter and each has a control test below. Substituting once here, right after
+     the capture, covers both downstream arms (the `approvalPrepared` arm at `driver.go:1106-1108`
+     and the ordinary arm at `driver.go:1136-1143`) from a single site.
+
+  4. NO adapter change. The adapter keeps returning bare `ctx.Err()`; the driver owns the naming.
+
+  5. NO new `driver.Result` field. `interrupted()` already preserves `Err`, so `errors.As` at the
+     command boundary is enough to discriminate.
+
+  6. The renderer, `renderRunInterruption` at `cmd/partitur/main.go:1466-1475`. Its format string
+     becomes
+
+         "run interrupted: run_id=%q state=%q resume=%q resume_condition=%q detail=%q\n"
+
+     and the new operand is a condition string computed from the error:
+
+         - when `errors.As(result.Err, &exhausted)` with `*driver.ActiveBudgetExhaustedError`:
+           `legal; recovery must reconcile the open adapter interval before deciding the next durable action`
+         - otherwise: `ready`
+
+     `detail` stays `errorText(result.Err)` unchanged — the budget wording arrives through the
+     typed error's own `Error()` string, so the renderer special-cases the condition and nothing
+     else. `errors` is already imported in `main.go`.
+
+     ONLY `renderRunInterruption` changes. `renderResumeInterruption`
+     (`cmd/partitur/main.go:1044-1050`) and the eight other literal `run interrupted:` Fprintf
+     sites (`main.go:510, 528, 568, 581, 641, 659, 765, 937`) belong to the apply, promotion,
+     amendment and resume paths, which never carry a live adapter budget error. Leave every one
+     of them alone. Verified: `renderRunInterruption` has exactly one caller,
+     `cmd/partitur/main.go:351`.
+
+  THE PINNED TEST YOU MUST UPDATE DELIBERATELY, NOT WEAKEN.
+
+  `cmd/partitur/main_test.go:1134-1144` pins the current interrupt line BYTE-FOR-BYTE inside
+  `TestRunPrintsDurableIDOnceBeforeTerminalOutcome` (the comparison is `stderr.String() !=
+  test.stderr` at `main_test.go:1180`). `cmd/partitur/main_test.go:1224-1228` pins it again inside
+  `TestRunIDWriteFailureIsOperationalInterruption`. Both go through `renderRunInterruption` and
+  both MUST be updated to the new byte-exact shape.
+
+  This repository's lesson L40 is that a loosened assertion loses its lock: when you widen an
+  exact-equality pin, enumerate exactly what the widening admits and pin each new thing.
+  Here the widening admits exactly ONE new field, `resume_condition`, in exactly TWO states, so:
+
+    - Keep BOTH tests on byte equality. Do NOT convert either to `strings.Contains`, to a prefix
+      check, or to a regexp. A `Contains` here would pass whether the condition said `ready`,
+      `legal; …`, or nothing at all.
+    - Update the existing rows to carry `resume_condition="ready"`.
+    - ADD a new row to `TestRunPrintsDurableIDOnceBeforeTerminalOutcome` whose `err` is
+      `&driver.ActiveBudgetExhaustedError{RemainingAtStartMS: 60_000}`, `code` is 6, and whose
+      `stderr` is byte-exactly
+
+          "run interrupted: " +
+              "run_id=\"019d0000-0000-7000-8000-000000000001\" " +
+              "state=\"nonterminal\" " +
+              "resume=\"partitur resume 019d0000-0000-7000-8000-000000000001\" " +
+              "resume_condition=\"legal; recovery must reconcile the open adapter interval before deciding the next durable action\" " +
+              "detail=\"active execution budget expired: remaining_at_start_ms=60000; live budget terminalization was not recorded\"\n"
+
+  `cmd/partitur/command_matrix_witness_test.go:554` also pins a `run interrupted:` line, but it is
+  the RESUME-009 witness driving `partitur resume`, which renders through
+  `renderResumeInterruption`. It must NOT change. If your diff touches it, your renderer change
+  leaked into the wrong function.
+
+  THE LIVE TEST SEAM.
+
+  `internal/driver/driver_test.go:1849` (`TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement`)
+  is the closest working example of driving the live execution path in a unit test: it prepares a
+  runnable fixture, acquires the driver authority, appends `movement.ready` and `movement.started`,
+  swaps `dependencies.client` for an adapter fixture, and calls
+
+      ExecuteAttempt(context.Background(), AttemptExecution{…, RemainingMS: 1_000}, executionDependenciesFrom(dependencies))
+
+  Read it before you write anything; copy its fixture construction rather than inventing one.
+  Note that `RemainingMS` is settable per call, so `budgetTimeout(50)` gives a 50ms deadline. Do
+  NOT pass `RemainingMS: 0` — `budgetTimeout(0)` yields an already-expired context and would test
+  a different thing (a known incidental hazard, out of scope).
+
+  No existing adapter fixture in `driver_test.go` observes its context: `waitingAdapterFixture`
+  (:2872), `deliveredInputAdapterFixture` (:2926), `completedAdapterFixture` (:2994) and
+  `adapterResolutionFailureFixture` (:2866) all ignore it. You will need one new fixture that
+  blocks on `<-ctx.Done()` and returns `adapter.ExecuteReport{}, ctx.Err()` — bare, exactly as the
+  real adapter does. Put it beside the existing fixtures in `driver_test.go`.
+
+  THE MUTATION PROOF USES THE HELPER THAT IS ALREADY THERE.
+
+  `internal/driver/mutation_test.go` already carries `//go:build mutation` and a helper that does
+  precisely what this proof needs: `assertDriverMutationKilledUnique` (`mutation_test.go:667-681`)
+  asserts the anchor occurs EXACTLY ONCE in the real source before mutating, then delegates to
+  `assertDriverMutationKilledAt`, which copies the repository into `t.TempDir()` skipping `.git`
+  and `.partitur` (`copyMutationRepository`, :820-866), rewrites the anchor, and drives the child
+  through `internal/mutationtest`. Use it. Do not write a new copy helper and do not create a new
+  file.
+
+  ONE CLASSIFIER FACT THAT DECIDES THE MUTATION'S TARGET. `internal/mutationtest/child.go:190-205`
+  reports `Killed` only when EVERY named target failed. The control test survives this mutation by
+  construction — it asserts that a non-budget context ending is NOT a budget error, which stays
+  true when the cause is never installed. So the mutation must name ONLY the budget-discrimination
+  test. Naming both would report "mixed outcomes" and the criterion could never pass. Run the
+  control test by hand inside a scratch copy afterwards and report what it does, so the survival
+  is recorded rather than assumed.
+
+  SCORE PLACEMENT. This score temporarily replaces the committed reference-workflow score because
+  `partitur run` reads only `<repo>/partitur.yaml` and takes no score operand (#435). It is
+  reverted before the pull request; only the `internal/driver/` and `cmd/partitur/` change is
+  meant to land.
 
 verification:
   expectation:
-    intent: none
+    intent: pass-existing-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +240,441 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: name-the-budget-in-the-interrupt
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Fix issue #441's diagnostic half in this repository, red-first. Everything you write is
+      English.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      The design is already agreed and is in this score's context. Your job is to implement it
+      exactly and to prove it, not to reopen it. In particular the conformance repair (the
+      `execution.stopped{budget_exhausted}` terminal chain) is issue #447 and is OUT OF SCOPE: if
+      you believe it belongs here, STOP and say so in your report instead of writing it.
+
+      Step 0 — CONFIRM THE GROUND, cheaply. Report the output of each, verbatim:
+
+        grep -n 'context.WithTimeout(' internal/driver/driver.go
+        grep -n 'budgetTimeout(remainingMS)' internal/driver/driver.go
+        grep -n '^	cancel()$' internal/driver/driver.go
+        grep -n 'func renderRunInterruption' cmd/partitur/main.go
+        grep -rn 'renderRunInterruption' cmd/partitur/
+        ls internal/driver/budget.go ; echo "rc=$?"
+        grep -n 'func assertDriverMutationKilledUnique' internal/driver/mutation_test.go
+
+      You must see: exactly one `context.WithTimeout(` in `driver.go` (at :1084), one
+      `budgetTimeout(remainingMS)` (:1086), exactly one top-level `cancel()` (:1105),
+      `renderRunInterruption` declared at `main.go:1466` with exactly one caller at `main.go:351`,
+      NO `internal/driver/budget.go`, and the unique-anchor mutation helper at
+      `mutation_test.go:667`. If any of that does not hold, STOP: the tree is not the one this
+      score was written against, and say which anchor drifted.
+
+      Step 1 — RED FIRST, in two layers. Both layers go in your report.
+
+      Layer 1 (baseline, weak). Before editing anything, run every acceptance command in this
+      movement exactly as written below and record each exit status. The six artifact criteria
+      (`typed-budget-error-declared`, `timeout-cause-installed`, `cause-read-before-cancel`,
+      `budget-discrimination-pinned`, `renderer-shape-pinned`, and `mutation-proof`) must be
+      nonzero because none of what they name exists yet. A seventh, `interrupt-outcome-unchanged`,
+      is also nonzero on the unfixed tree for a different reason: it counts the OLD four-field
+      `run interrupted:` format at 7 sites, and the renderer you are about to change is the eighth.
+      Say all of this plainly: this layer is an absence check and on its own it is weak evidence.
+
+      Layer 2 (the load-bearing red). This is the one that matters. Produce it BY HAND before you
+      write the mutation test that automates it.
+
+        - Write `internal/driver/budget.go` and the two new driver tests (step 3) FIRST, but leave
+          `driver.go:1084-1087` on `context.WithTimeout` — that is, do not install the cause yet.
+          Run
+
+              go test -count=1 -v -run '^TestLiveAdapterBudgetDeadlineNamesTheActiveBudget$' ./internal/driver/
+
+          It MUST fail, and the failure text must say the returned error was not an
+          `*ActiveBudgetExhaustedError`. Quote it verbatim.
+        - In that same tree run the control test
+
+              go test -count=1 -v -run '^TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions$' ./internal/driver/
+
+          and report its exit status. Expect it to PASS. State in one sentence what that means:
+          the control cannot distinguish a missing feature from a correct one, which is why the
+          budget test is the mutation's target and the control is not.
+        - Now install `context.WithTimeoutCause` but read the cause AFTER `cancel()` instead of
+          before it. Re-run the budget test. It MUST still fail, and the failure must show the
+          observed cause was `context.Canceled`. Quote it. Then move the read before `cancel()`
+          and confirm the test passes. This is the only evidence that the ordering is load-bearing
+          rather than stylistic, and the verifier will ask for it.
+        - Write the renderer change last, and before writing it run
+
+              go test -count=1 -v -run '^TestRunPrintsDurableIDOnceBeforeTerminalOutcome$' ./cmd/partitur/
+
+          with the new table row already added and the format string NOT yet changed. It MUST fail
+          on the byte comparison. Quote the `exit=… stdout=… stderr=…` line.
+
+      Do not skip Layer 2 or reconstruct it from reasoning. If a command is blocked by your
+      sandbox, say exactly which and how, and do not report a blocked command as evidence.
+
+      Step 2 — the typed error, in a NEW file `internal/driver/budget.go`.
+
+      Package `driver`. Declare exactly the struct, `Error()`, `Unwrap()` and the unexported
+      `activeBudgetError` helper described in this score's context. Both methods take POINTER
+      receivers. `Error()` must produce, for `RemainingAtStartMS == 60000`, exactly:
+
+          active execution budget expired: remaining_at_start_ms=60000; live budget terminalization was not recorded
+
+      Write a doc comment on the type saying what it means and what it deliberately does NOT mean:
+      it names the run's own active wall-clock budget as the deadline that fired, and it is a
+      DIAGNOSTIC signal only — the attempt was not terminalized, the outcome stays INTERRUPTED,
+      and the spec's terminal chain (`DESIGN.md:2338-2350`) remains unimplemented under issue
+      #447. Say that in the comment; a future reader must not mistake this type for conformance.
+
+      Step 3 — the threading, in `internal/driver/driver.go`, and its two tests in
+      `internal/driver/driver_test.go`.
+
+      Replace the `context.WithTimeout` call at :1084-1087 with the `context.WithTimeoutCause`
+      form from the context, constructing the cause inline. Immediately after
+      `dependencies.client.Execute(...)` returns, capture `context.Cause(executeContext)` into a
+      local, THEN call `cancel()`, THEN reassign `err` through `activeBudgetError`. Change nothing
+      else in that function: not `controlResult`, not the `approvalPrepared` arm, not the
+      `adapter.HaltError` check, not `stopped`, not `interrupted`.
+
+      Add a context-observing adapter fixture beside the existing fixtures in `driver_test.go`: its
+      `Execute` blocks on `<-ctx.Done()` and returns `adapter.ExecuteReport{}, ctx.Err()` — the
+      bare error, with no wrapping, exactly as the real adapter does. Give it an optional hook the
+      test can use to act once the call is in flight.
+
+      Then two tests, modelled on
+      `TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement` (:1849):
+
+          func TestLiveAdapterBudgetDeadlineNamesTheActiveBudget(t *testing.T) {
+
+      Drive `ExecuteAttempt` with a small positive `RemainingMS` (50 is fine; never 0) and the
+      blocking fixture. Assert ALL of:
+        - `result.Outcome == OutcomeInterrupted`
+        - `result.Reason == ""`
+        - `errors.As(result.Err, &exhausted)` succeeds for `*ActiveBudgetExhaustedError`
+        - `exhausted.RemainingAtStartMS` equals the exact value you passed (not merely nonzero)
+        - `errors.Is(result.Err, context.DeadlineExceeded)` still holds, so the `Unwrap` contract
+          is pinned rather than assumed.
+
+          func TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions(t *testing.T) {
+
+      Two subtests, both with a LARGE `RemainingMS` (60_000) so the budget deadline cannot fire:
+        - "parent cancellation": the fixture cancels the parent context from inside `Execute`, then
+          blocks on `<-ctx.Done()` and returns `ctx.Err()`. Assert the result is INTERRUPTED, that
+          `errors.As(result.Err, &exhausted)` is FALSE, and that `errors.Is(result.Err,
+          context.Canceled)` holds.
+        - "enclosing deadline": the parent context carries its own short deadline. The adapter
+          error IS `context.DeadlineExceeded`, so this subtest is what proves the SECOND conjunct
+          of `activeBudgetError` — the cause check — actually does work. Assert
+          `errors.As(result.Err, &exhausted)` is FALSE and that the error is still the bare
+          `context.DeadlineExceeded`.
+
+      Both subtests must be constructed so they would FAIL if `activeBudgetError` dropped either
+      conjunct. Say in a comment which conjunct each subtest holds.
+
+      Step 4 — the renderer, in `cmd/partitur/main.go`, and its pins in `cmd/partitur/main_test.go`.
+
+      Change `renderRunInterruption` only, exactly as the context describes. Touch no other
+      `run interrupted:` site.
+
+      Then update the two byte-exact pins and add the new row, exactly as the context spells out.
+      Keep both tests on byte equality. Do not reflow the surrounding table, do not rename the
+      tests, do not touch any other row's expected bytes beyond inserting `resume_condition="ready" `
+      in its correct position, and do not touch
+      `cmd/partitur/command_matrix_witness_test.go`.
+
+      Step 5 — the mutation proof, appended to `internal/driver/mutation_test.go`.
+
+          func TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause(t *testing.T) {
+
+      Follow the shape of the neighbouring mutation tests in that file. It calls
+      `assertDriverMutationKilledUnique` with `sourceName` `"driver.go"`, `testName`
+      `"TestLiveAdapterBudgetDeadlineNamesTheActiveBudget"`, a `before` anchor that is the whole
+      `context.WithTimeoutCause(` call you wrote (all four lines, tabs included) and an `after`
+      that is the original `context.WithTimeout(` three-line form.
+
+      Choose the anchor so that:
+        - it occurs EXACTLY ONCE in `internal/driver/driver.go` (the helper asserts this and fails
+          with the count otherwise — #432: an anchor that stops matching makes a mutation test
+          silently vacuous), and
+        - the mutated copy STILL COMPILES. This is why the cause is constructed inline: with the
+          cause gone, nothing becomes unused, `context` is still imported, and
+          `ActiveBudgetExhaustedError` is still referenced by `activeBudgetError` and the tests. A
+          mutation that fails to build is a non-result, not a kill. Confirm the mutated copy
+          compiles by running the proof and reporting `result.Diagnostic()` if it is anything other
+          than `Killed`.
+
+      Name ONLY `TestLiveAdapterBudgetDeadlineNamesTheActiveBudget` as the target. Do NOT add the
+      control test: `internal/mutationtest/child.go:190-205` reports `Killed` only when every
+      target failed, and the control passes under this mutation. Separately, in a scratch copy of
+      the repository OUTSIDE this worktree, apply the same mutation with the control test as the
+      target and report what the classifier says. That observation belongs in your report, not in
+      the test.
+
+      Step 6 — prove it holds. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/driver/ ./cmd/partitur/
+        go test -count=1 -v -run '^(TestLiveAdapterBudgetDeadlineNamesTheActiveBudget|TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions)$' ./internal/driver/
+        go test -count=1 ./internal/driver/
+        go test -count=1 -v -run '^(TestRunPrintsDurableIDOnceBeforeTerminalOutcome|TestRunIDWriteFailureIsOperationalInterruption)$' ./cmd/partitur/
+        go test -count=1 ./cmd/partitur/
+        go test -tags=mutation -count=1 -run '^$' ./internal/driver/
+        go test -tags=mutation -count=1 -v -run '^TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause$' ./internal/driver/
+
+      NEVER run `go test -tags=mutation ./...`. That whole-repository battery is a known starvation
+      hazard (#316) and would red unrelated tests while telling you nothing about this change.
+      Every tagged command you run is scoped to `./internal/driver/`.
+
+      Step 7 — confirm the scope. Report `git status --porcelain` and `git diff --stat` verbatim.
+      At most these paths may appear, and no others:
+
+        internal/driver/budget.go        (new)
+        internal/driver/driver.go        (modified)
+        internal/driver/driver_test.go   (modified)
+        internal/driver/mutation_test.go (modified)
+        cmd/partitur/main.go             (modified)
+        cmd/partitur/main_test.go        (modified)
+
+      Put every new test in those existing test files; do not create additional files. No other
+      package, no `internal/adapter/`, no `docs/`, no `DESIGN.md`, no `.github/`, no
+      `partitur.yaml`, no `.partitur/cast.yaml`. Do not commit; the run captures the change set.
+
+      Then run every acceptance command below yourself and report each result.
     outputs:
-      - id: marker-change
+      - id: active-budget-interrupt-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet-driver
+          run: ["go", "vet", "./internal/driver/"]
+          timeout_min: 10
+        - id: vet-cmd
+          run: ["go", "vet", "./cmd/partitur/"]
+          timeout_min: 10
+        - id: typed-budget-error-declared
+          run: ["sh", "-c", "f=internal/driver/budget.go; test \"$(grep -cF 'type ActiveBudgetExhaustedError struct {' $f)\" = 1 && test \"$(grep -cF 'RemainingAtStartMS int64' $f)\" = 1 && test \"$(grep -cF ') Error() string {' $f)\" = 1 && test \"$(grep -cF ') Unwrap() error {' $f)\" = 1 && test \"$(grep -cF 'return context.DeadlineExceeded' $f)\" = 1 && test \"$(grep -cF 'active execution budget expired: remaining_at_start_ms=%d; live budget terminalization was not recorded' $f)\" = 1 && test \"$(grep -rlF 'type ActiveBudgetExhaustedError struct {' internal/ cmd/ | wc -l | tr -d ' ')\" = 1"]
+          timeout_min: 5
+        - id: timeout-cause-installed
+          run: ["sh", "-c", "f=internal/driver/driver.go; test \"$(grep -cF 'context.WithTimeoutCause(' $f)\" = 1 && test \"$(grep -cF 'context.WithTimeout(' $f)\" = 0 && test \"$(grep -cF '&ActiveBudgetExhaustedError{RemainingAtStartMS: remainingMS},' $f)\" = 1"]
+          timeout_min: 5
+        - id: cause-read-before-cancel
+          run: ["sh", "-c", "f=internal/driver/driver.go; test \"$(grep -cF 'context.Cause(executeContext)' $f)\" = 1 && test \"$(grep -c '^\tcancel()$' $f)\" = 1 && cause=$(grep -nF 'context.Cause(executeContext)' $f | cut -d: -f1) && kill=$(grep -n '^\tcancel()$' $f | cut -d: -f1) && test \"$cause\" -lt \"$kill\""]
+          timeout_min: 5
+        - id: budget-discrimination-pinned
+          run: ["sh", "-c", "f=internal/driver/driver_test.go; for n in TestLiveAdapterBudgetDeadlineNamesTheActiveBudget TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions; do grep -qF \"func $n(t *testing.T) {\" $f || exit 1; done; go test -count=1 -run '^(TestLiveAdapterBudgetDeadlineNamesTheActiveBudget|TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions)$' -v ./internal/driver/ | grep -c '^--- PASS: TestLiveAdapter' | grep -qx 2"]
+          timeout_min: 20
+        - id: renderer-shape-pinned
+          run: ["sh", "-c", "m=cmd/partitur/main.go; t=cmd/partitur/main_test.go; test \"$(grep -cF 'state=%q resume=%q resume_condition=%q detail=%q' $m)\" = 1 && test \"$(grep -cF 'legal; recovery must reconcile the open adapter interval before deciding the next durable action' $m)\" = 1 && test \"$(grep -cF 'legal; recovery must reconcile the open adapter interval before deciding the next durable action' $t)\" = 1 && test \"$(grep -cF 'active execution budget expired: remaining_at_start_ms=60000; live budget terminalization was not recorded' $t)\" = 1 && test \"$(grep -cF 'resume_condition=' $t)\" -ge 3 && test \"$(grep -cF 'stderr.String() != test.stderr' $t)\" -ge 1 && test \"$(grep -cF 'stdout.calls != 1 || stderr.String() != wantStderr' $t)\" = 1 && go test -count=1 -run '^(TestRunPrintsDurableIDOnceBeforeTerminalOutcome|TestRunIDWriteFailureIsOperationalInterruption)$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestRun' | grep -qx 2"]
+          timeout_min: 30
+        - id: interrupt-outcome-unchanged
+          run: ["sh", "-c", "m=cmd/partitur/main.go; test \"$(grep -cF 'case driver.OutcomeInterrupted:' $m)\" = 1 && test \"$(grep -cF 'renderRunInterruption(stderr, result)' $m)\" = 1 && test -z \"$(git status --porcelain -- cmd/partitur/command_matrix_witness_test.go)\" && test \"$(grep -cF 'run interrupted: run_id=%q state=%q resume=%q detail=%q' $m)\" = 7"]
+          timeout_min: 5
+        - id: no-terminalization-vocabulary
+          run: ["sh", "-c", "if { git diff HEAD -- internal/driver/ cmd/partitur/ | grep '^+'; cat internal/driver/budget.go 2>/dev/null; } | grep -qE 'TerminalizeAcceptanceBudget|EventExecutionStopped|classifyAttemptFailure|KindBudgetExhausted|OutcomeFailed'; then exit 1; fi; test -z \"$(git status --porcelain -- DESIGN.md docs/ internal/docclause/)\""]
+          timeout_min: 5
+        - id: driver-package
+          run: ["go", "test", "-count=1", "./internal/driver/"]
+          timeout_min: 30
+        - id: cmd-package
+          run: ["go", "test", "-count=1", "./cmd/partitur/"]
+          timeout_min: 45
+        - id: mutation-build-compiles
+          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./internal/driver/"]
+          timeout_min: 10
+        - id: mutation-proof
+          run: ["sh", "-c", "grep -qF \"func TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause(t *testing.T) {\" internal/driver/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause$' -v ./internal/driver/ | grep -q '^--- PASS: TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause'"]
+          timeout_min: 30
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ | grep -v 'internal/driver/')\" && test -z \"$(git status --porcelain -- internal/driver/ | grep -vE 'internal/driver/(budget\\.go|budget_test\\.go|driver\\.go|driver_test\\.go|mutation_test\\.go)$')\" && test -z \"$(git status --porcelain -- cmd/ | grep -vE 'cmd/partitur/(main\\.go|main_test\\.go)$')\" && test -z \"$(git status --porcelain -- docs/ integration/ .github/ go.mod go.sum partitur.yaml .partitur/ DESIGN.md AGENTS.md)\""]
+          timeout_min: 5
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [name-the-budget-in-the-interrupt]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the issue #441 Branch-B fix. Change no file in this repository. Report in English.
+
+      This change is small. The three ways it can be wrong are: it can quietly implement #447's
+      conformance repair, it can weaken a byte-exact pin while claiming to update it, and it can
+      get the cause/cancel ordering right by accident rather than by construction. Spend your
+      effort on points 2, 3, 4 and 5.
+
+      1. SCOPE, BY READING THE WHOLE DIFF. Run `git status --porcelain` and `git diff --stat` and
+      report both verbatim, then READ `git diff` in full — not a summary of it. At most six paths
+      may appear: `internal/driver/budget.go` (new), `internal/driver/driver.go`,
+      `internal/driver/driver_test.go`, `internal/driver/mutation_test.go`,
+      `cmd/partitur/main.go`, `cmd/partitur/main_test.go`. A change to `DESIGN.md`, to
+      `internal/docclause/`, to `cmd/partitur/command_matrix_witness_test.go`, to any other
+      package, to `partitur.yaml` or to `.partitur/cast.yaml` is a scope violation and a failure —
+      say so rather than passing it.
+
+      2. NO CONFORMANCE REPAIR LEAKED IN. This is the fence that matters most. Issue #441's
+      conformance half is issue #447 and must NOT be here. Confirm by reading the diff that it
+      contains: no new `execution.stopped` append site, no call to `TerminalizeAcceptanceBudget`
+      (`internal/driver/acceptance_budget.go:17`), no change to `classifyAttemptFailure`, no new
+      `driver.Result` field, no change to `Outcome`, `Reason` or the exit code for this path, and
+      no new journal event of any kind. Then confirm positively that the outcome semantics are
+      still what the score promised: the budget path still ends INTERRUPTED with an empty
+      `Reason`, and `cmd/partitur/main.go` still returns 6 for `driver.OutcomeInterrupted`. Quote
+      the lines you used. A run that landed the terminal chain here is a failure even if every
+      test is green.
+
+      3. THE PINS WERE UPDATED, NOT WEAKENED. `cmd/partitur/main_test.go:1134-1144` (in
+      `TestRunPrintsDurableIDOnceBeforeTerminalOutcome`) and `main_test.go:1224-1228` (in
+      `TestRunIDWriteFailureIsOperationalInterruption`) both pinned the interrupt line byte-for-byte
+      before this change. Compare each against the pre-change revision line by line
+      (`git diff -- cmd/partitur/main_test.go`). Confirm:
+        - the comparison in each is STILL byte equality (`stderr.String() != …`), not
+          `strings.Contains`, not a prefix check, not a regexp,
+        - the only textual difference in each existing expectation is the insertion of
+          `resume_condition="ready" ` in its correct position, and
+        - a NEW row exists carrying `&driver.ActiveBudgetExhaustedError{RemainingAtStartMS: 60_000}`
+          whose expected bytes contain BOTH `resume_condition="legal; recovery must reconcile the
+          open adapter interval before deciding the next durable action"` AND
+          `detail="active execution budget expired: remaining_at_start_ms=60000; live budget
+          terminalization was not recorded"`.
+      This repository's lesson L40 is that widening an exact-equality assertion loses its lock
+      unless you enumerate what the widening admits and pin each item. Here the widening admits
+      exactly one new field in exactly two states, and both states must be pinned by byte
+      equality. If either is only implied, say so.
+
+      Also confirm `cmd/partitur/command_matrix_witness_test.go:554` is UNCHANGED. It renders
+      through `renderResumeInterruption`, which this change must not touch; if it moved, the
+      renderer edit leaked into the wrong function. Confirm too that the eight other literal
+      `run interrupted:` Fprintf sites in `main.go` (:510, :528, :568, :581, :641, :659, :765, :937)
+      still carry the OLD four-field format.
+
+      4. THE ORDERING IS LOAD-BEARING AND WAS BUILT THAT WAY. Read
+      `internal/driver/driver.go` around the adapter call. Confirm by line number that
+      `context.Cause(executeContext)` is read BEFORE `cancel()`, and state why that matters in your
+      own words: after `cancel()` the cause reports `context.Canceled` and the typed cause is
+      unrecoverable. The writer claims to have measured this by moving the read after `cancel()`
+      and watching the budget test fail with an observed cause of `context.Canceled`. Reproduce
+      that yourself in a scratch copy of the repository OUTSIDE this worktree (do NOT modify this
+      worktree): move the read after `cancel()`, run
+      `go test -count=1 -v -run '^TestLiveAdapterBudgetDeadlineNamesTheActiveBudget$' ./internal/driver/`,
+      and report whether it fails and what the failure says. If a scratch copy is impractical, say
+      exactly why and reason from the source instead — and mark the conclusion as UNMEASURED.
+
+      Also confirm the cause is constructed INLINE in the `context.WithTimeoutCause` call rather
+      than hoisted into a variable. That is not style: a hoisted variable would go unused under the
+      mutation in point 6, turning a kill into a build failure.
+
+      5. BOTH CONJUNCTS OF THE SUBSTITUTION ARE GUARDED. Read `activeBudgetError` in
+      `internal/driver/budget.go`. It must substitute only when the returned error is
+      `context.DeadlineExceeded` AND the captured cause is an `*ActiveBudgetExhaustedError`. Then
+      read `TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions` and confirm each
+      subtest actually holds one conjunct:
+        - the "parent cancellation" subtest exercises the first conjunct (error is `Canceled`, not
+          a deadline), and
+        - the "enclosing deadline" subtest exercises the SECOND conjunct — the error IS
+          `context.DeadlineExceeded` and the ONLY thing that prevents substitution is the cause
+          check. If that second subtest is missing, or if it uses a cancellation rather than a
+          deadline, the cause conjunct is untested and you must say so.
+      Confirm also that `TestLiveAdapterBudgetDeadlineNamesTheActiveBudget` asserts the EXACT
+      `RemainingAtStartMS` value rather than merely that it is nonzero, and that it pins
+      `errors.Is(result.Err, context.DeadlineExceeded)` so the `Unwrap` contract cannot be dropped
+      silently.
+
+      6. THE MUTATION PROOF IS REAL, AND ITS SCOPE IS HONEST. Read
+      `TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause` in
+      `internal/driver/mutation_test.go`. Confirm it goes through
+      `assertDriverMutationKilledUnique` (which asserts the anchor occurs exactly once and fails
+      with the count otherwise), that the anchor is the whole `context.WithTimeoutCause` call and
+      the replacement is the plain `context.WithTimeout` form, and that it names ONLY
+      `TestLiveAdapterBudgetDeadlineNamesTheActiveBudget` as the target. Then confirm the thing
+      most likely to be glossed over: the writer's report must state that
+      `TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions` SURVIVES this mutation, and
+      that this is why it is not a target. `internal/mutationtest/child.go:190-205` reports
+      `Killed` only when every target failed, so naming both would make the criterion
+      unsatisfiable. If the report instead claims the control test is killed, that claim is false
+      and you must say so.
+
+      7. THE RED-FIRST EVIDENCE IS REAL. An absence check ("the criterion was red because the type
+      did not exist yet") is NOT sufficient evidence on its own — say so if that is all the writer
+      has. For each of the writer's four Layer-2 constructions, say which of your own observations
+      supports the conclusion and whether the writer's quoted failure text matches what you saw.
+
+      8. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/driver/ ./cmd/partitur/
+        go test -count=1 -v -run '^(TestLiveAdapterBudgetDeadlineNamesTheActiveBudget|TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions)$' ./internal/driver/
+        go test -count=1 ./internal/driver/
+        go test -count=1 -v -run '^(TestRunPrintsDurableIDOnceBeforeTerminalOutcome|TestRunIDWriteFailureIsOperationalInterruption)$' ./cmd/partitur/
+        go test -count=1 ./cmd/partitur/
+        go test -tags=mutation -count=1 -v -run '^TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause$' ./internal/driver/
+
+      9. NEVER run `go test -tags=mutation ./...` (#316 — that whole-repository battery is a known
+      starvation hazard and will red unrelated tests). Every tagged command is scoped to
+      `./internal/driver/`.
+
+      If any point above does not hold, say so plainly rather than passing it.
+    inputs: [active-budget-interrupt-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet-driver
+          run: ["go", "vet", "./internal/driver/"]
+          timeout_min: 10
+        - id: vet-cmd
+          run: ["go", "vet", "./cmd/partitur/"]
+          timeout_min: 10
+        - id: typed-budget-error-declared
+          run: ["sh", "-c", "f=internal/driver/budget.go; test \"$(grep -cF 'type ActiveBudgetExhaustedError struct {' $f)\" = 1 && test \"$(grep -cF 'RemainingAtStartMS int64' $f)\" = 1 && test \"$(grep -cF ') Error() string {' $f)\" = 1 && test \"$(grep -cF ') Unwrap() error {' $f)\" = 1 && test \"$(grep -cF 'return context.DeadlineExceeded' $f)\" = 1 && test \"$(grep -cF 'active execution budget expired: remaining_at_start_ms=%d; live budget terminalization was not recorded' $f)\" = 1 && test \"$(grep -rlF 'type ActiveBudgetExhaustedError struct {' internal/ cmd/ | wc -l | tr -d ' ')\" = 1"]
+          timeout_min: 5
+        - id: timeout-cause-installed
+          run: ["sh", "-c", "f=internal/driver/driver.go; test \"$(grep -cF 'context.WithTimeoutCause(' $f)\" = 1 && test \"$(grep -cF 'context.WithTimeout(' $f)\" = 0 && test \"$(grep -cF '&ActiveBudgetExhaustedError{RemainingAtStartMS: remainingMS},' $f)\" = 1"]
+          timeout_min: 5
+        - id: cause-read-before-cancel
+          run: ["sh", "-c", "f=internal/driver/driver.go; test \"$(grep -cF 'context.Cause(executeContext)' $f)\" = 1 && test \"$(grep -c '^\tcancel()$' $f)\" = 1 && cause=$(grep -nF 'context.Cause(executeContext)' $f | cut -d: -f1) && kill=$(grep -n '^\tcancel()$' $f | cut -d: -f1) && test \"$cause\" -lt \"$kill\""]
+          timeout_min: 5
+        - id: budget-discrimination-pinned
+          run: ["sh", "-c", "f=internal/driver/driver_test.go; for n in TestLiveAdapterBudgetDeadlineNamesTheActiveBudget TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions; do grep -qF \"func $n(t *testing.T) {\" $f || exit 1; done; go test -count=1 -run '^(TestLiveAdapterBudgetDeadlineNamesTheActiveBudget|TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions)$' -v ./internal/driver/ | grep -c '^--- PASS: TestLiveAdapter' | grep -qx 2"]
+          timeout_min: 20
+        - id: renderer-shape-pinned
+          run: ["sh", "-c", "m=cmd/partitur/main.go; t=cmd/partitur/main_test.go; test \"$(grep -cF 'state=%q resume=%q resume_condition=%q detail=%q' $m)\" = 1 && test \"$(grep -cF 'legal; recovery must reconcile the open adapter interval before deciding the next durable action' $m)\" = 1 && test \"$(grep -cF 'legal; recovery must reconcile the open adapter interval before deciding the next durable action' $t)\" = 1 && test \"$(grep -cF 'active execution budget expired: remaining_at_start_ms=60000; live budget terminalization was not recorded' $t)\" = 1 && test \"$(grep -cF 'resume_condition=' $t)\" -ge 3 && test \"$(grep -cF 'stderr.String() != test.stderr' $t)\" -ge 1 && test \"$(grep -cF 'stdout.calls != 1 || stderr.String() != wantStderr' $t)\" = 1 && go test -count=1 -run '^(TestRunPrintsDurableIDOnceBeforeTerminalOutcome|TestRunIDWriteFailureIsOperationalInterruption)$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestRun' | grep -qx 2"]
+          timeout_min: 30
+        - id: interrupt-outcome-unchanged
+          run: ["sh", "-c", "m=cmd/partitur/main.go; test \"$(grep -cF 'case driver.OutcomeInterrupted:' $m)\" = 1 && test \"$(grep -cF 'renderRunInterruption(stderr, result)' $m)\" = 1 && test -z \"$(git status --porcelain -- cmd/partitur/command_matrix_witness_test.go)\" && test \"$(grep -cF 'run interrupted: run_id=%q state=%q resume=%q detail=%q' $m)\" = 7"]
+          timeout_min: 5
+        - id: no-terminalization-vocabulary
+          run: ["sh", "-c", "if { git diff HEAD -- internal/driver/ cmd/partitur/ | grep '^+'; cat internal/driver/budget.go 2>/dev/null; } | grep -qE 'TerminalizeAcceptanceBudget|EventExecutionStopped|classifyAttemptFailure|KindBudgetExhausted|OutcomeFailed'; then exit 1; fi; test -z \"$(git status --porcelain -- DESIGN.md docs/ internal/docclause/)\""]
+          timeout_min: 5
+        - id: driver-package
+          run: ["go", "test", "-count=1", "./internal/driver/"]
+          timeout_min: 30
+        - id: cmd-package
+          run: ["go", "test", "-count=1", "./cmd/partitur/"]
+          timeout_min: 45
+        - id: mutation-proof
+          run: ["sh", "-c", "grep -qF \"func TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause(t *testing.T) {\" internal/driver/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause$' -v ./internal/driver/ | grep -q '^--- PASS: TestMutationLiveAdapterBudgetDeadlineCarriesTheTypedCause'"]
+          timeout_min: 30
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ | grep -v 'internal/driver/')\" && test -z \"$(git status --porcelain -- internal/driver/ | grep -vE 'internal/driver/(budget\\.go|budget_test\\.go|driver\\.go|driver_test\\.go|mutation_test\\.go)$')\" && test -z \"$(git status --porcelain -- cmd/ | grep -vE 'cmd/partitur/(main\\.go|main_test\\.go)$')\" && test -z \"$(git status --porcelain -- docs/ integration/ .github/ go.mod go.sum partitur.yaml .partitur/ DESIGN.md AGENTS.md)\""]
+          timeout_min: 5
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/driver/budget.go"
+    - "internal/driver/budget_test.go"
+    - "internal/driver/driver.go"
+    - "internal/driver/driver_test.go"
+    - "internal/driver/mutation_test.go"
+    - "cmd/partitur/main.go"
+    - "cmd/partitur/main_test.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 150
+    retries_per_movement: 1
   amendment:
     auto: "off"
