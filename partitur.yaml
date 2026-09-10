@@ -1,24 +1,326 @@
 score: "0.2"
-name: reference-workflow
+name: issue-442i-disclose-the-budget-in-status-json
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Ship option C of issue #442(i): an additive `budget` object in `partitur status --json`.
+
+  Today the run's budget position is durable in the journal and projected into `replay.State`,
+  but no read-only surface exposes it. An operator whose run was clamped on resume cannot see
+  how much budget was consumed, nor that an execution interval is still open, without reading
+  the journal by hand. This run copies two already-projected values onto the status report:
+  `budget.consumed_budget_ms`, and `budget.open_execution` which is either null or the four
+  fields of the open interval.
+
+  Nothing else changes. No clock is sampled, no `observed_at` is emitted, no exhaustion boolean
+  is inferred, no charging arithmetic moves, no resume path is touched, and the human `status`
+  text output gains not one byte.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  WHAT WAS DECIDED, AND WHAT WAS DECIDED AGAINST. READ THIS BEFORE YOU DESIGN ANYTHING.
+
+  Issue #442's literal ask is "report the clamp and refuse with an explanation". A two-party
+  design gate on 2026-09-11 (codex writer, opus verifier, two rounds) established that no single
+  change ships that whole ask, and split it three ways:
+
+    - OPTION A, refusing BEFORE the charge is committed, is NORMATIVELY BLOCKED. `DESIGN.md`
+      6582-6588 makes the interval close mandatory; 3729-3743 is the resume matrix including
+      RESUME-002; 6620-6625 says a matrix row "selects an action, never an outcome". A refusal
+      before charging would require a new resume flag, and `parseResumeArgs`
+      (`cmd/partitur/main.go:990-998`) takes none — the usage pin is `main.go:374`. Option A
+      stays OPEN as an owner question. Do NOT implement it.
+
+    - OPTION B, a terminal diagnostic on resume's stderr, is ISSUE #455 and is OUT OF SCOPE
+      HERE. It is genuinely larger than it looks: it must cover all five resume-reachable clamp
+      routes or it under-reports silently, and the naive accumulator is unsound because
+      `internal/runstore/journal.go:285-298` returns existing receipts on idempotent replay.
+
+    - OPTION C, this run, is the additive `status --json` disclosure. It is size S and ungated.
+
+  Shipping C must NOT be recorded as implementing refusal-before-charge. If you believe A or B
+  belongs here, STOP and say so in your report; do not write it.
+
+  THE SEAM, LOCATED.
+
+  `internal/status/status.go:279-280` binds the replayed state:
+
+      func projectAt(runID runstate.RunID, compiled *score.Score, snapshots map[uint64]*score.Score, replay runstore.ReadReplayResult, repositoryRoot string) Report {
+          state := replay.State
+
+  and assembles `Report` immediately below it (`status.go:281-296`). Both values you need are
+  already on `state` and need no computation:
+
+    - `state.ConsumedBudgetMS` (`internal/runstate/types.go:406`). Its only producer is
+      `internal/runstate/apply.go:715`, `state.ConsumedBudgetMS += mustInt(payload, "charged_duration")`
+      on every `execution.stopped`. It is a pure projection of the journal.
+
+    - `state.OpenExecution` (`internal/runstate/types.go:405`), a `*runstate.ExecutionInterval`
+      declared at `internal/runstate/types.go:210-215`:
+
+          type ExecutionInterval struct {
+              ID               IntervalID
+              Phase            string
+              WallStart        string
+              RemainingAtStart int64
+          }
+
+      Set on `execution.started` (`apply.go:700-709`), cleared on `execution.stopped`
+      (`apply.go:710-716`). Nil exactly when no interval is open.
+
+  NOTE THE FIELD-NAME DRIFT AND DO NOT PROPAGATE IT. The Go field is `RemainingAtStart` with no
+  `MS` suffix; the journal payload key is `remaining_at_start`; the JSON key this run introduces
+  is `remaining_at_start_ms`, matching the `_ms` convention already used by
+  `consumed_budget_ms`. Do not rename the runstate field, and do not rename the journal key.
+
+  THE AGREED DESIGN (implement it, do not redesign it).
+
+  1. Two new types in `internal/status/status.go`, beside the other report types:
+
+         type Budget struct {
+             ConsumedBudgetMS int64          `json:"consumed_budget_ms"`
+             OpenExecution    *OpenExecution `json:"open_execution"`
+         }
+
+         type OpenExecution struct {
+             IntervalID         string `json:"interval_id"`
+             Phase              string `json:"phase"`
+             WallStart          string `json:"wall_start"`
+             RemainingAtStartMS int64  `json:"remaining_at_start_ms"`
+         }
+
+     `OpenExecution` is a POINTER on `Budget` so that a closed interval encodes as JSON `null`
+     rather than as a zero-valued object. A zero-valued object would be indistinguishable from
+     an interval that genuinely started at the epoch with zero remaining budget.
+
+  2. One new field on `Report` (`status.go:44-52`), appended LAST so the encoded key order of
+     every existing field is unchanged:
+
+         Budget Budget `json:"budget"`
+
+  3. One new assembly line inside the `Report` literal in `projectAt`, and one small helper:
+
+         func budgetProjection(state runstate.State) Budget {
+             projection := Budget{ConsumedBudgetMS: state.ConsumedBudgetMS}
+             if state.OpenExecution != nil {
+                 projection.OpenExecution = &OpenExecution{
+                     IntervalID:         string(state.OpenExecution.ID),
+                     Phase:              state.OpenExecution.Phase,
+                     WallStart:          state.OpenExecution.WallStart,
+                     RemainingAtStartMS: state.OpenExecution.RemainingAtStart,
+                 }
+             }
+             return projection
+         }
+
+     Every field is a COPY. No arithmetic, no comparison against a limit, no derived boolean.
+
+  4. THE SCHEMA VERSION DOES NOT CHANGE. It stays `partitur/status+json;v=1` (`status.go:282`).
+     The status schema is explicitly additive: adding a key is not a breaking change, and the
+     one existing `--json` consumer test decodes into the struct rather than byte-comparing
+     (`cmd/partitur/main_test.go:349-367`, `TestStatusJSONAndArgumentErrors`, which unmarshals
+     and checks two fields). Verified on this tree: no test anywhere byte-compares status JSON.
+
+  WHY THERE IS NO CLOCK IN THIS CHANGE, AND WHY THAT IS THE POINT.
+
+  `DESIGN.md:3439` confines status to the journal plus pinned snapshots. `DESIGN.md:2321` reserves
+  `observed_at` to the closing process — the process that actually closes an interval is the only
+  one entitled to say when it observed the world. A status read is not that process.
+
+  So this change must NOT:
+    - call `time.Now()` or import `"time"` in `internal/status/status.go`,
+    - emit an `observed_at`, an `elapsed_ms`, or a `remaining_ms`,
+    - infer `exhausted: true`, `over_budget: true`, or any comparable boolean.
+
+  A reader who wants elapsed time takes their own clock sample and subtracts `wall_start`. That
+  subtraction is the reader's, and its provenance stays visible. `internal/status/status.go`
+  imports no `"time"` today (`status.go:4-21`) and must still import none afterwards. One
+  acceptance criterion enforces that mechanically.
+
+  WHAT THIS RUN MUST NOT TOUCH.
+
+    - THE HUMAN RENDERER. The consensus specifies the JSON surface ONLY. `renderStatusProjection`
+      (`cmd/partitur/main.go:1360-1425`) gains no line. This keeps the change additive and
+      pin-safe, because the human output is pinned by substring in
+      `TestStatusRendersProjectionAndClassifiesOutcomes` (`main_test.go:274-298`) and byte-exactly
+      in several command-matrix witnesses. The criterion is blunt and deliberate:
+      `cmd/partitur/main.go` must be BYTE-UNCHANGED, and the only path that may appear under
+      `cmd/` at all is the ONE NEW test file named below.
+
+    - THE FOUR SILENCE LOCKS. The design gate identified four byte-exact assertions that pin
+      resume's current output, and parameterizing them is what option B (#455) will have to do:
+
+          cmd/partitur/main_test.go:1253                 TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout
+          cmd/partitur/main_test.go:1809                 TestResumeKeepsTerminalWriterScoreIdempotent
+          cmd/partitur/main_test.go:1854                 TestResumeTreatsTerminalProjectionIdempotently
+          cmd/partitur/command_matrix_witness_test.go:2601  witnessTerminalResumeCleanup (assertion at :2636)
+
+      Option C touches no resume path, so these must be BYTE-UNCHANGED. This repository's lesson
+      L40 is that a loosened assertion loses its lock; the safest handling of a lock you have no
+      business touching is not to touch it. A criterion proves both files are unmodified.
+
+    - THE CLAMP. `internal/recoveryexec/handlers.go:902-926` (`closeOpenExecutionInterval`) does
+      the clamp arithmetic: `duration = observed - wall_start`, floored at 0, then capped at
+      `interval.RemainingAtStart`, appended as `charging: "clamped"`. Not one character of it
+      changes. Disclosure is a read; charging is a write; they must stay separated.
+
+    - `DESIGN.md`, `docs/`, `internal/docclause/`, `partitur.yaml`, `.partitur/cast.yaml`,
+      `internal/runstate/`, `internal/runstore/`, `internal/recoveryexec/`, and every other
+      package. The ONLY paths this run may modify are listed under `policy.allowed_paths`.
+
+  WHERE THE TESTS GO, AND WHY THERE.
+
+  The existing status projection tests live in `internal/status/status_test.go` (package
+  `status`), built on `statusFixture` (`status_test.go:474-502`), which creates a `t.TempDir()`
+  repository, writes a real compiled score snapshot to
+  `.partitur/runs/run-1/scores/revision-1.yaml`, opens a real `runstore.Store`, and appends a
+  real `run.started` through `store.Mutate` / `transaction.At(...).Append(...)`. `runStartedPayload`
+  (`status_test.go:504-517`) computes the real semantic and file hashes, which matters because
+  `status.Read` loads and validates that snapshot (`status.go:188-196`, `loadInitialScore`).
+
+  Put the three PROJECTION tests in ONE NEW FILE, `internal/status/budget_disclosure_test.go`,
+  package `status`. It may freely call `statusFixture`, `statusScore`, `runStartedPayload` and
+  `mustCompile` — same package, no export needed. Putting them in a new file rather than in
+  `status_test.go` gives a free extra lock: `status_test.go` itself stays byte-unchanged, and a
+  criterion proves it.
+
+  THE FOURTH TEST CANNOT LIVE THERE, AND HERE IS EXACTLY WHY. `statusFixture` writes the score
+  snapshot with a plain `os.WriteFile` (`status_test.go:481`) and writes no resolved cast at all.
+  A real resume goes through `store.LoadRunInput`, which reads the PUBLISHED immutables
+  `scores/revision-1.yaml` and `resolved-cast.yaml`. `statusFixture` publishes neither, so the
+  recovery executor cannot load a run from it. `statusFixture` is a projection fixture, not a
+  runnable one. Do not try to upgrade it — that would modify `status_test.go`, which a criterion
+  forbids.
+
+  The runnable fixture is `resumeFixture` (`cmd/partitur/main_test.go:2206`), which delegates to
+  `resumeFixtureWithInputsAtRepository` (`main_test.go:2221-2262`). That one does the three things
+  a real resume needs: `PublishImmutable("scores/revision-1.yaml", ...)`,
+  `PublishImmutable("resolved-cast.yaml", ...)`, and one appended `run.started` — over a real git
+  repository built by `resumeFixtureRepository` (`main_test.go:2270`), which `git init`s, commits
+  two tracked files, and returns the base commit and tree. Its score
+  (`resumeScore`, `main_test.go:2509`) has no movements and a 10-minute budget.
+
+  So the fourth test goes in a SECOND NEW FILE, `cmd/partitur/status_budget_disclosure_test.go`,
+  package `main`. This is also the correct MIRROR: every existing test that asserts a clamped
+  close after a real CLI invocation already lives in `cmd/partitur/`
+  (`cancellation_kill_matrix_test.go:365-383`, `supersession_kill_matrix_test.go:705-713`,
+  `e2e_test.go:202`). It calls `resumeFixture` and `statusprojection.Read` — both already
+  available in that package — so `main_test.go` needs no edit whatsoever.
+
+  HOW THE PLANNER REACHES THE CLOSE, AND THE CHEAP ROUTE THROUGH IT. There are two routes to
+  `closeOpenExecutionInterval`:
+
+    - The ADAPTER route. `internal/recovery/planner.go:704-716`: an attempt in `AttemptStarting`
+      yields `CaseUnstartedAttempt` (RC-RESUME-013) / `ActionRecoverUnstartedAttempt` with
+      `Steps: {StepStabilizeHandoff, StepCloseAdapterInterval, StepClassifyAndAppendFailure}`.
+      This needs an attempt, and it needs `Observations.Handoff` to stay `HandoffSafe`.
+
+    - THE CHEAP ROUTE, and the one to use. `internal/recovery/planner.go:583-585`:
+
+          if state.OpenExecution != nil && state.OpenExecution.Phase != "adapter" {
+              return action(CaseOpenExecution, ActionCloseOpenExecutionInterval, true)
+          }
+
+      `CaseOpenExecution` is RC-RESUME-001. It needs NO attempt, no adapter launch directory and
+      no sweep observation — only an open interval whose `phase` is not `"adapter"`. Its handler
+      is `closeOpenExecutionInterval` directly (registered in
+      `defaultKindsWithExecutionDependencies`, `internal/recoveryexec/handlers.go:82`), and it
+      emits the IDENTICAL `reason: "recovered", charging: "clamped"` payload as the adapter route,
+      through the same clamp arithmetic. Use `phase: "fixture"`, exactly as
+      `appendCancellationFixtureInterval` does (`cmd/partitur/cancellation_fixture_test.go:504-513`).
+
+      That branch sits after the stale-lease, cancellation, pending-prepare, human-gate and
+      authority-reclaim branches (`planner.go:534-579`). A plain `resumeFixture(t, "")` journal
+      grants no authority and holds no lease, so it drops straight through. Append NO
+      `cancel.requested`: cancellation outranks this branch at `planner.go:560`.
+
+  APPEND THE INTERVAL THROUGH THE STORE, NOT BY WRITING THE FILE. `recoveryconsequence.AppendEvent`
+  (`internal/recoveryconsequence/consequence.go:733-741`) derives the `execution.stopped` event's
+  `CausationID` from the event id of the matching `execution.started`. An interval that did not go
+  through a real `store.Mutate` / `transaction.At(...).Append(...)` has no such id, and the close
+  fails with "recovered interval source is absent". Follow the idiom at
+  `cancellation_fixture_test.go:504-513`.
+
+  ONE CONSEQUENCE TO EXPECT RATHER THAN BE SURPRISED BY. `apply.go:715` adds the full 9,000,000 ms
+  to `ConsumedBudgetMS`, which is far beyond the fixture score's 600,000 ms budget, so the replan
+  after RC-RESUME-001 will take a budget-exhaustion path. That is fine and it is deterministic —
+  but it means you must not guess the resume's exit code. RECORD the exit code you actually
+  observe, pin that value, and say in a comment what it means. Do not assert an exit code you
+  reasoned your way to.
+
+  HOW TO OPEN AN INTERVAL IN A FIXTURE. `execution.started` has NO attempt or movement
+  precondition — `internal/runstate/apply.go:700-702` refuses it only when an interval is
+  already open. Its required payload keys are exactly `interval_id`, `phase`, `wall_start`,
+  `remaining_at_start` (`apply.go:1504-1505`), with `remaining_at_start` an integer
+  (`apply.go:2168-2170`) that must be non-negative (`apply.go:2475-2478`). So appending
+  `run.started` then `execution.started` is a valid two-event journal.
+
+  `execution.stopped` requires `interval_id`, `reason`, `charging`, `charged_duration`, with
+  `observed_at` OPTIONAL but required if and only if `charging == "clamped"`
+  (`apply.go:1506-1507`, `apply.go:2479-2487`).
+
+  THE BACKDATING TECHNIQUE IS ALREADY LIVE IN THIS REPOSITORY. It is at
+  `internal/recoveryexec/executor_test.go:1196` inside
+  `TestClampedCloseRefreshesBudgetBeforeFailureClassification` (declared at :1192):
+
+      "interval_id": "last-millisecond", "phase": "adapter",
+      "wall_start": time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano),
+      "remaining_at_start": 1,
+
+  Read it before you write anything. Note that the CLOCK LIVES IN THE TEST, not in the code
+  under test — that is the shape you want here too.
+
+  THE DETERMINISTIC SATURATION SCENARIO. Open an interval with
+
+      "remaining_at_start": 9000000
+      "wall_start":         time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano)
+
+  Three hours is 10,800,000 ms of elapsed wall clock against 9,000,000 ms of remaining budget, so
+  `closeOpenExecutionInterval` saturates its cap and charges EXACTLY 9,000,000 — the same integer
+  on every machine, at any speed, with no sleep and no SIGTERM. The 1.8 million millisecond margin
+  is what makes it deterministic; do not shrink it.
+
+  DRIVING A REAL RESUME FROM A TEST. `partitur resume` reaches recovery through
+  `executeRecovery` (`cmd/partitur/main.go:1204-1229`), which builds
+  `productionRecoveryExecutor` (`main.go:154-160`) and calls the EXPORTED
+  `(*recoveryexec.Executor).Execute(ctx)` (`internal/recoveryexec/executor.go:116`). Every piece
+  of that wiring is exported, so a test in another package can construct the same executor:
+  `recoveryexec.Executor{Store: ..., RunID: ..., Load: ...}` plus `Execute(ctx)`. The planner
+  reaches the interval close through `recovery.StepCloseAdapterInterval`
+  (`internal/recovery/planner.go:472`, used at planner.go:718, :732, :745), whose handler is
+  `closeAdapterInterval` -> `closeOpenExecutionInterval` (`internal/recoveryexec/handlers.go:898-926`).
+
+  `internal/status` does not import `internal/recoveryexec`, and `internal/recoveryexec` does not
+  import `internal/status` (both verified with `go list -deps` on this tree), so the new test file
+  may import `recoveryexec` with no cycle.
+
+  IF THE FULL `Execute` WIRING DEFEATS YOU, SAY SO RATHER THAN FAKING IT. The honest fallback is
+  to drive the same `closeOpenExecutionInterval` arithmetic through whatever exported recovery
+  entry point does work, and to state PLAINLY in your report which layer you actually exercised
+  and which you did not. What is NOT acceptable is hand-appending a pre-computed
+  `execution.stopped{charged_duration: 9000000}` and calling it a real resume: that would assert
+  the arithmetic you wrote into the fixture, not the arithmetic in `handlers.go`. If you end up
+  hand-appending, name the criterion you weakened and say the clamp went unexercised.
+
+  RED-FIRST HONESTY ABOUT CRITERION 4. The charge is ALREADY correct on unfixed main — clamping to
+  9,000,000 is existing, working behaviour, and a test asserting only the journal would pass on
+  main and prove nothing about this change. That is why the charge-preservation test must ALSO
+  assert the disclosure in the same scenario: after the clamped close, `budget.open_execution` is
+  null and `budget.consumed_budget_ms == 9000000`. It then reds on main for the right reason —
+  the `budget` key does not exist — while still pinning that the charge is untouched. State this
+  in your report in your own words; do not claim the charge assertion is what makes it red.
+
+  SCORE PLACEMENT. This score temporarily replaces the committed reference-workflow score because
+  `partitur run` reads only `<repo>/partitur.yaml` and takes no score operand (#435). It, and the
+  cast commit that precedes it (#436), are reverted before the pull request; only the
+  `internal/status/` change is meant to land.
 
 verification:
   expectation:
-    intent: none
+    intent: pass-existing-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +330,472 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: disclose-the-budget-in-status-json
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Ship option C of issue #442(i) in this repository, red-first. Everything you write is
+      English.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      The design is already agreed and is in this score's context. Implement it exactly and prove
+      it; do not reopen it. Options A and B are out of scope and are covered in the context.
+
+      Step 0 — CONFIRM THE GROUND, cheaply. Report the output of each, verbatim:
+
+        grep -n 'state := replay.State' internal/status/status.go
+        grep -n 'partitur/status+json;v=1' internal/status/status.go
+        grep -c 'time.Now' internal/status/status.go ; grep -c '"time"' internal/status/status.go
+        grep -n 'OpenExecution\|ConsumedBudgetMS' internal/runstate/types.go
+        grep -n 'type ExecutionInterval struct' internal/runstate/types.go
+        grep -n 'func TestClampedCloseRefreshesBudgetBeforeFailureClassification' internal/recoveryexec/executor_test.go
+        grep -n 'func closeOpenExecutionInterval' internal/recoveryexec/handlers.go
+        grep -n 'func statusFixture' internal/status/status_test.go
+        ls internal/status/budget_disclosure_test.go ; echo "rc=$?"
+
+      You must see: `state := replay.State` at `status.go:280`; the schema literal exactly once at
+      `status.go:282`; ZERO `time.Now` and ZERO `"time"` in `status.go`; `OpenExecution` at
+      `types.go:405` and `ConsumedBudgetMS` at `types.go:406`; `ExecutionInterval` at
+      `types.go:210`; the clamped-close test at `executor_test.go:1192`;
+      `closeOpenExecutionInterval` at `handlers.go:902`; `statusFixture` at `status_test.go:474`;
+      and NO `internal/status/budget_disclosure_test.go`. If any anchor has drifted, STOP and say
+      which one — the tree is not the one this score was written against.
+
+      Step 1 — RED FIRST, in two layers. Both layers go in your report.
+
+      Layer 1 (baseline, weak). Before editing anything, run every acceptance command in this
+      movement exactly as written below and record each exit status. `budget-object-declared`,
+      `open-interval-disclosure`, `closed-interval-disclosure`, `read-only-byte-stable`,
+      `charge-preserved-through-recovery` and `mutation-proof` must be nonzero, because none of
+      what they name exists yet. Say plainly that this layer is an absence check and is weak
+      evidence on its own. Note also which criteria are GREEN on the unfixed tree and why —
+      `no-clock-sample`, `human-surface-unchanged`, `silence-locks-untouched`,
+      `existing-status-tests-untouched` and `change-scope` are all satisfied by an untouched tree,
+      and their job is to stay green, not to turn green.
+
+      Layer 2 (the load-bearing red). Produce it BY HAND.
+
+        - Write `internal/status/budget_disclosure_test.go` with the open-interval and
+          closed-interval tests FIRST, before touching `internal/status/status.go`. The file will
+          not compile, because `Report` has no `Budget` field. That is a COMPILE failure, not a
+          test failure, and a compile failure is weak evidence. So do this instead: add ONLY the
+          two type declarations and the `Report` field to `status.go`, leaving `projectAt`
+          unchanged so `Budget` is always its zero value. Then run
+
+              go test -count=1 -v -run '^TestStatusDisclosesOpenExecutionInterval$' ./internal/status/
+
+          It MUST fail, and the failure must show `open_execution` was nil where the four field
+          values were expected. Quote the failure verbatim.
+        - In that same tree run
+
+              go test -count=1 -v -run '^TestStatusDisclosesClosedExecutionInterval$' ./internal/status/
+
+          It MUST also fail, on `consumed_budget_ms` being 0 rather than the projected charge.
+          Quote it.
+        - Now add `budgetProjection` and the assembly line, and confirm both pass.
+        - Then NEUTER the assembly by hand: change the assembly line so it produces `Budget{}`
+          instead of `budgetProjection(state)`. Re-run both tests; both MUST fail again. Quote one
+          of the failures. Restore the assembly. This is the by-hand rehearsal of the mutation
+          proof in step 5, and the verifier will compare your two failure texts.
+
+      Do not skip Layer 2 or reconstruct it from reasoning. If a command is blocked by your
+      sandbox, say exactly which and how, and do not report a blocked command as evidence.
+
+      Step 2 — the projection, in `internal/status/status.go` ONLY.
+
+      Add the `Budget` and `OpenExecution` types, the `Budget` field on `Report` appended LAST,
+      the `budgetProjection` helper, and the single assembly line inside the `Report` literal in
+      `projectAt`. Copy every value; compute nothing. Do not import `"time"`. Do not change the
+      schema string. Do not touch any other function in the file.
+
+      Write a doc comment on `Budget` saying what it is and what it deliberately is not: it is a
+      copy of the journal-projected budget position, carrying no clock sample and no derived
+      exhaustion judgement, because `DESIGN.md:3439` confines status to the journal and pinned
+      snapshots and `DESIGN.md:2321` reserves `observed_at` to the closing process. A future
+      reader must not add a clock here without reopening that decision.
+
+      Step 3 — the disclosure tests, in the NEW file `internal/status/budget_disclosure_test.go`.
+
+          func TestStatusDisclosesOpenExecutionInterval(t *testing.T) {
+
+      Build a `statusFixture` repository, append an `execution.started` with a distinctive
+      `interval_id`, a `phase`, a backdated `wall_start` and a `remaining_at_start` of your
+      choosing, call `Read(root, runID)`, and assert ALL FOUR fields of
+      `report.Budget.OpenExecution` against the EXACT values you appended — not merely that the
+      pointer is non-nil, and not merely that one field matches. Also assert
+      `report.Budget.ConsumedBudgetMS == 0`, since nothing has been charged yet. Then marshal the
+      report and assert the encoded JSON contains `"budget":` and `"open_execution":` and
+      `"remaining_at_start_ms":`, so the wire names are pinned and not only the Go field names.
+
+          func TestStatusDisclosesClosedExecutionInterval(t *testing.T) {
+
+      Same fixture, then append an `execution.stopped` closing that interval with a known
+      `charged_duration`. Assert `report.Budget.OpenExecution == nil` AND
+      `report.Budget.ConsumedBudgetMS` equals the charged value. Marshal and assert the encoded
+      JSON contains `"open_execution":null`, so the null encoding is pinned rather than assumed —
+      a non-pointer field would encode as an object here and the test must be able to tell.
+
+          func TestStatusBudgetDisclosureTakesNoClockSample(t *testing.T) {
+
+      Call `Read` on the same fixture TWICE, marshal both reports, and assert the two encodings
+      are BYTE-IDENTICAL. State in a comment that this is what makes the absence of a clock
+      observable from outside the package: a `time.Now()` anywhere in the projection would make
+      two reads of an unchanged journal differ.
+
+      Step 4 — the charge-preservation scenario, in a SECOND NEW FILE,
+      `cmd/partitur/status_budget_disclosure_test.go`, package `main`.
+
+          func TestStatusBudgetDisclosureLeavesTheClampedChargeIntact(t *testing.T) {
+
+      Build the deterministic saturation scenario from this score's context:
+
+        - `root, store := resumeFixture(t, "")`.
+        - Through `store.Mutate("run-1", "", ...)` and `transaction.At(...).Append(...)`, append
+          ONE `runstate.EventExecutionStarted` with payload
+          `{"interval_id": ..., "phase": "fixture", "wall_start": time.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339Nano), "remaining_at_start": 9000000}`.
+          Mirror `appendCancellationFixtureInterval` (`cmd/partitur/cancellation_fixture_test.go:504-513`).
+          Append NO `cancel.requested`.
+        - `t.Chdir(root)`, then invoke the REAL command: `run([]string{"resume", "run-1"}, &stdout, &stderr)`.
+
+      Then assert BOTH halves:
+
+        - THE CHARGE, read from the journal: locate the `execution.stopped` event and assert its
+          payload has `"reason": "recovered"`, `"charging": "clamped"`, a non-empty `observed_at`,
+          and `"charged_duration"` EXACTLY 9000000. This is the half that is already correct on
+          unfixed main.
+        - THE DISCLOSURE, read through `statusprojection.Read(root, "run-1")`:
+          `report.Budget.OpenExecution == nil` and `report.Budget.ConsumedBudgetMS == 9000000`.
+          This is the half that reds on main.
+
+      Also pin the resume's exit code — but pin the value you OBSERVE, not one you reasoned to.
+      Run it, read the exit code, put that number in the test, and write a comment saying what it
+      means given that the close charges 9,000,000 ms against a 600,000 ms fixture budget.
+
+      Say in a comment which half reds on main and why, so a later reader is not misled into
+      thinking this test guards the clamp arithmetic against regression on its own.
+
+      Do NOT hand-append a pre-computed `execution.stopped{charged_duration: 9000000}`. That would
+      assert the arithmetic you wrote into the fixture rather than the arithmetic in
+      `internal/recoveryexec/handlers.go:916-922`. If the real resume defeats you, say so plainly
+      in your report, name what went unexercised, and do not describe a hand-appended payload as a
+      real resume.
+
+      This file must use `resumeFixture` as it stands. Do NOT edit `cmd/partitur/main_test.go` to
+      make it more convenient — it is the same package, so every helper is already reachable.
+
+      Step 5 — the mutation proof, appended to `internal/status/mutation_test.go`.
+
+          func TestMutationBudgetDisclosureAssemblyIsLoadBearing(t *testing.T) {
+
+      That file already carries `//go:build mutation` and the helper this proof needs,
+      `assertStatusMutationKilled` (`internal/status/mutation_test.go:80-124`), which copies the
+      repository through `mutationtest.CopyRepository`, asserts the anchor occurs EXACTLY ONCE,
+      rewrites it, verifies the rewrite landed, and drives the child through
+      `internal/mutationtest`. Use it. Do not write a new helper and do not create a new file.
+
+      Follow the shape of `TestMutationLiveApprovedMarkRequiresApproval` (`mutation_test.go:38-53`).
+      Source `internal/status/status.go`, directory `internal/status`, package `.`, target test
+      `TestStatusDisclosesOpenExecutionInterval`. The `before` anchor is the assembly expression
+      you wrote in `projectAt`; the `after` replaces it with an empty `Budget{}`.
+
+      Choose the anchor so that it occurs EXACTLY ONCE in `internal/status/status.go` (the helper
+      fails with the count otherwise — #432: an anchor that stops matching makes a mutation test
+      silently vacuous) and so that the mutated copy STILL COMPILES. A mutation that fails to build
+      is a non-result, not a kill. If `budgetProjection` becomes unused under the mutation, Go
+      still compiles — unused FUNCTIONS are legal, unlike unused variables and imports — but
+      confirm it rather than assuming it, and report `result.Diagnostic()` if the outcome is
+      anything other than `Killed`.
+
+      Name ONLY `TestStatusDisclosesOpenExecutionInterval` as the target.
+      `internal/mutationtest/child.go:190-205` reports `Killed` only when EVERY named target
+      failed, so naming a test that survives would make the criterion unsatisfiable.
+
+      Step 6 — prove it holds. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/status/ ./cmd/partitur/
+        go test -count=1 -v -run '^(TestStatusDisclosesOpenExecutionInterval|TestStatusDisclosesClosedExecutionInterval|TestStatusBudgetDisclosureTakesNoClockSample)$' ./internal/status/
+        go test -count=1 ./internal/status/
+        go test -count=1 -v -run '^TestStatusBudgetDisclosureLeavesTheClampedChargeIntact$' ./cmd/partitur/
+        go test -count=1 -v -run '^(TestStatusJSONAndArgumentErrors|TestStatusRendersProjectionAndClassifiesOutcomes)$' ./cmd/partitur/
+        go test -count=1 ./cmd/partitur/
+        go test -tags=mutation -count=1 -run '^$' ./internal/status/
+        go test -tags=mutation -count=1 -v -run '^TestMutationBudgetDisclosureAssemblyIsLoadBearing$' ./internal/status/
+
+      NEVER run `go test -tags=mutation ./...`. That whole-repository battery is a known starvation
+      hazard (#316) and would red unrelated tests while telling you nothing about this change.
+      Every tagged command you run is scoped to `./internal/status/`.
+
+      Step 7 — confirm the scope. Report `git status --porcelain` and `git diff --stat` verbatim.
+      At most these four paths may appear, and no others:
+
+        internal/status/status.go                       (modified)
+        internal/status/budget_disclosure_test.go       (new)
+        internal/status/mutation_test.go                (modified)
+        cmd/partitur/status_budget_disclosure_test.go   (new)
+
+      In particular: NOTHING in `cmd/partitur/main.go`, NOTHING in `cmd/partitur/main_test.go`,
+      NOTHING in `cmd/partitur/command_matrix_witness_test.go`, NOTHING in
+      `internal/status/status_test.go`, NOTHING in `internal/recoveryexec/`, `internal/recovery/`,
+      `internal/runstate/`, `internal/runstore/`, no `DESIGN.md`, no `docs/`, no `.github/`, no
+      `partitur.yaml`, no `.partitur/cast.yaml`. Do not commit; the run captures the change set.
+
+      Then run every acceptance command below yourself and report each result.
     outputs:
-      - id: marker-change
+      - id: status-budget-disclosure-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet-status
+          run: ["go", "vet", "./internal/status/"]
+          timeout_min: 10
+        - id: vet-cmd
+          run: ["go", "vet", "./cmd/partitur/"]
+          timeout_min: 10
+        - id: budget-object-declared
+          run: ["sh", "-c", "f=internal/status/status.go; test \"$(grep -cF 'type Budget struct {' $f)\" = 1 && test \"$(grep -cF 'type OpenExecution struct {' $f)\" = 1 && test \"$(grep -cF 'json:\"budget\"' $f)\" = 1 && test \"$(grep -cF 'json:\"consumed_budget_ms\"' $f)\" = 1 && test \"$(grep -cF 'json:\"open_execution\"' $f)\" = 1 && test \"$(grep -cF 'json:\"interval_id\"' $f)\" = 1 && test \"$(grep -cF 'json:\"phase\"' $f)\" = 1 && test \"$(grep -cF 'json:\"wall_start\"' $f)\" = 1 && test \"$(grep -cF 'json:\"remaining_at_start_ms\"' $f)\" = 1 && test \"$(grep -cE 'OpenExecution +[*]OpenExecution' $f)\" = 1 && test \"$(grep -cF 'partitur/status+json;v=1' $f)\" = 1"]
+          timeout_min: 5
+        - id: no-clock-sample
+          run: ["sh", "-c", "f=internal/status/status.go; test \"$(grep -cF 'time.Now' $f)\" = 0 && test \"$(grep -cF '\"time\"' $f)\" = 0 && test \"$(grep -cF 'observed_at' $f)\" = 0 && test \"$(grep -ciE 'exhaust|over_budget|elapsed' $f)\" = 0"]
+          timeout_min: 5
+        - id: open-interval-disclosure
+          run: ["sh", "-c", "f=internal/status/budget_disclosure_test.go; grep -qF 'func TestStatusDisclosesOpenExecutionInterval(t *testing.T) {' $f && grep -qF 'execution.started' $f && go test -count=1 -run '^TestStatusDisclosesOpenExecutionInterval$' -v ./internal/status/ | grep -c '^--- PASS: TestStatusDisclosesOpenExecutionInterval' | grep -qx 1"]
+          timeout_min: 20
+        - id: closed-interval-disclosure
+          run: ["sh", "-c", "f=internal/status/budget_disclosure_test.go; grep -qF 'func TestStatusDisclosesClosedExecutionInterval(t *testing.T) {' $f && grep -qF '\"open_execution\":null' $f && go test -count=1 -run '^TestStatusDisclosesClosedExecutionInterval$' -v ./internal/status/ | grep -c '^--- PASS: TestStatusDisclosesClosedExecutionInterval' | grep -qx 1"]
+          timeout_min: 20
+        - id: read-only-byte-stable
+          run: ["sh", "-c", "f=internal/status/budget_disclosure_test.go; grep -qF 'func TestStatusBudgetDisclosureTakesNoClockSample(t *testing.T) {' $f && go test -count=1 -run '^TestStatusBudgetDisclosureTakesNoClockSample$' -v ./internal/status/ | grep -c '^--- PASS: TestStatusBudgetDisclosureTakesNoClockSample' | grep -qx 1"]
+          timeout_min: 20
+        - id: charge-preserved-through-recovery
+          run: ["sh", "-c", "f=cmd/partitur/status_budget_disclosure_test.go; grep -qF 'func TestStatusBudgetDisclosureLeavesTheClampedChargeIntact(t *testing.T) {' $f && grep -qF '9000000' $f && grep -qF 'clamped' $f && grep -qF 'resumeFixture(t,' $f && grep -qF 'run([]string{\"resume\", \"run-1\"}' $f && test -z \"$(git status --porcelain -- internal/recoveryexec/ internal/recovery/ internal/runstate/ internal/runstore/)\" && go test -count=1 -run '^TestStatusBudgetDisclosureLeavesTheClampedChargeIntact$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatusBudgetDisclosureLeavesTheClampedChargeIntact' | grep -qx 1"]
+          timeout_min: 30
+        - id: human-surface-unchanged
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/main.go)\" && test -z \"$(git status --porcelain -- cmd/ | grep -vE 'cmd/partitur/status_budget_disclosure_test\\.go$')\" && test \"$(grep -cF 'func renderStatusProjection' cmd/partitur/main.go)\" = 1 && test \"$(grep -cF 'report.Budget' cmd/partitur/main.go)\" = 0"]
+          timeout_min: 5
+        - id: silence-locks-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/main_test.go cmd/partitur/command_matrix_witness_test.go)\" && for n in TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout TestResumeKeepsTerminalWriterScoreIdempotent TestResumeTreatsTerminalProjectionIdempotently; do grep -qF \"func $n(t *testing.T) {\" cmd/partitur/main_test.go || exit 1; done; grep -qF 'func witnessTerminalResumeCleanup(t *testing.T, terminal string, wantCode int) {' cmd/partitur/command_matrix_witness_test.go"]
+          timeout_min: 5
+        - id: existing-status-tests-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/status/status_test.go)\" && go test -count=1 -run '^(TestReadProjectsPinnedRunWithoutMutatingIt|TestProjectRendersPendingDecisions|TestProjectCarriesVerifiedProvenanceAndShippingRecovery)$' -v ./internal/status/ | grep -c '^--- PASS: Test' | grep -qx 3"]
+          timeout_min: 20
+        - id: schema-additivity
+          run: ["sh", "-c", "for n in TestStatusJSONAndArgumentErrors TestStatusRendersProjectionAndClassifiesOutcomes; do grep -qF \"func $n(t *testing.T) {\" cmd/partitur/main_test.go || exit 1; done; go test -count=1 -run '^(TestStatusJSONAndArgumentErrors|TestStatusRendersProjectionAndClassifiesOutcomes)$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatus' | grep -qx 2"]
+          timeout_min: 30
+        - id: status-package
+          run: ["go", "test", "-count=1", "./internal/status/"]
+          timeout_min: 25
+        - id: cmd-package
+          run: ["go", "test", "-count=1", "./cmd/partitur/"]
+          timeout_min: 45
+        - id: mutation-build-compiles
+          run: ["go", "test", "-tags=mutation", "-count=1", "-run", "^$", "./internal/status/"]
+          timeout_min: 10
+        - id: mutation-proof
+          run: ["sh", "-c", "grep -qF 'func TestMutationBudgetDisclosureAssemblyIsLoadBearing(t *testing.T) {' internal/status/mutation_test.go && grep -qF 'TestStatusDisclosesOpenExecutionInterval' internal/status/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationBudgetDisclosureAssemblyIsLoadBearing$' -v ./internal/status/ | grep -q '^--- PASS: TestMutationBudgetDisclosureAssemblyIsLoadBearing'"]
+          timeout_min: 30
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ | grep -v 'internal/status/')\" && test -z \"$(git status --porcelain -- internal/status/ | grep -vE 'internal/status/(status\\.go|budget_disclosure_test\\.go|mutation_test\\.go)$')\" && test -z \"$(git status --porcelain -- cmd/ | grep -vE 'cmd/partitur/status_budget_disclosure_test\\.go$')\" && test -z \"$(git status --porcelain -- docs/ integration/ .github/ go.mod go.sum partitur.yaml .partitur/ DESIGN.md AGENTS.md)\""]
+          timeout_min: 5
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [disclose-the-budget-in-status-json]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the issue #442(i) option-C disclosure. Change no file in this repository. Report in
+      English.
+
+      This change is small and additive. The five ways it can be wrong are: it can smuggle a clock
+      into a read-only projection; it can leak into the human renderer or into a resume path it
+      had no business touching; it can encode a closed interval as an empty object rather than
+      null; its charge-preservation test can be a hand-appended fixture dressed up as a real
+      resume; and its red-first evidence can be a compile failure dressed up as a test failure.
+      Spend your effort on points 2 through 6.
+
+      1. SCOPE, BY READING THE WHOLE DIFF. Run `git status --porcelain` and `git diff --stat` and
+      report both verbatim, then READ `git diff` in full — not a summary of it. At most four
+      paths may appear: `internal/status/status.go` (modified),
+      `internal/status/budget_disclosure_test.go` (new), `internal/status/mutation_test.go`
+      (modified), and `cmd/partitur/status_budget_disclosure_test.go` (new). A change to
+      `cmd/partitur/main.go`, to `cmd/partitur/main_test.go`, to
+      `cmd/partitur/command_matrix_witness_test.go`, to `internal/status/status_test.go`, to
+      `internal/recoveryexec/`, `internal/recovery/`, `internal/runstate/`, `internal/runstore/`,
+      to `DESIGN.md`, to `docs/`, to `partitur.yaml` or to `.partitur/cast.yaml` is a scope
+      violation and a failure — say so rather than passing it.
+
+      2. NO CLOCK, NO DERIVED JUDGEMENT. This is the fence that matters most, because a clock in a
+      status read would be invisible in a passing test suite and would violate `DESIGN.md:3439`
+      and `DESIGN.md:2321`. Confirm by reading `internal/status/status.go` in full that it
+      contains no `time.Now`, does not import `"time"`, emits no `observed_at`, and computes no
+      derived value — every field of `Budget` and `OpenExecution` must be a plain copy from
+      `replay.State`, with no arithmetic, no comparison against a limit, and no boolean such as
+      `exhausted` or `over_budget`. Quote the whole `budgetProjection` helper and the assembly
+      line. If any field is computed rather than copied, say so.
+
+      Confirm positively that the schema string is still `partitur/status+json;v=1` and that the
+      `Budget` field was APPENDED to `Report` rather than inserted among the existing fields, so
+      the encoded key order of every pre-existing field is unchanged.
+
+      3. NULL, NOT AN EMPTY OBJECT. `Budget.OpenExecution` must be a POINTER. Confirm the
+      declaration, and confirm that `TestStatusDisclosesClosedExecutionInterval` pins the encoded
+      form `"open_execution":null` on the marshalled JSON rather than only checking that the Go
+      pointer is nil. A non-pointer field would encode as `{"interval_id":"","phase":"", ...}`,
+      which a nil check inside Go would never catch and which an operator's JSON consumer would
+      misread as a real interval starting at the epoch. If the encoded form is only implied, say
+      so.
+
+      4. THE HUMAN SURFACE AND THE FOUR SILENCE LOCKS ARE UNTOUCHED. Confirm
+      `cmd/partitur/main.go` is BYTE-UNCHANGED and that the ONLY path under `cmd/` in
+      `git status --porcelain` is the new `cmd/partitur/status_budget_disclosure_test.go` — the
+      consensus specified the JSON surface only, and `renderStatusProjection`
+      (`cmd/partitur/main.go:1360-1425`) must gain no line. Then
+      confirm specifically that these four byte-exact assertions are unmodified, since option C
+      touches no resume path and this repository's lesson L40 is that a widened assertion loses
+      its lock:
+
+          cmd/partitur/main_test.go:1253                    TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout
+          cmd/partitur/main_test.go:1809                    TestResumeKeepsTerminalWriterScoreIdempotent
+          cmd/partitur/main_test.go:1854                    TestResumeTreatsTerminalProjectionIdempotently
+          cmd/partitur/command_matrix_witness_test.go:2601  witnessTerminalResumeCleanup (assertion at :2636)
+
+      Also confirm `internal/status/status_test.go` is byte-unchanged: every new test belongs in
+      the new file, and an edit to the existing file would mean a pre-existing projection
+      assertion moved.
+
+      5. THE CHARGE-PRESERVATION TEST EXERCISES SOMETHING REAL. Read
+      `TestStatusBudgetDisclosureLeavesTheClampedChargeIntact` in
+      `cmd/partitur/status_budget_disclosure_test.go` in full. Determine, and state plainly, WHICH
+      LAYER it actually drives. It must invoke the real command — `run([]string{"resume", "run-1"},
+      ...)` — so that the planner selects `CaseOpenExecution` (`internal/recovery/planner.go:583-585`)
+      and `closeOpenExecutionInterval` (`internal/recoveryexec/handlers.go:902-926`) performs the
+      clamp. If instead it hand-appends a pre-computed `execution.stopped` payload, that is not a
+      real resume and the 9,000,000 assertion is asserting the fixture rather than the arithmetic —
+      say so explicitly and say whether the writer's report admitted it.
+
+      Confirm the open interval was appended THROUGH THE STORE rather than by writing the journal
+      file: `recoveryconsequence.AppendEvent` derives the close's `CausationID` from the
+      `execution.started` event id (`internal/recoveryconsequence/consequence.go:733-741`), so a
+      hand-written line would not have produced a real close at all.
+
+      Confirm the scenario is DETERMINISTIC: the backdating margin must be large enough that the
+      cap saturates on any machine, with no sleep and no signal. Three hours of elapsed wall clock
+      against 9,000,000 ms of remaining budget leaves 1.8 million milliseconds of slack; a margin
+      that had been shaved thin would make the test flaky rather than deterministic, so say so if
+      it was.
+
+      Confirm too that the pinned exit code is one the writer OBSERVED rather than reasoned to —
+      the close charges 9,000,000 ms against the fixture score's 600,000 ms budget, so the replan
+      takes a budget-exhaustion path, and a guessed exit code would be a coincidence if it passed.
+
+      Then confirm the writer was honest about red-first here. The clamped charge is ALREADY
+      correct on unfixed main, so a journal-only assertion would pass on main and prove nothing
+      about this change. The test must ALSO assert the disclosure — `Budget.OpenExecution == nil`
+      and `Budget.ConsumedBudgetMS == 9000000` — and that disclosure half is the only reason it
+      reds on main. If the writer's report claims the charge assertion is what makes it red, that
+      claim is false and you must say so.
+
+      6. THE RED-FIRST EVIDENCE IS REAL, NOT A COMPILE ERROR. An absence check ("the criterion was
+      red because the field did not exist yet") is NOT sufficient evidence on its own, and neither
+      is a build failure — say so if that is all the writer has. The writer was instructed to stage
+      the types and the `Report` field FIRST, so that the disclosure tests COMPILE and then FAIL on
+      values, and separately to neuter the assembly by hand and watch both tests red again. For
+      each of those constructions, say which of your own observations supports the conclusion and
+      whether the writer's quoted failure text matches what you saw.
+
+      7. THE MUTATION PROOF IS REAL, AND ITS SCOPE IS HONEST. Read
+      `TestMutationBudgetDisclosureAssemblyIsLoadBearing` in `internal/status/mutation_test.go`.
+      Confirm it goes through `assertStatusMutationKilled` (`mutation_test.go:80-124`), which
+      asserts the anchor occurs exactly once and fails with the count otherwise; that the anchor is
+      the assembly expression and the replacement is an empty `Budget{}`; that the mutated copy
+      COMPILES rather than failing to build (a build failure is a non-result, not a kill); and that
+      it names ONLY `TestStatusDisclosesOpenExecutionInterval` as the target, since
+      `internal/mutationtest/child.go:190-205` reports `Killed` only when every target failed.
+
+      8. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/status/ ./cmd/partitur/
+        go test -count=1 -v -run '^(TestStatusDisclosesOpenExecutionInterval|TestStatusDisclosesClosedExecutionInterval|TestStatusBudgetDisclosureTakesNoClockSample)$' ./internal/status/
+        go test -count=1 ./internal/status/
+        go test -count=1 -v -run '^TestStatusBudgetDisclosureLeavesTheClampedChargeIntact$' ./cmd/partitur/
+        go test -count=1 -v -run '^(TestStatusJSONAndArgumentErrors|TestStatusRendersProjectionAndClassifiesOutcomes)$' ./cmd/partitur/
+        go test -count=1 ./cmd/partitur/
+        go test -tags=mutation -count=1 -v -run '^TestMutationBudgetDisclosureAssemblyIsLoadBearing$' ./internal/status/
+
+      9. NEVER run `go test -tags=mutation ./...` (#316 — that whole-repository battery is a known
+      starvation hazard and will red unrelated tests). Every tagged command is scoped to
+      `./internal/status/`.
+
+      If any point above does not hold, say so plainly rather than passing it.
+    inputs: [status-budget-disclosure-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet-status
+          run: ["go", "vet", "./internal/status/"]
+          timeout_min: 10
+        - id: vet-cmd
+          run: ["go", "vet", "./cmd/partitur/"]
+          timeout_min: 10
+        - id: budget-object-declared
+          run: ["sh", "-c", "f=internal/status/status.go; test \"$(grep -cF 'type Budget struct {' $f)\" = 1 && test \"$(grep -cF 'type OpenExecution struct {' $f)\" = 1 && test \"$(grep -cF 'json:\"budget\"' $f)\" = 1 && test \"$(grep -cF 'json:\"consumed_budget_ms\"' $f)\" = 1 && test \"$(grep -cF 'json:\"open_execution\"' $f)\" = 1 && test \"$(grep -cF 'json:\"interval_id\"' $f)\" = 1 && test \"$(grep -cF 'json:\"phase\"' $f)\" = 1 && test \"$(grep -cF 'json:\"wall_start\"' $f)\" = 1 && test \"$(grep -cF 'json:\"remaining_at_start_ms\"' $f)\" = 1 && test \"$(grep -cE 'OpenExecution +[*]OpenExecution' $f)\" = 1 && test \"$(grep -cF 'partitur/status+json;v=1' $f)\" = 1"]
+          timeout_min: 5
+        - id: no-clock-sample
+          run: ["sh", "-c", "f=internal/status/status.go; test \"$(grep -cF 'time.Now' $f)\" = 0 && test \"$(grep -cF '\"time\"' $f)\" = 0 && test \"$(grep -cF 'observed_at' $f)\" = 0 && test \"$(grep -ciE 'exhaust|over_budget|elapsed' $f)\" = 0"]
+          timeout_min: 5
+        - id: open-interval-disclosure
+          run: ["sh", "-c", "f=internal/status/budget_disclosure_test.go; grep -qF 'func TestStatusDisclosesOpenExecutionInterval(t *testing.T) {' $f && grep -qF 'execution.started' $f && go test -count=1 -run '^TestStatusDisclosesOpenExecutionInterval$' -v ./internal/status/ | grep -c '^--- PASS: TestStatusDisclosesOpenExecutionInterval' | grep -qx 1"]
+          timeout_min: 20
+        - id: closed-interval-disclosure
+          run: ["sh", "-c", "f=internal/status/budget_disclosure_test.go; grep -qF 'func TestStatusDisclosesClosedExecutionInterval(t *testing.T) {' $f && grep -qF '\"open_execution\":null' $f && go test -count=1 -run '^TestStatusDisclosesClosedExecutionInterval$' -v ./internal/status/ | grep -c '^--- PASS: TestStatusDisclosesClosedExecutionInterval' | grep -qx 1"]
+          timeout_min: 20
+        - id: read-only-byte-stable
+          run: ["sh", "-c", "f=internal/status/budget_disclosure_test.go; grep -qF 'func TestStatusBudgetDisclosureTakesNoClockSample(t *testing.T) {' $f && go test -count=1 -run '^TestStatusBudgetDisclosureTakesNoClockSample$' -v ./internal/status/ | grep -c '^--- PASS: TestStatusBudgetDisclosureTakesNoClockSample' | grep -qx 1"]
+          timeout_min: 20
+        - id: charge-preserved-through-recovery
+          run: ["sh", "-c", "f=cmd/partitur/status_budget_disclosure_test.go; grep -qF 'func TestStatusBudgetDisclosureLeavesTheClampedChargeIntact(t *testing.T) {' $f && grep -qF '9000000' $f && grep -qF 'clamped' $f && grep -qF 'resumeFixture(t,' $f && grep -qF 'run([]string{\"resume\", \"run-1\"}' $f && test -z \"$(git status --porcelain -- internal/recoveryexec/ internal/recovery/ internal/runstate/ internal/runstore/)\" && go test -count=1 -run '^TestStatusBudgetDisclosureLeavesTheClampedChargeIntact$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatusBudgetDisclosureLeavesTheClampedChargeIntact' | grep -qx 1"]
+          timeout_min: 30
+        - id: human-surface-unchanged
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/main.go)\" && test -z \"$(git status --porcelain -- cmd/ | grep -vE 'cmd/partitur/status_budget_disclosure_test\\.go$')\" && test \"$(grep -cF 'func renderStatusProjection' cmd/partitur/main.go)\" = 1 && test \"$(grep -cF 'report.Budget' cmd/partitur/main.go)\" = 0"]
+          timeout_min: 5
+        - id: silence-locks-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/main_test.go cmd/partitur/command_matrix_witness_test.go)\" && for n in TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout TestResumeKeepsTerminalWriterScoreIdempotent TestResumeTreatsTerminalProjectionIdempotently; do grep -qF \"func $n(t *testing.T) {\" cmd/partitur/main_test.go || exit 1; done; grep -qF 'func witnessTerminalResumeCleanup(t *testing.T, terminal string, wantCode int) {' cmd/partitur/command_matrix_witness_test.go"]
+          timeout_min: 5
+        - id: existing-status-tests-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/status/status_test.go)\" && go test -count=1 -run '^(TestReadProjectsPinnedRunWithoutMutatingIt|TestProjectRendersPendingDecisions|TestProjectCarriesVerifiedProvenanceAndShippingRecovery)$' -v ./internal/status/ | grep -c '^--- PASS: Test' | grep -qx 3"]
+          timeout_min: 20
+        - id: schema-additivity
+          run: ["sh", "-c", "for n in TestStatusJSONAndArgumentErrors TestStatusRendersProjectionAndClassifiesOutcomes; do grep -qF \"func $n(t *testing.T) {\" cmd/partitur/main_test.go || exit 1; done; go test -count=1 -run '^(TestStatusJSONAndArgumentErrors|TestStatusRendersProjectionAndClassifiesOutcomes)$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatus' | grep -qx 2"]
+          timeout_min: 30
+        - id: status-package
+          run: ["go", "test", "-count=1", "./internal/status/"]
+          timeout_min: 25
+        - id: cmd-package
+          run: ["go", "test", "-count=1", "./cmd/partitur/"]
+          timeout_min: 45
+        - id: mutation-proof
+          run: ["sh", "-c", "grep -qF 'func TestMutationBudgetDisclosureAssemblyIsLoadBearing(t *testing.T) {' internal/status/mutation_test.go && grep -qF 'TestStatusDisclosesOpenExecutionInterval' internal/status/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationBudgetDisclosureAssemblyIsLoadBearing$' -v ./internal/status/ | grep -q '^--- PASS: TestMutationBudgetDisclosureAssemblyIsLoadBearing'"]
+          timeout_min: 30
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ | grep -v 'internal/status/')\" && test -z \"$(git status --porcelain -- internal/status/ | grep -vE 'internal/status/(status\\.go|budget_disclosure_test\\.go|mutation_test\\.go)$')\" && test -z \"$(git status --porcelain -- cmd/ | grep -vE 'cmd/partitur/status_budget_disclosure_test\\.go$')\" && test -z \"$(git status --porcelain -- docs/ integration/ .github/ go.mod go.sum partitur.yaml .partitur/ DESIGN.md AGENTS.md)\""]
+          timeout_min: 5
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/status/status.go"
+    - "internal/status/budget_disclosure_test.go"
+    - "internal/status/mutation_test.go"
+    - "cmd/partitur/status_budget_disclosure_test.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 150
+    retries_per_movement: 1
   amendment:
     auto: "off"
