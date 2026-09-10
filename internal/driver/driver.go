@@ -1081,9 +1081,10 @@ func ExecuteAttempt(
 			)
 		},
 	}
-	executeContext, cancel := context.WithTimeout(
+	executeContext, cancel := context.WithTimeoutCause(
 		ctx,
 		budgetTimeout(remainingMS),
+		&ActiveBudgetExhaustedError{RemainingAtStartMS: remainingMS},
 	)
 	report, err := dependencies.client.Execute(executeContext, adapter.ExecutePlan{
 		AdapterID:      performer.Adapter,
@@ -1102,7 +1103,9 @@ func ExecuteAttempt(
 		RecordIdentity: recordIdentity,
 		Recorder:       recorder,
 	})
+	executeCause := context.Cause(executeContext)
 	cancel()
+	err = activeBudgetError(err, executeCause)
 	if approvalPrepared {
 		if err != nil {
 			return stopped(result, err)
