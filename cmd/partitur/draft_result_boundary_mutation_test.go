@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -375,28 +374,5 @@ func draftResultMutationTerminalLine(output, testName string) string {
 }
 
 func copyDraftResultMutationRepository(destination, source string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if relative == ".git" || relative == ".codegraph" || relative == ".partitur" {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		target := filepath.Join(destination, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, contents, 0o600)
-	})
+	return mutationtest.CopyRepository(destination, source)
 }

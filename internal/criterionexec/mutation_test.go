@@ -77,7 +77,7 @@ func TestCopyCriterionExecMutationRepositorySkipsPartiturStateDirectory(t *testi
 		}
 	}
 
-	if err := copyCriterionExecMutationRepository(destination, source); err != nil {
+	if err := mutationtest.CopyRepository(destination, source); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, ".partitur")); !os.IsNotExist(err) {
@@ -89,32 +89,5 @@ func TestCopyCriterionExecMutationRepositorySkipsPartiturStateDirectory(t *testi
 }
 
 func copyCriterionExecMutationRepository(destination, source string) error {
-	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if (relative == ".git" || relative == ".partitur") && entry.IsDir() {
-			return filepath.SkipDir
-		}
-		target := filepath.Join(destination, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		}
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, contents, 0o600)
-	})
+	return mutationtest.CopyRepository(destination, source)
 }
