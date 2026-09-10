@@ -240,9 +240,9 @@ func sigtermRequest(method, adapterID, workdir, outputDir string) ([]byte, error
 			model = "claude-sonnet-5"
 		}
 		request["params"] = protocol.ExecuteRequest{
-			RunID:         "run-1",
+			RunID:         executeFixtureRunID,
 			MovementID:    "movement-1",
-			AttemptID:     "attempt-1",
+			AttemptID:     executeFixtureAttemptID,
 			ScoreRevision: 1,
 			Model:         model,
 			Brief: protocol.Brief{

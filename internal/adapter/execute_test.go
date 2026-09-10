@@ -28,6 +28,17 @@ import (
 // oracle cannot be satisfied by the client's own deadline.
 const executeCancellationLivenessBound = 6 * time.Second
 
+// The codex adapter derives an attempt scratch directory from these ids and
+// rejects anything that is not a UUIDv7, so conformance fixtures that drive the
+// real adapter must carry realistic identities. They are deliberately distinct
+// from the codex package's own fixture ids: that package removes its whole
+// /tmp/p<run> root during cleanup, and `go test` runs the two packages in
+// parallel, so a shared run id would let one package delete the other's scratch.
+const (
+	executeFixtureRunID     = "01a05f61-1c2d-7a3b-b4c5-d6e7f8091a2b"
+	executeFixtureAttemptID = "01a05f62-2d3e-7b4c-95d6-e7f8091a2b3c"
+)
+
 func TestExecuteCancellationLivenessBoundStaysInsideClientDeadline(t *testing.T) {
 	// The lower bound is the injected cancellation grace used by these clients;
 	// at or below it, the test fails before the cancellation mechanism can run.
@@ -1782,7 +1793,7 @@ func assertCancelRequest(t *testing.T, frame []byte) {
 	if err := protocol.DecodeStrict(envelope.Params, &request); err != nil {
 		t.Fatalf("cancel params = %s: %v", envelope.Params, err)
 	}
-	if request.AttemptID != "attempt-1" {
+	if request.AttemptID != executeFixtureAttemptID {
 		t.Fatalf("cancel request = %#v", request)
 	}
 }
@@ -1849,9 +1860,9 @@ func executePlan(
 		LaunchID:       "adapter-1",
 		Directory:      workdir,
 		Request: protocol.ExecuteRequest{
-			RunID:         "run-1",
+			RunID:         executeFixtureRunID,
 			MovementID:    "movement-1",
-			AttemptID:     "attempt-1",
+			AttemptID:     executeFixtureAttemptID,
 			ScoreRevision: 1,
 			Model:         "test-model",
 			Brief: protocol.Brief{

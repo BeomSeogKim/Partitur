@@ -127,8 +127,16 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 	if err != nil {
 		return failed(protocol.FailureAdapterUnavailable, "Codex CLI is unavailable"), nil
 	}
+	if request == nil {
+		return failed(protocol.FailureProtocolError, "execute request is required"), nil
+	}
+	scratch, err := prepareAttemptScratch(request.Workdir, request.RunID, request.AttemptID)
+	if err != nil {
+		return failed(protocol.FailureProtocolError, err.Error()), nil
+	}
+	environment := childEnvironment(os.Environ(), scratch)
 
-	command, err := buildCommand(request, true)
+	command, err := buildCommand(request, scratch, true)
 	if err != nil {
 		return failed(protocol.FailureProtocolError, err.Error()), nil
 	}
@@ -141,7 +149,7 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 		}
 	}()
 
-	invocation := a.invoke(ctx, binary, command, sink, diagnostic)
+	invocation := a.invoke(ctx, binary, command, environment, sink, diagnostic)
 	sensitive = unique(append(sensitive, invocation.stream.sensitive...))
 	if ctx.Err() != nil {
 		return withSession(cancelled(), invocation.stream.sessionID), nil
@@ -151,11 +159,11 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 		if err := sink.Log("warn", "Codex session hint was stale; retrying without it"); err != nil {
 			return failed(protocol.FailureProtocolError, "emit retry event"), nil
 		}
-		command, err = buildCommand(request, false)
+		command, err = buildCommand(request, scratch, false)
 		if err != nil {
 			return failed(protocol.FailureProtocolError, err.Error()), nil
 		}
-		invocation = a.invoke(ctx, binary, command, sink, diagnostic)
+		invocation = a.invoke(ctx, binary, command, environment, sink, diagnostic)
 		sensitive = unique(append(sensitive, invocation.stream.sensitive...))
 		if ctx.Err() != nil {
 			return withSession(cancelled(), invocation.stream.sessionID), nil
@@ -172,7 +180,7 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 	return withSession(result, invocation.stream.sessionID, invocation.stream.sensitive...), nil
 }
 
-func (a *Adapter) invoke(ctx context.Context, binary string, command commandSpec, sink adapterkit.EventSink, diagnostic *diagnosticWriter) invocationResult {
+func (a *Adapter) invoke(ctx context.Context, binary string, command commandSpec, environment []string, sink adapterkit.EventSink, diagnostic *diagnosticWriter) invocationResult {
 	state := streamState{sink: sink}
 	if command.resumeID != "" {
 		state.sensitive = []string{command.resumeID}
@@ -182,7 +190,7 @@ func (a *Adapter) invoke(ctx context.Context, binary string, command commandSpec
 		Path:   binary,
 		Args:   command.args,
 		Dir:    command.dir,
-		Env:    os.Environ(),
+		Env:    environment,
 		Stdin:  strings.NewReader(command.prompt),
 		Stderr: diagnostic,
 	}, state.consume)
@@ -285,7 +293,7 @@ type commandSpec struct {
 	resumeID string
 }
 
-func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (commandSpec, error) {
+func buildCommand(request *protocol.ExecuteRequest, scratch string, includeResume bool) (commandSpec, error) {
 	if request == nil {
 		return commandSpec{}, errors.New("execute request is required")
 	}
@@ -322,6 +330,7 @@ func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (command
 		"--ignore-rules",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+		"--add-dir", scratch,
 	}
 	// Ignoring user config preserves CODEX_HOME authentication but cannot
 	// remove managed policy or every integration built into the executable.
