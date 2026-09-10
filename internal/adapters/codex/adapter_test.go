@@ -25,9 +25,13 @@ import (
 )
 
 const (
-	helperEnv            = "PARTITUR_CODEX_TEST_HELPER"
-	commandScratch       = "/tmp/puAaBfWYvoeryRIxI0VniavA/cAaBfXQS0fe-EVqvN7xI0Vg"
-	executeTestRunID     = "01a05f59-8be8-7abc-9123-123456789abc"
+	helperEnv = "PARTITUR_CODEX_TEST_HELPER"
+	// commandScratch is attemptScratchDirectory(executeTestRunID, executeTestAttemptID).
+	commandScratch = "/tmp/puAaCOEHxBe26PKl08mx5Apw/cAaBfXQS0fe-EVqvN7xI0Vg"
+	// executeTestRunID must differ from criterionexec's fixture run id: both packages
+	// derive the same global /tmp/p<compactRunID> run root from it, and `go test ./...`
+	// runs them in parallel, so a shared id makes the two contend for one directory.
+	executeTestRunID     = "01a08e10-7c41-7b6e-8f2a-5d3c9b1e40a7"
 	executeTestAttemptID = "01a05f5d-04b4-7def-8456-abcdef123456"
 )
 
