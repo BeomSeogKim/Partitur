@@ -25,6 +25,7 @@ func TestMutationCopyHelpersExcludePartiturStateDirectory(t *testing.T) {
 		{"cmd/partitur/prepare_quiesce_mutation_test.go", "copyPrepareQuiesceRepository"},
 		{"cmd/partitur/resume_hint_mutation_test.go", "copyDecisionResumeHintMutationRepository"},
 		{"integration/composition/mutation_test.go", "copyCompositionMutationRepository"},
+		{"internal/adapter/mutation_test.go", "copyAdapterMutationRepository"},
 		{"internal/amendment/mutation_test.go", "copyRepository"},
 		{"internal/amendmentexec/mutation_test.go", "copyMutationRepository"},
 		{"internal/criterionexec/mutation_test.go", "copyCriterionExecMutationRepository"},
