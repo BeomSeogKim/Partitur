@@ -50,6 +50,23 @@ type Report struct {
 	EnforcementAdvisories []EnforcementAdvisory `json:"enforcement_advisories"`
 	Journal               Journal               `json:"journal"`
 	Recovery              Recovery              `json:"recovery"`
+	Budget                Budget                `json:"budget"`
+}
+
+// Budget copies the journal-projected budget position without a clock sample or
+// derived budget-limit judgement. DESIGN.md:3439 confines status to the journal
+// and pinned snapshots, while DESIGN.md:2321 reserves the observation timestamp
+// to the closing process; adding a clock here requires reopening that decision.
+type Budget struct {
+	ConsumedBudgetMS int64          `json:"consumed_budget_ms"`
+	OpenExecution    *OpenExecution `json:"open_execution"`
+}
+
+type OpenExecution struct {
+	IntervalID         string `json:"interval_id"`
+	Phase              string `json:"phase"`
+	WallStart          string `json:"wall_start"`
+	RemainingAtStartMS int64  `json:"remaining_at_start_ms"`
 }
 
 type Run struct {
@@ -296,6 +313,7 @@ func projectAt(runID runstate.RunID, compiled *score.Score, snapshots map[uint64
 		EnforcementAdvisories: advisories(state),
 		Journal:               Journal{Integrity: "INTACT"},
 		Recovery:              Recovery{State: "NOT_REQUIRED"},
+		Budget:                budgetProjection(state),
 	}
 	if state.ApplicationCandidate != nil {
 		candidate := state.ApplicationCandidate
@@ -329,6 +347,19 @@ func projectAt(runID runstate.RunID, compiled *score.Score, snapshots map[uint64
 		}
 	}
 	return report
+}
+
+func budgetProjection(state runstate.State) Budget {
+	projection := Budget{ConsumedBudgetMS: state.ConsumedBudgetMS}
+	if state.OpenExecution != nil {
+		projection.OpenExecution = &OpenExecution{
+			IntervalID:         string(state.OpenExecution.ID),
+			Phase:              state.OpenExecution.Phase,
+			WallStart:          state.OpenExecution.WallStart,
+			RemainingAtStartMS: state.OpenExecution.RemainingAtStart,
+		}
+	}
+	return projection
 }
 
 func pendingDecisions(state runstate.State) []PendingDecision {
