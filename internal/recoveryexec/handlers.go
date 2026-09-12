@@ -538,22 +538,10 @@ func closeRecoveredAcceptanceBudgetInterval(execution HandlerContext, action rec
 	if interval == nil || interval.Phase != "acceptance" {
 		return errors.New("recovery acceptance budget has no open acceptance interval")
 	}
-	observed := time.Now().UTC()
-	started, err := time.Parse(time.RFC3339Nano, interval.WallStart)
-	if err != nil {
-		return fmt.Errorf("parse interval wall_start: %w", err)
-	}
-	duration := observed.Sub(started).Milliseconds()
-	if duration < 0 {
-		duration = 0
-	}
-	if duration > interval.RemainingAtStart {
-		duration = interval.RemainingAtStart
-	}
-	return appendEvent(execution, state, action, runstate.EventExecutionStopped, map[string]any{
-		"interval_id": interval.ID, "reason": "budget_exhausted", "charging": "clamped",
-		"charged_duration": duration, "observed_at": observed.Format("2006-01-02T15:04:05.000Z"),
-	})
+	payload := runstate.ClampedCloseFields(interval)
+	payload["interval_id"] = interval.ID
+	payload["reason"] = "budget_exhausted"
+	return appendEvent(execution, state, action, runstate.EventExecutionStopped, payload)
 }
 
 func materializeSuccessorWithExecutionDependencies(
@@ -908,22 +896,10 @@ func closeOpenExecutionInterval(_ context.Context, execution HandlerContext, act
 	if interval == nil {
 		return nil
 	}
-	observed := time.Now().UTC()
-	started, err := time.Parse(time.RFC3339Nano, interval.WallStart)
-	if err != nil {
-		return fmt.Errorf("parse interval wall_start: %w", err)
-	}
-	duration := observed.Sub(started).Milliseconds()
-	if duration < 0 {
-		duration = 0
-	}
-	if duration > interval.RemainingAtStart {
-		duration = interval.RemainingAtStart
-	}
-	return appendEvent(execution, state, action, runstate.EventExecutionStopped, map[string]any{
-		"interval_id": interval.ID, "reason": "recovered", "charging": "clamped",
-		"charged_duration": duration, "observed_at": observed.Format("2006-01-02T15:04:05.000Z"),
-	})
+	payload := runstate.ClampedCloseFields(interval)
+	payload["interval_id"] = interval.ID
+	payload["reason"] = "recovered"
+	return appendEvent(execution, state, action, runstate.EventExecutionStopped, payload)
 }
 
 func appendAttemptFailure(_ context.Context, execution HandlerContext, action recovery.Action) error {

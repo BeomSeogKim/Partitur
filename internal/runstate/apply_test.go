@@ -128,15 +128,15 @@ func TestUnregisteredEventFailsAsInvalid(t *testing.T) {
 	}
 }
 
-func TestEScopedSupportedEventSetHasFiftyTypes(t *testing.T) {
+func TestEScopedSupportedEventSetHasFiftyOneTypes(t *testing.T) {
 	var count int
 	for eventType := range registryEvents {
 		if isSupportedEvent(eventType) {
 			count++
 		}
 	}
-	if count != 50 {
-		t.Fatalf("supported event count = %d, want 50", count)
+	if count != 51 {
+		t.Fatalf("supported event count = %d, want 51", count)
 	}
 	for _, eventType := range []EventType{EventMovementCancelled, EventAttemptCancelled, EventAttemptSuperseded, EventDecisionObsoleted} {
 		if isSupportedEvent(eventType) {

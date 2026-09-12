@@ -11,6 +11,9 @@ const (
 	ProbeCompletionDeadline = 15_000 * time.Millisecond
 	OuterTerminationGrace   = 30_000 * time.Millisecond
 	MaxProbeStderrBytes     = 65_536
+	// ElapsedCheckpointCadence is §6's fixed cadence at which the interval opener
+	// writes execution.elapsed_checkpointed while the adapter interval is open.
+	ElapsedCheckpointCadence = 5_000 * time.Millisecond
 )
 
 type DiagnosticKind string
