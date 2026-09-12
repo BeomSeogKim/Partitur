@@ -232,6 +232,24 @@ func TestStartRejectsRepositoryPreconditionFailures(t *testing.T) {
 				writeFile(t, filepath.Join(root, "untracked.txt"), []byte("new\n"), 0o600)
 			},
 		},
+		{
+			name: "untracked partitur gitignore",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, filepath.Join(root, ".partitur", ".gitignore"), []byte("scratch.tmp\n"), 0o600)
+			},
+		},
+		{
+			name: "untracked partitur sibling of cast",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, filepath.Join(root, ".partitur", "foo"), []byte("new\n"), 0o600)
+			},
+		},
+		{
+			name: "cast renamed away",
+			mutate: func(t *testing.T, root string) {
+				gitRun(t, root, "mv", ".partitur/cast.yaml", ".partitur/other.yaml")
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repository, preparation := prepareRepository(t)
@@ -239,6 +257,70 @@ func TestStartRejectsRepositoryPreconditionFailures(t *testing.T) {
 			_, err := startWithID(preparation, newRecordingGit(t), testRunID)
 			if !errors.Is(err, ErrDirtySource) {
 				t.Fatalf("error = %v, want ErrDirtySource", err)
+			}
+		})
+	}
+
+	t.Run("modified project cast alone starts", func(t *testing.T) {
+		repository, preparation := prepareRepository(t)
+		writeFile(t, filepath.Join(repository, ".partitur", "cast.yaml"), []byte("tuned: true\n"), 0o600)
+		result, err := startWithID(preparation, newRecordingGit(t), testRunID)
+		if err != nil {
+			t.Fatalf("start with only a modified project cast: %v", err)
+		}
+		if result.RunID != testRunID {
+			t.Fatalf("run id = %q, want %q", result.RunID, testRunID)
+		}
+	})
+}
+
+func TestStatusPermitsProjectCastOnly(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		records []string
+		want    bool
+	}{
+		{name: "clean tree", records: nil, want: true},
+		{name: "modified cast alone", records: []string{" M .partitur/cast.yaml"}, want: true},
+		{name: "staged cast alone", records: []string{"M  .partitur/cast.yaml"}, want: true},
+		{
+			name:    "cast renamed onto itself is permitted structurally",
+			records: []string{"R  .partitur/cast.yaml", ".partitur/cast.yaml"},
+			want:    true,
+		},
+		{name: "modified source file", records: []string{" M README.md"}, want: false},
+		{name: "untracked partitur sibling", records: []string{"?? .partitur/foo"}, want: false},
+		{name: "untracked partitur gitignore", records: []string{"?? .partitur/.gitignore"}, want: false},
+		{
+			name:    "cast alongside another change",
+			records: []string{" M .partitur/cast.yaml", " M README.md"},
+			want:    false,
+		},
+		{
+			name:    "rename cast to other refuses on new path",
+			records: []string{"R  .partitur/other.yaml", ".partitur/cast.yaml"},
+			want:    false,
+		},
+		{
+			name:    "rename other to cast refuses on original path",
+			records: []string{"R  .partitur/cast.yaml", "README.md"},
+			want:    false,
+		},
+		{
+			name:    "rename record missing its original path fails closed",
+			records: []string{"R  .partitur/cast.yaml"},
+			want:    false,
+		},
+		{name: "malformed short record fails closed", records: []string{"M"}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var status []byte
+			for _, record := range test.records {
+				status = append(status, record...)
+				status = append(status, 0)
+			}
+			if got := statusPermitsProjectCastOnly(status); got != test.want {
+				t.Fatalf("statusPermitsProjectCastOnly(%q) = %t, want %t", status, got, test.want)
 			}
 		})
 	}
