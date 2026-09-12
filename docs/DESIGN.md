@@ -4010,6 +4010,12 @@ This is a comparison projection, not a change-set or candidate-identity projecti
 the state directory only: `partitur.yaml` remains in the application tree and in every comparison.
 The source score is protected under §2, but it is not part of the repository state directory.
 
+**The normative specification is not a run surface.** `docs/DESIGN.md`, and the anchors its
+clause-staging ledger (`docs/DESIGN.clause-staging.json`) pins by blob, are normative and
+human-owned. No score, movement, or amendment amends them: a normative edit to this specification
+is out of scope for the self-hosted loop and lands only through a direct, human-owned change, never
+a run's candidate.
+
 | Rule | Value |
 |---|---|
 | state-directory-paths | excluded |
