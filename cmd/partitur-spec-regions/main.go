@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/BeomSeogKim/Partitur/internal/docclause"
@@ -18,10 +19,43 @@ func main() {
 	previewPacket := flag.Int("preview-packet", 0, "render one packet with confirmed classifications inline as a view on stdout")
 	context := flag.Int("context", 2, "surrounding physical lines to display")
 	registryPath := flag.String("registry", "docs/DESIGN.clause-staging.json", "staging receipt registry")
+	classificationDeltaPath := flag.String("classification-delta", "", "human-authored classifications for new or changed source byte ranges")
+	regeneratePath := flag.String("regenerate", "", "regenerate the staging registry at this path")
+	emitPins := flag.Bool("emit-pins", false, "print baseline_test.go pins after regeneration")
 	materializePath := flag.String("materialize", "", "write confirmed classifications to this new document")
 	markedPath := flag.String("marked", "", "materialized document to validate against activation pins")
 	checkActivation := flag.Bool("check-activation", false, "require all four atomic baseline activation conditions")
 	flag.Parse()
+	if *regeneratePath != "" {
+		if *packet != 0 || *previewPacket != 0 || *materializePath != "" || *markedPath != "" || *checkActivation {
+			fail(fmt.Errorf("-regenerate cannot be combined with view, materialize, or activation modes"))
+		}
+		documentAbsolute, err := filepath.Abs(*documentPath)
+		if err != nil {
+			fail(err)
+		}
+		regenerateAbsolute, err := filepath.Abs(*regeneratePath)
+		if err != nil {
+			fail(err)
+		}
+		if documentAbsolute == regenerateAbsolute {
+			fail(fmt.Errorf("regeneration output must not overwrite source document"))
+		}
+		contents, pins, err := regenerateLedger(".", *documentPath, *registryPath, *classificationDeltaPath)
+		if err != nil {
+			fail(err)
+		}
+		if err := os.WriteFile(*regeneratePath, contents, 0o600); err != nil {
+			fail(err)
+		}
+		if *emitPins {
+			fmt.Print(pins)
+		}
+		return
+	}
+	if *classificationDeltaPath != "" || *emitPins {
+		fail(fmt.Errorf("-classification-delta and -emit-pins require -regenerate"))
+	}
 
 	document, err := os.ReadFile(*documentPath)
 	if err != nil {
