@@ -1959,9 +1959,12 @@ daemonized and lost its ancestry relationship. So:
 
 **Run preconditions.** A run requires a Git repository. At run start the core records
 the source base commit/tree id in the manifest, together with the score and resolved
-cast hashes. If the source tree has tracked or untracked changes (beyond ignored
-`.partitur/` run data), the run is refused — dirty-source support is future scope. This
-guarantees the agents' base is exactly what the user sees.
+cast hashes. If the source tree has tracked or untracked changes — other than a
+modified `<repo>/.partitur/cast.yaml`, and beyond ignored `.partitur/` run data — the
+run is refused. A dirty project cast is permitted because the resolved cast is
+snapshotted at run start (§1); broader dirty-source support is future scope. This
+guarantees the agents' base is exactly what the user sees, apart from that cast
+selection.
 
 Write attempts never modify the user's checkout directly. v0.2 uses **Git worktrees**:
 

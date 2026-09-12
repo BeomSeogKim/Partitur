@@ -214,7 +214,7 @@ func inspectRepository(
 	if err != nil {
 		return repositoryFacts{}, err
 	}
-	if len(status) != 0 {
+	if !statusPermitsProjectCastOnly(status) {
 		return repositoryFacts{}, ErrDirtySource
 	}
 
@@ -247,6 +247,47 @@ func inspectRepository(
 		return repositoryFacts{}, err
 	}
 	return facts, nil
+}
+
+// projectCastRelativePath is the one dirty path a run tolerates: the resolved cast is
+// snapshotted at run start, so a modified project cast cannot corrupt the run.
+const projectCastRelativePath = ".partitur/cast.yaml"
+
+// statusPermitsProjectCastOnly reports whether every record in `git status
+// --porcelain=v1 -z` output affects only the project cast. Records are NUL-delimited
+// and each begins with the two-character XY status followed by a space and the path; a
+// rename or copy record (an 'R' or 'C' in either status column) carries its original
+// path in the next NUL field, and both paths must be the project cast for the record to
+// be permitted. An empty status (a clean tree) is permitted.
+func statusPermitsProjectCastOnly(status []byte) bool {
+	records := bytes.Split(status, []byte{0})
+	for index := 0; index < len(records); index++ {
+		record := records[index]
+		if len(record) == 0 {
+			continue
+		}
+		if len(record) < 4 || record[2] != ' ' {
+			return false
+		}
+		path := string(record[3:])
+		column := record[0]
+		other := record[1]
+		if column == 'R' || column == 'C' || other == 'R' || other == 'C' {
+			index++
+			if index >= len(records) {
+				return false
+			}
+			original := string(records[index])
+			if path != projectCastRelativePath || original != projectCastRelativePath {
+				return false
+			}
+			continue
+		}
+		if path != projectCastRelativePath {
+			return false
+		}
+	}
+	return true
 }
 
 type gitVersion struct {
