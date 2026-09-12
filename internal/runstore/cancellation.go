@@ -236,18 +236,6 @@ func controlStopEvent(transaction *Txn, state runstate.State, runID runstate.Run
 	if interval == nil {
 		return runstate.Event{}, errors.New("control interval is absent")
 	}
-	started, err := time.Parse(time.RFC3339Nano, interval.WallStart)
-	if err != nil {
-		return runstate.Event{}, fmt.Errorf("parse interval wall_start: %w", err)
-	}
-	observed := time.Now().UTC()
-	duration := observed.Sub(started).Milliseconds()
-	if duration < 0 {
-		duration = 0
-	}
-	if duration > interval.RemainingAtStart {
-		duration = interval.RemainingAtStart
-	}
 	journal, err := transaction.loadJournal(filepath.Join(transaction.runRoot(), "journal.jsonl"))
 	if err != nil {
 		return runstate.Event{}, err
@@ -264,12 +252,12 @@ func controlStopEvent(transaction *Txn, state runstate.State, runID runstate.Run
 	if causationID == "" {
 		return runstate.Event{}, errors.New("control execution start source is absent")
 	}
+	payload := runstate.ClampedCloseFields(interval)
+	payload["interval_id"] = string(interval.ID)
+	payload["reason"] = reason
 	return runstate.Event{
 		RunID: runID, ScoreRevision: state.ScoreHead.Revision, Type: runstate.EventExecutionStopped, CausationID: causationID,
-		Payload: cancellationPayload(map[string]any{
-			"interval_id": string(interval.ID), "reason": reason, "charging": "clamped", "charged_duration": duration,
-			"observed_at": observed.Format("2006-01-02T15:04:05.000Z"),
-		}),
+		Payload: cancellationPayload(payload),
 	}, nil
 }
 

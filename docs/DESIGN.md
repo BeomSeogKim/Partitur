@@ -2319,14 +2319,19 @@ the recovery rule below.
   In each case `charging: clamped` and
 
   ```text
-  charged_duration = min( max(0, observed_at − wall_start), remaining_at_start )
+  checkpoint_ms    = latest execution.elapsed_checkpointed.cumulative_elapsed_ms
+                     for the interval, or 0 if none
+  charged_duration = min( checkpoint_ms + 35000, remaining_at_start )
   ```
 
-  `observed_at` is **sampled by the closing process** — it is not journaled state — so that
-  process records both `observed_at` and the resulting `charged_duration` in the fsynced
-  `execution.stopped`. Every later replay reads the recorded charge and never recomputes it, which
-  is what makes the projection stable. Honestly labelled, this is **bounded best-effort accounting,
-  not fail-closed**: a backward clock jump between `wall_start` and the close can undercharge. The
+  The recovering process reads the interval's **latest `execution.elapsed_checkpointed`** — the
+  opener-written cumulative-elapsed duration — rather than sampling wall clock, and records the
+  resulting `charged_duration` together with its audit fields, `elapsed_checkpoint_event_id` (the
+  checkpoint it read; **absent ⇒ a zero baseline**, no checkpoint was ever recorded) and
+  `accounting_grace_ms: 35000`, in the fsynced `execution.stopped`. Every later replay reads the
+  recorded charge and never recomputes it, which is what makes the projection stable. Honestly
+  labelled, this is **bounded best-effort accounting, not fail-closed**: it cannot account exactly
+  for a recovery delay longer than the grace window or for an escaped nonconforming process. The
   clamp guarantees only the upper bound — an uncertain interval never costs more than the budget
   that was actually available when it opened.
 
@@ -5422,6 +5427,7 @@ movement.cancelled {}
 | `attempt.superseded` *derived* | — | source event_id + attempt_id | — | Attempt → `SUPERSEDED`; projected from `amendment.approved` (§9) |
 | `execution.started` | ✓ | `interval_id` | no interval open | Opens the (single) budget interval; carries `interval_id`, `phase`, `wall_start`, `remaining_at_start` (§6). Keyed on `interval_id` because one attempt legitimately opens several intervals |
 | `execution.stopped` | ✓ | `interval_id` | that interval open | Closes it and charges `charged_duration` under §6's measured/clamped rule, which covers recovery (`reason: recovered`) and a fenced supersession (`reason: superseded`) alike. **`reason: cancelled` and `reason: superseded` are always `clamped`**, whether a fence is taken and whether the closer is the opener: §6 fixes one shape for each control outcome across every close that can produce it, so this is a property of the reason rather than of the closer. For an ordinary `adapter` close, §4 additionally requires the recorded session to be verified empty first |
+| `execution.elapsed_checkpointed` | ✓ | `(interval_id, cumulative_elapsed_ms)` | that interval open, appended only by its opener | **Projects no state; it is the durable baseline a later clamp reads.** Records the opener's `cumulative_elapsed_ms` — active elapsed time as a **duration** measured from the opener's in-memory monotonic origin, never an absolute reading — on a fixed cadence while the interval is open. `cumulative_elapsed_ms` strictly increases per interval. When another process later closes the interval `clamped`, §6's formula uses the latest such value as its checkpoint baseline. It is **authoritative**, not an observational `progress`: a projection (the clamp) reads it. `causation_id` names the interval's `execution.started` |
 
 **Payloads.**
 
@@ -5599,9 +5605,21 @@ adjacent coherent specimen.
 - `execution.stopped.charging` is `measured` or `clamped`, orthogonally to `reason`.
 - `execution.stopped.charged_duration` is integer milliseconds computed by the opening process from
   its own monotonic clock, or by the clamp during recovery.
-- `execution.stopped.observed_at` is required if and only if `charging = clamped`.
-- `execution.stopped.observed_at` is the recovery-time wall sample journaled so replay never
-  re-samples (§6).
+- `execution.stopped.elapsed_checkpoint_event_id` is present only when `charging = clamped`; it
+  names the `execution.elapsed_checkpointed` whose `cumulative_elapsed_ms` is the clamp's checkpoint
+  baseline, and its absence on a clamped close means a zero baseline — no checkpoint was recorded.
+- `execution.stopped.accounting_grace_ms` is present if and only if `charging = clamped` and is the
+  grace `35000` added to the checkpoint baseline (§6).
+- `execution.elapsed_checkpointed.interval_id` matches an `execution.started` whose interval is
+  still open.
+- `execution.elapsed_checkpointed` is appended only by the process that opened the interval.
+- `execution.elapsed_checkpointed.cumulative_elapsed_ms` is integer milliseconds and strictly
+  increases for the interval.
+- `execution.elapsed_checkpointed.cumulative_elapsed_ms` is a duration measured from the opener's
+  in-memory monotonic origin, never an absolute monotonic reading, which §6 forbids persisting as an
+  identity.
+- `execution.elapsed_checkpointed` is authoritative, not observational: recovery's clamp reads it,
+  which the `progress` event of B.7 could never feed.
 
 ```text
 performer.completed {
@@ -5658,7 +5676,15 @@ execution.stopped {
   reason,
   charging,
   charged_duration,
-  observed_at?
+  elapsed_checkpoint_event_id?,
+  accounting_grace_ms?
+}
+```
+
+```text
+execution.elapsed_checkpointed {
+  interval_id,
+  cumulative_elapsed_ms
 }
 ```
 
@@ -6550,6 +6576,7 @@ it to one of the two §8 surfaces above. `open` entries point to the stable gap 
 | event | `attempt.superseded` | structural | `RC-RESUME-042` | covered |
 | event | `execution.started` | structural | `RC-RESUME-001`, `RC-RESUME-044` | covered |
 | event | `execution.stopped` | structural | `RC-RESUME-015`, `RC-RESUME-044` | covered |
+| event | `execution.elapsed_checkpointed` | neutral | — | covered |
 | event | `artifact.recorded` | structural | `RC-RESUME-010`, `RC-RESUME-015`, `RC-RESUME-016`, `RC-RESUME-017` | covered |
 | event | `change_set.recorded` | direct | `RC-RESUME-018` | covered |
 | event | `verification.passed` | direct | `RC-RESUME-018` | covered |

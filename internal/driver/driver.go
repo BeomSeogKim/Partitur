@@ -715,14 +715,16 @@ func ExecuteAttempt(
 		return interrupted(result, err)
 	}
 	adapterOpened := dependencies.now()
-	if _, err := appendEvent(runstate.EventExecutionStarted, map[string]any{
+	adapterStartedReceipt, err := appendEvent(runstate.EventExecutionStarted, map[string]any{
 		"interval_id":        adapterInterval,
 		"phase":              "adapter",
 		"wall_start":         formatTime(adapterOpened),
 		"remaining_at_start": remainingMS,
-	}, "execution.adapter.started"); err != nil {
+	}, "execution.adapter.started")
+	if err != nil {
 		return stopped(result, err)
 	}
+	adapterStartedEventID := adapterStartedReceipt.Mutation.EventID
 
 	attemptDomains := []canonical.Domain(nil)
 	if baseCompositionHash != "" {
@@ -886,6 +888,27 @@ func ExecuteAttempt(
 				adapterChargedMS = stop.ChargedDurationMS
 			}
 			return receipt, err
+		},
+		RecordElapsedCheckpoint: func(
+			checkpoint adapter.ElapsedCheckpoint,
+		) (faultpoint.DurabilityReceipt, error) {
+			if observationErr != nil {
+				return faultpoint.DurabilityReceipt{}, observationErr
+			}
+			encoded, err := json.Marshal(map[string]any{
+				"interval_id":           checkpoint.IntervalID,
+				"cumulative_elapsed_ms": checkpoint.CumulativeElapsedMS,
+			})
+			if err != nil {
+				return faultpoint.DurabilityReceipt{}, err
+			}
+			event := base
+			event.Type = runstate.EventExecutionElapsedCheckpointed
+			event.CausationID = adapterStartedEventID
+			event.Payload = encoded
+			return authority.Append(event, faultpoint.ReceiptAddress(
+				fmt.Sprintf("execution.adapter.elapsed_checkpointed.%d", checkpoint.CumulativeElapsedMS),
+			))
 		},
 		RecordOutcome: func(
 			observation adapter.OutcomeObservation,

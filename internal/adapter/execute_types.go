@@ -41,9 +41,21 @@ type ExecuteRecorder struct {
 	RecordProbe            func(protocol.ProbeResult) (faultpoint.DurabilityReceipt, error)
 	RecordArtifact         func(ArtifactObservation) (faultpoint.DurabilityReceipt, error)
 	RecordExecutionStopped func(ExecutionStop) (faultpoint.DurabilityReceipt, error)
-	RecordOutcome          func(OutcomeObservation) (faultpoint.DurabilityReceipt, error)
-	ObserveLog             func(protocol.LogEvent)
-	ObserveProgress        func(protocol.ProgressEvent)
+	// RecordElapsedCheckpoint durably appends one execution.elapsed_checkpointed
+	// carrying the opener's monotonic cumulative elapsed duration for the open
+	// interval. The opener calls it on a fixed cadence while the adapter interval
+	// is open; a nil callback disables checkpointing.
+	RecordElapsedCheckpoint func(ElapsedCheckpoint) (faultpoint.DurabilityReceipt, error)
+	RecordOutcome           func(OutcomeObservation) (faultpoint.DurabilityReceipt, error)
+	ObserveLog              func(protocol.LogEvent)
+	ObserveProgress         func(protocol.ProgressEvent)
+}
+
+// ElapsedCheckpoint is one opener-written cumulative-elapsed observation for an
+// open budget interval, measured as a duration from the opener's monotonic origin.
+type ElapsedCheckpoint struct {
+	IntervalID          runstate.IntervalID
+	CumulativeElapsedMS int64
 }
 
 type ArtifactObservation struct {

@@ -101,7 +101,7 @@ func extractSemanticJournal(path string, normalizer *semanticNormalizer) ([]any,
 		if err := decoder.Decode(&event); err != nil {
 			return nil, fmt.Errorf("decode journal event: %w", err)
 		}
-		if err := validateTimestampDerivedCharge(event, openIntervals); err != nil {
+		if err := validateCheckpointDerivedCharge(event, openIntervals); err != nil {
 			return nil, err
 		}
 		if isDiagnosticRecoveryEvent(event["type"]) {
@@ -117,69 +117,108 @@ func extractSemanticJournal(path string, normalizer *semanticNormalizer) ([]any,
 }
 
 type semanticOpenExecutionInterval struct {
-	wallStart        string
-	remainingAtStart int64
+	remainingAtStart   int64
+	latestCheckpointMS int64
+	hasCheckpoint      bool
 }
 
-func validateTimestampDerivedCharge(event map[string]any, openIntervals map[string]semanticOpenExecutionInterval) error {
+// validateCheckpointDerivedCharge pins #442(ii)'s evidence-based clamp on every
+// journal it scans: a clamped execution.stopped charges
+// min(latest checkpoint cumulative_elapsed_ms + AccountingGraceMS, remaining_at_start),
+// records accounting_grace_ms, cites its checkpoint iff one existed, and no longer
+// samples observed_at. It tracks the latest execution.elapsed_checkpointed per
+// interval as it scans (0 if none seen).
+func validateCheckpointDerivedCharge(event map[string]any, openIntervals map[string]semanticOpenExecutionInterval) error {
 	eventType, _ := event["type"].(string)
-	if eventType != string(runstate.EventExecutionStarted) && eventType != string(runstate.EventExecutionStopped) {
-		return nil
-	}
-	payload, ok := event["payload"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("timestamp-derived charge %s payload is not an object", eventType)
-	}
-	intervalID, err := semanticString(payload, "interval_id")
-	if err != nil {
-		return fmt.Errorf("timestamp-derived charge %s: %w", eventType, err)
-	}
-	if eventType == string(runstate.EventExecutionStarted) {
-		wallStart, err := semanticString(payload, "wall_start")
+	switch eventType {
+	case string(runstate.EventExecutionStarted):
+		payload, ok := event["payload"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("checkpoint-derived charge execution.started payload is not an object")
+		}
+		intervalID, err := semanticString(payload, "interval_id")
 		if err != nil {
-			return fmt.Errorf("timestamp-derived charge execution.started: %w", err)
+			return fmt.Errorf("checkpoint-derived charge execution.started: %w", err)
 		}
 		remainingAtStart, err := semanticInt64(payload, "remaining_at_start")
 		if err != nil {
-			return fmt.Errorf("timestamp-derived charge execution.started: %w", err)
+			return fmt.Errorf("checkpoint-derived charge execution.started: %w", err)
 		}
-		openIntervals[intervalID] = semanticOpenExecutionInterval{wallStart: wallStart, remainingAtStart: remainingAtStart}
+		openIntervals[intervalID] = semanticOpenExecutionInterval{remainingAtStart: remainingAtStart}
+		return nil
+	case string(runstate.EventExecutionElapsedCheckpointed):
+		payload, ok := event["payload"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("checkpoint-derived charge execution.elapsed_checkpointed payload is not an object")
+		}
+		intervalID, err := semanticString(payload, "interval_id")
+		if err != nil {
+			return fmt.Errorf("checkpoint-derived charge execution.elapsed_checkpointed: %w", err)
+		}
+		cumulative, err := semanticInt64(payload, "cumulative_elapsed_ms")
+		if err != nil {
+			return fmt.Errorf("checkpoint-derived charge execution.elapsed_checkpointed: %w", err)
+		}
+		interval, found := openIntervals[intervalID]
+		if !found {
+			return fmt.Errorf("checkpoint-derived charge execution.elapsed_checkpointed has no execution.started for interval %q", intervalID)
+		}
+		if interval.hasCheckpoint && cumulative <= interval.latestCheckpointMS {
+			return fmt.Errorf("checkpoint-derived charge execution.elapsed_checkpointed cumulative_elapsed_ms=%d does not strictly increase past %d", cumulative, interval.latestCheckpointMS)
+		}
+		interval.latestCheckpointMS = cumulative
+		interval.hasCheckpoint = true
+		openIntervals[intervalID] = interval
+		return nil
+	case string(runstate.EventExecutionStopped):
+	default:
 		return nil
 	}
 
+	payload, ok := event["payload"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("checkpoint-derived charge execution.stopped payload is not an object")
+	}
+	intervalID, err := semanticString(payload, "interval_id")
+	if err != nil {
+		return fmt.Errorf("checkpoint-derived charge execution.stopped: %w", err)
+	}
 	interval, found := openIntervals[intervalID]
 	if !found {
-		return fmt.Errorf("timestamp-derived charge execution.stopped has no execution.started for interval %q", intervalID)
+		return fmt.Errorf("checkpoint-derived charge execution.stopped has no execution.started for interval %q", intervalID)
 	}
 	delete(openIntervals, intervalID)
 	if payload["charging"] != "clamped" {
 		return nil
 	}
-	observedAt, err := semanticString(payload, "observed_at")
+	if _, present := payload["observed_at"]; present {
+		return fmt.Errorf("checkpoint-derived charge execution.stopped must not sample observed_at")
+	}
+	grace, err := semanticInt64(payload, "accounting_grace_ms")
 	if err != nil {
-		return fmt.Errorf("timestamp-derived charge execution.stopped: %w", err)
+		return fmt.Errorf("checkpoint-derived charge execution.stopped: %w", err)
 	}
-	observed, err := time.Parse(time.RFC3339Nano, observedAt)
-	if err != nil {
-		return fmt.Errorf("timestamp-derived charge execution.stopped parse observed_at: %w", err)
+	if grace != runstate.AccountingGraceMS {
+		return fmt.Errorf("checkpoint-derived charge execution.stopped accounting_grace_ms=%d, want %d", grace, runstate.AccountingGraceMS)
 	}
-	started, err := time.Parse(time.RFC3339Nano, interval.wallStart)
-	if err != nil {
-		return fmt.Errorf("timestamp-derived charge execution.stopped parse wall_start: %w", err)
+	_, hasCheckpointID := payload["elapsed_checkpoint_event_id"]
+	if hasCheckpointID != interval.hasCheckpoint {
+		return fmt.Errorf("checkpoint-derived charge execution.stopped elapsed_checkpoint_event_id present=%t, want %t (present iff a checkpoint existed)", hasCheckpointID, interval.hasCheckpoint)
 	}
-	want := observed.Sub(started).Milliseconds()
-	if want < 0 {
-		want = 0
+	checkpointMS := int64(0)
+	if interval.hasCheckpoint {
+		checkpointMS = interval.latestCheckpointMS
 	}
+	want := checkpointMS + runstate.AccountingGraceMS
 	if want > interval.remainingAtStart {
 		want = interval.remainingAtStart
 	}
 	charged, err := semanticInt64(payload, "charged_duration")
 	if err != nil {
-		return fmt.Errorf("timestamp-derived charge execution.stopped: %w", err)
+		return fmt.Errorf("checkpoint-derived charge execution.stopped: %w", err)
 	}
 	if charged != want {
-		return fmt.Errorf("timestamp-derived charged_duration=%d, want min(max(0, observed_at-wall_start), remaining_at_start)=%d", charged, want)
+		return fmt.Errorf("checkpoint-derived charged_duration=%d, want min(checkpoint_ms+%d, remaining_at_start)=%d", charged, runstate.AccountingGraceMS, want)
 	}
 	return nil
 }
@@ -328,25 +367,26 @@ const (
 // separate semanticIDProcess class below. Content-addressed change-set, tree,
 // commit, score, and plan-record values stay literal semantic evidence.
 var generatedIdentifierClasses = map[string]semanticIDClass{
-	"run_id":                 semanticIDRun,
-	"event_id":               semanticIDEvent,
-	"causation_id":           semanticIDEvent,
-	"evidence_event_id":      semanticIDEvent,
-	"approval_event_id":      semanticIDEvent,
-	"attempt_id":             semanticIDAttempt,
-	"previous_attempt_id":    semanticIDAttempt,
-	"target_attempt_ids":     semanticIDAttempt,
-	"superseded_attempt_ids": semanticIDAttempt,
-	"cancelled_attempt_ids":  semanticIDAttempt,
-	"prepare_id":             semanticIDPrepare,
-	"proposal_id":            semanticIDProposal,
-	"decision_id":            semanticIDDecision,
-	"obsoleted_decision_ids": semanticIDDecision,
-	"pending_decision_ids":   semanticIDDecision,
-	"txn_id":                 semanticIDTxn,
-	"transaction_id":         semanticIDTxn,
-	"candidate_id":           semanticIDCandidate,
-	"interval_id":            semanticIDInterval,
+	"run_id":                      semanticIDRun,
+	"event_id":                    semanticIDEvent,
+	"causation_id":                semanticIDEvent,
+	"evidence_event_id":           semanticIDEvent,
+	"approval_event_id":           semanticIDEvent,
+	"elapsed_checkpoint_event_id": semanticIDEvent,
+	"attempt_id":                  semanticIDAttempt,
+	"previous_attempt_id":         semanticIDAttempt,
+	"target_attempt_ids":          semanticIDAttempt,
+	"superseded_attempt_ids":      semanticIDAttempt,
+	"cancelled_attempt_ids":       semanticIDAttempt,
+	"prepare_id":                  semanticIDPrepare,
+	"proposal_id":                 semanticIDProposal,
+	"decision_id":                 semanticIDDecision,
+	"obsoleted_decision_ids":      semanticIDDecision,
+	"pending_decision_ids":        semanticIDDecision,
+	"txn_id":                      semanticIDTxn,
+	"transaction_id":              semanticIDTxn,
+	"candidate_id":                semanticIDCandidate,
+	"interval_id":                 semanticIDInterval,
 }
 
 type semanticNormalizer struct {
@@ -494,6 +534,12 @@ var semanticBudgetClockFieldClasses = map[semanticPath]semanticBudgetClockFieldC
 	semanticPath("event.payload.charged_duration"): {
 		normalization: semanticTimestampDerivedCharge,
 	},
+	semanticPath("event.payload.accounting_grace_ms"): {
+		literalReason: "fixed §6 accounting grace added to the checkpoint baseline, not a clock-derived magnitude",
+	},
+	semanticPath("event.payload.cumulative_elapsed_ms"): {
+		literalReason: "opener-recorded pre-recovery cumulative elapsed, identical across clones of one prefix",
+	},
 	semanticPath("event.payload.duration_ms"): {
 		literalReason: "criterion duration is not derived from a normalized persisted timestamp pair",
 	},
@@ -581,6 +627,12 @@ func (normalizer *semanticNormalizer) observeBudgetClockFields(value any, path s
 }
 
 func isSemanticBudgetMagnitudeKey(key string) bool {
+	if strings.HasSuffix(key, "_id") {
+		// Generated identifiers (e.g. elapsed_checkpoint_event_id) are normalized
+		// as identities, never as clock-derived magnitudes, even when the name
+		// carries a magnitude-shaped substring like "elapsed".
+		return false
+	}
 	return strings.Contains(key, "budget") ||
 		strings.Contains(key, "duration") ||
 		strings.HasPrefix(key, "remaining_") ||
@@ -1011,28 +1063,35 @@ func TestSemanticRecoveryNormalizer(t *testing.T) {
 		}
 	})
 
-	t.Run("timestamp_derived_charge_formula", func(t *testing.T) {
-		journal := semanticTimestampDerivedChargeJournal(t, "2026-08-16T00:00:00.000Z", "2026-08-16T00:00:00.250Z", 1000, 250)
+	t.Run("checkpoint_derived_charge_formula_no_checkpoint", func(t *testing.T) {
+		// Zero baseline: charge is the grace alone, bounded by remaining.
+		journal := semanticCheckpointDerivedChargeJournal(t, 1_000_000, 0, 35_000)
 		if _, err := extractSemanticJournal(journal, newSemanticNormalizer()); err != nil {
-			t.Fatalf("valid timestamp-derived charge: %v", err)
+			t.Fatalf("valid no-checkpoint charge: %v", err)
 		}
-		journal = semanticTimestampDerivedChargeJournal(t, "2026-08-16T00:00:00.000Z", "2026-08-16T00:00:00.250Z", 1000, 249)
-		if _, err := extractSemanticJournal(journal, newSemanticNormalizer()); err == nil || !strings.Contains(err.Error(), "timestamp-derived charged_duration") {
-			t.Fatalf("invalid timestamp-derived charge error=%v", err)
-		}
-	})
-
-	t.Run("timestamp_derived_charge_formula_negative_elapsed", func(t *testing.T) {
-		journal := semanticTimestampDerivedChargeJournal(t, "2026-08-16T00:00:00.250Z", "2026-08-16T00:00:00.000Z", 1000, 0)
-		if _, err := extractSemanticJournal(journal, newSemanticNormalizer()); err != nil {
-			t.Fatalf("negative elapsed timestamp-derived charge: %v", err)
+		journal = semanticCheckpointDerivedChargeJournal(t, 1_000_000, 0, 34_999)
+		if _, err := extractSemanticJournal(journal, newSemanticNormalizer()); err == nil || !strings.Contains(err.Error(), "checkpoint-derived charged_duration") {
+			t.Fatalf("invalid no-checkpoint charge error=%v", err)
 		}
 	})
 
-	t.Run("timestamp_derived_charge_formula_beyond_remaining_at_start", func(t *testing.T) {
-		journal := semanticTimestampDerivedChargeJournal(t, "2026-08-16T00:00:00.000Z", "2026-08-16T00:00:01.500Z", 1000, 1000)
+	t.Run("checkpoint_derived_charge_formula_with_checkpoint", func(t *testing.T) {
+		// Charge is the latest checkpoint plus the grace.
+		journal := semanticCheckpointDerivedChargeJournal(t, 1_000_000, 60_000, 95_000)
 		if _, err := extractSemanticJournal(journal, newSemanticNormalizer()); err != nil {
-			t.Fatalf("beyond remaining-at-start timestamp-derived charge: %v", err)
+			t.Fatalf("valid checkpoint charge: %v", err)
+		}
+		journal = semanticCheckpointDerivedChargeJournal(t, 1_000_000, 60_000, 95_001)
+		if _, err := extractSemanticJournal(journal, newSemanticNormalizer()); err == nil || !strings.Contains(err.Error(), "checkpoint-derived charged_duration") {
+			t.Fatalf("invalid checkpoint charge error=%v", err)
+		}
+	})
+
+	t.Run("checkpoint_derived_charge_formula_bounded_by_remaining", func(t *testing.T) {
+		// checkpoint + grace exceeds remaining, so the charge is clamped to it.
+		journal := semanticCheckpointDerivedChargeJournal(t, 1_000, 60_000, 1_000)
+		if _, err := extractSemanticJournal(journal, newSemanticNormalizer()); err != nil {
+			t.Fatalf("bounded-by-remaining charge: %v", err)
 		}
 	})
 
@@ -1087,6 +1146,8 @@ func TestSemanticRecoveryBudgetClockCompleteness(t *testing.T) {
 			"event.payload.quiesce_silence_limit_ms",
 			"event.payload.observed_at",
 			"event.payload.wall_start",
+			"event.payload.accounting_grace_ms",
+			"event.payload.cumulative_elapsed_ms",
 			"projection.state.pending_prepare.quiesce_silence_limit_ms",
 			"projection.state.pending_prepare.prepared_at",
 			"projection.state.pending_prepare.latest_quiesce_observed_at",
@@ -1208,7 +1269,7 @@ func semanticNormalizerSeed(prefix, timestamp string) semanticRecoverySnapshot {
 	)
 }
 
-func semanticTimestampDerivedChargeSeed(prefix, observedAt string, charged, consumed, remaining int64) semanticRecoverySnapshot {
+func semanticTimestampDerivedChargeSeed(prefix, stoppedTS string, charged, consumed, remaining int64) semanticRecoverySnapshot {
 	return semanticSnapshot(
 		[]any{
 			map[string]any{
@@ -1217,9 +1278,9 @@ func semanticTimestampDerivedChargeSeed(prefix, observedAt string, charged, cons
 				"payload": map[string]any{"interval_id": prefix + "-interval", "phase": "acceptance", "wall_start": "2026-08-16T00:00:00.000Z", "remaining_at_start": json.Number("1000")},
 			},
 			map[string]any{
-				"event_id": prefix + "-stopped", "causation_id": prefix + "-started", "seq": json.Number("2"), "ts": observedAt, "run_id": prefix + "-run",
+				"event_id": prefix + "-stopped", "causation_id": prefix + "-started", "seq": json.Number("2"), "ts": stoppedTS, "run_id": prefix + "-run",
 				"score_revision": json.Number("1"), "type": string(runstate.EventExecutionStopped),
-				"payload": map[string]any{"interval_id": prefix + "-interval", "reason": "recovered", "charging": "clamped", "charged_duration": charged, "observed_at": observedAt},
+				"payload": map[string]any{"interval_id": prefix + "-interval", "reason": "recovered", "charging": "clamped", "charged_duration": charged, "accounting_grace_ms": json.Number("35000")},
 			},
 		},
 		map[string]any{
@@ -1237,7 +1298,8 @@ func semanticTimestampDerivedChargeSeed(prefix, observedAt string, charged, cons
 func semanticBudgetClockCompletenessFixture() ([]map[string]any, any) {
 	return []map[string]any{
 			{"payload": map[string]any{"remaining_at_start": 1000, "wall_start": "2026-08-16T00:00:00.000Z"}},
-			{"payload": map[string]any{"charging": "clamped", "charged_duration": 250}},
+			{"payload": map[string]any{"charging": "clamped", "charged_duration": 250, "accounting_grace_ms": 35000}},
+			{"payload": map[string]any{"cumulative_elapsed_ms": 215}},
 			{"payload": map[string]any{"duration_ms": 100}},
 			{"payload": map[string]any{"quiesce_silence_limit_ms": 60_000, "observed_at": "2026-08-16T00:00:00.250Z"}},
 			{"payload": map[string]any{"disposition": map[string]any{"charged": "none"}}},
@@ -1264,21 +1326,38 @@ func semanticBudgetClockCompletenessFixture() ([]map[string]any, any) {
 		}
 }
 
-func semanticTimestampDerivedChargeJournal(t *testing.T, wallStart, observedAt string, remainingAtStart, charged int64) string {
+// semanticCheckpointDerivedChargeJournal writes started[, elapsed_checkpointed]
+// stopped for one interval. A checkpointMS > 0 emits an execution.elapsed_checkpointed
+// and cites it on the clamped close (elapsed_checkpoint_event_id); a zero baseline
+// emits neither. charged is written verbatim so the helper's exact-formula check
+// can be exercised on both valid and invalid inputs.
+func semanticCheckpointDerivedChargeJournal(t *testing.T, remainingAtStart, checkpointMS, charged int64) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	seq := 1
 	entries := []map[string]any{
 		{
-			"event_id": "started", "seq": 1, "ts": "2026-08-16T00:00:00.000Z", "run_id": "run", "score_revision": 1,
+			"event_id": "started", "seq": seq, "ts": "2026-08-16T00:00:00.000Z", "run_id": "run", "score_revision": 1,
 			"type":    string(runstate.EventExecutionStarted),
-			"payload": map[string]any{"interval_id": "interval", "phase": "acceptance", "wall_start": wallStart, "remaining_at_start": remainingAtStart},
-		},
-		{
-			"event_id": "stopped", "seq": 2, "ts": observedAt, "run_id": "run", "score_revision": 1,
-			"type":    string(runstate.EventExecutionStopped),
-			"payload": map[string]any{"interval_id": "interval", "reason": "recovered", "charging": "clamped", "charged_duration": charged, "observed_at": observedAt},
+			"payload": map[string]any{"interval_id": "interval", "phase": "acceptance", "wall_start": "2026-08-16T00:00:00.000Z", "remaining_at_start": remainingAtStart},
 		},
 	}
+	stopped := map[string]any{"interval_id": "interval", "reason": "recovered", "charging": "clamped", "charged_duration": charged, "accounting_grace_ms": 35000}
+	if checkpointMS > 0 {
+		seq++
+		entries = append(entries, map[string]any{
+			"event_id": "checkpoint", "causation_id": "started", "seq": seq, "ts": "2026-08-16T00:00:00.100Z", "run_id": "run", "score_revision": 1,
+			"type":    string(runstate.EventExecutionElapsedCheckpointed),
+			"payload": map[string]any{"interval_id": "interval", "cumulative_elapsed_ms": checkpointMS},
+		})
+		stopped["elapsed_checkpoint_event_id"] = "checkpoint"
+	}
+	seq++
+	entries = append(entries, map[string]any{
+		"event_id": "stopped", "seq": seq, "ts": "2026-08-16T00:00:00.250Z", "run_id": "run", "score_revision": 1,
+		"type":    string(runstate.EventExecutionStopped),
+		"payload": stopped,
+	})
 	var contents bytes.Buffer
 	for _, entry := range entries {
 		encoded, err := json.Marshal(entry)

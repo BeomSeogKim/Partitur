@@ -212,6 +212,46 @@ type ExecutionInterval struct {
 	Phase            string
 	WallStart        string
 	RemainingAtStart int64
+	// LatestCheckpointMS is the highest cumulative_elapsed_ms recorded by the
+	// opener via execution.elapsed_checkpointed for this interval, or 0 if none.
+	// LatestCheckpointEventID names the event that carried it (empty if none).
+	// A clamped close reads these as the recovery baseline (§6).
+	LatestCheckpointMS      int64
+	LatestCheckpointEventID string
+}
+
+// AccountingGraceMS is §6's fixed accounting grace, in milliseconds, added to the
+// checkpoint baseline when an interval is closed clamped by a process other than
+// its opener (marker budget.clamped-charge-formula).
+const AccountingGraceMS int64 = 35000
+
+// ClampedCharge implements §6's evidence-based clamp:
+// min(checkpoint_ms + AccountingGraceMS, remaining_at_start). checkpointMS is the
+// latest execution.elapsed_checkpointed cumulative_elapsed_ms for the interval, or
+// 0 when none was recorded (a zero baseline). remainingAtStart is the second operand.
+func ClampedCharge(checkpointMS, remainingAtStart int64) int64 {
+	charge := checkpointMS + AccountingGraceMS
+	if charge > remainingAtStart {
+		charge = remainingAtStart
+	}
+	return charge
+}
+
+// ClampedCloseFields returns the §6 clamped-close payload fields for an execution
+// interval closed by a process other than its opener: charging=clamped, the clamped
+// charged_duration, accounting_grace_ms, and elapsed_checkpoint_event_id when a
+// checkpoint baseline exists (absent ⇒ zero baseline). The caller adds interval_id
+// and reason.
+func ClampedCloseFields(interval *ExecutionInterval) map[string]any {
+	fields := map[string]any{
+		"charging":            "clamped",
+		"charged_duration":    ClampedCharge(interval.LatestCheckpointMS, interval.RemainingAtStart),
+		"accounting_grace_ms": AccountingGraceMS,
+	}
+	if interval.LatestCheckpointEventID != "" {
+		fields["elapsed_checkpoint_event_id"] = interval.LatestCheckpointEventID
+	}
+	return fields
 }
 
 type Disposition struct {
@@ -493,6 +533,7 @@ const (
 	EventAmendmentRejected              EventType = "amendment.rejected"
 	EventExecutionStarted               EventType = "execution.started"
 	EventExecutionStopped               EventType = "execution.stopped"
+	EventExecutionElapsedCheckpointed   EventType = "execution.elapsed_checkpointed"
 	EventAmendmentApprovalPrepared      EventType = "amendment.approval_prepared"
 	EventAmendmentQuiesceObserved       EventType = "amendment.quiesce_observed"
 	EventAmendmentApprovalAbandoned     EventType = "amendment.approval_abandoned"

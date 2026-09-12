@@ -73,6 +73,8 @@ func IdempotencyKey(event Event) (string, error) {
 		return string(event.AttemptID) + "\x00" + mustString(payload, "criterion_id"), nil
 	case EventExecutionStarted, EventExecutionStopped:
 		return mustString(payload, "interval_id"), nil
+	case EventExecutionElapsedCheckpointed:
+		return mustString(payload, "interval_id") + "\x00" + fmt.Sprintf("%d", mustInt(payload, "cumulative_elapsed_ms")), nil
 	case EventAmendmentApprovalPrepared, EventAmendmentApprovalAbandoned:
 		return mustString(payload, "prepare_id"), nil
 	case EventAmendmentQuiesceObserved:
@@ -707,6 +709,17 @@ func Apply(input State, event Event) (State, error) {
 			WallStart:        mustString(payload, "wall_start"),
 			RemainingAtStart: mustInt(payload, "remaining_at_start"),
 		}
+	case EventExecutionElapsedCheckpointed:
+		intervalID := IntervalID(mustString(payload, "interval_id"))
+		if state.OpenExecution == nil || state.OpenExecution.ID != intervalID {
+			return state, transition(event, "matching execution interval is not open")
+		}
+		cumulative := mustInt(payload, "cumulative_elapsed_ms")
+		if cumulative <= state.OpenExecution.LatestCheckpointMS {
+			return state, transition(event, "cumulative_elapsed_ms must strictly increase")
+		}
+		state.OpenExecution.LatestCheckpointMS = cumulative
+		state.OpenExecution.LatestCheckpointEventID = event.EventID
 	case EventExecutionStopped:
 		intervalID := IntervalID(mustString(payload, "interval_id"))
 		if state.OpenExecution == nil || state.OpenExecution.ID != intervalID {
@@ -1006,7 +1019,7 @@ func preparePendingMutation(eventType EventType) bool {
 	// This barrier prevents ordinary lifecycle work from invalidating the
 	// inputs frozen by a pending prepare.
 	switch eventType {
-	case EventExecutionStopped, EventCancelRequested,
+	case EventExecutionStopped, EventExecutionElapsedCheckpointed, EventCancelRequested,
 		EventAmendmentQuiesceObserved, EventAmendmentApprovalAbandoned, EventAmendmentApproved,
 		EventJournalTailTruncated:
 		return true
@@ -1504,7 +1517,9 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventExecutionStarted:
 		return []string{"interval_id", "phase", "wall_start", "remaining_at_start"}, nil, true
 	case EventExecutionStopped:
-		return []string{"interval_id", "reason", "charging", "charged_duration"}, []string{"observed_at"}, true
+		return []string{"interval_id", "reason", "charging", "charged_duration"}, []string{"elapsed_checkpoint_event_id", "accounting_grace_ms"}, true
+	case EventExecutionElapsedCheckpointed:
+		return []string{"interval_id", "cumulative_elapsed_ms"}, nil, true
 	case EventAmendmentApprovalPrepared:
 		return []string{"prepare_id", "proposal_id", "mode", "base_revision", "base_hash", "new_revision", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash", "target_attempt_ids", "observed_authority_epoch", "quiesce_silence_limit_ms", "classifier_version", "identity_versions"}, []string{"decision_id", "envelope_class"}, true
 	case EventAmendmentQuiesceObserved:
@@ -2169,8 +2184,11 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		strings = []string{"interval_id", "phase", "wall_start"}
 		integers = []string{"remaining_at_start"}
 	case EventExecutionStopped:
-		strings = append([]string{"interval_id", "reason", "charging"}, optionalNames(payload, "observed_at")...)
-		integers = []string{"charged_duration"}
+		strings = append([]string{"interval_id", "reason", "charging"}, optionalNames(payload, "elapsed_checkpoint_event_id")...)
+		integers = append([]string{"charged_duration"}, optionalNames(payload, "accounting_grace_ms")...)
+	case EventExecutionElapsedCheckpointed:
+		strings = []string{"interval_id"}
+		integers = []string{"cumulative_elapsed_ms"}
 	case EventAmendmentApprovalPrepared:
 		strings = append([]string{"prepare_id", "proposal_id", "mode", "base_hash", "new_snapshot_hash", "new_snapshot_file_hash", "plan_record_hash"}, optionalNames(payload, "decision_id", "envelope_class")...)
 		arrays = []string{"target_attempt_ids"}
@@ -2481,9 +2499,17 @@ func validatePayloadValues(eventType EventType, payload map[string]any) error {
 			return errors.New("charged_duration must be non-negative")
 		}
 		charging := mustString(payload, "charging")
-		_, observed := payload["observed_at"]
-		if (charging == "clamped") != observed {
-			return errors.New("observed_at is required iff charging is clamped")
+		clamped := charging == "clamped"
+		_, grace := payload["accounting_grace_ms"]
+		if clamped != grace {
+			return errors.New("accounting_grace_ms is required iff charging is clamped")
+		}
+		if _, checkpoint := payload["elapsed_checkpoint_event_id"]; checkpoint && !clamped {
+			return errors.New("elapsed_checkpoint_event_id is only permitted when charging is clamped")
+		}
+	case EventExecutionElapsedCheckpointed:
+		if mustInt(payload, "cumulative_elapsed_ms") < 0 {
+			return errors.New("cumulative_elapsed_ms must be non-negative")
 		}
 	case EventCriterionCompleted:
 		outcome := mustString(payload, "outcome")
@@ -2986,7 +3012,7 @@ var registryEvents = map[EventType]bool{
 	"movement.cancelled": true, "performer.selected": true, "attempt.started": true,
 	"adapter.probed": true, "performer.completed": true, "attempt.completed": true, "attempt.blocked": true,
 	"attempt.failed": true, "attempt.cancelled": true, "attempt.superseded": true,
-	"execution.started": true, "execution.stopped": true, "artifact.recorded": true,
+	"execution.started": true, "execution.stopped": true, "execution.elapsed_checkpointed": true, "artifact.recorded": true,
 	"change_set.recorded": true, "verification.passed": true, "composition.conflicted": true, "composition.failed": true,
 	"application_candidate.recorded": true, "acceptance.started": true, "criterion.started": true,
 	"criterion.completed": true, "acceptance.failed": true, "acceptance.evaluation_completed": true,
