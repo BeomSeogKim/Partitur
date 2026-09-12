@@ -14,10 +14,19 @@ import (
 func TestStatusBudgetDisclosureLeavesTheClampedChargeIntact(t *testing.T) {
 	root, store := resumeFixture(t, "")
 	if err := store.Mutate("run-1", "", func(transaction *runstore.Txn) error {
-		_, err := transaction.At("fixture.execution.started").Append(resumeEvent("run-1", runstate.EventExecutionStarted, map[string]any{
+		if _, err := transaction.At("fixture.execution.started").Append(resumeEvent("run-1", runstate.EventExecutionStarted, map[string]any{
 			"interval_id": "saturated-interval", "phase": "fixture",
 			"wall_start":         time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano),
 			"remaining_at_start": 9000000,
+		})); err != nil {
+			return err
+		}
+		// The opener recorded a large cumulative-elapsed checkpoint before the
+		// crash (§6). Recovery charges min(checkpoint + 35s grace, remaining) from
+		// that evidence — never the wall-clock gap — which still exhausts the
+		// fixture budget here.
+		_, err := transaction.At("fixture.execution.checkpoint").Append(resumeEvent("run-1", runstate.EventExecutionElapsedCheckpointed, map[string]any{
+			"interval_id": "saturated-interval", "cumulative_elapsed_ms": 9000000,
 		}))
 		return err
 	}); err != nil {
@@ -50,8 +59,15 @@ func TestStatusBudgetDisclosureLeavesTheClampedChargeIntact(t *testing.T) {
 	if stopped == nil {
 		t.Fatal("execution.stopped event not found")
 	}
-	if stopped["reason"] != "recovered" || stopped["charging"] != "clamped" || stopped["observed_at"] == "" || stopped["charged_duration"] != float64(9000000) {
-		t.Fatalf("execution.stopped payload = %v, want recovered clamped charge of 9000000 with observed_at", stopped)
+	if _, observed := stopped["observed_at"]; observed {
+		t.Fatalf("clamped close must no longer sample observed_at: %v", stopped)
+	}
+	if stopped["reason"] != "recovered" || stopped["charging"] != "clamped" ||
+		stopped["accounting_grace_ms"] != float64(35000) || stopped["charged_duration"] != float64(9000000) {
+		t.Fatalf("execution.stopped payload = %v, want recovered clamped charge of 9000000 with accounting_grace_ms", stopped)
+	}
+	if stopped["elapsed_checkpoint_event_id"] == "" || stopped["elapsed_checkpoint_event_id"] == nil {
+		t.Fatalf("clamped close must cite the checkpoint it read: %v", stopped)
 	}
 
 	report, err := statusprojection.Read(root, "run-1")

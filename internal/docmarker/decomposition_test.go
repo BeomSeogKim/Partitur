@@ -199,8 +199,8 @@ func TestAppendixBRemainingDecomposition(t *testing.T) {
 		{
 			name: "B2", start: "## B.2 Attempt lifecycle and performer selection", end: "## B.3 Evidence",
 			carrierMarkers:     []string{"**`performer.selected` and `adapter.probed` field clauses.**", "**Remaining B.2 field clauses.**"},
-			carrierHash:        "683d80f393078cb0fd421aec140aa80e9606ce7cf617598f8f6038b33dcaccd5",
-			carrierAssignments: []int{1, 2, 1, 2, 1, 1, 3, 1, 2, 2, 1, 1, 1, 2, 10, 1, 3, 3, 7, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2},
+			carrierHash:        "fb7a7d6922eb83265016e390a4e4221af180594112e935fb3dc1b5f34a2f6281",
+			carrierAssignments: []int{1, 2, 1, 2, 1, 1, 3, 1, 2, 2, 1, 1, 1, 2, 10, 1, 3, 3, 7, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 5},
 			skipPayload:        "attempt.started",
 			payloads: []payloadExpectation{
 				{name: "performer.selected", hash: "b4ee5a3e746190d356b8868591f8e5c6058a433e605530ba2fc66dd8f1b3d349"},
@@ -212,7 +212,8 @@ func TestAppendixBRemainingDecomposition(t *testing.T) {
 				{name: "attempt.cancelled", hash: "4978d730b312c52d2449aebc595bc46b465bc9dc4335c5652aeb513de0c59577"},
 				{name: "attempt.superseded", hash: "1123d3739c73fb9167d8d0ef652eeac5286374f4877c55d0575261d56b250ef3"},
 				{name: "execution.started", hash: "ac411f565664ba8861e21b4245490d06d8b76c56961fe3242b83613a550f897b"},
-				{name: "execution.stopped", hash: "1791bb4da3e9b5201686f0c949118e52464059a19ab79376d49cccd3fe2e9f85"},
+				{name: "execution.stopped", hash: "5e254cf2ffd820f90493e050613341d9db013fd5d012cd8f026ada3ff37ddc36"},
+				{name: "execution.elapsed_checkpointed", hash: "f1951e9c34bff7aa2133c7f560a128d72bf1603662b51e94f60c9b9207157cb0"},
 			},
 		},
 		{

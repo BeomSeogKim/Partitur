@@ -60,7 +60,8 @@ integer MILLISECONDS, the clamp's second operand (§6)
 normal | cancelled | superseded | budget_exhausted | recovered
 measured | clamped — orthogonal to reason
 integer MILLISECONDS, computed by the OPENING process from its own monotonic clock, or by the clamp when recovering
-required iff charging = clamped; the recovery-time wall sample, journaled so replay never re-samples (§6)
+elapsed_checkpoint_event_id present only when clamped (absent ⇒ zero baseline); accounting_grace_ms present iff clamped, the 35000 grace added to the checkpoint baseline (§6)
+execution.elapsed_checkpointed: interval_id matches an open interval; appended only by the opener; cumulative_elapsed_ms integer MS strictly increasing; a monotonic-origin duration never an absolute reading (§6); authoritative not observational — the clamp reads it, progress never could
 
 [B3]
 sha256: raw bytes of the immutable instance (§1)
