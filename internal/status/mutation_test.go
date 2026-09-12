@@ -52,6 +52,23 @@ func TestMutationLiveApprovedMarkRequiresApproval(t *testing.T) {
 	)
 }
 
+func TestMutationBudgetDisclosureAssemblyIsLoadBearing(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStatusMutationKilled(
+		t,
+		"TestStatusDisclosesOpenExecutionInterval",
+		environment,
+		"Budget:                budgetProjection(state),",
+		"Budget:                Budget{},",
+		"internal/status/status.go",
+		"internal/status",
+		".",
+	)
+}
+
 func TestMutationLiveOverrideGuards(t *testing.T) {
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
