@@ -62,7 +62,7 @@ func TestConfirmedReceiptsMergeWithoutDuplicateAnchors(t *testing.T) {
 	}{
 		{"adapter-transport.framing", 5, 6},
 		{"validation-probe.per-adapter-once", 6, 7},
-		{"cancellation.oracle-step-b-abandon-prepare", 11, 12},
+		{"subject.distinction-by-attempt-kind", 13, 14},
 	}
 	for _, want := range continuations {
 		var tailEnd, headStart int

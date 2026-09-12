@@ -265,11 +265,41 @@ probed:
 			return c.finishFailure(running, &state, protocol.FailureAdapterUnavailable, "", writeErr.Error())
 		}
 	}
+	// While the adapter interval is open the opener writes an
+	// execution.elapsed_checkpointed on a fixed cadence, measuring cumulative
+	// elapsed as a monotonic duration from plan.IntervalOpened. The ticker is
+	// stopped when this window exits, so it can never outlive the interval, and
+	// the checkpoint is emitted from this single-threaded select, never a
+	// concurrent goroutine.
+	var checkpointTick <-chan time.Time
+	if plan.Recorder.RecordElapsedCheckpoint != nil && c.newTicker != nil && c.checkpointCadence > 0 {
+		tick, stopTicker := c.newTicker(c.checkpointCadence)
+		checkpointTick = tick
+		defer stopTicker()
+	}
+	lastCheckpointMS := int64(0)
 	for {
 		if err := ctx.Err(); err != nil {
 			return interrupted(err)
 		}
 		select {
+		case <-checkpointTick:
+			cumulative := c.now().Sub(plan.IntervalOpened).Milliseconds()
+			if cumulative <= lastCheckpointMS {
+				continue
+			}
+			receipt, recordErr := plan.Recorder.RecordElapsedCheckpoint(ElapsedCheckpoint{
+				IntervalID:          plan.IntervalID,
+				CumulativeElapsedMS: cumulative,
+			})
+			if recordErr != nil {
+				return failWithoutOutcome(recordErr)
+			}
+			if err := validateExecuteReceipt(receipt, string(runstate.EventExecutionElapsedCheckpointed)); err != nil {
+				return failWithoutOutcome(err)
+			}
+			lastCheckpointMS = cumulative
+			continue
 		case event := <-running.frames:
 			if event.err != nil {
 				reason := ""

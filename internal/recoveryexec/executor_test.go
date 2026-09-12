@@ -2018,7 +2018,7 @@ func appendBudgetExhaustedInterval(t *testing.T, store *runstore.Store, driver *
 		t.Fatal(err)
 	}
 	if _, err := driver.Append(runstate.Event{RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: handlerPayload(t, map[string]any{
-		"interval_id": "composition-1", "reason": "budget_exhausted", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+		"interval_id": "composition-1", "reason": "budget_exhausted", "charging": "clamped", "charged_duration": 1, "accounting_grace_ms": 35000,
 	})}, "test.execution_stopped"); err != nil {
 		t.Fatal(err)
 	}

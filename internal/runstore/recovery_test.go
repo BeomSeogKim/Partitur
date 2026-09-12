@@ -599,7 +599,7 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		appendRecoveryEvent(t, store, runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped,
 			Payload: recoveryPayload(t, map[string]any{
-				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 600000, "observed_at": "2026-07-28T00:10:00.000Z",
+				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 600000, "accounting_grace_ms": 35000,
 			}),
 		})
 
@@ -628,7 +628,7 @@ func TestLoadRunInputProjectsCompositionRecoveryFacts(t *testing.T) {
 		appendRecoveryEvent(t, store, runstate.Event{
 			RunID: "run-1", ScoreRevision: 1, Type: runstate.EventExecutionStopped,
 			Payload: recoveryPayload(t, map[string]any{
-				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+				"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "accounting_grace_ms": 35000,
 			}),
 		})
 
@@ -824,7 +824,7 @@ func TestCompositionRecoveryIgnoresSupersededRevisionClose(t *testing.T) {
 			"interval_id": "composition-1", "phase": "composition", "wall_start": "2026-07-28T00:00:00.000Z", "remaining_at_start": 1,
 		})},
 		{ScoreRevision: 1, Type: runstate.EventExecutionStopped, Payload: recoveryPayload(t, map[string]any{
-			"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "observed_at": "2026-07-28T00:00:00.001Z",
+			"interval_id": "composition-1", "reason": "recovered", "charging": "clamped", "charged_duration": 1, "accounting_grace_ms": 35000,
 		})},
 	}
 	if got := replayFacts(events).compositionRecovery(state, scheduler); got != nil {

@@ -45,6 +45,11 @@ type Client struct {
 	copyStderr  stderrCopier
 	launch      gatedLauncher
 	now         func() time.Time
+	// checkpointCadence is the interval opener's execution.elapsed_checkpointed period.
+	checkpointCadence time.Duration
+	// newTicker builds the checkpoint ticker; production uses time.NewTicker.
+	// Tests inject a controllable channel.
+	newTicker func(time.Duration) (<-chan time.Time, func())
 	// observeExecuteWindow is test-only. Production clients leave it nil.
 	observeExecuteWindow func(executeWindow)
 }
@@ -81,6 +86,12 @@ func newClient(environment []string, deadline, grace time.Duration) *Client {
 		copyStderr:  io.Copy,
 		launch:      launch.LaunchContext,
 		now:         time.Now,
+
+		checkpointCadence: ElapsedCheckpointCadence,
+		newTicker: func(d time.Duration) (<-chan time.Time, func()) {
+			ticker := time.NewTicker(d)
+			return ticker.C, ticker.Stop
+		},
 	}
 }
 
