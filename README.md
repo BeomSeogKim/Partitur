@@ -135,6 +135,13 @@ constraints a score declares are recorded per attempt rather than imposed. And t
 out to vendor CLIs that change on their own schedule, while the full real-CLI path has been
 exercised deliberately rather than continuously.
 
+The score lives at one committed path. `run` and `validate` read only `<repo>/partitur.yaml`, and
+v0.2 has no `--score` operand or overlay file by design. A repository whose committed
+`partitur.yaml` is itself a fixture — as this one's is — therefore drives any *other* task through
+Partitur by temporarily overwriting that score and reverting it. The single-source contract accepts
+that chore in exchange for one unambiguous score location to snapshot, resume-check against, and
+promote back to (#435).
+
 The design is written down before it is built, and the gap between the two is tracked rather than
 estimated:
 
