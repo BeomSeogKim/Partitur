@@ -1,140 +1,24 @@
 score: "0.2"
-name: onboarding-actionable-hints
+name: reference-workflow
 revision: 1
 status: finalized
 
 goal: |
-  Make the three empty-repo onboarding walls actionable. A fresh user who has not yet installed
-  the four binaries, or who runs the scaffold cast unchanged, hits three diagnostics that state a
-  fact but no remedy. This run attaches a remediation hint to each, red-first, and ships NOTHING
-  else.
-
-  1. ADAPTER `executable_absent` (validate) and TRAMPOLINE resolve failure (run) — both mean a
-     required binary is not on PATH. Attach a hint telling the user to install the four binaries
-     (`make install`, or the four-target `go install`) and put the Go bin dir on PATH.
-  2. ENFORCEMENT refused (the fatal `enforcement:` diagnostic, exit 3) — attach a hint pointing to
-     `allow_advisory_enforcement: true`, or to adding the missing grants / `allowed_paths: ["**"]`.
-  3. `binding_missing` — its hint already exists; ENHANCE it to carry a ready-to-paste minimal cast
-     snippet, so the user can paste a working `.partitur/cast.yaml`.
+  Exercise one real, recovery-capable Partitur write attempt against this repository,
+  and let `apply` carry its result onto the checkout.
 
 context: |
-  ROUTING: THIS IS NON-NORMATIVE. READ THIS FIRST.
-
-  Every change here is CLI diagnostic-hint text. No pinned DESIGN anchor governs the diagnostic
-  render string shape or the `hint=` field. DESIGN §4 (docs/DESIGN.md:1381-1428) and the §7
-  precondition matrix (docs/DESIGN.md:3806-3819) govern only WHICH conditions are diagnostics, the
-  grouping/ordering (score -> cast -> adapter-environment -> capability -> enforcement), the stderr
-  stream, stderr sanitization/bounding, and the exit codes (VALIDATE-002 exit 3, VALIDATE-003 exit
-  0). None of that changes here: the same conditions stay diagnostics, in the same order, on the
-  same stream, with the same exit codes. Adding a `hint=` suffix to a rendered line, and enriching
-  one hint's text, touches none of it.
-
-  The precedent is decisive. `bindingMissingHint` (internal/validate/run.go:16) already ships a
-  `hint=` field on a diagnostic render, with its own tests (TestMissingBindingGuidance,
-  TestValidateBindingMissingRendersGuidance) and its own mutation proof
-  (TestMutationBindingMissingGuidance, cmd/partitur/cast_guidance_mutation_test.go) — and NO DESIGN
-  clause governs it. Hints are non-normative by established practice. Do NOT edit docs/DESIGN.md,
-  docs/, docs/DESIGN.clause-staging.json, or any recovery/ledger doc. If you come to believe any
-  hint here requires a DESIGN change, STOP and say so in your report rather than editing the spec.
-
-  THE FOUR SEAMS, LOCATED ON THIS TREE (f468b7f2). Confirm each in step 0 before editing.
-
-  SEAM A — adapter executable_absent hint carried into the entry.
-    internal/validate/run.go:129-137 builds the EntryAdapterEnvironment entries from the probe
-    report. `diagnostic.Kind` is an adapter.DiagnosticKind; the absent-binary case is
-    `adapter.DiagnosticExecutableAbsent` ("executable_absent", internal/adapter/types.go:22).
-    internal/adapter is already imported in run.go. Set entry.Hint to the install hint ONLY when
-    `diagnostic.Kind == adapter.DiagnosticExecutableAbsent` — not for the other adapter-environment
-    kinds (a missing vendor CLI, a malformed response, etc. are not fixed by installing Partitur
-    binaries).
-
-  SEAM B — enforcement refused hint carried into the entry.
-    internal/validate/run.go:210-240 builds enforcement entries. The FATAL diagnostic is
-    `EntryEnforcement` (kind stays EntryEnforcement); `EntryEnforcementAdvisory` is the already
-    worked-around state and gets NO hint. Set entry.Hint on the EntryEnforcement branch only
-    (run.go:226-237, the `kind := EntryEnforcement` path where Disposition != strict and !=
-    advisory).
-
-  SEAM C — the CLI render of the hint.
-    cmd/partitur/main.go: the EntryCast case (1503-1515) already prints ` hint=%q` when
-    entry.Hint != "". The EntryAdapterEnvironment case (1516-1524) and the EntryEnforcement case
-    (1533-1541) do NOT. They must render the hint the same way. NOTE the newline: both of those
-    Fprintf format strings currently END with `\n`; if you append the hint you must move the
-    newline after the hint (mirror the EntryCast case, which prints the fields, then the optional
-    hint, then Fprintln).
-
-    A UNIQUENESS TRAP YOU MUST HANDLE (lesson L: an anchor that stops matching, or matches more
-    than once, makes a mutation test vacuous — #432). The existing TestMutationBindingMissingGuidance
-    mutation anchors the literal `if entry.Hint != "" {` in main.go and REQUIRES it to occur exactly
-    once. If you add two more inline `if entry.Hint != "" {` blocks, that existing mutation test
-    breaks on the count. The clean fix is to extract ONE tiny helper, e.g.
-    `renderHint(w io.Writer, hint string)`, and call it from all three cases, so exactly one
-    `if entry.Hint != "" {` remains. That also gives you a single clean render anchor for the new
-    mutation proof. If you instead keep per-case blocks, you MUST update the existing mutation
-    test's CLI anchor so it still matches exactly once. Either way, TestMutationBindingMissingGuidance
-    must still pass — a criterion enforces it.
-
-  SEAM D — the trampoline resolve failure hint (run path, not validate).
-    internal/driver/driver.go:69-78, inside `defaultExecutionDependencies`, the `ResolveTrampoline`
-    closure wraps a PATH-lookup failure as `fmt.Errorf("resolve partitur-trampoline: %w", err)`.
-    Enrich that wrapped message with the same install remediation so the remedy travels with the
-    error regardless of which run render path surfaces it. Keep the existing `resolve
-    partitur-trampoline:` prefix and the `%w` wrap — only append the remediation. No production
-    driver test asserts this string today (verified), so nothing breaks; you add one small
-    driver-package test that clears PATH and calls the closure.
-
-  THE HINT TEXTS (compose the exact wording; these are the substrings the criteria pin).
-    - Install hint (Seam A and Seam D): must mention `make install`, the phrase
-      `go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude
-      ./cmd/partitur-trampoline`, the literal `partitur-trampoline`, and putting the Go bin dir
-      (`$(go env GOBIN)` or `$(go env GOPATH)/bin`) on `PATH`. Source of truth: README.md
-      "install" section and the Makefile header (Makefile:1-8). Seam A lives in
-      internal/validate/run.go; Seam D lives in internal/driver/driver.go; each package owns its
-      own constant (they are different packages) but the wording is the same.
-    - Enforcement hint (Seam B): must mention `allow_advisory_enforcement` (set it `true` to accept
-      the unmet dimensions as per-attempt advisories) AND the alternative of clearing each unmet
-      dimension by adding the missing grants or `allowed_paths: ["**"]`. Source of truth: README §4
-      (README.md around the withheld-authority discussion) and docs/DESIGN.md:1438-1439.
-    - Binding snippet (Seam C's data, in bindingMissingHint at internal/validate/run.go:16): APPEND
-      a ready-to-paste minimal cast to the EXISTING hint text. Keep the three substrings the current
-      hint carries (`.partitur/cast.yaml (project)`, `~/.config/partitur/cast.yaml (user-global)`,
-      `bindings.<part>.performer must name an entry in performers`) so TestMutationBindingMissingGuidance's
-      anchors still match. The appended snippet mirrors README's scaffold cast (README.md ~lines
-      63-73) and must contain the lines `performers:`, a performer with `adapter:` and `model:`, and
-      `bindings:` with `<part>.performer`. Write it as a paste-ready block a user can drop into
-      `.partitur/cast.yaml`.
-
-  GOLDEN TESTS THAT LEGITIMATELY CHANGE (this is expected; it is the render behaviour you are
-  changing). At minimum:
-    - cmd/partitur/e2e_test.go (the adapter_environment, enforcement, and binding-missing `want`
-      golden strings gain ` hint=...`).
-    - cmd/partitur/main_test.go (TestValidateBindingMissingRendersGuidance at :2655, and the
-      multi-entry render golden around :2647-2674).
-    - internal/validate/run_test.go (TestMissingBindingGuidance at :545 want.Hint).
-    - cmd/partitur/command_matrix_witness_test.go if any witness pins an `enforcement:` /
-      `adapter-environment:` line (search before you assume; do NOT weaken a byte-exact assertion by
-      loosening it — re-derive the new exact bytes, lesson L40).
-  Update these to the new exact bytes. This is IN SCOPE. The change-scope fence forbids only
-  DESIGN/docs/ledger and packages OTHER than internal/validate, internal/driver, cmd/partitur.
-
-  RED-FIRST HONESTY. Every new render assertion reds on unfixed main because the hint does not
-  exist yet, and the binding-snippet assertion reds because the snippet is not in the hint yet. An
-  absence/compile failure is weak evidence on its own: stage each new test so it COMPILES and then
-  FAILS on the missing hint text, quote the failure, then implement and confirm green. The
-  build/vet/status-untouched/change-scope criteria are green on an untouched tree and their job is
-  to STAY green, not to turn green — say which is which in your report.
-
-  SCORE PLACEMENT. This score temporarily replaces the committed reference-workflow score because
-  `partitur run` reads only `<repo>/partitur.yaml` and takes no score operand (#435). It, and the
-  cast commit that precedes it, are reverted before the pull request; only the
-  internal/validate + internal/driver + cmd/partitur hint change is meant to land.
+  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
+  change only reference-workflow/marker.txt; its base content is deliberately different
+  from the required result so that the captured change set is not a no-op, and so that
+  the checkout `apply` runs against initially differs from the candidate.
 
 verification:
   expectation:
-    intent: pass-existing-tests
+    intent: none
     apply_gate:
       require: [verified, approved]
-  final_movement: confirm
+  final_movement: check
 
 parts:
   writer:
@@ -144,294 +28,43 @@ parts:
     read_only: true
 
 movements:
-  - id: add-onboarding-hints
+  - id: write-marker
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Ship the three onboarding-hint remediations, red-first. Everything you write is English. The
-      seams, hint texts, and the uniqueness trap are in this score's context; implement them, do
-      not redesign them, and do not touch the specification.
+      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
+      partitur reference workflow
 
-      Step 0 — CONFIRM THE GROUND, cheaply. Report the output of each, verbatim:
-
-        grep -n 'EntryAdapterEnvironment' internal/validate/run.go
-        grep -n 'kind := EntryEnforcement' internal/validate/run.go
-        grep -n 'DiagnosticExecutableAbsent' internal/adapter/types.go
-        grep -n 'case validation.EntryAdapterEnvironment:' cmd/partitur/main.go
-        grep -n 'case validation.EntryEnforcement:' cmd/partitur/main.go
-        grep -c 'if entry.Hint != "" {' cmd/partitur/main.go
-        grep -n 'resolve partitur-trampoline' internal/driver/driver.go
-        grep -n 'const bindingMissingHint' internal/validate/run.go
-
-      You must see the adapter-environment entry build near run.go:129-137, the enforcement build
-      near run.go:210-240 with `kind := EntryEnforcement`, DiagnosticExecutableAbsent at
-      types.go:22, the two render cases in main.go near 1516 and 1533, EXACTLY ONE
-      `if entry.Hint != "" {` in main.go today, the trampoline wrap near driver.go:72, and
-      bindingMissingHint at run.go:16. If any anchor has drifted, STOP and say which — the tree is
-      not the one this score was written against.
-
-      Step 1 — RED FIRST. Before editing production code, write the four new/updated tests and run
-      them; record each failure verbatim. Make each COMPILE and then FAIL on the missing hint, not
-      merely fail to build.
-
-        - cmd/partitur: TestValidateAdapterAbsentRendersInstallHint — build a validate repo whose
-          cast names a missing adapter (mirror the e2e "adapter_environment" fixture: a performer
-          whose `adapter` is a name with no installed binary, e.g. "missing"), invoke `validate`,
-          assert exit 3 and that the rendered `adapter-environment:` line for that adapter carries
-          `hint=` containing `make install` and `partitur-trampoline` and `PATH`.
-        - cmd/partitur: TestValidateEnforcementRefusedRendersAdvisoryHint — build a validate repo
-          that produces the FATAL `enforcement:` diagnostic (mirror the e2e "enforcement" fixture;
-          the performer must NOT set allow_advisory_enforcement, so the dimension fails closed),
-          invoke `validate`, assert exit 3 and that the `enforcement:` line carries `hint=`
-          containing `allow_advisory_enforcement` and `allowed_paths`. Assert too that an
-          `enforcement advisory:` line, when present, carries NO `hint=`.
-        - internal/driver: TestResolveTrampolineAbsentExplainsInstall — `t.Setenv("PATH", "")`, call
-          `defaultExecutionDependencies(faultpoint.Nop{}).ResolveTrampoline()`, assert the error is
-          non-nil, still begins `resolve partitur-trampoline:`, and contains `make install` and
-          `PATH`.
-        - Update TestValidateBindingMissingRendersGuidance (cmd/partitur, main_test.go:2655) and
-          TestMissingBindingGuidance (internal/validate, run_test.go:545) to the ENHANCED hint that
-          includes the paste-ready cast snippet (`performers:`, `bindings:`, `adapter:`). These red
-          on main because the snippet is absent.
-
-      Quote each failure. If a command is blocked by your sandbox, say exactly which and how; do not
-      report a blocked command as evidence.
-
-      Step 2 — implement the four seams (context Seams A-D). Modify ONLY:
-        internal/validate/run.go   (Seam A hint on executable_absent; Seam B hint on EntryEnforcement;
-                                    Seam C data: enhance bindingMissingHint with the snippet)
-        cmd/partitur/main.go       (Seam C render: render entry.Hint on the adapter-environment and
-                                    enforcement cases; prefer extracting one renderHint helper so
-                                    exactly one `if entry.Hint != "" {` remains)
-        internal/driver/driver.go  (Seam D: enrich the trampoline resolve wrap)
-      Copy the hint wording; add no logic beyond selecting when a hint applies. Do NOT change which
-      conditions are diagnostics, the ordering, the streams, or any exit code.
-
-      Step 3 — update the golden tests that the render change touches (context lists them). Re-derive
-      the new EXACT bytes; never loosen a byte-exact assertion to absorb the change (lesson L40).
-      Search command_matrix_witness_test.go for any pinned `enforcement:` / `adapter-environment:`
-      line and update it too.
-
-      Step 4 — the mutation proof. Follow the precedent in
-      cmd/partitur/cast_guidance_mutation_test.go and cmd/partitur/dirty_source_mutation_test.go
-      (both //go:build mutation, both drive assertPrepareQuiesceMutationKilled). Add a mutation test
-      that KILLS each new hint by mutating its source anchor and naming the test that must then fail:
-        - the executable_absent hint assignment in internal/validate/run.go (target
-          TestValidateAdapterAbsentRendersInstallHint),
-        - the EntryEnforcement hint assignment in internal/validate/run.go (target
-          TestValidateEnforcementRefusedRendersAdvisoryHint),
-        - the trampoline remediation in internal/driver/driver.go (target
-          TestResolveTrampolineAbsentExplainsInstall),
-        - the CLI hint render in cmd/partitur/main.go (target one of the render tests).
-      Choose each `before` anchor so it occurs EXACTLY ONCE in its source and the mutated copy STILL
-      COMPILES (a build failure is a non-result, not a kill). Name only tests that actually die under
-      the mutation (internal/mutationtest reports Killed only when every named target failed). NEVER
-      run `go test -tags=mutation ./...` (#316 starvation hazard); scope every tagged command to the
-      one package under test.
-
-      Step 5 — prove it holds. Run and report the tail of each:
-
-        go build ./...
-        go vet ./internal/validate/ ./internal/driver/ ./cmd/partitur/
-        go test -count=1 ./internal/validate/
-        go test -count=1 ./internal/driver/
-        go test -count=1 ./cmd/partitur/
-        go test -tags=mutation -count=1 -run '^TestMutationBindingMissingGuidance$' ./cmd/partitur/
-        go test -tags=mutation -count=1 -run '^TestMutationDirtySourceGuidance$' ./cmd/partitur/
-        (your new mutation test, scoped to its package)
-
-      Step 6 — confirm the scope. Report `git status --porcelain` and `git diff --stat` verbatim.
-      Only files under internal/validate/, internal/driver/, and cmd/partitur/ may appear. NOTHING
-      in docs/, docs/DESIGN.md, docs/DESIGN.clause-staging.json, internal/status/,
-      internal/recoveryexec/, internal/runstate/, internal/runstore/, internal/adapter/,
-      internal/cast/, internal/score/, no .github/, no go.mod/go.sum, no partitur.yaml, no
-      .partitur/. Do not commit; the run captures the change set.
-
-      Then run every acceptance command below yourself and report each result.
+      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
     outputs:
-      - id: onboarding-hints-change-set
+      - id: marker-change
         kind: change_set
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: vet
-          run: ["go", "vet", "./internal/validate/", "./internal/driver/", "./cmd/partitur/"]
-          timeout_min: 10
-        - id: adapter-install-hint
-          run: ["sh", "-c", "grep -qF 'func TestValidateAdapterAbsentRendersInstallHint(t *testing.T) {' cmd/partitur/main_test.go && test \"$(grep -c 'DiagnosticExecutableAbsent' internal/validate/run.go)\" -ge 1 && go test -count=1 -run '^TestValidateAdapterAbsentRendersInstallHint$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestValidateAdapterAbsentRendersInstallHint' | grep -qx 1"]
-          timeout_min: 30
-        - id: enforcement-advisory-hint
-          run: ["sh", "-c", "grep -qF 'func TestValidateEnforcementRefusedRendersAdvisoryHint(t *testing.T) {' cmd/partitur/main_test.go && go test -count=1 -run '^TestValidateEnforcementRefusedRendersAdvisoryHint$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestValidateEnforcementRefusedRendersAdvisoryHint' | grep -qx 1"]
-          timeout_min: 30
-        - id: trampoline-install-hint
-          run: ["sh", "-c", "grep -qF 'func TestResolveTrampolineAbsentExplainsInstall(t *testing.T) {' internal/driver/driver_test.go && grep -qF 'resolve partitur-trampoline' internal/driver/driver.go && go test -count=1 -run '^TestResolveTrampolineAbsentExplainsInstall$' -v ./internal/driver/ | grep -c '^--- PASS: TestResolveTrampolineAbsentExplainsInstall' | grep -qx 1"]
-          timeout_min: 20
-        - id: binding-cast-snippet
-          run: ["sh", "-c", "f=internal/validate/run.go; grep -qF 'performers:' $f && grep -qF 'bindings:' $f && grep -qF 'adapter:' $f && grep -qF '.partitur/cast.yaml (project)' $f && grep -qF 'bindings.<part>.performer must name an entry in performers' $f"]
-          timeout_min: 5
-        - id: install-hint-wording
-          run: ["sh", "-c", "grep -qF 'make install' internal/validate/run.go && grep -qF 'partitur-trampoline' internal/validate/run.go && grep -qF 'PATH' internal/validate/run.go && grep -qF 'make install' internal/driver/driver.go && grep -qF 'PATH' internal/driver/driver.go"]
-          timeout_min: 5
-        - id: enforcement-hint-wording
-          run: ["sh", "-c", "grep -qF 'allow_advisory_enforcement' internal/validate/run.go && grep -qF 'allowed_paths' internal/validate/run.go"]
-          timeout_min: 5
-        - id: validate-package
-          run: ["go", "test", "-count=1", "./internal/validate/"]
-          timeout_min: 25
-        - id: driver-package
-          run: ["go", "test", "-count=1", "./internal/driver/"]
-          timeout_min: 45
-        - id: cmd-package
-          run: ["go", "test", "-count=1", "./cmd/partitur/"]
-          timeout_min: 45
-        - id: existing-hint-mutations-still-pass
-          run: ["sh", "-c", "go test -tags=mutation -count=1 -run '^TestMutationBindingMissingGuidance$' -v ./cmd/partitur/ | grep -q '^--- PASS: TestMutationBindingMissingGuidance' && go test -tags=mutation -count=1 -run '^TestMutationDirtySourceGuidance$' -v ./cmd/partitur/ | grep -q '^--- PASS: TestMutationDirtySourceGuidance'"]
-          timeout_min: 30
-        - id: hint-mutation-proof
-          run: ["sh", "-c", "grep -lF 'TestValidateAdapterAbsentRendersInstallHint' cmd/partitur/*_mutation_test.go 2>/dev/null | grep -q . && grep -lF 'TestValidateEnforcementRefusedRendersAdvisoryHint' cmd/partitur/*_mutation_test.go 2>/dev/null | grep -q . && grep -lF 'TestResolveTrampolineAbsentExplainsInstall' cmd/partitur/*_mutation_test.go internal/driver/*_mutation_test.go 2>/dev/null | grep -q ."]
-          timeout_min: 5
-        - id: status-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/status/ internal/recoveryexec/ internal/runstate/ internal/runstore/ internal/adapter/ internal/cast/ internal/score/)\""]
-          timeout_min: 5
-        - id: spec-and-ledger-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
-          timeout_min: 5
-        - id: change-scope
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -vE '(internal/validate/|internal/driver/|cmd/partitur/)')\""]
-          timeout_min: 5
+        - id: marker-written
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
 
-  - id: confirm
+  - id: check
     part: verifier
-    needs: [add-onboarding-hints]
+    needs: [write-marker]
     grants: [repo_read, shell]
     instruction: |
-      Confirm the onboarding-hint change. Change no file. Report in English.
-
-      The ways this can be wrong are: it can drift into the specification (docs/DESIGN.md, the
-      clause-staging file, or a ledger) which routing says it must not touch; it can leak a hint
-      onto a diagnostic that should not carry one (the enforcement ADVISORY line, or a non-
-      executable_absent adapter-environment kind); it can weaken a byte-exact golden by loosening it
-      rather than re-deriving the new bytes (lesson L40); it can break the existing binding/dirty
-      mutation proofs by making `if entry.Hint != "" {` non-unique (#432); and its red-first
-      evidence can be a compile error dressed up as a test failure.
-
-      1. SCOPE, BY READING THE WHOLE DIFF. Run `git status --porcelain` and `git diff --stat`,
-      report both verbatim, then READ `git diff` in full. Only files under internal/validate/,
-      internal/driver/, and cmd/partitur/ may appear. Any change to docs/, docs/DESIGN.md,
-      docs/DESIGN.clause-staging.json, internal/status/, internal/recoveryexec/, internal/runstate/,
-      internal/runstore/, internal/adapter/, internal/cast/, internal/score/, .github/,
-      go.mod/go.sum, partitur.yaml, or .partitur/ is a scope violation — say so rather than passing.
-
-      2. NO SPEC DRIFT, AND THE ROUTING HELD. Confirm docs/DESIGN.md and
-      docs/DESIGN.clause-staging.json are byte-unchanged. Confirm the change adds only hint TEXT and
-      hint RENDER: which conditions are diagnostics, the score->cast->adapter-environment->
-      capability->enforcement ordering, the stderr stream, and the exit codes are all untouched.
-      Read internal/validate/run.go and confirm no new diagnostic condition and no reordering.
-
-      3. THE RIGHT DIAGNOSTICS CARRY HINTS, AND ONLY THOSE.
-        - The install hint attaches to the adapter-environment entry ONLY when the kind is
-          `adapter.DiagnosticExecutableAbsent` — confirm it is guarded on that kind and does NOT
-          attach to the other adapter-environment kinds. Quote the guard.
-        - The enforcement hint attaches to the FATAL `EntryEnforcement` branch ONLY, NOT to
-          `EntryEnforcementAdvisory`. Confirm by reading run.go and by confirming the render: an
-          `enforcement advisory:` line must carry no `hint=`. Quote the two render cases.
-        - The trampoline hint enriches internal/driver/driver.go's ResolveTrampoline wrap while
-          keeping the `resolve partitur-trampoline:` prefix and the `%w` wrap. Quote the line.
-
-      4. THE HINT WORDING IS ACTIONABLE AND MATCHES THE DOCS. The install hint names `make install`,
-      the four-target `go install`, `partitur-trampoline`, and putting the Go bin dir on `PATH`. The
-      enforcement hint names `allow_advisory_enforcement` and the `allowed_paths`/grants alternative.
-      The enhanced bindingMissingHint appends a paste-ready cast (`performers:`, a performer with
-      `adapter:`/`model:`, `bindings:`) AND still carries its original three substrings. Confirm each
-      by reading the constants/wrap, not only by grep.
-
-      5. GOLDENS RE-DERIVED, NOT LOOSENED. For every changed golden (e2e_test.go, main_test.go,
-      run_test.go, and any command_matrix witness), confirm the assertion is still byte-exact — the
-      new bytes were written out, not replaced by a `Contains` or a regex. A widened assertion is a
-      lost lock (L40); say so if you find one.
-
-      6. THE MUTATION PROOFS ARE REAL. Confirm the existing TestMutationBindingMissingGuidance and
-      TestMutationDirtySourceGuidance still pass (they break if `if entry.Hint != "" {` stopped
-      occurring exactly once). Confirm the new mutation test kills each new hint anchor, that each
-      `before` anchor occurs exactly once and the mutated copy compiles, and that only tests which
-      actually die are named. Confirm no tagged command was run as `-tags=mutation ./...` (#316).
-
-      7. RED-FIRST WAS REAL, NOT A COMPILE ERROR. For each new/updated test, say which of your own
-      observations shows it would red on unfixed main for the RIGHT reason (missing hint text), and
-      whether the writer's quoted failures match.
-
-      8. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
-
-        go build ./...
-        go vet ./internal/validate/ ./internal/driver/ ./cmd/partitur/
-        go test -count=1 ./internal/validate/
-        go test -count=1 ./internal/driver/
-        go test -count=1 ./cmd/partitur/
-        go test -tags=mutation -count=1 -run '^TestMutationBindingMissingGuidance$' ./cmd/partitur/
-        (the writer's new mutation test, scoped to its package)
-
-      If any point above does not hold, say so plainly rather than passing it.
-    inputs: [onboarding-hints-change-set]
+      Confirm that reference-workflow/marker.txt holds exactly the line
+      `partitur reference workflow` followed by one LF byte, and nothing else.
+      Report what you observed. Change no file.
+    inputs: [marker-change]
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: vet
-          run: ["go", "vet", "./internal/validate/", "./internal/driver/", "./cmd/partitur/"]
-          timeout_min: 10
-        - id: adapter-install-hint
-          run: ["sh", "-c", "grep -qF 'func TestValidateAdapterAbsentRendersInstallHint(t *testing.T) {' cmd/partitur/main_test.go && test \"$(grep -c 'DiagnosticExecutableAbsent' internal/validate/run.go)\" -ge 1 && go test -count=1 -run '^TestValidateAdapterAbsentRendersInstallHint$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestValidateAdapterAbsentRendersInstallHint' | grep -qx 1"]
-          timeout_min: 30
-        - id: enforcement-advisory-hint
-          run: ["sh", "-c", "grep -qF 'func TestValidateEnforcementRefusedRendersAdvisoryHint(t *testing.T) {' cmd/partitur/main_test.go && go test -count=1 -run '^TestValidateEnforcementRefusedRendersAdvisoryHint$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestValidateEnforcementRefusedRendersAdvisoryHint' | grep -qx 1"]
-          timeout_min: 30
-        - id: trampoline-install-hint
-          run: ["sh", "-c", "grep -qF 'func TestResolveTrampolineAbsentExplainsInstall(t *testing.T) {' internal/driver/driver_test.go && grep -qF 'resolve partitur-trampoline' internal/driver/driver.go && go test -count=1 -run '^TestResolveTrampolineAbsentExplainsInstall$' -v ./internal/driver/ | grep -c '^--- PASS: TestResolveTrampolineAbsentExplainsInstall' | grep -qx 1"]
-          timeout_min: 20
-        - id: binding-cast-snippet
-          run: ["sh", "-c", "f=internal/validate/run.go; grep -qF 'performers:' $f && grep -qF 'bindings:' $f && grep -qF 'adapter:' $f && grep -qF '.partitur/cast.yaml (project)' $f && grep -qF 'bindings.<part>.performer must name an entry in performers' $f"]
-          timeout_min: 5
-        - id: install-hint-wording
-          run: ["sh", "-c", "grep -qF 'make install' internal/validate/run.go && grep -qF 'partitur-trampoline' internal/validate/run.go && grep -qF 'PATH' internal/validate/run.go && grep -qF 'make install' internal/driver/driver.go && grep -qF 'PATH' internal/driver/driver.go"]
-          timeout_min: 5
-        - id: enforcement-hint-wording
-          run: ["sh", "-c", "grep -qF 'allow_advisory_enforcement' internal/validate/run.go && grep -qF 'allowed_paths' internal/validate/run.go"]
-          timeout_min: 5
-        - id: validate-package
-          run: ["go", "test", "-count=1", "./internal/validate/"]
-          timeout_min: 25
-        - id: driver-package
-          run: ["go", "test", "-count=1", "./internal/driver/"]
-          timeout_min: 45
-        - id: cmd-package
-          run: ["go", "test", "-count=1", "./cmd/partitur/"]
-          timeout_min: 45
-        - id: existing-hint-mutations-still-pass
-          run: ["sh", "-c", "go test -tags=mutation -count=1 -run '^TestMutationBindingMissingGuidance$' -v ./cmd/partitur/ | grep -q '^--- PASS: TestMutationBindingMissingGuidance' && go test -tags=mutation -count=1 -run '^TestMutationDirtySourceGuidance$' -v ./cmd/partitur/ | grep -q '^--- PASS: TestMutationDirtySourceGuidance'"]
-          timeout_min: 30
-        - id: status-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/status/ internal/recoveryexec/ internal/runstate/ internal/runstore/ internal/adapter/ internal/cast/ internal/score/)\""]
-          timeout_min: 5
-        - id: spec-and-ledger-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
-          timeout_min: 5
-        - id: change-scope
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -vE '(internal/validate/|internal/driver/|cmd/partitur/)')\""]
-          timeout_min: 5
+        - id: marker-is-reference-workflow
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
       human_gate: always
 
 policy:
-  allowed_paths:
-    - "internal/validate/**"
-    - "internal/driver/**"
-    - "cmd/partitur/**"
+  allowed_paths: ["reference-workflow/marker.txt"]
   side_effects: []
   budget:
-    active_wall_clock_min: 150
-    retries_per_movement: 1
+    active_wall_clock_min: 15
+    retries_per_movement: 0
   amendment:
     auto: "off"
