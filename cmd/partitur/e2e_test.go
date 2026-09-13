@@ -38,6 +38,10 @@ const runVendorDraftResultEnvironment = "PARTITUR_RUN_VENDOR_DRAFT_RESULT"
 const runVendorScoreBaseFlowEnvironment = "PARTITUR_RUN_VENDOR_SCORE_BASE_FLOW"
 const runVendorRetryBeforeProposalEnvironment = "PARTITUR_RUN_VENDOR_RETRY_BEFORE_PROPOSAL"
 
+const validateInstallHint = "install the four Partitur binaries with `make install` or `go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline`, then put the Go bin dir (`$(go env GOBIN)` or `$(go env GOPATH)/bin`) on `PATH` so `partitur-trampoline` is available"
+const validateEnforcementHint = "set `allow_advisory_enforcement: true` to accept unmet dimensions as per-attempt advisories, or clear each unmet dimension by adding the missing grants or `allowed_paths: [\"**\"]`"
+const validateBindingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer"
+
 func TestMain(m *testing.M) {
 	if os.Getenv(initTestCommandEnvironment) == "1" {
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -1288,7 +1292,7 @@ func TestValidateEndToEnd(t *testing.T) {
 					value["performers"].(map[string]any)["performer"].(map[string]any)["adapter"] = "missing"
 					return value
 				}(),
-				want: "adapter-environment: adapter=\"missing\" kind=\"executable_absent\" detail=\"partitur-adapter-missing is absent from PATH\" stderr=\"\"\n",
+				want: fmt.Sprintf("adapter-environment: adapter=\"missing\" kind=\"executable_absent\" detail=\"partitur-adapter-missing is absent from PATH\" stderr=\"\" hint=%q\n", validateInstallHint),
 			},
 			{
 				name:  "capability",
@@ -1308,7 +1312,7 @@ func TestValidateEndToEnd(t *testing.T) {
 					value["performers"].(map[string]any)["performer"].(map[string]any)["adapter"] = "enforcement"
 					return value
 				}(),
-				want: "enforcement: movement=\"plan-movement\" part=\"plan\" performer=\"performer\" unmet=[\"read_only\"]\n",
+				want: fmt.Sprintf("enforcement: movement=\"plan-movement\" part=\"plan\" performer=\"performer\" unmet=[\"read_only\"] hint=%q\n", validateEnforcementHint),
 			},
 		}
 		for _, test := range tests {
@@ -1413,10 +1417,10 @@ func TestValidateEndToEnd(t *testing.T) {
 				),
 			)
 			want := "" +
-				"cast: rule=\"cast.score\" origin=\"\" pointer=\"/bindings/missing\" detail=\"binding_missing\" hint=\"write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers\"\n" +
-				"adapter-environment: adapter=\"bad\" kind=\"executable_absent\" detail=\"partitur-adapter-bad is absent from PATH\" stderr=\"\"\n" +
+				fmt.Sprintf("cast: rule=\"cast.score\" origin=\"\" pointer=\"/bindings/missing\" detail=\"binding_missing\" hint=%q\n", validateBindingHint) +
+				fmt.Sprintf("adapter-environment: adapter=\"bad\" kind=\"executable_absent\" detail=\"partitur-adapter-bad is absent from PATH\" stderr=\"\" hint=%q\n", validateInstallHint) +
 				"capability: part=\"capability\" performer=\"capability-performer\" missing=[\"network\"]\n" +
-				"enforcement: movement=\"enforcement-movement\" part=\"enforcement\" performer=\"enforcement-performer\" unmet=[\"read_only\"]\n"
+				fmt.Sprintf("enforcement: movement=\"enforcement-movement\" part=\"enforcement\" performer=\"enforcement-performer\" unmet=[\"read_only\"] hint=%q\n", validateEnforcementHint)
 			if code != 3 || stdout != "" || stderr != want {
 				t.Fatalf(
 					"exit=%d stdout=%q\nstderr=%q\nwant=%q",

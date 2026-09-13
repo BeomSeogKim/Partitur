@@ -2594,6 +2594,8 @@ func TestValidateRefusalIsExitTwo(t *testing.T) {
 
 func TestValidateRendersOrderedBlocksAndExitsThree(t *testing.T) {
 	t.Parallel()
+	installHint := "install the four Partitur binaries with `make install` or `go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline`, then put the Go bin dir (`$(go env GOBIN)` or `$(go env GOPATH)/bin`) on `PATH` so `partitur-trampoline` is available"
+	enforcementHint := "set `allow_advisory_enforcement: true` to accept unmet dimensions as per-attempt advisories, or clear each unmet dimension by adding the missing grants or `allowed_paths: [\"**\"]`"
 	result := validation.Result{Entries: []validation.Entry{
 		{
 			Kind:    validation.EntryScore,
@@ -2613,6 +2615,7 @@ func TestValidateRendersOrderedBlocksAndExitsThree(t *testing.T) {
 			AdapterKind: "executable_absent",
 			Detail:      "not found\nsecond line",
 			Stderr:      "safe\tstderr",
+			Hint:        installHint,
 		},
 		{
 			Kind:                validation.EntryCapability,
@@ -2629,6 +2632,7 @@ func TestValidateRendersOrderedBlocksAndExitsThree(t *testing.T) {
 				cast.DimensionPathGrants,
 				cast.DimensionReadOnly,
 			},
+			Hint: enforcementHint,
 		},
 	}}
 	var stdout, stderr bytes.Buffer
@@ -2644,36 +2648,74 @@ func TestValidateRendersOrderedBlocksAndExitsThree(t *testing.T) {
 	want := "" +
 		"score: rule=\"§2.4\" pointer=\"/movements/1/id\" detail=\"duplicate_movement_id\"\n" +
 		"cast: rule=\"cast.score\" origin=\"\" pointer=\"/bindings/build\" detail=\"binding_missing\"\n" +
-		"adapter-environment: adapter=\"missing\" kind=\"executable_absent\" detail=\"not found\\nsecond line\" stderr=\"safe\\tstderr\"\n" +
+		fmt.Sprintf("adapter-environment: adapter=\"missing\" kind=\"executable_absent\" detail=\"not found\\nsecond line\" stderr=\"safe\\tstderr\" hint=%q\n", installHint) +
 		"capability: part=\"plan\" performer=\"primary\" missing=[\"network\" \"shell\"]\n" +
-		"enforcement: movement=\"build\" part=\"write\" performer=\"writer\" unmet=[\"path_grants\" \"read_only\"]\n"
+		fmt.Sprintf("enforcement: movement=\"build\" part=\"write\" performer=\"writer\" unmet=[\"path_grants\" \"read_only\"] hint=%q\n", enforcementHint)
 	if stderr.String() != want {
 		t.Fatalf("stderr differs\n got: %q\nwant: %q", stderr.String(), want)
 	}
 }
 
 func TestValidateBindingMissingRendersGuidance(t *testing.T) {
-	result := validation.Result{Entries: []validation.Entry{{
-		Kind:    validation.EntryCast,
-		Rule:    "cast.score",
-		Pointer: "/bindings/interview",
-		Detail:  "binding_missing",
-		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
-	}}}
-	var stdout, stderr bytes.Buffer
-	code := runWithValidate(
-		[]string{"validate"},
-		&stdout,
-		&stderr,
-		func() validation.Result { return result },
-	)
-	if code != 3 || stdout.Len() != 0 {
-		t.Fatalf("exit=%d stdout=%q", code, stdout.String())
+	hint := "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer"
+	repository := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	writeValidateInputs(t, repository, e2eScore("interview"), e2eCast(map[string]string{}))
+	t.Chdir(repository)
+	code, stdout, stderr := invokeCommand("validate")
+	if code != 3 || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q", code, stdout)
 	}
 	want := "cast: rule=\"cast.score\" origin=\"\" pointer=\"/bindings/interview\" detail=\"binding_missing\" " +
-		"hint=\"write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers\"\n"
-	if stderr.String() != want {
-		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+		fmt.Sprintf("hint=%q\n", hint)
+	if stderr != want {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+}
+
+func TestValidateAdapterAbsentRendersInstallHint(t *testing.T) {
+	repository := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	scoreDocument := e2eScore("plan")
+	castDocument := e2eCast(map[string]string{"plan": "performer"})
+	castDocument["performers"].(map[string]any)["performer"].(map[string]any)["adapter"] = "missing"
+	writeValidateInputs(t, repository, scoreDocument, castDocument)
+	t.Chdir(repository)
+
+	code, stdout, stderr := invokeCommand("validate")
+	line := strings.TrimSuffix(stderr, "\n")
+	if code != 3 || stdout != "" || !strings.HasPrefix(line, "adapter-environment: adapter=\"missing\"") ||
+		!strings.Contains(line, " hint=") || !strings.Contains(line, "make install") ||
+		!strings.Contains(line, "partitur-trampoline") || !strings.Contains(line, "PATH") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want adapter install hint", code, stdout, stderr)
+	}
+}
+
+func TestValidateEnforcementRefusedRendersAdvisoryHint(t *testing.T) {
+	repository := validateCommandWitnessFixture(t, "enforcement", false)
+	t.Chdir(repository)
+
+	code, stdout, stderr := invokeCommand("validate")
+	line := strings.TrimSuffix(stderr, "\n")
+	if code != 3 || stdout != "" || !strings.HasPrefix(line, "enforcement:") ||
+		!strings.Contains(line, " hint=") || !strings.Contains(line, "allow_advisory_enforcement") ||
+		!strings.Contains(line, "allowed_paths") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want refused enforcement hint", code, stdout, stderr)
+	}
+
+	advisory := validation.Entry{
+		Kind:            validation.EntryEnforcementAdvisory,
+		MovementID:      "build",
+		PartID:          "write",
+		PerformerID:     "writer",
+		UnmetDimensions: []cast.EnforcementDimension{cast.DimensionPathGrants},
+		Hint:            "must not render",
+	}
+	var rendered bytes.Buffer
+	renderEntry(&rendered, advisory)
+	if strings.Contains(rendered.String(), "hint=") {
+		t.Fatalf("advisory render = %q, want no hint", rendered.String())
 	}
 }
 

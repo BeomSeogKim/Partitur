@@ -43,7 +43,10 @@ var (
 	ErrEnforcement                  = errors.New("enforcement_unavailable")
 )
 
-const maxResolvedDecisionRequestBytes = 512 * 1024
+const (
+	maxResolvedDecisionRequestBytes = 512 * 1024
+	trampolineInstallHint           = "install the four Partitur binaries with `make install` or `go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline`, then put the Go bin dir (`$(go env GOBIN)` or `$(go env GOPATH)/bin`) on `PATH` so `partitur-trampoline` is available"
+)
 
 type dependencies struct {
 	probe               faultpoint.Probe
@@ -69,7 +72,7 @@ func defaultExecutionDependencies(probe faultpoint.Probe) ExecutionDependencies 
 		ResolveTrampoline: func() (string, error) {
 			path, err := exec.LookPath("partitur-trampoline")
 			if err != nil {
-				return "", fmt.Errorf("resolve partitur-trampoline: %w", err)
+				return "", fmt.Errorf("resolve partitur-trampoline: %w; hint: %s", err, trampolineInstallHint)
 			}
 			if filepath.IsAbs(path) {
 				return path, nil

@@ -1509,19 +1509,19 @@ func renderEntry(w io.Writer, entry validation.Entry) {
 			entry.Pointer,
 			entry.Detail,
 		)
-		if entry.Hint != "" {
-			fmt.Fprintf(w, " hint=%q", entry.Hint)
-		}
+		renderHint(w, entry)
 		fmt.Fprintln(w)
 	case validation.EntryAdapterEnvironment:
 		fmt.Fprintf(
 			w,
-			"adapter-environment: adapter=%q kind=%q detail=%q stderr=%q\n",
+			"adapter-environment: adapter=%q kind=%q detail=%q stderr=%q",
 			entry.AdapterID,
 			entry.AdapterKind,
 			entry.Detail,
 			entry.Stderr,
 		)
+		renderHint(w, entry)
+		fmt.Fprintln(w)
 	case validation.EntryCapability:
 		fmt.Fprintf(
 			w,
@@ -1533,12 +1533,14 @@ func renderEntry(w io.Writer, entry validation.Entry) {
 	case validation.EntryEnforcement:
 		fmt.Fprintf(
 			w,
-			"enforcement: movement=%q part=%q performer=%q unmet=%q\n",
+			"enforcement: movement=%q part=%q performer=%q unmet=%q",
 			entry.MovementID,
 			entry.PartID,
 			entry.PerformerID,
 			entry.UnmetDimensions,
 		)
+		renderHint(w, entry)
+		fmt.Fprintln(w)
 	case validation.EntryEnforcementAdvisory:
 		fmt.Fprintf(
 			w,
@@ -1548,5 +1550,11 @@ func renderEntry(w io.Writer, entry validation.Entry) {
 			entry.PerformerID,
 			entry.UnmetDimensions,
 		)
+	}
+}
+
+func renderHint(w io.Writer, entry validation.Entry) {
+	if entry.Hint != "" {
+		fmt.Fprintf(w, " hint=%q", entry.Hint)
 	}
 }
