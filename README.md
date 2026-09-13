@@ -36,11 +36,18 @@ Partitur is four binaries. The core resolves the adapters and the trampoline fro
 all four:
 
 ```bash
+make install
+```
+
+which is exactly:
+
+```bash
 go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline
 ```
 
 `go install` writes to `$(go env GOBIN)` when that is set and `$(go env GOPATH)/bin` otherwise. Put
-whichever one applies on your `PATH`.
+whichever one applies on your `PATH`. (`make help` lists the other targets — `make build`, `make
+battery` for the full CI test set, `make check` for the whole gate.)
 
 An adapter is a thin shim, not the agent. Whichever performer a cast selects, that vendor's own CLI
 has to be installed and on `PATH` as well — the adapter's probe resolves and runs it. `validate`
