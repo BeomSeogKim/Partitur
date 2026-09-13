@@ -260,6 +260,19 @@ must refuse an active run, a run whose application projection is `APPLYING` or
 `RECOVERY_REQUIRED`, and must require an explicit discard for a `SUCCEEDED` run whose
 candidate is not yet `APPLIED`.
 
+**Run discovery scope.** A child of `<repo>/.partitur/runs/` whose name is not a `<run-id>` is
+outside run discovery. `.state.lock` above is one such child and the archive below is another;
+neither is a run, and no command enumerates either as one.
+
+**Operator archive of a run directory.** The repository-layout clause "Only the core writes
+`<repo>/.partitur/runs/<run-id>/`" has one narrow operator exception. While no partitur process is
+running, an operator may atomically rename an entire run directory to
+`<repo>/.partitur/runs/.archive/<run-id>/`, which the clause above places outside run discovery.
+The archive is reversible preservation out of discovery scope: renaming the directory back restores
+the run unchanged. It is never validation, repair, migration, or terminalization. It never edits a
+byte inside the run directory and never appends an event. It fails rather than overwrites when the
+destination already exists.
+
 **Authority within run state.** `journal.jsonl` is authoritative for lifecycle history.
 `manifest.yaml` is a rebuildable projection/checkpoint of the journal. Immutable score
 snapshots and artifact instances remain authoritative for their respective contents. Crash
@@ -5241,6 +5254,12 @@ table give its **exact fields**. Both are normative. Conventions:
   needs every one of those projection versions. Recording only the outermost domain would let a
   recomputation silently use a different inner rule.
 
+**Payload revisions.** A future revision of an event's payload that can strand a journal already
+written under the superseded shape MUST first specify its compatibility or migration outcome, or a
+named halt from Appendix D, and revise this appendix before implementation. This is §6's
+approval-plan obligation — "MUST first specify its compatibility or migration outcome, or a named
+halt" — carried from the approval-plan format to the payload shapes of B.1–B.7.
+
 **Subject binding.** Where a payload includes `subject_tree`, it is the **core-observed** tree,
 never a value taken from an artifact (§7). Events repeat it rather than referring to an earlier
 event because a mark must be readable from the single event that constitutes it — a projection
@@ -7130,6 +7149,11 @@ implementation to classify.
 `prepare_lease_epoch_mismatch`, `sweep_unverifiable`, `spawn_handoff_unverifiable`, `root_snapshot_divergence`, `journal_corrupt`. Each `missing_*` reason covers **both** absence and hash mismatch: a file whose
 bytes do not match the recorded hash is no more usable than one that is gone, and splitting them
 would double the enum without changing any action.
+
+*Non-normative.* `journal_corrupt` also covers a journal whose lines parse but whose payload shape
+the running binary does not implement. v0.2 records no shape version in the envelope, so "written
+under a superseded shape" and "damaged" are not distinguishable at read time, and both halt under
+that one reason.
 
 # Appendix E — Ordered-step boundaries
 
