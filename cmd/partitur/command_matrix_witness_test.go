@@ -973,7 +973,8 @@ func runValidateCommandWitnesses(t *testing.T, registry *commandWitnessRegistry)
 
 		code, stdout, stderr := invokeCommand("validate")
 
-		want := "enforcement: movement=\"plan-movement\" part=\"plan\" performer=\"performer\" unmet=[\"read_only\"]\n"
+		hint := "set `allow_advisory_enforcement: true` to accept unmet dimensions as per-attempt advisories, or clear each unmet dimension by adding the missing grants or `allowed_paths: [\"**\"]`"
+		want := fmt.Sprintf("enforcement: movement=\"plan-movement\" part=\"plan\" performer=\"performer\" unmet=[\"read_only\"] hint=%q\n", hint)
 		if code != 3 || stdout != "" || stderr != want {
 			t.Fatalf("exit=%d stdout=%q stderr=%q, want complete diagnostic output %q", code, stdout, stderr, want)
 		}

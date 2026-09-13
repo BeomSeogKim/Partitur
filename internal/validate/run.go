@@ -13,7 +13,11 @@ type prober interface {
 	ProbeAll([]string) adapter.Report
 }
 
-const bindingMissingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers"
+const (
+	bindingMissingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer"
+	installHint        = "install the four Partitur binaries with `make install` or `go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline`, then put the Go bin dir (`$(go env GOBIN)` or `$(go env GOPATH)/bin`) on `PATH` so `partitur-trampoline` is available"
+	enforcementHint    = "set `allow_advisory_enforcement: true` to accept unmet dimensions as per-attempt advisories, or clear each unmet dimension by adding the missing grants or `allowed_paths: [\"**\"]`"
+)
 
 type dependencies struct {
 	acquisition acquisitionDependencies
@@ -127,13 +131,17 @@ func evaluatePrepared(
 	}
 	probeReport := newProber().ProbeAll(adapterIDs)
 	for _, diagnostic := range probeReport.Diagnostics {
-		result.Entries = append(result.Entries, Entry{
+		entry := Entry{
 			Kind:        EntryAdapterEnvironment,
 			AdapterID:   diagnostic.AdapterID,
 			AdapterKind: string(diagnostic.Kind),
 			Detail:      diagnostic.Detail,
 			Stderr:      diagnostic.Stderr,
-		})
+		}
+		if diagnostic.Kind == adapter.DiagnosticExecutableAbsent {
+			entry.Hint = installHint
+		}
+		result.Entries = append(result.Entries, entry)
 	}
 
 	probes := make(map[string]cast.Probe, len(probeReport.Probes))
@@ -227,14 +235,18 @@ func appendEnforcementEntries(
 			if assessment.Result.Disposition == cast.EnforcementAdvisory {
 				kind = EntryEnforcementAdvisory
 			}
-			result.Entries = append(result.Entries, Entry{
+			entry := Entry{
 				Kind:            kind,
 				Detail:          "enforcement_unmet",
 				PartID:          movement.PartID,
 				MovementID:      movement.ID,
 				PerformerID:     assessment.PerformerID,
 				UnmetDimensions: assessment.Result.Unmet,
-			})
+			}
+			if kind == EntryEnforcement {
+				entry.Hint = enforcementHint
+			}
+			result.Entries = append(result.Entries, entry)
 		}
 	}
 }

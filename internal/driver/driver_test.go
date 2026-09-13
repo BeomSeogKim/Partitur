@@ -37,6 +37,15 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/workspace"
 )
 
+func TestResolveTrampolineAbsentExplainsInstall(t *testing.T) {
+	t.Setenv("PATH", "")
+	_, err := defaultExecutionDependencies(faultpoint.Nop{}).ResolveTrampoline()
+	if err == nil || !strings.HasPrefix(err.Error(), "resolve partitur-trampoline:") ||
+		!strings.Contains(err.Error(), "make install") || !strings.Contains(err.Error(), "PATH") {
+		t.Fatalf("ResolveTrampoline error = %v, want install guidance", err)
+	}
+}
+
 func TestMovementSeedsProjectFinality(t *testing.T) {
 	final := movementSeeds(prepareFixture(t, sliceScore()).Score)
 	if len(final) != 1 || !final[0].Final {

@@ -470,13 +470,14 @@ func TestCastAdapterCapabilityEnforcementOrderAndSuppression(t *testing.T) {
 			Rule:    "cast.score",
 			Pointer: "/bindings/missing",
 			Detail:  "binding_missing",
-			Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
+			Hint:    bindingMissingHint,
 		},
 		{
 			Kind:        EntryAdapterEnvironment,
 			AdapterID:   "bad",
 			AdapterKind: "executable_absent",
 			Detail:      "partitur-adapter-bad not found",
+			Hint:        installHint,
 		},
 		{
 			Kind:                EntryCapability,
@@ -492,6 +493,7 @@ func TestCastAdapterCapabilityEnforcementOrderAndSuppression(t *testing.T) {
 			MovementID:      "enforcement-movement",
 			PerformerID:     "enforcement-performer",
 			UnmetDimensions: []cast.EnforcementDimension{cast.DimensionReadOnly},
+			Hint:            enforcementHint,
 		},
 	}
 	if !reflect.DeepEqual(result.Entries, want) {
@@ -535,7 +537,7 @@ func TestAdapterDeduplicationAndBindingLocalSuppression(t *testing.T) {
 		Rule:    "cast.score",
 		Pointer: "/bindings/missing",
 		Detail:  "binding_missing",
-		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
+		Hint:    bindingMissingHint,
 	}}
 	if !reflect.DeepEqual(result.Entries, want) {
 		t.Fatalf("entries = %#v, want %#v", result.Entries, want)
@@ -556,7 +558,7 @@ func TestMissingBindingGuidance(t *testing.T) {
 		Rule:    "cast.score",
 		Pointer: "/bindings/interview",
 		Detail:  "binding_missing",
-		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers",
+		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer",
 	}}
 	if !reflect.DeepEqual(result.Entries, want) {
 		t.Fatalf("entries = %#v, want %#v", result.Entries, want)
