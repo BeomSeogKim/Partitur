@@ -6,12 +6,12 @@ performers:
     allow_advisory_enforcement: true
   claude:
     adapter: claude
-    model: claude-opus-5
+    model: claude-sonnet-5
     allow_advisory_enforcement: true
 bindings:
   writer:
     performer: codex
     fallbacks: [claude]
   verifier:
-    performer: claude
-    fallbacks: [codex]
+    performer: codex
+    fallbacks: [claude]
