@@ -169,6 +169,16 @@ type Recovery struct {
 // Read selects and projects a run from repositoryRoot without creating,
 // repairing, locking, or leasing any repository state.
 func Read(repositoryRoot, requestedID string) (Report, error) {
+	return read(repositoryRoot, requestedID, false)
+}
+
+// ReadObservation selects and projects the status command's read-only observation.
+// Its unselected scan contains unreadable discovered run projections.
+func ReadObservation(repositoryRoot, requestedID string) (Report, error) {
+	return read(repositoryRoot, requestedID, true)
+}
+
+func read(repositoryRoot, requestedID string, observationScan bool) (Report, error) {
 	store, err := runstore.New(repositoryRoot, faultpoint.Nop{})
 	if err != nil {
 		return Report{}, fmt.Errorf("%w: %v", ErrRequiredInput, err)
@@ -191,6 +201,11 @@ func Read(repositoryRoot, requestedID string) (Report, error) {
 			continue
 		}
 		if err != nil {
+			if observationScan {
+				if unreadableDiscovered(err) {
+					continue
+				}
+			}
 			return Report{}, err
 		}
 		if !terminal(report.Run.Lifecycle) {
@@ -201,6 +216,13 @@ func Read(repositoryRoot, requestedID string) (Report, error) {
 		return Report{}, fmt.Errorf("%w: found %d", ErrNoActiveRun, len(active))
 	}
 	return active[0], nil
+}
+
+// unreadableDiscovered identifies DESIGN's exit-2 "unreadable discovered input"
+// class without widening status-exit.mapping-is-exhaustive's required-input cases.
+func unreadableDiscovered(err error) bool {
+	return errors.Is(err, runstore.ErrJournalCorrupt) ||
+		errors.Is(err, runstate.ErrUnsupportedEventType)
 }
 
 func readRun(store *runstore.Store, runID runstate.RunID) (Report, error) {

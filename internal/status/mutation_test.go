@@ -69,6 +69,33 @@ func TestMutationBudgetDisclosureAssemblyIsLoadBearing(t *testing.T) {
 	)
 }
 
+func TestMutationScanContainmentIsLoadBearing(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []struct {
+		before string
+		after  string
+	}{
+		{"if unreadableDiscovered(err) {", "if false && unreadableDiscovered(err) {"},
+		{"errors.Is(err, runstore.ErrJournalCorrupt) ||\n\t\terrors.Is(err, runstate.ErrUnsupportedEventType)", "errors.Is(err, runstate.ErrUnsupportedEventType)"},
+	} {
+		t.Run(mutation.before, func(t *testing.T) {
+			assertStatusMutationKilled(
+				t,
+				"TestReadScanSkipsUnreadableNonSelectedRun",
+				environment,
+				mutation.before,
+				mutation.after,
+				"internal/status/status.go",
+				"internal/status",
+				".",
+			)
+		})
+	}
+}
+
 func TestMutationLiveOverrideGuards(t *testing.T) {
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {

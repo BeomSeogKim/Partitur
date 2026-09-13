@@ -1242,7 +1242,7 @@ func readStatus(requestedID string) (statusprojection.Report, error) {
 	if err != nil {
 		return statusprojection.Report{}, fmt.Errorf("resolve invocation directory: %w", err)
 	}
-	return statusprojection.Read(root, requestedID)
+	return statusprojection.ReadObservation(root, requestedID)
 }
 
 func readLogs(requestedID string) (logstream.Snapshot, error) {
