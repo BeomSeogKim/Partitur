@@ -1,24 +1,301 @@
 score: "0.2"
-name: reference-workflow
+name: status-scan-containment
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Contain issue #463 axis (b), and nothing else. Today one unreadable run journal anywhere under
+  `.partitur/runs/` takes down `partitur status` — and resume/answer/logs selection with it — for
+  every other run in the repository, including runs whose journals are perfectly readable. A
+  finished, failed run from four days ago makes the tool unusable for the live run.
+
+  This run makes the `status` OBSERVATION scan skip a NON-SELECTED run it cannot project, and ships
+  NOTHING else. Explicit selection of that same run must still halt with `ErrJournalCorrupt` and
+  exit 5. Every decision- or mutation-adjacent selection — `answer`, `approve`, `amend`, `resume`,
+  `cancel`, `apply`, and `logs` — keeps today's fail-closed scan, including its exit 5 when the only
+  run's journal is unreadable. `internal/runstore` must stay byte-unchanged and fail-closed.
+
+  This is ROUTE A, code-only. Axis (a) of #463 (no versioning / tolerance / migration for a
+  superseded journal payload shape) is NOT in scope, and neither is #464. Do not add a journal
+  compatibility path, do not relax `internal/runstate`'s field allowlist, do not add a status
+  field, and do not touch the specification.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  ROUTING: THIS IS A CONFORMANCE FIX, NOT A SPECIFICATION CHANGE. READ THIS FIRST.
+
+  Two normative anchors already decide this case, and today's code deviates from both.
+
+  1. The exit-code table, docs/DESIGN.md:3851 (row for exit 2), lists among the exit-2 class:
+     "missing or unreadable required input, UNREADABLE DISCOVERED INPUT, no active run, ...".
+     A run directory that the global scan enumerated on its own — that nobody asked for — is
+     discovered input, not required input.
+
+  2. The pinned clause `status-exit.mapping-is-exhaustive` (docs/DESIGN.md:3571-3577,
+     docs/DESIGN.clause-staging.json byte range 240559-240910) reads:
+
+       "The status-specific exit mapping is exhaustive: 0 for a reported projection; 1 for usage;
+        2 for a refused selection or required readable input, including no active run, a non-unique
+        active-run set, or an unreadable pinned snapshot; and 5 only when THE PROJECTION cannot be
+        built, including a corrupt journal prefix or an event the core cannot project."
+
+     "the projection" is the projection `status` was asked to report — the selected run's. Run Y's
+     journal being unprojectable is not run X's projection failing to build. Reporting run Y's
+     corruption as "recovery halted" for run X is the deviation this run removes.
+
+  So: DO NOT EDIT docs/DESIGN.md, docs/DESIGN.clause-staging.json, docs/ko/**, any ledger, or any
+  recovery doc. No normative sentence changes. No field is added to the `status --json` schema
+  block (docs/DESIGN.md:3466-3496) — that is #464's question and it is a spec question. If you come
+  to believe this fix requires a DESIGN change, STOP and say so in your report rather than editing
+  the specification.
+
+  TAKE 1 FAILED EXACTLY HERE. READ THIS BEFORE YOU TOUCH THE SEAM.
+
+  A previous attempt at this score put the containment inside `Read`'s scan loop, which EVERY
+  command shares. Both writer attempts were otherwise VERIFIED and passed every criterion except
+  `cmd-package`, which failed both times with exactly:
+
+    --- FAIL: TestCommandMatrixWitnesses/ANSWER-003 — command_matrix_witness_test.go:1273: exit=2 stdout="", want unavailable-projection exit 5
+    --- FAIL: TestCommandMatrixWitnesses/APPROVE-002 — command_matrix_witness_test.go:1348: exit=2 stdout="", want unavailable-projection exit 5
+    --- FAIL: TestApproveTypeValidationFollowsSelection/unavailable_projection_precedes_operand_applicability — main_test.go:1051: exit=2 stdout="" stderr="precondition refused: detail=\"no active run: found 0\"\n"
+
+  WHY. `answer` (cmd/partitur/main.go:954) and `approve` (main.go:793) select with
+  `statusprojection.Read(root, "")` — the SAME empty-selector scan `status` uses. All three fixtures
+  corrupt the single fixture run's journal and then invoke `answer`/`approve` with NO run operand.
+  Containment inside the shared scan makes that run get skipped, the active set become empty, and
+  the command refuse with `no active run` (exit 2) instead of reporting the unavailable projection
+  (exit 5).
+
+  THOSE TWO EXITS ARE NORMATIVE, NOT TEST HABIT. docs/DESIGN.md:3418, in the `partitur answer`
+  precondition matrix:
+
+    | `ANSWER-003` | acquired | no current projection can be built | not started | Report the unavailable projection and append nothing; exit 5 |
+
+  and docs/DESIGN.md:3434, in the `partitur approve` precondition matrix:
+
+    | `APPROVE-002` | no current projection can be built | not reached | not started | Report the unavailable projection and append nothing; exit 5 |
+
+  Both rows are pinned clauses — markers `answer-matrix.ANSWER-003`
+  (docs/DESIGN.clause-staging.json:12077) and `approve-matrix.APPROVE-002`
+  (docs/DESIGN.clause-staging.json:12138). Keeping those two witnesses green is SPECIFICATION
+  CONFORMANCE, not test appeasement. Turning either into exit 2 is a specification change this run
+  may not make; if you come to believe it is required, STOP and report.
+
+  THE SCOPING RULE — THE REQUIRED END STATE, STATED BEHAVIOURALLY.
+    - The `status` OBSERVATION path, and only it, skips a discovered run it cannot project when NO
+      run was selected. `partitur status` with no operand exits 0 and reports the readable active
+      run even though an unreadable run sits beside it.
+    - Every DECISION- or MUTATION-ADJACENT selection keeps today's behaviour, byte for byte, in
+      stderr and exit code: `answer`, `approve`, `amend`, `resume`, `cancel`, `apply`, and `logs`.
+      With the only run's journal unreadable they still report the unavailable projection and exit 5.
+    - Explicit selection is unchanged everywhere, `status` included. STATUS-004 (`status run-1`),
+      LOGS-004 (`logs run-1`), AMEND-002 (`amend run-1`) and CANCEL-003 (`cancel run-1`) all pass an
+      explicit run id, so they never reach the scan at all. They were NOT the take-1 failure and
+      they must stay green.
+
+  THE MINIMAL API SHAPE THIS SCORE REQUIRES — AND DELIBERATELY DOES NOT DESIGN. Today's
+  `statusprojection.Read(root, requestedID)` is shared by eight call sites: cmd/partitur/main.go:592
+  (`amend`), 793 (`approve`), 954 (`answer`), 1116 and 1122 (`resume`), 1151 (`cancel`), 1245
+  (`readStatus`), and internal/logs/logs.go:52. Its behaviour for seven of those eight must stay
+  exactly what it is today. The containment must therefore be reachable ONLY through a path the
+  `status` command asks for deliberately — an added scan-policy argument, an options struct, a second
+  exported entry point; pick the smallest, this score does not pick for you. What the score requires
+  is:
+    a. `internal/status` offers both scans: a FAIL-CLOSED one (today's, which aborts on any error
+       other than `ErrRunNotFound`) and an OBSERVATION one that additionally skips an unreadable
+       NON-SELECTED discovered run; and the tolerant one is NOT what an existing caller gets by
+       default;
+    b. the ONLY production caller that asks for the observation scan is the `status` command's own
+       read path — today `readStatus` (cmd/partitur/main.go:1240-1245), whose single caller is the
+       status dispatch at main.go:242;
+    c. `internal/logs`, `answer`, `approve`, `amend`, `resume`, `cancel` and `apply` keep the
+       fail-closed scan.
+
+  THE "BENEFICIARIES YOU GET FOR FREE" PARAGRAPH BELOW IS WITHDRAWN. Those call sites were never in
+  scope, and take 1 proved that contaminating them breaks the specification. `go test ./internal/logs/`
+  stays a criterion as a REGRESSION FENCE, not as a beneficiary.
+
+  CONSEQUENCES FOR THE STEPS BELOW, WHICH OVERRIDE WHAT THOSE STEPS SAY:
+    - Step 2's "Modify ONLY internal/status/status.go" is relaxed by exactly one file: the minimal
+      edit to cmd/partitur/main.go needed to route the `status` read path — and nothing else — to
+      the observation scan is permitted and expected. No other main.go change.
+      `unavailableProjection`, `statusErrorCode`, `renderStatusError`, and every other command's
+      selection stay untouched.
+    - The `containment-predicate-present` criterion is UNCHANGED and still greps for the literal
+      `func unreadableDiscovered(err error) bool {` and for `if unreadableDiscovered(err) {`
+      occurring EXACTLY ONCE in internal/status/status.go. Gate the tolerance with an ENCLOSING
+      condition; do not widen that `if` line itself. Step 3's mutation anchors depend on the same
+      literal.
+    - `TestReadScanSkipsUnreadableNonSelectedRun` keeps its name (three criteria and the mutation
+      proof grep for it) but must now drive the OBSERVATION scan rather than whatever
+      `Read(root, "")` does. Add to internal/status/status_test.go the package-level twin of the
+      `answer`/`approve` lock: for the SAME two-run fixture, the FAIL-CLOSED scan with an empty
+      selector still returns an error satisfying `errors.Is(err, runstore.ErrJournalCorrupt)`.
+    - `TestStatusNoOperandSkipsUnreadableDiscoveredRun` is unchanged: `status` with no operand, exit 0.
+    - The new criterion `answer-approve-stay-fail-closed` runs `TestCommandMatrixWitnesses` and
+      `TestApproveTypeValidationFollowsSelection` UNFILTERED at the parent level on purpose, and then
+      requires the three subtest PASS lines. Do not "optimise" it down to the two witness subtests:
+      `TestCommandMatrixWitnesses` reconciles its catalog at command_matrix_witness_test.go:113, so
+      filtering to two subtests makes the PARENT fail with "COMPLETION states 97 completed command
+      witnesses, executed witnesses completed 2" even when both subtests pass.
+
+  THE SEAM, LOCATED ON THIS TREE. Confirm each anchor in step 0 before editing.
+
+  SEAM — the global scan, internal/status/status.go:183-199, inside `Read`:
+
+      ids, err := store.RunIDs()
+      ...
+      for _, id := range ids {
+          report, err := readRun(store, id)
+          if errors.Is(err, ErrRunNotFound) {
+              continue
+          }
+          if err != nil {
+              return Report{}, err          // <-- one bad journal aborts the whole scan
+          }
+          if !terminal(report.Run.Lifecycle) {
+              active = append(active, report)
+          }
+      }
+
+  Only `ErrRunNotFound` is tolerated. Add exactly one more tolerated class: a discovered run whose
+  PROJECTION cannot be built. Classify it with a helper whose name and signature this score pins,
+  because the mutation proof anchors on it:
+
+      func unreadableDiscovered(err error) bool
+
+  It must return true for exactly `runstore.ErrJournalCorrupt` and `runstate.ErrUnsupportedEventType`
+  — the same two classes `cmd/partitur/main.go`'s `unavailableProjection` (main.go:1325-1327) already
+  names as "no projection can be built". Both packages are already imported by status.go. Use it in
+  the scan loop only, and — per the scoping rule above — only when the caller asked for the
+  OBSERVATION scan, with the gate as an ENCLOSING condition so the pinned literal stays intact:
+
+      if err != nil {
+          if <observation scan requested> {
+              if unreadableDiscovered(err) {
+                  continue
+              }
+          }
+          return Report{}, err
+      }
+
+  WHY THAT PREDICATE AND NOT "any error". Three classes must KEEP aborting the scan, because they
+  are not "the projection cannot be built":
+    - `ErrSnapshot` / `ErrSnapshotInvalid` — an unreadable pinned snapshot is named in the clause
+      above as an exit-2 refusal of the whole observation. A test pins that it still aborts.
+    - `ErrRequiredInput` — permission errors, unreadable store root.
+    - anything unclassified — the default arm stays.
+  `ErrRunNotFound` keeps its existing `continue`. Do not merge the two branches.
+
+  WHERE THE REJECTION ACTUALLY HAPPENS (do not re-derive this; it decides the fixture). The legacy
+  `execution.stopped` payload is rejected by `runstate.ValidateEvent` inside
+  `internal/runstore/journal.go`'s `validateEnvelope` (journal.go:414-418), reached from
+  `decodeEvent`, reached from `ReadJournal` — which wraps it as
+  `fmt.Errorf("%w: %v", ErrJournalCorrupt, err)` (journal.go:228). The message is verbatim
+  `journal_corrupt: invalid event: execution.stopped: unknown field "observed_at"`, with no `seq=`
+  prefix, exactly as #463 reports it. In `internal/status`, `readRun` reaches it through
+  `loadInitialScore` -> `store.LoadInitialScore` -> `ReadJournal`, and status.go:243 already returns
+  `ErrJournalCorrupt` unwrapped rather than re-classing it as `ErrSnapshot`. So the error your new
+  branch sees IS `runstore.ErrJournalCorrupt`. The field allowlist that rejects it is
+  internal/runstate/apply.go:2186-2188 — DO NOT WIDEN IT.
+
+  THE SCAN CANNOT FILTER BY TERMINALITY. Both offending runs in #463 are terminal (`run.failed`),
+  but `ReadJournal` fails at the bad line before any event is returned, so the scan cannot know a
+  run is terminal without first reading it. Containment must therefore be by ERROR CLASS, not by
+  skipping terminal runs. Do not add a terminal-state pre-filter to `store.RunIDs()`.
+
+  WHAT THIS FIX DELIBERATELY DOES NOT DO — the over-correction list. A change that does any of
+  these is wrong even if every test passes:
+    - It must NOT make `status.Read(root, "<that-run-id>")` tolerant. Explicit selection of an
+      unreadable run still returns `ErrJournalCorrupt` and `statusErrorCode` still maps it to 5.
+      That path (status.go:176-181) is not touched at all.
+    - It must NOT relax `internal/runstore` or `internal/runstate` reading. `internal/runstore` stays
+      BYTE-UNCHANGED; a criterion enforces it. `apply`'s independent mutual-exclusion scan at
+      internal/runstore/application.go:286-299 calls `store.LoadRunInput(id)` and returns the error
+      — a run it cannot read CANNOT be proven inactive, so `apply` must keep refusing. The asymmetry
+      is intentional and is the whole safety argument: `status` is observational and must contain;
+      `apply` is a mutation precondition and must stay fail-closed.
+    - It must NOT print, log, or add a field for the skipped run. No new stderr line, no schema
+      change, no `Report` field. (Whether the skip should be surfaced is an open steering question,
+      NOT something to decide here.)
+    - It must NOT change any exit code, any render string, or any command-matrix witness.
+      cmd/partitur/command_matrix_witness_test.go and cmd/partitur/main_test.go are FROZEN — a
+      criterion requires them byte-unchanged. STATUS-004 (explicit selection of a corrupt journal,
+      exit 5) and `TestStatusUnprojectableJournalExitsFive` must pass UNMODIFIED. If you believe one
+      of them must change, STOP and report; that would mean the fix leaked past its boundary.
+
+  A CONSEQUENCE TO STATE, NOT TO FIX. After the skip, a run that could not be read is no longer
+  counted when `Read` decides the active set is unique (status.go:200-202). If such a run were in
+  fact active, the scan now reports a unique active run where before it refused. That is accepted
+  for Route A — an unreadable run cannot be projected as active either way, and the alternative
+  (today's behaviour) is a repository-wide halt. Name this in your report; do not paper over it.
+
+  BENEFICIARIES YOU GET FOR FREE — no extra tests. `cmd/partitur/main.go:1116` (`resume` selection),
+  main.go:793 (`gate approve`), main.go:954 (`answer`), and `internal/logs/logs.go:52` all select
+  through the same `statusprojection.Read(root, "")`. One fix; `go test ./internal/logs/` is a
+  criterion because logs is the closest consumer.
+
+  THE FIXTURE — SELF-CONTAINED, AND FAITHFUL TO THE REPORTED SHAPE. Tests MUST construct both run
+  directories themselves. They must NOT read, reference, or depend on
+  `.partitur/runs-quarantine-20260913/` or any real run under `.partitur/runs/` — a criterion greps
+  for `runs-quarantine` and fails if it appears. The verbatim legacy line, from that quarantine
+  directory, run `01a08513-603e-7b0a-9d18-4d95ee790f97`, seq 48, is the shape to embed as a Go
+  string (envelope reformatted for your fixture's run id and seq; the PAYLOAD stays verbatim):
+
+    {"event_id":"eae0817fd0427dc951e4d9c2edac15e5","seq":48,"ts":"2026-09-09T11:35:37.138Z","run_id":"01a08513-603e-7b0a-9d18-4d95ee790f97","score_revision":1,"type":"execution.stopped","causation_id":"a26cbf0304893d0dda4c69c1d0653c5a","payload":{"charged_duration":9000000,"charging":"clamped","interval_id":"01a08513-60dd-78ce-a481-f973e3e78b5d","observed_at":"2026-09-09T11:35:37.135Z","reason":"recovered"}}
+
+  and the run's terminal line, seq 51:
+
+    {"event_id":"0996139e3e0eeb784b092d927338e9ed","seq":51,"ts":"2026-09-09T11:35:37.172Z","run_id":"01a08513-603e-7b0a-9d18-4d95ee790f97","score_revision":1,"type":"run.failed","causation_id":"4b6b0b0a1b56fd14dc7ee53f84b48cca","payload":{"reason":"movement_failed"}}
+
+  Note the shape markers a criterion pins: `"type":"execution.stopped"`, `"charging":"clamped"`,
+  `"observed_at"`, and NO `accounting_grace_ms` (that is the post-#460 field; its absence is what
+  makes this a pre-#460 journal).
+
+  RECOMMENDED CONSTRUCTION (cheapest path that is guaranteed valid). `ReadJournal` validates every
+  envelope: `event_id`, `seq`, `ts` (`2006-01-02T15:04:05.000Z`), `run_id`, `type`, non-empty
+  `payload`, canonical JSON, seq contiguous from 1, and `run_id` equal to the directory name. So:
+    a. build the READABLE active run the way the package already does — `statusFixture`
+       (internal/status/status_test.go:474) in internal/status, `resumeAttemptFixture`
+       (cmd/partitur/main_test.go:2210) in cmd/partitur. Neither file's helper needs editing; call
+       it. (main_test.go is frozen — call the helper, do not edit it.)
+    b. for the UNREADABLE run, take that fixture's own `journal.jsonl` line 1 (a valid
+       `run.started`), rewrite its `run_id` (and `event_id`) to your legacy run id, write it as line
+       1 of `.partitur/runs/<legacy-id>/journal.jsonl`, then append the legacy `execution.stopped`
+       line as seq 2 and the `run.failed` line as seq 3, with the same rewritten `run_id`.
+    c. the legacy run needs NO `scores/` directory: `readRun` stats the journal, then
+       `loadInitialScore` -> `ReadJournal` fails before any snapshot is read. Adding one is fine but
+       pointless. Do NOT rely on a missing snapshot for the unreadability — that is the OTHER error
+       class, and a separate test pins it.
+
+  PROVE THE FIXTURE IS UNREADABLE FOR THE RIGHT REASON. A truncated or malformed line also produces
+  `ErrJournalCorrupt`, and a fixture that is corrupt by accident would make the whole run vacuous
+  (lesson: a fixture whose uniformity hides its own defect). Therefore
+  `TestReadSelectedUnreadableRunStillReportsJournalCorrupt` must assert BOTH that the error is
+  `runstore.ErrJournalCorrupt` AND that its message contains the exact substring
+  `unknown field "observed_at"`. That single assertion is what makes every other test in this run
+  mean what it says.
+
+  RED-FIRST HONESTY — SAY WHICH IS WHICH. Only ONE new test reds on unfixed main:
+  `TestReadScanSkipsUnreadableNonSelectedRun` (and its CLI twin
+  `TestStatusNoOperandSkipsUnreadableDiscoveredRun`), because today the scan returns the error. The
+  over-correction locks (`...StillReportsJournalCorrupt`, `...StillHaltsWithExitFive`,
+  `...StillRefusesRunWithUnreadableSnapshot`, `...StillBlocksApplicationPreconditionScan`) and every
+  fence criterion are GREEN on an untouched tree and their job is to STAY green, not to turn green.
+  The mutation test cannot pass on main at all (its anchor does not exist yet). Stage each red test
+  so it COMPILES and then FAILS for the stated reason, quote the failure verbatim, then implement.
+  Do not report a compile error as a red test.
+
+  SCORE PLACEMENT. This score temporarily replaces the committed reference-workflow score because
+  `partitur run` reads only `<repo>/partitur.yaml` and takes no score operand (#435). It, and the
+  cast commit that precedes it, are reverted before the pull request; only the internal/status +
+  cmd/partitur change is meant to land.
 
 verification:
   expectation:
-    intent: none
+    intent: pass-existing-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +305,369 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: contain-unreadable-discovered-runs
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Contain the global status scan, red-first. Everything you write is English. The seam, the
+      predicate, the over-correction list, and the fixture are in this score's context; implement
+      them, do not redesign them, and do not touch the specification.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      Step 0 — CONFIRM THE GROUND, cheaply. Report the output of each, verbatim:
+
+        git status --porcelain
+        grep -n 'ids, err := store.RunIDs()' internal/status/status.go
+        grep -n 'if errors.Is(err, ErrRunNotFound)' internal/status/status.go
+        grep -n 'func unavailableProjection' cmd/partitur/main.go
+        grep -n 'func statusErrorCode' cmd/partitur/main.go
+        grep -n 'input, err := store.LoadRunInput(id)' internal/runstore/application.go
+        grep -n 'func statusFixture' internal/status/status_test.go
+        grep -n 'func resumeAttemptFixture' cmd/partitur/main_test.go
+        grep -rc 'runs-quarantine' internal/status/ cmd/partitur/
+
+      You must see the scan at status.go:183-199 with exactly one tolerated `ErrRunNotFound`
+      branch, `unavailableProjection` and `statusErrorCode` in cmd/partitur/main.go near 1307-1327,
+      the fail-closed `LoadRunInput` line in internal/runstore/application.go near 286-292,
+      `statusFixture` at internal/status/status_test.go:474, `resumeAttemptFixture` at
+      cmd/partitur/main_test.go:2210, and ZERO `runs-quarantine` references in either package.
+
+      `git status --porcelain` MUST be empty. If it lists anything — a stray untracked directory
+      such as `.partitur/runs-quarantine-20260913/` included — STOP and say so: the fence criteria
+      (`spec-and-ledger-untouched`, `change-scope`) cannot distinguish it from your own work, and
+      the tree is not the one this score was written against. Likewise STOP if any anchor drifted.
+
+      Step 1 — RED FIRST. Before editing production code, write the tests and run them. Record each
+      result verbatim and label it RED (fails on unfixed main, for the stated reason) or LOCK
+      (already green; must stay green). Make every red test COMPILE and then FAIL on the behaviour,
+      not merely fail to build.
+
+        In internal/status/status_test.go (build the fixtures per the context; `statusFixture` gives
+        you the readable active run):
+
+        - TestReadScanSkipsUnreadableNonSelectedRun — RED. One readable ACTIVE run plus one
+          unreadable legacy terminal run in the same root. `Read(root, "")` returns nil error and a
+          Report whose `Run.ID` is the READABLE run's id. Assert the returned report is the readable
+          run's (id, and `Run.Lifecycle` RUNNING), not merely that err is nil.
+        - TestReadSelectedUnreadableRunStillReportsJournalCorrupt — LOCK. Same two run directories.
+          `Read(root, "<legacy-id>")` returns an error satisfying
+          `errors.Is(err, runstore.ErrJournalCorrupt)` AND whose `Error()` contains the exact
+          substring `unknown field "observed_at"`. This is also the fixture's own proof of shape.
+        - TestReadFailClosedScanStillReportsUnreadableDiscoveredRun — LOCK (scoping; see the take-1
+          section). The SAME two-run fixture, empty selector, but through the FAIL-CLOSED scan that
+          `answer`/`approve`/`amend`/`resume`/`cancel`/`logs` keep using: it must still return an
+          error satisfying `errors.Is(err, runstore.ErrJournalCorrupt)`. This is the package-level
+          twin of the `answer-approve-stay-fail-closed` criterion and it is what stops the
+          containment from leaking back into the shared selection path.
+        - TestReadScanStillRefusesRunWithUnreadableSnapshot — LOCK (narrowness). One readable active
+          run plus a second run whose journal PROJECTS but whose pinned score snapshot is missing
+          (build it like `statusFixture` but do not write `scores/revision-1.yaml`). `Read(root, "")`
+          must still return an error satisfying `errors.Is(err, ErrSnapshot)`. This test is what
+          stops the fix from degenerating into "skip every run that fails".
+
+        In a NEW file cmd/partitur/status_scan_containment_test.go (do NOT edit main_test.go or
+        command_matrix_witness_test.go; call `resumeAttemptFixture` from where it is):
+
+        - TestStatusNoOperandSkipsUnreadableDiscoveredRun — RED. `resumeAttemptFixture` root plus
+          the legacy run directory; `t.Chdir(root)`; `invokeCommand("status")` with NO operand
+          returns exit 0, stderr empty, and stdout containing `Run: run-1 (RUNNING)`.
+        - TestStatusSelectedUnreadableRunStillHaltsWithExitFive — LOCK. Same root;
+          `invokeCommand("status", "<legacy-id>")` returns exit 5, empty stdout, and stderr
+          beginning `recovery halted:`.
+        - TestUnreadableRunStillBlocksApplicationPreconditionScan — LOCK (safety). Same root; build
+          a store with `runstore.New(root, faultpoint.Nop{})` and assert
+          `store.LoadRunInput(runstate.RunID("<legacy-id>"))` returns an error satisfying
+          `errors.Is(err, runstore.ErrJournalCorrupt)`. That is the exact call
+          `applicationPreconditions` (internal/runstore/application.go:286-292) makes for every run
+          it enumerates, and it propagates the error rather than treating the run as inactive — so
+          `apply` stays fail-closed while `status` contains. State that reasoning in a comment above
+          the test.
+
+      Quote each failure. If a command is blocked by your sandbox, say exactly which and how; do not
+      report a blocked command as evidence.
+
+      Step 2 — implement the seam. Modify internal/status/status.go:
+        - add `func unreadableDiscovered(err error) bool` returning true for exactly
+          `runstore.ErrJournalCorrupt` and `runstate.ErrUnsupportedEventType`, with a short comment
+          citing DESIGN's exit-2 "unreadable discovered input" class and
+          `status-exit.mapping-is-exhaustive`;
+        - in the scan loop, tolerate it with `continue` — but ONLY when the caller asked for the
+          observation scan (see "THE MINIMAL API SHAPE" in the context) — keeping the existing
+          `ErrRunNotFound` branch and the existing default `return Report{}, err` arm.
+      Then make the minimal cmd/partitur/main.go edit that routes the `status` read path
+      (`readStatus`, main.go:1240-1245) — and nothing else — to the observation scan.
+      Add no other logic. Do not touch `readRun`, `loadInitialScore`, the explicit-selection path,
+      `terminal()`, any other command's selection, or anything else in cmd/partitur except that one
+      routing edit and the new test file.
+
+      Step 3 — the mutation proof. Add ONE test to internal/status/mutation_test.go (already
+      `//go:build mutation`), named exactly TestMutationScanContainmentIsLoadBearing, driving the
+      existing `assertStatusMutationKilled` helper with source `internal/status/status.go`,
+      directory `internal/status`, package `.`, and target test
+      `TestReadScanSkipsUnreadableNonSelectedRun`. Two mutations, both of which must still COMPILE
+      (a build failure is a non-result, not a kill) and whose `before` anchor must occur EXACTLY
+      ONCE in status.go:
+        - the tolerance branch: `if unreadableDiscovered(err) {` -> `if false && unreadableDiscovered(err) {`
+        - the classification: drop `errors.Is(err, runstore.ErrJournalCorrupt)` from the predicate,
+          leaving the `runstate.ErrUnsupportedEventType` disjunct alone, so the legacy fixture stops
+          being classified.
+      Name only tests that actually die under the mutation. NEVER run `go test -tags=mutation ./...`
+      (#316 starvation hazard); scope every tagged command to `./internal/status/`.
+
+      Step 4 — prove it holds. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/status/ ./cmd/partitur/
+        go test -count=1 ./internal/status/
+        go test -count=1 ./internal/logs/
+        go test -count=1 ./cmd/partitur/
+        go test -tags=mutation -count=1 -run '^TestMutationScanContainmentIsLoadBearing$' ./internal/status/
+
+      Step 5 — confirm the scope. Report `git status --porcelain` and `git diff --stat` verbatim.
+      Only files under internal/status/ and cmd/partitur/ may appear, and within cmd/partitur only
+      the new status_scan_containment_test.go plus the one-site routing edit in main.go described in
+      step 2 — quote that main.go diff hunk in full. NOTHING in internal/runstore/, internal/runstate/,
+      internal/logs/, internal/driver/, internal/recoveryexec/, docs/, docs/DESIGN.md,
+      docs/DESIGN.clause-staging.json, .github/, go.mod, go.sum, partitur.yaml, or .partitur/.
+      cmd/partitur/main_test.go and cmd/partitur/command_matrix_witness_test.go must be byte-
+      unchanged. Do not commit; the run captures the change set.
+
+      In your report, say explicitly: which tests were RED and which were LOCKS; the verbatim error
+      message your fixture produced (it must contain `unknown field "observed_at"`); and the
+      accepted consequence named in the context (an unreadable run no longer counts toward the
+      active-set uniqueness check).
+
+      Then run every acceptance command below yourself and report each result.
     outputs:
-      - id: marker-change
+      - id: status-containment-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet
+          run: ["go", "vet", "./internal/status/", "./cmd/partitur/"]
+          timeout_min: 10
+        - id: containment-predicate-present
+          run: ["sh", "-c", "f=internal/status/status.go; grep -qF 'func unreadableDiscovered(err error) bool {' $f && grep -qF 'runstore.ErrJournalCorrupt' $f && grep -qF 'runstate.ErrUnsupportedEventType' $f && grep -qF 'if unreadableDiscovered(err) {' $f && test \"$(grep -c 'if unreadableDiscovered(err) {' $f)\" -eq 1 && grep -qF 'if errors.Is(err, ErrRunNotFound) {' $f"]
+          timeout_min: 5
+        - id: scan-skips-unreadable
+          run: ["sh", "-c", "grep -qF 'func TestReadScanSkipsUnreadableNonSelectedRun(t *testing.T) {' internal/status/status_test.go && go test -count=1 -run '^TestReadScanSkipsUnreadableNonSelectedRun$' -v ./internal/status/ | grep -c '^--- PASS: TestReadScanSkipsUnreadableNonSelectedRun' | grep -qx 1"]
+          timeout_min: 15
+        - id: selected-unreadable-still-corrupt
+          run: ["sh", "-c", "grep -qF 'func TestReadSelectedUnreadableRunStillReportsJournalCorrupt(t *testing.T) {' internal/status/status_test.go && grep -qF 'unknown field' internal/status/status_test.go && grep -qF 'observed_at' internal/status/status_test.go && go test -count=1 -run '^TestReadSelectedUnreadableRunStillReportsJournalCorrupt$' -v ./internal/status/ | grep -c '^--- PASS: TestReadSelectedUnreadableRunStillReportsJournalCorrupt' | grep -qx 1"]
+          timeout_min: 15
+        - id: scan-narrowness-snapshot-still-refused
+          run: ["sh", "-c", "grep -qF 'func TestReadScanStillRefusesRunWithUnreadableSnapshot(t *testing.T) {' internal/status/status_test.go && go test -count=1 -run '^TestReadScanStillRefusesRunWithUnreadableSnapshot$' -v ./internal/status/ | grep -c '^--- PASS: TestReadScanStillRefusesRunWithUnreadableSnapshot' | grep -qx 1"]
+          timeout_min: 15
+        - id: cli-scan-exits-zero
+          run: ["sh", "-c", "grep -qF 'func TestStatusNoOperandSkipsUnreadableDiscoveredRun(t *testing.T) {' cmd/partitur/status_scan_containment_test.go && go test -count=1 -run '^TestStatusNoOperandSkipsUnreadableDiscoveredRun$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatusNoOperandSkipsUnreadableDiscoveredRun' | grep -qx 1"]
+          timeout_min: 30
+        - id: cli-selected-still-exits-five
+          run: ["sh", "-c", "grep -qF 'func TestStatusSelectedUnreadableRunStillHaltsWithExitFive(t *testing.T) {' cmd/partitur/status_scan_containment_test.go && go test -count=1 -run '^TestStatusSelectedUnreadableRunStillHaltsWithExitFive$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatusSelectedUnreadableRunStillHaltsWithExitFive' | grep -qx 1"]
+          timeout_min: 30
+        - id: runstore-stays-fail-closed
+          run: ["sh", "-c", "grep -qF 'func TestUnreadableRunStillBlocksApplicationPreconditionScan(t *testing.T) {' cmd/partitur/status_scan_containment_test.go && grep -qF 'LoadRunInput' cmd/partitur/status_scan_containment_test.go && grep -qF 'input, err := store.LoadRunInput(id)' internal/runstore/application.go && go test -count=1 -run '^TestUnreadableRunStillBlocksApplicationPreconditionScan$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestUnreadableRunStillBlocksApplicationPreconditionScan' | grep -qx 1"]
+          timeout_min: 30
+        - id: fixture-is-self-contained-legacy-shape
+          run: ["sh", "-c", "grep -rqF 'execution.stopped' internal/status/ && grep -rqF 'clamped' internal/status/ && grep -rqF 'observed_at' internal/status/ && ! grep -rqF 'accounting_grace_ms' internal/status/ && grep -qF 'execution.stopped' cmd/partitur/status_scan_containment_test.go && grep -qF 'clamped' cmd/partitur/status_scan_containment_test.go && grep -qF 'observed_at' cmd/partitur/status_scan_containment_test.go && ! grep -rqF 'runs-quarantine' internal/status/ cmd/partitur/"]
+          timeout_min: 5
+        - id: status-package
+          run: ["go", "test", "-count=1", "./internal/status/"]
+          timeout_min: 20
+        - id: logs-package
+          run: ["go", "test", "-count=1", "./internal/logs/"]
+          timeout_min: 15
+        - id: cmd-package
+          run: ["go", "test", "-count=1", "./cmd/partitur/"]
+          timeout_min: 45
+        - id: answer-approve-stay-fail-closed
+          run: ["sh", "-c", "grep -qF 'registry.run(t, \"ANSWER-003\", witnessDischarged, 0, func(t *testing.T) {' cmd/partitur/command_matrix_witness_test.go && grep -qF 'registry.run(t, \"APPROVE-002\", witnessDischarged, 0, func(t *testing.T) {' cmd/partitur/command_matrix_witness_test.go && grep -qF 'func TestApproveTypeValidationFollowsSelection(t *testing.T) {' cmd/partitur/main_test.go && grep -qF 't.Run(\"unavailable projection precedes operand applicability\", func(t *testing.T) {' cmd/partitur/main_test.go && out=$(go test -count=1 -run '^(TestCommandMatrixWitnesses|TestApproveTypeValidationFollowsSelection)$' -v ./cmd/partitur/) && printf '%s\\n' \"$out\" | grep -c -e '--- PASS: TestCommandMatrixWitnesses/ANSWER-003' | grep -qx 1 && printf '%s\\n' \"$out\" | grep -c -e '--- PASS: TestCommandMatrixWitnesses/APPROVE-002' | grep -qx 1 && printf '%s\\n' \"$out\" | grep -c -e '--- PASS: TestApproveTypeValidationFollowsSelection/unavailable_projection_precedes_operand_applicability' | grep -qx 1"]
+          timeout_min: 30
+        - id: containment-mutation-proof
+          run: ["sh", "-c", "grep -qF 'func TestMutationScanContainmentIsLoadBearing(t *testing.T) {' internal/status/mutation_test.go && grep -qF 'TestReadScanSkipsUnreadableNonSelectedRun' internal/status/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationScanContainmentIsLoadBearing$' -v ./internal/status/ | grep -c '^--- PASS: TestMutationScanContainmentIsLoadBearing' | grep -qx 1"]
+          timeout_min: 30
+        - id: witnesses-and-exit-table-frozen
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/command_matrix_witness_test.go cmd/partitur/main_test.go)\""]
+          timeout_min: 5
+        - id: runstore-and-runstate-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/runstore/ internal/runstate/ internal/logs/ internal/driver/ internal/recoveryexec/)\""]
+          timeout_min: 5
+        - id: spec-and-ledger-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -vE '(internal/status/|cmd/partitur/)')\""]
+          timeout_min: 5
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [contain-unreadable-discovered-runs]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the status-scan containment. Change no file. Report in English.
+
+      The ways this can be wrong are: it can OVER-CORRECT, swallowing errors the clause still wants
+      fatal (an unreadable pinned snapshot, a permission error, an unclassified error) or making
+      explicit selection tolerant; it can relax `internal/runstore` / `internal/runstate` reading
+      instead of containing the scan, breaking `apply`'s fail-closed mutual-exclusion precondition;
+      it can drift into the specification (docs/DESIGN.md, docs/DESIGN.clause-staging.json, a
+      ledger) or add a status field, which is #464's spec question and not this run's; its fixture
+      can be unreadable for the WRONG reason (a truncated line rather than the legacy
+      `execution.stopped` payload), which would make every test vacuous; it can depend on the
+      untracked `.partitur/runs-quarantine-20260913/` directory instead of building its own
+      fixture; and its mutation proof can be a non-result (an anchor that does not occur exactly
+      once, or a mutated copy that fails to compile).
+
+      1. SCOPE, BY READING THE WHOLE DIFF. Run `git status --porcelain` and `git diff --stat`,
+      report both verbatim, then READ `git diff` in full. Only internal/status/status.go,
+      internal/status/status_test.go, internal/status/mutation_test.go, the new
+      cmd/partitur/status_scan_containment_test.go, and cmd/partitur/main.go may appear. The
+      main.go diff must be confined to routing the `status` read path (`readStatus`,
+      main.go:1240-1245) to the observation scan: if it touches any other command's selection,
+      `unavailableProjection`, `statusErrorCode`, `renderStatusError`, or anything else, that is a
+      scope violation. Any change to internal/runstore/, internal/runstate/, internal/logs/, docs/,
+      docs/DESIGN.md, docs/DESIGN.clause-staging.json, .github/, go.mod/go.sum, partitur.yaml,
+      .partitur/, cmd/partitur/main_test.go, or cmd/partitur/command_matrix_witness_test.go is a
+      scope violation — say so rather than passing.
+
+      2. NO SPEC DRIFT, AND THE ROUTING HELD. Confirm docs/DESIGN.md and
+      docs/DESIGN.clause-staging.json are byte-unchanged. Read the exit-code table row for exit 2
+      (docs/DESIGN.md:3851) and the `status-exit.mapping-is-exhaustive` paragraph
+      (docs/DESIGN.md:3571-3577) yourself and say, in your own words, whether the new behaviour
+      conforms to them or bends them. No field was added to the `status --json` schema block
+      (docs/DESIGN.md:3466-3496).
+
+      3. THE TOLERANCE IS EXACTLY AS NARROW AS CLAIMED. Read `unreadableDiscovered` and the scan
+      loop. Quote both. Confirm:
+        - it tolerates exactly `runstore.ErrJournalCorrupt` and `runstate.ErrUnsupportedEventType`
+          — the same pair `cmd/partitur/main.go`'s `unavailableProjection` names;
+        - `ErrSnapshot`, `ErrSnapshotInvalid`, `ErrRequiredInput`, and unclassified errors still
+          reach `return Report{}, err`;
+        - the `ErrRunNotFound` branch is unchanged;
+        - the explicit-selection path (status.go:176-181) and `readRun` are untouched;
+        - nothing is printed, logged, or added to `Report` for a skipped run;
+        - THE SCOPING RULE HELD: the tolerance is reachable only through the observation scan the
+          `status` read path asks for. Enumerate every caller of the projection entry points —
+          cmd/partitur/main.go:592 (`amend`), 793 (`approve`), 954 (`answer`), 1116/1122 (`resume`),
+          1151 (`cancel`), 1245 (`readStatus`), internal/logs/logs.go:52 — and confirm that exactly
+          one of them (`readStatus`) gets the tolerant scan and the other seven still get today's
+          fail-closed behaviour. `ANSWER-003` (docs/DESIGN.md:3418) and `APPROVE-002`
+          (docs/DESIGN.md:3434) require exit 5 for an unbuildable current projection; take 1 of this
+          score turned both into exit 2 by containing the shared scan. Re-run the
+          `answer-approve-stay-fail-closed` criterion yourself and quote the three PASS lines.
+
+      4. THE SAFETY LOCK IS REAL. Confirm internal/runstore is byte-unchanged, that
+      internal/runstore/application.go:286-299 still propagates `store.LoadRunInput`'s error rather
+      than treating an unreadable run as inactive, and that
+      TestUnreadableRunStillBlocksApplicationPreconditionScan actually pins that call. Say in one
+      sentence why `status` may contain while `apply` must not.
+
+      5. THE FIXTURE IS SELF-CONTAINED AND UNREADABLE FOR THE RIGHT REASON. Read the fixture
+      construction in both packages. Confirm no test reads `.partitur/runs-quarantine-20260913/` or
+      any real run directory. Confirm the embedded line carries `"type":"execution.stopped"`,
+      `"charging":"clamped"`, `"observed_at"`, and NO `accounting_grace_ms`, and that
+      TestReadSelectedUnreadableRunStillReportsJournalCorrupt asserts the message contains
+      `unknown field "observed_at"` — not merely that some error occurred. Then verify it yourself:
+      run that test with `-v` and quote the assertion. If the fixture would be corrupt even without
+      the legacy payload, say so; the run is vacuous.
+
+      6. THE MUTATION PROOF IS REAL. Confirm TestMutationScanContainmentIsLoadBearing exists in
+      internal/status/mutation_test.go, that each `before` anchor occurs EXACTLY ONCE in
+      internal/status/status.go, that each mutated copy still compiles, that it names
+      TestReadScanSkipsUnreadableNonSelectedRun (a test that genuinely dies under the mutation),
+      and that no tagged command was run as `-tags=mutation ./...` (#316). Re-run it scoped to
+      ./internal/status/ and quote the result.
+
+      7. RED-FIRST WAS REAL, NOT A COMPILE ERROR, AND THE LOCKS WERE ALWAYS GREEN. For each new
+      test, say which of your own observations shows whether it would red on unfixed main for the
+      RIGHT reason (the scan returning the error) or was a lock that was green all along. Check the
+      writer's labels against your own reading and name any mislabel.
+
+      8. THE ACCEPTED CONSEQUENCE WAS NAMED. The writer must have stated that an unreadable run no
+      longer counts toward the unique-active-run check in status.go:200-202. If the report omits
+      it, say so.
+
+      9. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/status/ ./cmd/partitur/
+        go test -count=1 ./internal/status/
+        go test -count=1 ./internal/logs/
+        go test -count=1 ./cmd/partitur/
+        go test -tags=mutation -count=1 -run '^TestMutationScanContainmentIsLoadBearing$' ./internal/status/
+
+      If any point above does not hold, say so plainly rather than passing it.
+    inputs: [status-containment-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet
+          run: ["go", "vet", "./internal/status/", "./cmd/partitur/"]
+          timeout_min: 10
+        - id: containment-predicate-present
+          run: ["sh", "-c", "f=internal/status/status.go; grep -qF 'func unreadableDiscovered(err error) bool {' $f && grep -qF 'runstore.ErrJournalCorrupt' $f && grep -qF 'runstate.ErrUnsupportedEventType' $f && grep -qF 'if unreadableDiscovered(err) {' $f && test \"$(grep -c 'if unreadableDiscovered(err) {' $f)\" -eq 1 && grep -qF 'if errors.Is(err, ErrRunNotFound) {' $f"]
+          timeout_min: 5
+        - id: scan-skips-unreadable
+          run: ["sh", "-c", "grep -qF 'func TestReadScanSkipsUnreadableNonSelectedRun(t *testing.T) {' internal/status/status_test.go && go test -count=1 -run '^TestReadScanSkipsUnreadableNonSelectedRun$' -v ./internal/status/ | grep -c '^--- PASS: TestReadScanSkipsUnreadableNonSelectedRun' | grep -qx 1"]
+          timeout_min: 15
+        - id: selected-unreadable-still-corrupt
+          run: ["sh", "-c", "grep -qF 'func TestReadSelectedUnreadableRunStillReportsJournalCorrupt(t *testing.T) {' internal/status/status_test.go && grep -qF 'unknown field' internal/status/status_test.go && grep -qF 'observed_at' internal/status/status_test.go && go test -count=1 -run '^TestReadSelectedUnreadableRunStillReportsJournalCorrupt$' -v ./internal/status/ | grep -c '^--- PASS: TestReadSelectedUnreadableRunStillReportsJournalCorrupt' | grep -qx 1"]
+          timeout_min: 15
+        - id: scan-narrowness-snapshot-still-refused
+          run: ["sh", "-c", "grep -qF 'func TestReadScanStillRefusesRunWithUnreadableSnapshot(t *testing.T) {' internal/status/status_test.go && go test -count=1 -run '^TestReadScanStillRefusesRunWithUnreadableSnapshot$' -v ./internal/status/ | grep -c '^--- PASS: TestReadScanStillRefusesRunWithUnreadableSnapshot' | grep -qx 1"]
+          timeout_min: 15
+        - id: cli-scan-exits-zero
+          run: ["sh", "-c", "grep -qF 'func TestStatusNoOperandSkipsUnreadableDiscoveredRun(t *testing.T) {' cmd/partitur/status_scan_containment_test.go && go test -count=1 -run '^TestStatusNoOperandSkipsUnreadableDiscoveredRun$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatusNoOperandSkipsUnreadableDiscoveredRun' | grep -qx 1"]
+          timeout_min: 30
+        - id: cli-selected-still-exits-five
+          run: ["sh", "-c", "grep -qF 'func TestStatusSelectedUnreadableRunStillHaltsWithExitFive(t *testing.T) {' cmd/partitur/status_scan_containment_test.go && go test -count=1 -run '^TestStatusSelectedUnreadableRunStillHaltsWithExitFive$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestStatusSelectedUnreadableRunStillHaltsWithExitFive' | grep -qx 1"]
+          timeout_min: 30
+        - id: runstore-stays-fail-closed
+          run: ["sh", "-c", "grep -qF 'func TestUnreadableRunStillBlocksApplicationPreconditionScan(t *testing.T) {' cmd/partitur/status_scan_containment_test.go && grep -qF 'LoadRunInput' cmd/partitur/status_scan_containment_test.go && grep -qF 'input, err := store.LoadRunInput(id)' internal/runstore/application.go && go test -count=1 -run '^TestUnreadableRunStillBlocksApplicationPreconditionScan$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestUnreadableRunStillBlocksApplicationPreconditionScan' | grep -qx 1"]
+          timeout_min: 30
+        - id: fixture-is-self-contained-legacy-shape
+          run: ["sh", "-c", "grep -rqF 'execution.stopped' internal/status/ && grep -rqF 'clamped' internal/status/ && grep -rqF 'observed_at' internal/status/ && ! grep -rqF 'accounting_grace_ms' internal/status/ && grep -qF 'execution.stopped' cmd/partitur/status_scan_containment_test.go && grep -qF 'clamped' cmd/partitur/status_scan_containment_test.go && grep -qF 'observed_at' cmd/partitur/status_scan_containment_test.go && ! grep -rqF 'runs-quarantine' internal/status/ cmd/partitur/"]
+          timeout_min: 5
+        - id: status-package
+          run: ["go", "test", "-count=1", "./internal/status/"]
+          timeout_min: 20
+        - id: logs-package
+          run: ["go", "test", "-count=1", "./internal/logs/"]
+          timeout_min: 15
+        - id: cmd-package
+          run: ["go", "test", "-count=1", "./cmd/partitur/"]
+          timeout_min: 45
+        - id: answer-approve-stay-fail-closed
+          run: ["sh", "-c", "grep -qF 'registry.run(t, \"ANSWER-003\", witnessDischarged, 0, func(t *testing.T) {' cmd/partitur/command_matrix_witness_test.go && grep -qF 'registry.run(t, \"APPROVE-002\", witnessDischarged, 0, func(t *testing.T) {' cmd/partitur/command_matrix_witness_test.go && grep -qF 'func TestApproveTypeValidationFollowsSelection(t *testing.T) {' cmd/partitur/main_test.go && grep -qF 't.Run(\"unavailable projection precedes operand applicability\", func(t *testing.T) {' cmd/partitur/main_test.go && out=$(go test -count=1 -run '^(TestCommandMatrixWitnesses|TestApproveTypeValidationFollowsSelection)$' -v ./cmd/partitur/) && printf '%s\\n' \"$out\" | grep -c -e '--- PASS: TestCommandMatrixWitnesses/ANSWER-003' | grep -qx 1 && printf '%s\\n' \"$out\" | grep -c -e '--- PASS: TestCommandMatrixWitnesses/APPROVE-002' | grep -qx 1 && printf '%s\\n' \"$out\" | grep -c -e '--- PASS: TestApproveTypeValidationFollowsSelection/unavailable_projection_precedes_operand_applicability' | grep -qx 1"]
+          timeout_min: 30
+        - id: containment-mutation-proof
+          run: ["sh", "-c", "grep -qF 'func TestMutationScanContainmentIsLoadBearing(t *testing.T) {' internal/status/mutation_test.go && grep -qF 'TestReadScanSkipsUnreadableNonSelectedRun' internal/status/mutation_test.go && go test -tags=mutation -count=1 -run '^TestMutationScanContainmentIsLoadBearing$' -v ./internal/status/ | grep -c '^--- PASS: TestMutationScanContainmentIsLoadBearing' | grep -qx 1"]
+          timeout_min: 30
+        - id: witnesses-and-exit-table-frozen
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/command_matrix_witness_test.go cmd/partitur/main_test.go)\""]
+          timeout_min: 5
+        - id: runstore-and-runstate-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/runstore/ internal/runstate/ internal/logs/ internal/driver/ internal/recoveryexec/)\""]
+          timeout_min: 5
+        - id: spec-and-ledger-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -vE '(internal/status/|cmd/partitur/)')\""]
+          timeout_min: 5
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/status/**"
+    - "cmd/partitur/**"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 120
+    retries_per_movement: 1
   amendment:
     auto: "off"
