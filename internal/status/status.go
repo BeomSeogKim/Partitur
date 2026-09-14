@@ -51,6 +51,7 @@ type Report struct {
 	Journal               Journal               `json:"journal"`
 	Recovery              Recovery              `json:"recovery"`
 	Budget                Budget                `json:"budget"`
+	Authority             Authority             `json:"authority"`
 }
 
 // Budget copies the journal-projected budget position without a clock sample or
@@ -67,6 +68,26 @@ type OpenExecution struct {
 	Phase              string `json:"phase"`
 	WallStart          string `json:"wall_start"`
 	RemainingAtStartMS int64  `json:"remaining_at_start_ms"`
+}
+
+// Authority copies the journal-projected driver authority without consulting
+// procid or performing any process-liveness observation.
+type Authority struct {
+	Epoch uint64          `json:"epoch"`
+	Owner *AuthorityOwner `json:"owner"`
+}
+
+type AuthorityOwner struct {
+	PID           int                     `json:"pid"`
+	StartIdentity StartIdentityProjection `json:"start_identity"`
+}
+
+type StartIdentityProjection struct {
+	Platform    string  `json:"platform"`
+	StartTVSec  *uint64 `json:"start_tvsec,omitempty"`
+	StartTVUsec *uint64 `json:"start_tvusec,omitempty"`
+	BootID      *string `json:"boot_id,omitempty"`
+	StartTicks  *string `json:"start_ticks,omitempty"`
 }
 
 type Run struct {
@@ -336,6 +357,7 @@ func projectAt(runID runstate.RunID, compiled *score.Score, snapshots map[uint64
 		Journal:               Journal{Integrity: "INTACT"},
 		Recovery:              Recovery{State: "NOT_REQUIRED"},
 		Budget:                budgetProjection(state),
+		Authority:             authorityProjection(state),
 	}
 	if state.ApplicationCandidate != nil {
 		candidate := state.ApplicationCandidate
@@ -380,6 +402,31 @@ func budgetProjection(state runstate.State) Budget {
 			WallStart:          state.OpenExecution.WallStart,
 			RemainingAtStartMS: state.OpenExecution.RemainingAtStart,
 		}
+	}
+	return projection
+}
+
+func authorityProjection(state runstate.State) Authority {
+	projection := Authority{Epoch: state.Authority.Epoch}
+	if state.Authority.Owner != nil && !terminal(string(state.Run)) {
+		owner := state.Authority.Owner
+		projection.Owner = &AuthorityOwner{
+			PID:           owner.PID,
+			StartIdentity: startIdentityProjection(owner.Start),
+		}
+	}
+	return projection
+}
+
+func startIdentityProjection(identity runstate.StartIdentity) StartIdentityProjection {
+	projection := StartIdentityProjection{Platform: identity.Platform()}
+	switch start := identity.(type) {
+	case runstate.DarwinStartIdentity:
+		projection.StartTVSec = &start.StartTVSec
+		projection.StartTVUsec = &start.StartTVUsec
+	case runstate.LinuxStartIdentity:
+		projection.BootID = &start.BootID
+		projection.StartTicks = &start.StartTicks
 	}
 	return projection
 }
