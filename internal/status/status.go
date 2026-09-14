@@ -16,6 +16,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/acceptance"
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
+	"github.com/BeomSeogKim/Partitur/internal/procid"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
 	"github.com/BeomSeogKim/Partitur/internal/runstore"
 	"github.com/BeomSeogKim/Partitur/internal/score"
@@ -52,6 +53,28 @@ type Report struct {
 	Recovery              Recovery              `json:"recovery"`
 	Budget                Budget                `json:"budget"`
 	Authority             Authority             `json:"authority"`
+	// RecordedOwnerProcessMatch is the bounded, side-effect-free process-table
+	// sample of the recorded authority owner's identity: MATCHING,
+	// GONE_OR_REUSED, UNVERIFIABLE, or NOT_APPLICABLE. It is reported beside the
+	// projection and is never folded into lifecycle, recovery, application, or
+	// promotion state.
+	RecordedOwnerProcessMatch string      `json:"recorded_owner_process_match"`
+	MatchUnavailableReason    string      `json:"match_unavailable_reason,omitempty"`
+	Observation               Observation `json:"observation"`
+}
+
+// Observation records read-only discovery-scan outcomes reported beside the
+// projection of the selected run.
+type Observation struct {
+	SkippedUnreadableRuns []SkippedUnreadableRun `json:"skipped_unreadable_runs"`
+}
+
+// SkippedUnreadableRun names a discovered run the read-only scan could not
+// project. Reason is the closed enum JOURNAL_CORRUPT or UNSUPPORTED_EVENT_TYPE,
+// never the raw error text.
+type SkippedUnreadableRun struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
 // Budget copies the journal-projected budget position without a clock sample or
@@ -208,7 +231,7 @@ func read(repositoryRoot, requestedID string, observationScan bool) (Report, err
 		if err := ValidateRunID(requestedID); err != nil {
 			return Report{}, err
 		}
-		return readRun(store, runstate.RunID(requestedID))
+		return readRun(store, runstate.RunID(requestedID), observationScan)
 	}
 
 	ids, err := store.RunIDs()
@@ -216,14 +239,16 @@ func read(repositoryRoot, requestedID string, observationScan bool) (Report, err
 		return Report{}, fmt.Errorf("%w: %v", ErrRequiredInput, err)
 	}
 	active := make([]Report, 0, 1)
+	skipped := make([]SkippedUnreadableRun, 0)
 	for _, id := range ids {
-		report, err := readRun(store, id)
+		report, err := readRun(store, id, observationScan)
 		if errors.Is(err, ErrRunNotFound) {
 			continue
 		}
 		if err != nil {
 			if observationScan {
 				if unreadableDiscovered(err) {
+					skipped = append(skipped, SkippedUnreadableRun{ID: string(id), Reason: skipReason(err)})
 					continue
 				}
 			}
@@ -236,7 +261,22 @@ func read(repositoryRoot, requestedID string, observationScan bool) (Report, err
 	if len(active) != 1 {
 		return Report{}, fmt.Errorf("%w: found %d", ErrNoActiveRun, len(active))
 	}
+	sort.Slice(skipped, func(i, j int) bool { return skipped[i].ID < skipped[j].ID })
+	active[0].Observation = Observation{SkippedUnreadableRuns: skipped}
 	return active[0], nil
+}
+
+// skipReason maps an unreadable-discovered error to its closed disclosure enum.
+// It is only called on errors unreadableDiscovered already classified.
+func skipReason(err error) string {
+	switch {
+	case errors.Is(err, runstore.ErrJournalCorrupt):
+		return "JOURNAL_CORRUPT"
+	case errors.Is(err, runstate.ErrUnsupportedEventType):
+		return "UNSUPPORTED_EVENT_TYPE"
+	default:
+		return ""
+	}
 }
 
 // unreadableDiscovered identifies DESIGN's exit-2 "unreadable discovered input"
@@ -246,7 +286,7 @@ func unreadableDiscovered(err error) bool {
 		errors.Is(err, runstate.ErrUnsupportedEventType)
 }
 
-func readRun(store *runstore.Store, runID runstate.RunID) (Report, error) {
+func readRun(store *runstore.Store, runID runstate.RunID, observationScan bool) (Report, error) {
 	journal := filepath.Join(storeRoot(store), ".partitur", "runs", string(runID), "journal.jsonl")
 	if _, err := os.Stat(journal); errors.Is(err, fs.ErrNotExist) {
 		return Report{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
@@ -277,7 +317,14 @@ func readRun(store *runstore.Store, runID runstate.RunID) (Report, error) {
 	if err := validateReviewArtifacts(storeRoot(store), runID, snapshots, replay.State); err != nil {
 		return Report{}, err
 	}
-	return projectAt(runID, compiled, snapshots, replay, storeRoot(store)), nil
+	report := projectAt(runID, compiled, snapshots, replay, storeRoot(store))
+	// The bounded process-table sample is a status-observation concern: it runs
+	// only on the observation path, never inside the fail-closed Read used by
+	// apply, answer, amend, resume, cancel, or logs' selection.
+	if observationScan {
+		report.RecordedOwnerProcessMatch, report.MatchUnavailableReason = recordedOwnerProcessMatch(replay.State)
+	}
+	return report, nil
 }
 
 func loadInitialScore(store *runstore.Store, runID runstate.RunID) (*score.Score, error) {
@@ -358,6 +405,7 @@ func projectAt(runID runstate.RunID, compiled *score.Score, snapshots map[uint64
 		Recovery:              Recovery{State: "NOT_REQUIRED"},
 		Budget:                budgetProjection(state),
 		Authority:             authorityProjection(state),
+		Observation:           Observation{SkippedUnreadableRuns: []SkippedUnreadableRun{}},
 	}
 	if state.ApplicationCandidate != nil {
 		candidate := state.ApplicationCandidate
@@ -416,6 +464,33 @@ func authorityProjection(state runstate.State) Authority {
 		}
 	}
 	return projection
+}
+
+// recordedOwnerProcessMatch takes one bounded, side-effect-free sample of the
+// host process table and reports how the recorded authority owner's identity
+// compares against it. It is a recorded-tuple match, neither a liveness signal
+// nor the §6 driver-authority compare-and-set, and it never manufactures
+// recovery state: a false MATCHING (e.g. cross-boot PID reuse on darwin, whose
+// recorded identity carries no boot or host discriminator) degrades to exactly
+// the projection status already reports. NOT_APPLICABLE performs no probe.
+func recordedOwnerProcessMatch(state runstate.State) (verdict string, unavailableReason string) {
+	owner := state.Authority.Owner
+	if owner == nil || terminal(string(state.Run)) {
+		return "NOT_APPLICABLE", ""
+	}
+	result := procid.Matches(owner.PID, owner.Start)
+	switch result.Status {
+	case procid.MatchingAndLive:
+		return "MATCHING", ""
+	case procid.GoneOrReused:
+		return "GONE_OR_REUSED", ""
+	default:
+		reason := ""
+		if result.Err != nil {
+			reason = result.Err.Error()
+		}
+		return "UNVERIFIABLE", reason
+	}
 }
 
 func startIdentityProjection(identity runstate.StartIdentity) StartIdentityProjection {

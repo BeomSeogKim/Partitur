@@ -1380,6 +1380,15 @@ func renderStatusProjection(w io.Writer, report statusprojection.Report) {
 		fmt.Fprintf(w, " (%s)", report.Recovery.Reason)
 	}
 	fmt.Fprintln(w)
+	if owner := report.Authority.Owner; owner != nil {
+		fmt.Fprintf(
+			w,
+			"Authority owner: pid %d (%s), process match %s\n",
+			owner.PID,
+			renderStartIdentity(owner.StartIdentity),
+			report.RecordedOwnerProcessMatch,
+		)
+	}
 	fmt.Fprintf(w, "Application: %s\n", report.Application.State)
 	if report.Application.Candidate != nil {
 		candidate := report.Application.Candidate
@@ -1425,6 +1434,29 @@ func renderStatusProjection(w io.Writer, report statusprojection.Report) {
 			strings.Join(advisory.Dimensions, ", "),
 		)
 	}
+	if skipped := report.Observation.SkippedUnreadableRuns; len(skipped) != 0 {
+		parts := make([]string, len(skipped))
+		for index, run := range skipped {
+			parts[index] = fmt.Sprintf("%s: %s", run.ID, run.Reason)
+		}
+		fmt.Fprintf(w, "Skipped unreadable runs: %d (%s)\n", len(parts), strings.Join(parts, ", "))
+	}
+}
+
+// renderStartIdentity formats a recorded owner's process-start identity for the
+// human status surface without asserting cross-platform comparability.
+func renderStartIdentity(identity statusprojection.StartIdentityProjection) string {
+	switch identity.Platform {
+	case "darwin":
+		if identity.StartTVSec != nil && identity.StartTVUsec != nil {
+			return fmt.Sprintf("darwin start %d.%06d", *identity.StartTVSec, *identity.StartTVUsec)
+		}
+	case "linux":
+		if identity.BootID != nil && identity.StartTicks != nil {
+			return fmt.Sprintf("linux boot %s ticks %s", *identity.BootID, *identity.StartTicks)
+		}
+	}
+	return identity.Platform
 }
 
 func renderMark(w io.Writer, mark statusprojection.Mark) {
