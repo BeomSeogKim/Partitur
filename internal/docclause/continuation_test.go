@@ -60,9 +60,9 @@ func TestConfirmedReceiptsMergeWithoutDuplicateAnchors(t *testing.T) {
 		firstOrd  int
 		secondOrd int
 	}{
-		{"adapter-transport.framing", 5, 6},
-		{"validation-probe.per-adapter-once", 6, 7},
-		{"subject.distinction-by-attempt-kind", 13, 14},
+		{"adapter.launch-control-isolation", 5, 6},
+		{"blocking-proposal.rejected-path", 7, 8},
+		{"subject.repo-write-is-core-created-tree", 13, 14},
 	}
 	for _, want := range continuations {
 		var tailEnd, headStart int
