@@ -1,24 +1,221 @@
 score: "0.2"
-name: reference-workflow
+name: authority-observability-json
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Fix the run-loop-eligible half of issue #464 ("a1"), and nothing else. `partitur status --json`
+  projects the run, application, journal, recovery, and budget position, but never the driver-owner
+  identity that replay ALREADY holds in memory (`runstate.Authority`). So when a reboot kills the
+  driver mid-movement, `status` renders the run as `RUNNING` / `Recovery: NOT_REQUIRED` with no field
+  that lets a reader check, from the JSON alone, which process was recorded as the owner.
+
+  THIS RUN'S FIX (code-only, decided in the design round — see context): add an always-present,
+  additive `authority` object to `status --json`, projected purely from `runstate.Authority`:
+
+      "authority": {
+        "epoch": 1,                         // 0 == authority was never granted
+        "owner": null | {                   // null WITH epoch > 0 == fenced/cleared or terminal-historical
+          "pid": 89528,
+          "start_identity": {"platform": "darwin", "start_tvsec": 1789292195, "start_tvusec": 717953}
+        }
+      }
+
+  It is a sibling of `journal` / `recovery` / `budget` (append it LAST on `status.Report`, exactly as
+  #456 appended `budget`), NOT a field inside `run`. It carries the RECORDED owner process identity as
+  replayed from the `authority.granted` event. It performs NO liveness check: no `internal/procid`
+  call, no process-table read, no clock sample. It is pure journal-projected replay data.
+
+  SEMANTICS (verify against internal/runstate/types.go + internal/runstate/apply.go before coding):
+    - epoch 0 + owner null  => authority was never granted.
+    - epoch > 0 + owner null => authority was granted then FENCED/CLEARED (the two fencing paths reset
+      `Authority{Epoch: e}`, retaining epoch and dropping owner: cancellation fence
+      internal/runstate/apply.go ~:180-182, amendment/prepare fence ~:898), OR the run is TERMINAL
+      (see next rule).
+    - epoch > 0 + owner present => the recorded owner process identity of a NON-TERMINAL run.
+    - TERMINAL run (lifecycle SUCCEEDED / FAILED / CANCELLED) => owner MUST be null. `Authority.Owner`
+      is NEVER cleared at run.succeeded/run.failed (verified: the only `Authority{Epoch: …}` resets
+      are the two fencing paths), so a terminal run keeps its last owner forever. Painting it would
+      grow a permanent owner badge on every SUCCEEDED run in the repo. Gate the owner on
+      `!terminal(string(state.Run))` using the EXISTING `terminal()` helper in internal/status/status.go.
+      run.lifecycle stays the discriminator between fenced-nonterminal and terminal-historical.
+
+  FORBIDDEN in this run, even if it would pass every test (these are the over-correction shapes #464
+  invites — the spec-lane parts a2/b/c are OUT of scope and MUST be fenced out):
+    - a2 (process-match tri-state): `internal/status` MUST NOT import `internal/procid`. No
+      `procid.Matches`, no `Lease.MatchOwner`, no `recorded_owner_process_match` field, no liveness or
+      "alive"/"gone" token anywhere. A grep fence proves this.
+    - b (human-rendered line): do NOT add any new line to `renderStatusProjection`
+      (cmd/partitur/main.go). The text surface stays byte-frozen — the `authority` object is
+      `--json`-only, exactly as `budget` is today (rendered by neither surface). A lock test proves
+      the dead-owner text output carries no authority/owner/pid substring.
+    - c (skipped-unreadable-runs): NO `skipped_unreadable_runs` field, NO `observation` object, and NO
+      change to the `ErrNoActiveRun` detail string anywhere. A grep fence proves this.
+    - Any change to docs/DESIGN.md, docs/DESIGN.clause-staging.json, the clause-staging registry, or
+      any other specification/ledger document. This is additive under existing anchors
+      (status-json.v1-compatibility + status-json.complete-shape-is-not-closed-object), precedent
+      be983ebc/#456, which changed ZERO spec bytes. docs/ stays byte-unchanged.
+    - Any change to cmd/partitur/main.go, internal/runstate, internal/runstore, internal/procid,
+      README.md, .github/, go.mod, go.sum, partitur.yaml, or .partitur/.
+    - `recovery.state` must stay NOT_REQUIRED and `run.lifecycle` must stay RUNNING for the dead-owner
+      fixture; exit codes 0/2/5 unchanged; `status --json` remains EXACTLY ONE JSON document;
+      answer/approve/apply keep their fail-closed scan.
+
+  No new production file. The only production edit is internal/status/status.go. Put the behavioral
+  tests in a NEW file internal/status/authority_disclosure_test.go (package status), the end-to-end
+  and text-freeze tests in a NEW file cmd/partitur/status_authority_disclosure_test.go, and extend the
+  EXISTING internal/status/mutation_test.go with the three mutation cases. Do not rename any test.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  ROUTING (decided in the #464 design round, codex-reviewed): THIS SUB-ITEM (a1) IS RUN-LOOP ELIGIBLE
+  AND CODE-ONLY. IT IS NOT A SPEC CHANGE. The full design is archived at
+  partitur-handoff/archive-runs-2026-09/design-464-r1.md; this score implements only its
+  "Score sketch for the run-loop half", minus the exit-2 stderr detail (that belongs to sub-item c,
+  which the design routed to the spec lane; it is OUT of scope here).
+
+  WHY CODE-ONLY (verified against the tree):
+    - `status-json.v1-compatibility` (docs/DESIGN.md 3471-3473, "a compatible producer may add
+      fields") and `status-json.complete-shape-is-not-closed-object` (3476-3477) license adding a
+      field to `status --json` with no spec edit.
+    - The `authority` object is a fact about THE SELECTED RUN's own journal (its `authority.granted`
+      events), already replayed into `replay.State.Authority`. It is byte-identical IN KIND to the
+      `budget` object added by be983ebc "#442(i) status budget disclosure": four Go files, zero
+      docs/DESIGN.md change. `git show be983ebc -- docs/DESIGN.md` is empty. That commit is your
+      structural template — read it: it added `Budget` to `status.Report`, a `budgetProjection(state)`
+      helper called from `projectAt`, package tests in internal/status, an end-to-end test in
+      cmd/partitur, and one mutation case in internal/status/mutation_test.go.
+    - The spec-lane parts of #464 (a2 process-match probe, b human line, c skipped-runs) each need a
+      normative source-confinement or text-surface amendment and are explicitly NOT in this run.
+
+  THE DATA IS ALREADY IN MEMORY (verified):
+    - `internal/runstate/types.go`: `Authority{Epoch uint64; Owner *AuthorityOwner}`;
+      `AuthorityOwner{PID int; Start StartIdentity}`; `StartIdentity` is an INTERFACE with two concrete
+      types — `DarwinStartIdentity{StartTVSec, StartTVUsec uint64}` (Platform()=="darwin") and
+      `LinuxStartIdentity{BootID, StartTicks string}` (Platform()=="linux").
+    - `projectAt` already receives `replay.State`, so `state.Authority` is in hand. `state.Run` is the
+      `RunLifecycle`; the file's existing `terminal(lifecycle string) bool` helper covers
+      SUCCEEDED/FAILED/CANCELLED.
+    - Populated at internal/runstate/apply.go `case EventAuthorityGranted:` from payload
+      `{authority_epoch, owner_pid, owner_start_identity}`.
+
+  RECOMMENDED IMPLEMENTATION (internal/status/status.go). Adapt the exact gofmt spacing to the tree;
+  the mutation anchors below must be copied VERBATIM from the gofmt'd source (count == 1 each):
+
+    // Append to the Report struct AFTER `Budget Budget`, so the schema stays additive:
+        Authority             Authority             `json:"authority"`
+
+    // Types (place near Budget), with a comment stating this is journal-projected, no procid/liveness:
+        type Authority struct {
+            Epoch uint64          `json:"epoch"`
+            Owner *AuthorityOwner `json:"owner"`
+        }
+        type AuthorityOwner struct {
+            PID           int                     `json:"pid"`
+            StartIdentity StartIdentityProjection `json:"start_identity"`
+        }
+        type StartIdentityProjection struct {
+            Platform    string  `json:"platform"`
+            StartTVSec  *uint64 `json:"start_tvsec,omitempty"`
+            StartTVUsec *uint64 `json:"start_tvusec,omitempty"`
+            BootID      *string `json:"boot_id,omitempty"`
+            StartTicks  *string `json:"start_ticks,omitempty"`
+        }
+
+    // In the projectAt Report literal, beside `Budget: budgetProjection(state),`:
+        Authority:             authorityProjection(state),
+
+    // Helper — the three load-bearing conjuncts are marked:
+        func authorityProjection(state runstate.State) Authority {
+            projection := Authority{Epoch: state.Authority.Epoch}                 // CONJUNCT 2: epoch copy
+            if state.Authority.Owner != nil && !terminal(string(state.Run)) {     // CONJUNCT 3: owner-nil / terminal branch
+                owner := state.Authority.Owner
+                projection.Owner = &AuthorityOwner{
+                    PID:           owner.PID,
+                    StartIdentity: startIdentityProjection(owner.Start),
+                }
+            }
+            return projection
+        }
+    // CONJUNCT 1 is the assembly line `Authority: authorityProjection(state),` in projectAt.
+    // startIdentityProjection type-switches on the StartIdentity interface: darwin ->
+    // {platform:"darwin", start_tvsec, start_tvusec}; linux -> {platform:"linux", boot_id, start_ticks}.
+    // The darwin JSON keys `platform`,`start_tvsec`,`start_tvusec` and `pid`,`epoch` are asserted by
+    // the tests below by value — keep them exactly.
+
+  FIXTURE REALITY (do NOT read any real run dir). The run named in #464
+  (.partitur/runs/01a09a20-…) has since been resumed twice and is now SUCCEEDED / epoch 3, so it is
+  unusable directly. SYNTHESIZE every fixture in-test, self-contained. The dead-owner condition is the
+  literal seq-2 `authority.granted` payload the issue photographed:
+      authority_epoch = 1
+      owner_pid       = 89528
+      owner_start_identity = {"platform":"darwin","start_tvsec":1789292195,"start_tvusec":717953}
+
+  RECOMMENDED TESTS (all self-contained; the fenced/terminal/never-granted cases are cleanest as
+  WHITE-BOX unit tests that call `authorityProjection(state)` directly with a hand-built
+  `runstate.State`, exactly as internal/status/budget_disclosure_test.go is `package status`; the
+  dead-owner and end-to-end cases go through a synthesized journal):
+
+    internal/status/authority_disclosure_test.go (package status):
+      - TestStatusDisclosesDeadOwnerAuthority: extend `statusFixture` (RunStarted, epoch 0) by
+        appending a `runstate.EventAuthorityGranted` event with the literal seq-2 payload above (mirror
+        the `appendBudgetEvent` helper from budget_disclosure_test.go). Call `Read`, marshal the
+        report to JSON, assert it contains `"epoch":1`, `"pid":89528`, `"platform":"darwin"`,
+        `"start_tvsec":1789292195`, `"start_tvusec":717953`. Red today (no authority field).
+      - TestStatusAuthorityFencedVsNeverGrantedDistinguishable (white-box): assert
+        `authorityProjection(runstate.State{Run: runstate.RunCancelled, Authority: runstate.Authority{Epoch: 2}})`
+        marshals to `"epoch":2` with `"owner":null`, and
+        `authorityProjection(runstate.State{Run: runstate.RunRunning, Authority: runstate.Authority{Epoch: 0}})`
+        marshals to `"epoch":0` with `"owner":null`, and the two JSON documents DIFFER. Both owner
+        null; the epoch alone distinguishes never-granted from fenced.
+      - TestStatusTerminalRunDoesNotPaintOwner (white-box): build a `runstate.State` with
+        `Run: runstate.RunFailed` and a non-nil `Authority.Owner` (epoch 1, pid 89528, the darwin
+        identity), assert `authorityProjection` yields `"epoch":1` with `"owner":null` (NOT painted);
+        as the contrast, the SAME owner with `Run: runstate.RunRunning` yields a non-null owner. This
+        is the terminal-historical rule and the killing test for conjunct 3.
+      - TestStatusDeadOwnerKeepsRecoveryAndLifecycle: on the dead-owner journal fixture, assert
+        `report.Recovery.State == "NOT_REQUIRED"` and `report.Run.Lifecycle == "RUNNING"`
+        (over-correction lock — must stay green).
+
+    cmd/partitur/status_authority_disclosure_test.go (package main):
+      - TestStatusJSONCarriesAuthorityObject: build a repo whose run has a synthesized
+        RunStarted+AuthorityGranted journal (reuse the fixture helpers already in the cmd/partitur
+        tests, e.g. resumeFixture / the store.Mutate pattern), run the real `status --json` path,
+        assert exit 0, that stdout decodes as EXACTLY ONE JSON document (a second `Decoder.Decode`
+        returns io.EOF), `schema == "partitur/status+json;v=1"`, and the decoded `authority` object
+        carries epoch 1 + owner pid 89528 + the darwin start identity.
+      - TestStatusTextRendererStaysByteFrozenForDeadOwner: render the dead-owner projection through the
+        text surface (`renderStatusProjection` or the `status` text path) and assert the output
+        contains NONE of the substrings `authority`, `Authority`, `owner`, `Owner`, ` pid`, `PID`
+        (case check as written) — proving no human line was added (the b-is-spec-lane fence).
+
+    internal/status/mutation_test.go (extend; //go:build mutation; package status). Add THREE
+    functions, each calling `assertStatusMutationKilled(t, <killingTest>, environment, before, after,
+    "internal/status/status.go", "internal/status", ".")`. Copy each `before` VERBATIM from the
+    gofmt'd status.go (the helper fails if it does not occur exactly once):
+      - TestMutationAuthorityAssemblyIsLoadBearing: killingTest
+        "TestStatusDisclosesDeadOwnerAuthority"; before `Authority:             authorityProjection(state),`
+        after `Authority:             Authority{},` (fix the exact alignment to the tree).
+      - TestMutationAuthorityEpochCopyIsLoadBearing: killingTest
+        "TestStatusAuthorityFencedVsNeverGrantedDistinguishable"; before
+        `projection := Authority{Epoch: state.Authority.Epoch}` after
+        `projection := Authority{Epoch: 0}` (epoch collapses to 0, so 2-vs-0 stops distinguishing).
+      - TestMutationAuthorityOwnerNilBranchIsLoadBearing: killingTest
+        "TestStatusTerminalRunDoesNotPaintOwner"; before
+        `if state.Authority.Owner != nil && !terminal(string(state.Run)) {` after
+        `if state.Authority.Owner != nil {` (drops the terminal guard, so a terminal run paints the
+        owner and the test reds).
+
+  GREP-PIN NOTE (cost a full cycle before): every PASS-line grep uses `grep -c -e '--- PASS: ...'`
+  (leading dash guarded by `-e`), and every fence grep guards its pattern with `-e`. Go splits `-run`
+  on `/`; every `-run` name here is a whole function name, grep-pinned against the source before the
+  test is run. Do NOT truncate mutation output; do NOT report a timed-out command as a pass.
 
 verification:
   expectation:
-    intent: none
+    intent: pass-existing-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +225,236 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: disclose-authority-observability
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Add the additive `authority` object to `status --json`, and nothing else. Everything you write
+      is English. The routing, the recommended implementation, the fixtures, the exact test list, and
+      the three mutation anchors are in this score's context; implement them, do not redesign them,
+      and do not touch anything outside the four files named there.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      Step 0 — CONFIRM THE GROUND, cheaply. Report the output of each, verbatim:
+
+        git status --porcelain
+        grep -n 'Budget                Budget' internal/status/status.go
+        grep -n 'func budgetProjection' internal/status/status.go
+        grep -n 'func terminal(' internal/status/status.go
+        grep -n 'func projectAt' internal/status/status.go
+        grep -n 'func statusFixture' internal/status/status_test.go
+        grep -n 'func appendBudgetEvent' internal/status/budget_disclosure_test.go
+        grep -n 'EventAuthorityGranted' internal/runstate/types.go
+        grep -n 'func assertStatusMutationKilled' internal/status/mutation_test.go
+        grep -rn 'internal/procid' internal/status/ || echo NO-PROCID-IMPORT
+
+      `git status --porcelain` MUST be empty. If it lists anything, STOP and say so.
+      `grep -rn 'internal/procid' internal/status/` MUST print NO-PROCID-IMPORT.
+
+      Step 1 — READ THE PRECEDENT. `git show be983ebc` (the #456 budget disclosure). Confirm in your
+      report that it changed zero docs/ bytes and note the four-file shape you are mirroring.
+
+      Step 2 — WRITE THE BEHAVIORAL TESTS FIRST (red before green). Create
+      internal/status/authority_disclosure_test.go with the four tests in context and
+      cmd/partitur/status_authority_disclosure_test.go with the two tests in context. Run them against
+      the UNTOUCHED tree and quote the failures — the disclosure tests must RED (no authority field
+      yet). Do NOT add a liveness/procid call to make anything pass.
+
+      Step 3 — ADD THE `authority` OBJECT (internal/status/status.go ONLY). Append `Authority` to the
+      Report struct AFTER `Budget`, add the types and the `authorityProjection` helper from context,
+      and add `Authority: authorityProjection(state),` to the projectAt literal. Gate the owner on
+      `!terminal(string(state.Run))`. Add no import of internal/procid. Re-run the behavioral tests:
+      they must now PASS.
+
+      Step 4 — ADD THE THREE MUTATION CASES to internal/status/mutation_test.go, copying each `before`
+      string VERBATIM from your gofmt'd status.go (the helper fails unless it occurs exactly once).
+      Map each to its killing test as in context (assembly -> dead-owner, epoch -> fenced-vs-never,
+      owner-nil/terminal -> terminal-not-painted).
+
+      Step 5 — prove it holds. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/status/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./internal/status/
+        go test -count=1 -run '^(TestStatusDisclosesDeadOwnerAuthority|TestStatusAuthorityFencedVsNeverGrantedDistinguishable|TestStatusTerminalRunDoesNotPaintOwner|TestStatusDeadOwnerKeepsRecoveryAndLifecycle)$' -v ./internal/status/
+        go test -count=1 -run '^(TestStatusJSONCarriesAuthorityObject|TestStatusTextRendererStaysByteFrozenForDeadOwner)$' -v ./cmd/partitur/
+        go test -count=1 -run '^(TestUnreadableRunStillBlocksApplicationPreconditionScan|TestStatusSelectedUnreadableRunStillHaltsWithExitFive)$' -v ./cmd/partitur/
+
+      Then run the mutation criterion (`authority-mutation-proof`); it spawns subprocess builds and is
+      slow — do not truncate and do not report a timed-out command as a pass.
+
+      Step 6 — confirm the scope. Report `git status --porcelain` and `git diff` IN FULL. Exactly four
+      files may appear: internal/status/status.go, internal/status/authority_disclosure_test.go,
+      internal/status/mutation_test.go, cmd/partitur/status_authority_disclosure_test.go. Nothing under
+      docs/, cmd/partitur/main.go, internal/runstate, internal/runstore, internal/procid, README.md,
+      .github/, go.mod, go.sum, partitur.yaml, or .partitur/. Confirm `internal/status` still does not
+      import internal/procid, and that no `skipped_unreadable_runs` string exists in the tree. Do not
+      commit; the run captures the change set.
+
+      Then run every acceptance command below yourself and report each result.
     outputs:
-      - id: marker-change
+      - id: authority-observability-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet
+          run: ["sh", "-c", "go vet ./internal/status/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./internal/status/"]
+          timeout_min: 10
+        - id: dead-owner-disclosed
+          run: ["sh", "-c", "grep -q -e 'func TestStatusDisclosesDeadOwnerAuthority(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusDisclosesDeadOwnerAuthority$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusDisclosesDeadOwnerAuthority' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: fenced-vs-never-granted-distinguishable
+          run: ["sh", "-c", "grep -q -e 'func TestStatusAuthorityFencedVsNeverGrantedDistinguishable(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusAuthorityFencedVsNeverGrantedDistinguishable$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusAuthorityFencedVsNeverGrantedDistinguishable' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: terminal-owner-not-painted
+          run: ["sh", "-c", "grep -q -e 'func TestStatusTerminalRunDoesNotPaintOwner(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusTerminalRunDoesNotPaintOwner$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusTerminalRunDoesNotPaintOwner' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: status-json-carries-authority
+          run: ["sh", "-c", "grep -q -e 'func TestStatusJSONCarriesAuthorityObject(' cmd/partitur/status_authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusJSONCarriesAuthorityObject$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusJSONCarriesAuthorityObject' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: recovery-and-lifecycle-unchanged
+          run: ["sh", "-c", "grep -q -e 'func TestStatusDeadOwnerKeepsRecoveryAndLifecycle(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusDeadOwnerKeepsRecoveryAndLifecycle$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -20 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusDeadOwnerKeepsRecoveryAndLifecycle' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: text-renderer-byte-frozen
+          run: ["sh", "-c", "grep -q -e 'func TestStatusTextRendererStaysByteFrozenForDeadOwner(' cmd/partitur/status_authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusTextRendererStaysByteFrozenForDeadOwner$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -20 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusTextRendererStaysByteFrozenForDeadOwner' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: status-does-not-import-procid
+          run: ["sh", "-c", "! grep -rn -e 'internal/procid' internal/status/"]
+          timeout_min: 5
+        - id: no-skipped-unreadable-runs-field
+          run: ["sh", "-c", "! grep -rn -e 'skipped_unreadable_runs' internal/ cmd/"]
+          timeout_min: 5
+        - id: fail-closed-scan-unchanged
+          run: ["sh", "-c", "log=$(mktemp); go test -count=1 -run '^(TestUnreadableRunStillBlocksApplicationPreconditionScan|TestStatusSelectedUnreadableRunStillHaltsWithExitFive)$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestUnreadableRunStillBlocksApplicationPreconditionScan' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestStatusSelectedUnreadableRunStillHaltsWithExitFive' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: authority-mutation-proof
+          run: ["sh", "-c", "for f in TestMutationAuthorityAssemblyIsLoadBearing TestMutationAuthorityEpochCopyIsLoadBearing TestMutationAuthorityOwnerNilBranchIsLoadBearing; do grep -q -e \"func $f(\" internal/status/mutation_test.go || { echo MISSING-MUTATION $f; exit 1; }; done; log=$(mktemp); go test -tags=mutation -count=1 -timeout=30m -run '^(TestMutationAuthorityAssemblyIsLoadBearing|TestMutationAuthorityEpochCopyIsLoadBearing|TestMutationAuthorityOwnerNilBranchIsLoadBearing)$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -60 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestMutationAuthorityAssemblyIsLoadBearing' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestMutationAuthorityEpochCopyIsLoadBearing' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestMutationAuthorityOwnerNilBranchIsLoadBearing' \"$log\")\" -ge 1"]
+          timeout_min: 40
+        - id: spec-and-ledger-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
+          timeout_min: 5
+        - id: production-code-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ cmd/ | grep -v -e '_test\\.go$' | grep -v -e 'internal/status/status\\.go$')\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -v -e 'internal/status/status\\.go$' | grep -v -e 'internal/status/authority_disclosure_test\\.go$' | grep -v -e 'internal/status/mutation_test\\.go$' | grep -v -e 'cmd/partitur/status_authority_disclosure_test\\.go$')\""]
+          timeout_min: 5
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [disclose-authority-observability]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the additive `authority` disclosure. Change no file. Report in English.
+
+      The ways this run can be wrong — check every one and say plainly if it holds or not:
+        1. WRONG LAYER (a2 snuck in): `internal/status` imports `internal/procid`, or any
+           `procid.Matches` / `Lease.MatchOwner` / liveness / "alive"/"gone" / recorded_owner_process_match
+           token appears. Run `grep -rn -e 'internal/procid' internal/status/` and
+           `grep -rn -e 'procid\.' -e 'MatchOwner' -e 'recorded_owner_process_match' internal/status/` and
+           quote the (empty) results. Any hit is a scope violation — fail it.
+        2. PERMANENT OWNER BADGE: read `authorityProjection`. Confirm the owner is gated on
+           `!terminal(string(state.Run))` using the existing helper, and that
+           TestStatusTerminalRunDoesNotPaintOwner asserts a FAILED/terminal run with a non-nil
+           `Authority.Owner` in state projects `owner: null`. If a terminal run paints an owner, fail.
+        3. NEVER-GRANTED vs FENCED conflated: confirm epoch 0 + owner null and epoch > 0 + owner null
+           are distinguishable from the JSON alone (TestStatusAuthorityFencedVsNeverGrantedDistinguishable).
+        4. HUMAN LINE ADDED (b snuck in): confirm cmd/partitur/main.go is byte-unchanged (`git diff --
+           cmd/partitur/main.go` empty) and that TestStatusTextRendererStaysByteFrozenForDeadOwner
+           asserts the dead-owner text output carries no authority/owner/pid substring.
+        5. SKIPPED-RUNS (c snuck in): `grep -rn -e 'skipped_unreadable_runs' -e 'observation' internal/status/`
+           and confirm the ErrNoActiveRun detail string is unchanged. Any new field is a violation.
+        6. SPEC EDIT: `git status --porcelain -- docs/` and `git diff -- docs/` MUST be empty. The
+           clause-staging blob and DESIGN.md are byte-frozen.
+        7. LOCKS BROKEN: recovery.state stays NOT_REQUIRED and run.lifecycle stays RUNNING on the
+           dead-owner fixture; exit 0/2/5 unchanged; status --json is exactly one JSON document; the
+           fail-closed scan tests still pass.
+        8. MUTATION NOT LOAD-BEARING: each of the three mutation cases must map to a DISTINCT conjunct
+           (assembly, epoch copy, owner-nil/terminal branch) and each `before` must occur exactly once
+           in status.go. Re-run `authority-mutation-proof` and quote the three PASS lines. Confirm the
+           `after` of the owner-nil case removes the terminal guard (so the terminal test is what
+           kills it), not something that also breaks the assembly.
+        9. FALSE GREEN by disabled/renamed test, or a timed-out mutation run reported as a pass.
+
+      1. SCOPE, BY READING THE WHOLE DIFF. Run `git status --porcelain` and `git diff`, quote BOTH in
+      full. Exactly four files may appear: internal/status/status.go,
+      internal/status/authority_disclosure_test.go, internal/status/mutation_test.go,
+      cmd/partitur/status_authority_disclosure_test.go. Any other path is a scope violation.
+
+      2. RED WITHOUT THE FIX. Take the disclosure test's assertions and confirm they would RED on the
+      base status.go (which has no authority field) — e.g. write the base
+      `git show <base>:internal/status/status.go` into a scratch tree and run
+      TestStatusDisclosesDeadOwnerAuthority against it, or reason from the diff and say so explicitly.
+
+      3. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/status/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./internal/status/
+        go test -count=1 -run '^(TestStatusDisclosesDeadOwnerAuthority|TestStatusAuthorityFencedVsNeverGrantedDistinguishable|TestStatusTerminalRunDoesNotPaintOwner|TestStatusDeadOwnerKeepsRecoveryAndLifecycle)$' -v ./internal/status/
+        go test -count=1 -run '^(TestStatusJSONCarriesAuthorityObject|TestStatusTextRendererStaysByteFrozenForDeadOwner)$' -v ./cmd/partitur/
+
+      If any point above does not hold, say so plainly rather than passing it.
+    inputs: [authority-observability-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet
+          run: ["sh", "-c", "go vet ./internal/status/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./internal/status/"]
+          timeout_min: 10
+        - id: dead-owner-disclosed
+          run: ["sh", "-c", "grep -q -e 'func TestStatusDisclosesDeadOwnerAuthority(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusDisclosesDeadOwnerAuthority$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusDisclosesDeadOwnerAuthority' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: fenced-vs-never-granted-distinguishable
+          run: ["sh", "-c", "grep -q -e 'func TestStatusAuthorityFencedVsNeverGrantedDistinguishable(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusAuthorityFencedVsNeverGrantedDistinguishable$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusAuthorityFencedVsNeverGrantedDistinguishable' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: terminal-owner-not-painted
+          run: ["sh", "-c", "grep -q -e 'func TestStatusTerminalRunDoesNotPaintOwner(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusTerminalRunDoesNotPaintOwner$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusTerminalRunDoesNotPaintOwner' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: status-json-carries-authority
+          run: ["sh", "-c", "grep -q -e 'func TestStatusJSONCarriesAuthorityObject(' cmd/partitur/status_authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusJSONCarriesAuthorityObject$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusJSONCarriesAuthorityObject' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: recovery-and-lifecycle-unchanged
+          run: ["sh", "-c", "grep -q -e 'func TestStatusDeadOwnerKeepsRecoveryAndLifecycle(' internal/status/authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusDeadOwnerKeepsRecoveryAndLifecycle$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -20 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusDeadOwnerKeepsRecoveryAndLifecycle' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: text-renderer-byte-frozen
+          run: ["sh", "-c", "grep -q -e 'func TestStatusTextRendererStaysByteFrozenForDeadOwner(' cmd/partitur/status_authority_disclosure_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestStatusTextRendererStaysByteFrozenForDeadOwner$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -20 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestStatusTextRendererStaysByteFrozenForDeadOwner' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: status-does-not-import-procid
+          run: ["sh", "-c", "! grep -rn -e 'internal/procid' internal/status/"]
+          timeout_min: 5
+        - id: no-skipped-unreadable-runs-field
+          run: ["sh", "-c", "! grep -rn -e 'skipped_unreadable_runs' internal/ cmd/"]
+          timeout_min: 5
+        - id: fail-closed-scan-unchanged
+          run: ["sh", "-c", "log=$(mktemp); go test -count=1 -run '^(TestUnreadableRunStillBlocksApplicationPreconditionScan|TestStatusSelectedUnreadableRunStillHaltsWithExitFive)$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestUnreadableRunStillBlocksApplicationPreconditionScan' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestStatusSelectedUnreadableRunStillHaltsWithExitFive' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: authority-mutation-proof
+          run: ["sh", "-c", "for f in TestMutationAuthorityAssemblyIsLoadBearing TestMutationAuthorityEpochCopyIsLoadBearing TestMutationAuthorityOwnerNilBranchIsLoadBearing; do grep -q -e \"func $f(\" internal/status/mutation_test.go || { echo MISSING-MUTATION $f; exit 1; }; done; log=$(mktemp); go test -tags=mutation -count=1 -timeout=30m -run '^(TestMutationAuthorityAssemblyIsLoadBearing|TestMutationAuthorityEpochCopyIsLoadBearing|TestMutationAuthorityOwnerNilBranchIsLoadBearing)$' -v ./internal/status/ > \"$log\" 2>&1; status=$?; tail -60 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestMutationAuthorityAssemblyIsLoadBearing' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestMutationAuthorityEpochCopyIsLoadBearing' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestMutationAuthorityOwnerNilBranchIsLoadBearing' \"$log\")\" -ge 1"]
+          timeout_min: 40
+        - id: spec-and-ledger-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
+          timeout_min: 5
+        - id: production-code-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ cmd/ | grep -v -e '_test\\.go$' | grep -v -e 'internal/status/status\\.go$')\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -v -e 'internal/status/status\\.go$' | grep -v -e 'internal/status/authority_disclosure_test\\.go$' | grep -v -e 'internal/status/mutation_test\\.go$' | grep -v -e 'cmd/partitur/status_authority_disclosure_test\\.go$')\""]
+          timeout_min: 5
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/status/status.go"
+    - "internal/status/authority_disclosure_test.go"
+    - "internal/status/mutation_test.go"
+    - "cmd/partitur/status_authority_disclosure_test.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 180
+    retries_per_movement: 1
   amendment:
     auto: "off"
