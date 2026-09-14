@@ -46,16 +46,24 @@ go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-cl
 ```
 
 `go install` writes to `$(go env GOBIN)` when that is set and `$(go env GOPATH)/bin` otherwise. Put
-whichever one applies on your `PATH`. (`make help` lists the other targets — `make build`, `make
-battery` for the full CI test set, `make check` for the whole gate.)
+whichever one applies on your `PATH`. The core resolves its siblings by name, so invoking `partitur`
+by absolute path with that directory *off* `PATH` fails at the first probe rather than later:
+
+```
+adapter-environment: adapter="codex" kind="executable_absent" detail="partitur-adapter-codex is absent from PATH"
+```
+
+(`make help` lists the other targets — `make build`, `make battery` for the full CI test set, `make
+check` for the whole gate.)
 
 An adapter is a thin shim, not the agent. Whichever performer a cast selects, that vendor's own CLI
 has to be installed and on `PATH` as well — the adapter's probe resolves and runs it. `validate`
 exits 3 either way, and the `adapter-environment` diagnostic distinguishes them: `executable_absent`
 means the adapter binary is missing, while a missing vendor CLI surfaces as `error_response` naming
-what the adapter could not resolve. Install the Codex CLI to follow this page as written.
+what the adapter could not resolve. Everything below was executed against a fresh repository with
+the Codex CLI installed.
 
-Scaffold a repository:
+### Scaffold and cast
 
 ```bash
 partitur init
@@ -63,7 +71,17 @@ partitur init
 
 That writes `partitur.yaml` — a draft score with one interview movement — and `.partitur/`. It
 deliberately writes no cast: a cast binds parts to the agents *you* choose, and the tool does not
-choose for you. Write `.partitur/cast.yaml`:
+choose for you. `validate` refuses, names the part it could not bind, and hands you the block:
+
+```console
+$ partitur validate
+cast: rule="cast.score" origin="" pointer="/bindings/interview" detail="binding_missing" hint="write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer"
+```
+
+Substitute a model your adapter can reach and the part the pointer named. Pasting just that much
+still exits 3, on a second hint — `unmet=["path_grants" "shell_grants"]`, offering
+`allow_advisory_enforcement: true` or the grants that would clear each dimension. The final
+`.partitur/cast.yaml`:
 
 ```yaml
 cast: "0.1"
@@ -77,12 +95,11 @@ bindings:
     performer: codex
 ```
 
-`allow_advisory_enforcement: true` is what this score needs, and it concedes something real.
-[`docs/DESIGN.md`](docs/DESIGN.md) §4's withheld-authority table pairs each authority a movement
-withholds or scopes with an enforcement dimension the adapter must provide in its place. The
-scaffold withholds `shell` and declares no `allowed_paths`; the Codex adapter reports neither
-`shell_grants` nor `path_grants`; so those two rows go unmet. The flag turns a fail-closed refusal
-into a per-attempt advisory record. Without it `validate` exits 3.
+`allow_advisory_enforcement: true` concedes something real. [`docs/DESIGN.md`](docs/DESIGN.md) §4's
+withheld-authority table pairs each authority a movement withholds or scopes with an enforcement
+dimension the adapter must provide in its place. The scaffold withholds `shell` and declares no
+`allowed_paths`; the Codex adapter reports neither `shell_grants` nor `path_grants`; so those two
+rows go unmet. The flag turns a fail-closed refusal into a per-attempt advisory record.
 
 Whether some other score can drop the flag is a question about that score, and `validate` answers it
 by naming the dimensions it found unmet — §4's table and `internal/cast/enforcement.go` say which
@@ -91,28 +108,143 @@ for a movement granting `repo_read` or `repo_write`, `path_grants` is demanded u
 is exactly `["**"]` — so a repository-granting movement declaring `["**", "src/**"]` still owes it,
 even though that list narrows nothing.
 
-```bash
-partitur validate
+```console
+$ partitur validate
+enforcement advisory: movement="interview" part="interview" performer="codex" unmet=["path_grants" "shell_grants"]
 ```
 
 Exit 0, with the advisory enforcement block on stderr, means the score and cast are sound and every
-adapter was probed. That is where this page stops being a transcript, because the rest has not been
-executed here yet — and a walkthrough composed from the specification is how the previous version of
-this section came to describe commands in an order the tool refuses.
+adapter was probed.
 
-What is left is `run`, and then a cycle driven by what `status` reports: `answer <decision-id>` when
-a run stops on a question, `approve <decision-id> --approve` when it stops on a gate or an amendment,
-and `resume <run-id>` to carry it forward. Two things a reader would otherwise guess wrong:
+### A score that does work
+
+The scaffold's interview movement is a draft-phase placeholder. Replace `partitur.yaml` with a
+finalized score — this one writes a file and then checks it:
+
+```yaml
+score: "0.2"
+name: greeting
+revision: 1
+status: finalized
+
+goal: Add a greeting file to the repository.
+
+verification:
+  expectation:
+    intent: none
+    apply_gate:
+      require: [verified, approved]
+  final_movement: check
+
+parts:
+  writer:
+    capabilities: [repo_read, repo_write]
+  verifier:
+    capabilities: [repo_read]
+    read_only: true
+
+movements:
+  - id: write-greeting
+    part: writer
+    needs: []
+    grants: [repo_read, repo_write]
+    instruction: |
+      Create the file greeting.txt containing exactly one line:
+      hello from partitur
+
+      The line must end with one LF byte. Do not edit, add, remove, or rename
+      any other file.
+    outputs:
+      - id: greeting-change
+        kind: change_set
+    acceptance:
+      hard:
+        - id: greeting-written
+          run: ["sh", "-c", "printf 'hello from partitur\\n' | cmp -s - greeting.txt"]
+
+  - id: check
+    part: verifier
+    needs: [write-greeting]
+    grants: [repo_read]
+    instruction: |
+      Confirm that greeting.txt holds exactly the line `hello from partitur`
+      followed by one LF byte, and nothing else. Report what you observed.
+      Change no file.
+    inputs: [greeting-change]
+    acceptance:
+      hard:
+        - id: greeting-is-hello
+          run: ["sh", "-c", "printf 'hello from partitur\\n' | cmp -s - greeting.txt"]
+      human_gate: always
+
+policy:
+  allowed_paths: ["greeting.txt"]
+  side_effects: []
+  budget:
+    active_wall_clock_min: 10
+    retries_per_movement: 0
+  amendment:
+    auto: "off"
+```
+
+The parts changed, so the cast's `bindings` block gains `writer` and `verifier` and drops
+`interview`. Two shapes here are load-bearing rather than stylistic. The final movement may not
+grant `repo_write` — naming the writer as `final_movement` is refused with
+`detail="final_movement_repo_write"` — so a verifying movement is what closes a writing score. And
+`require: [verified, approved]` obliges the final movement to carry both a `hard` criterion and
+`human_gate: always`, or `validate` reports the grade as unachievable.
+
+### Run, gate, apply
+
+```bash
+partitur run
+```
+
+`run` prints the run id and executes until something needs a human. Here that is the gate on
+`check`, and `status` is how you read it:
+
+```console
+$ partitur status
+Run: 01a09d6e-d568-7158-a4a5-a1752d6bda71 (WAITING_HUMAN)
+Journal: INTACT
+Application: NOT_APPLIED
+Candidate: sha256:e0abe119… (tree git-sha1:dc8fd174…, base git-sha1:bf3bf6d4…, rev 1)
+Pending decision 01a09d70-0d3e-78dc-a33b-4ae6b7dfa8d7: human_gate (rev 1)
+Movement write-greeting: SUCCEEDED
+  Mark: VERIFIED (1 criteria: greeting-written […]; rev 1; after 0 failed attempts)
+Movement check: WAITING_HUMAN
+  Mark: VERIFIED (1 criteria: greeting-is-hello […]; rev 1; after 0 failed attempts)
+```
+
+Resolve the decision, then carry the run forward — two commands, because resolving is not resuming:
+
+```console
+$ partitur approve 01a09d70-0d3e-78dc-a33b-4ae6b7dfa8d7 --approve
+run waiting: state="nonterminal" resume="partitur resume 01a09d6e-d568-7158-a4a5-a1752d6bda71"
+$ partitur resume
+```
+
+The run is now `SUCCEEDED`, `check` carries a second `APPROVED` mark naming the gate decision — and
+the working tree still has no `greeting.txt`. A candidate is not an application:
+
+```console
+$ partitur apply 01a09d6e-d568-7158-a4a5-a1752d6bda71
+$ cat greeting.txt
+hello from partitur
+```
+
+`status` then reads `Application: APPLIED`. Three things a reader would otherwise guess wrong:
 
 - `answer` and `approve` take a **decision** id, not a run id, and resolving a decision does not by
   itself start the next attempt — `resume` is what does.
+- Bare `status` finds only *active* runs. Once the run is terminal it refuses with `precondition
+  refused: detail="no active run: found 0"` (exit 2); pass the run id.
 - Promotion comes last, not first. Only the latest revision of a `SUCCEEDED` run may be promoted, at
   most once, and only after `apply.completed` for the same candidate — so `apply <run-id>` precedes
   `promote-score <run-id>`.
 
 Each command's operands, exit codes, and refusal conditions are specified in
-[`docs/DESIGN.md`](docs/DESIGN.md) §7, and the draft phase's own contract in §2. The executed
-walkthrough replaces this section once it has been run rather than composed.
+[`docs/DESIGN.md`](docs/DESIGN.md) §7, and the draft phase's own contract in §2.
 
 Working across several repositories? Cast layers `.partitur/cast.yaml` over
 `~/.config/partitur/cast.yaml`, and `performers` and `bindings` layer independently. Put the
