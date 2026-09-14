@@ -2657,7 +2657,7 @@ func TestValidateRendersOrderedBlocksAndExitsThree(t *testing.T) {
 }
 
 func TestValidateBindingMissingRendersGuidance(t *testing.T) {
-	hint := "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer"
+	hint := "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml: {cast: '0.1', performers: {performer: {adapter: codex, model: your-model}}, bindings: {<part>: {performer: performer}}}"
 	repository := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	writeValidateInputs(t, repository, e2eScore("interview"), e2eCast(map[string]string{}))
