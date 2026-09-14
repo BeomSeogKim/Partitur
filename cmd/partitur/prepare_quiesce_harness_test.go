@@ -228,8 +228,10 @@ func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {
 		driver.releaseProbe(t)
 		driver.waitReceipt(t, "prepare.quiesce_observed")
 		assertQuiesceRound(t, repository, runID, 1)
-		driver.kill(t)
+		// Kill the released approver first: its 25ms CompleteOrAbandonPrepare poll would take
+		// the fence path after the driver is reaped and durably approve the pending prepare.
 		killPausedRun(t, approver)
+		driver.kill(t)
 		assertPrepareBarrier(t, repository, runID)
 		assertRecoveryFixedPoint(t, partitur, repository, environment, string(runID), nil, fixedPointNoneFixture)
 	})
