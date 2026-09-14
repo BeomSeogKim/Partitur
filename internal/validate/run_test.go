@@ -558,7 +558,7 @@ func TestMissingBindingGuidance(t *testing.T) {
 		Rule:    "cast.score",
 		Pointer: "/bindings/interview",
 		Detail:  "binding_missing",
-		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer",
+		Hint:    "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml: {cast: '0.1', performers: {performer: {adapter: codex, model: your-model}}, bindings: {<part>: {performer: performer}}}",
 	}}
 	if !reflect.DeepEqual(result.Entries, want) {
 		t.Fatalf("entries = %#v, want %#v", result.Entries, want)

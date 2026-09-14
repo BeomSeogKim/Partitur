@@ -14,7 +14,7 @@ type prober interface {
 }
 
 const (
-	bindingMissingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer"
+	bindingMissingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml: {cast: '0.1', performers: {performer: {adapter: codex, model: your-model}}, bindings: {<part>: {performer: performer}}}"
 	installHint        = "install the four Partitur binaries with `make install` or `go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline`, then put the Go bin dir (`$(go env GOBIN)` or `$(go env GOPATH)/bin`) on `PATH` so `partitur-trampoline` is available"
 	enforcementHint    = "set `allow_advisory_enforcement: true` to accept unmet dimensions as per-attempt advisories, or clear each unmet dimension by adding the missing grants or `allowed_paths: [\"**\"]`"
 )
