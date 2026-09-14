@@ -1,24 +1,115 @@
 score: "0.2"
-name: reference-workflow
+name: paste-ready-cast-hint
 revision: 1
 status: finalized
 
 goal: |
-  Exercise one real, recovery-capable Partitur write attempt against this repository,
-  and let `apply` carry its result onto the checkout.
+  Fix issue #470, and nothing else. The `binding_missing` validation hint (added in #465) advertises
+  "paste this minimal cast into .partitur/cast.yaml:" and then embeds a MULTI-LINE block-YAML snippet.
+  Because the hint renders through `%q` (`cmd/partitur/main.go` renderHint:
+  `fmt.Fprintf(w, " hint=%q", entry.Hint)`), the snippet arrives on one line with `\n` and `\"`
+  escaped, so a user must hand-unescape it before it is valid YAML — it is not literally paste-ready.
+
+  THIS RUN'S FIX (Shape B, decided in the investigation — see context): change ONLY the snippet
+  portion of the `bindingMissingHint` constant in `internal/validate/run.go` so the offered cast is a
+  SINGLE-LINE, `%q`-safe YAML document that survives quoting VERBATIM and, pasted into
+  `.partitur/cast.yaml`, makes `partitur validate` resolve the previously-missing binding. Keep the
+  `%q` renderer and its one-physical-line invariant exactly as they are — do NOT change renderHint,
+  main.go, DESIGN.md, the clause-staging registry, README.md, or any other document.
+
+  FORBIDDEN in this run, even if it would pass every test: any change to `cmd/partitur/main.go`
+  (the renderer), to any production file other than `internal/validate/run.go`, to `docs/DESIGN.md`
+  or `docs/DESIGN.clause-staging.json` or any other specification/ledger document, to `README.md`,
+  to `.github/`, `go.mod`, `go.sum`, `partitur.yaml`, or `.partitur/`. Do NOT introduce
+  `strconv.Unquote` in the acceptance test (see the FALSE-GREEN warning in context). Do NOT rename
+  any existing test. No new files: put the new behavioral test in `cmd/partitur/e2e_test.go` and the
+  new mutation case in `cmd/partitur/cast_guidance_mutation_test.go`.
 
 context: |
-  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
-  change only reference-workflow/marker.txt; its base content is deliberately different
-  from the required result so that the captured change set is not a no-op, and so that
-  the checkout `apply` runs against initially differs from the candidate.
+  ROUTING (decided before staging): THIS IS RUN-LOOP ELIGIBLE, CODE-ONLY. IT IS NOT A SPEC CHANGE.
+
+  The single-line `%q`-quoted attribute form is NOT pinned by any normative anchor:
+    - docs/DESIGN.md §7 `cli.validate` (bytes 217256-217392) says validate "compiles the score,
+      resolves the cast, probes its adapters, and evaluates the fail-closed predicate" — no line
+      format.
+    - docs/DESIGN.md ~L1436-1439 pins ORDERING/GROUPING (score -> cast -> adapter-environment ->
+      capability -> enforcement), "rendered to stderr", and empty stdout. Nothing about a per-entry
+      single physical line or `%q`.
+    - The clause-staging registry `validate-matrix.*` / `cli.validate` markers pin the output
+      PARTITION and probe semantics, not line grammar. Every DESIGN.md "hint" mention is
+      `session_hint` (adapter resume tokens), an unrelated concept.
+    - The ONLY thing pinning the one-physical-line `%q` form is package-internal:
+      internal/validate/CONFORMANCE.md C4 ("remain one physical line") and its test
+      cmd/partitur/main_test.go TestValidateRendersOrderedBlocksAndExitsThree. Neither is DESIGN.md
+      nor the registry, so keeping them intact is ordinary code, not a normative edit.
+  Because no normative anchor pins the form AND the fix needs no renderer/spec/registry edit, this is
+  a run-loop fix.
+
+  WHY SHAPE B (single-line-safe snippet) AND NOT SHAPE A (multi-line unquoted block). Shape A would
+  change renderHint to emit literal newlines, breaking C4's one-physical-line invariant, the
+  ordered-blocks test, and the "CLI hint render" mutation anchor in onboarding_hint_mutation_test.go,
+  and it would change a cross-cutting invariant for ALL hints. Shape B is surgical: only the snippet
+  after the marker changes; the renderer and every rendering invariant stay byte-for-byte.
+
+  THE `%q` FACT THAT MAKES SHAPE B WORK (verified). Go's `%q` escapes `"`, `\`, and control chars
+  (including `\n`, `\t`). It does NOT touch single quotes or flow-YAML punctuation `{ } : ,`. So a
+  single-line FLOW YAML document that uses SINGLE quotes / unquoted scalars (no double quotes, no
+  newlines) survives `%q` VERBATIM. Verified end-to-end against the built binary at base:
+    - score with part `interview` + empty cast -> `validate` emits binding_missing (exit 3);
+    - pasting
+        {cast: '0.1', performers: {performer: {adapter: codex, model: your-model}}, bindings: {interview: {performer: performer}}}
+      into `.partitur/cast.yaml` -> `validate` exits 0, binding_missing gone.
+  A flow document with single quotes is the recommended encoding; the writer may choose another
+  encoding as long as it is one physical line, contains no `"` and no `\`, survives `%q` verbatim,
+  and parses+resolves. KEEP the prose prefix and these three mutation-anchor substrings intact so the
+  existing `TestMutationBindingMissingGuidance` cases stay green:
+  `.partitur/cast.yaml (project)`, `~/.config/partitur/cast.yaml (user-global)`,
+  `bindings.<part>.performer must name an entry in performers`.
+
+  FALSE-GREEN TRAP — READ THIS. `strconv.Unquote` REVERSES `%q`, so a test that Unquotes the hint
+  gets clean multi-line YAML EVEN ON THE UNFIXED CONSTANT, and would pass on the bug. The behavioral
+  test MUST model the HUMAN paste: take the hint's DISPLAYED bytes — everything after the marker
+  `paste this minimal cast into .partitur/cast.yaml:` up to the closing attribute quote, WITHOUT
+  unquoting — and write THOSE bytes into cast.yaml. On the unfixed constant those bytes contain
+  literal `\n`/`\"` -> invalid YAML -> binding_missing persists -> test reds. On the fix they are
+  literal flow YAML -> resolves -> test greens. The `paste-ready-mutation-proof` criterion enforces
+  this: reverting the snippet to the multi-line block must make the behavioral test RED (mutation
+  killed). If the test uses `strconv.Unquote`, the mutated multi-line block also Unquotes to valid
+  YAML, the test stays green, the mutation is NOT killed, and that criterion fails. So do not Unquote.
+
+  PLACEHOLDER NOTE. The snippet's binding key / performer are template placeholders. The behavioral
+  test's fixture part id (and performer, if named) must match whatever binding key the emitted
+  snippet uses so that the pasted cast actually resolves — pick a concrete example id reused by the
+  fixture, or perform only the minimal documented placeholder substitution a human is told to make.
+  The load-bearing discriminator is the DISPLAYED-bytes / no-Unquote rule above, not the placeholder.
+
+  FILES THIS RUN MAY TOUCH (all pre-existing; the ONLY production file is run.go):
+    - internal/validate/run.go — the `bindingMissingHint` constant (snippet portion only).
+    - internal/validate/run_test.go — mirrors the constant in TestMissingBindingGuidance and in
+      TestCastAdapterCapabilityEnforcementOrderAndSuppression; update the literals to match.
+    - cmd/partitur/main_test.go — TestValidateBindingMissingRendersGuidance mirrors the constant;
+      update its literal. Do NOT touch TestValidateRendersOrderedBlocksAndExitsThree (its binding
+      entry carries no hint and must stay byte-identical — it is the renderer-untouched guard).
+    - cmd/partitur/e2e_test.go — the `validateBindingHint` const (used by TestValidateEndToEnd);
+      update it, and ADD the new behavioral test TestBindingMissingHintPasteResolvesBinding here
+      (reuse writeValidateInputs / runWithValidate; run the real validate path end to end).
+    - cmd/partitur/cast_guidance_mutation_test.go — ADD one mutation case to
+      TestMutationBindingMissingGuidance with `name` EXACTLY `paste_ready_snippet_load_bearing`,
+      `before` = the new single-line snippet substring, `after` = the old multi-line block,
+      `packagePath` = "./cmd/partitur", `testName` = "TestBindingMissingHintPasteResolvesBinding".
+
+  Grep-pin note: every PASS-line grep uses `grep -c -e '--- PASS: ...'` (leading dash guarded by
+  `-e`). README.md line ~78 and the Quickstart walkthrough still show the old escaped example; they
+  are DELIBERATELY out of scope for this code-only run (no test verifies README content — the
+  documentation-claim manifest holds zero content baselines) and must stay byte-unchanged. Name that
+  as a follow-up doc gap in your report; do not fix it here.
 
 verification:
   expectation:
-    intent: none
+    intent: pass-existing-tests
     apply_gate:
       require: [verified, approved]
-  final_movement: check
+  final_movement: confirm
 
 parts:
   writer:
@@ -28,43 +119,237 @@ parts:
     read_only: true
 
 movements:
-  - id: write-marker
+  - id: fix-paste-ready-cast-hint
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
-      partitur reference workflow
+      Make the binding_missing "paste this minimal cast" snippet literally paste-ready. Everything
+      you write is English. The routing, the chosen Shape B, the `%q` mechanism, the false-green
+      trap, and the exact file list are in this score's context; implement them, do not redesign
+      them, and do not touch anything outside the five files named there.
 
-      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
+      Step 0 — CONFIRM THE GROUND, cheaply. Report the output of each, verbatim:
+
+        git status --porcelain
+        grep -n 'bindingMissingHint' internal/validate/run.go
+        grep -n 'func TestMissingBindingGuidance' internal/validate/run_test.go
+        grep -n 'func TestValidateBindingMissingRendersGuidance' cmd/partitur/main_test.go
+        grep -n 'func TestValidateRendersOrderedBlocksAndExitsThree' cmd/partitur/main_test.go
+        grep -n 'validateBindingHint' cmd/partitur/e2e_test.go
+        grep -n 'func TestMutationBindingMissingGuidance' cmd/partitur/cast_guidance_mutation_test.go
+        grep -n 'fmt.Fprintf(w, " hint=%q"' cmd/partitur/main.go
+
+      `git status --porcelain` MUST be empty. If it lists anything, STOP and say so: the fence
+      criteria cannot distinguish a stray file from your own work.
+
+      Step 1 — REPRODUCE THE DEFECT AT THE SOURCE. Run the `paste-ready-binding-resolves` acceptance
+      command below on the UNTOUCHED tree. It must FAIL because the test does not yet exist; that is
+      expected. Then, to see the defect itself, build partitur, make a temp repo with a score that
+      has one part and an empty cast, run `validate`, and quote the emitted hint: it shows
+      `\ncast: \"0.1\"\n...`. Confirm in your report that the displayed bytes are escaped.
+
+      Step 2 — WRITE THE BEHAVIORAL TEST FIRST (red before green). In cmd/partitur/e2e_test.go add
+      `func TestBindingMissingHintPasteResolvesBinding(t *testing.T)`. It must:
+        (a) build a repo whose score has a part with NO binding, run the real `validate` path, and
+            capture stderr;
+        (b) locate the binding_missing entry line and take the hint's DISPLAYED bytes AFTER the
+            marker `paste this minimal cast into .partitur/cast.yaml:` up to the closing attribute
+            quote — WITHOUT strconv.Unquote (see the false-green trap in context);
+        (c) write those bytes (with at most the minimal documented placeholder substitution) to
+            `.partitur/cast.yaml` in the repo;
+        (d) re-run `validate` and assert the binding_missing entry for that part is gone.
+      Run it against the UNFIXED constant and quote the failure — it must RED (the escaped bytes are
+      not valid YAML). Do NOT introduce strconv.Unquote to make it pass.
+
+      Step 3 — FIX THE CONSTANT (Shape B). In internal/validate/run.go, replace ONLY the snippet
+      after the marker with a single-line, `%q`-safe YAML document (single quotes / unquoted scalars,
+      no `"`, no `\`, no newline) that parses and resolves the binding. Keep the prose prefix and the
+      three mutation-anchor substrings named in context byte-for-byte. Do NOT touch cmd/partitur/main.go.
+      Re-run the behavioral test: it must now PASS.
+
+      Step 4 — UPDATE THE MIRRORS (tests only). Update the constant's literal copies in
+      internal/validate/run_test.go (TestMissingBindingGuidance and
+      TestCastAdapterCapabilityEnforcementOrderAndSuppression), cmd/partitur/main_test.go
+      (TestValidateBindingMissingRendersGuidance), and cmd/partitur/e2e_test.go
+      (`validateBindingHint`). Leave TestValidateRendersOrderedBlocksAndExitsThree byte-identical.
+
+      Step 5 — ADD THE MUTATION CASE. In cmd/partitur/cast_guidance_mutation_test.go add one case to
+      TestMutationBindingMissingGuidance named EXACTLY `paste_ready_snippet_load_bearing`, whose
+      `before` is a unique substring of your new snippet and whose `after` restores the old
+      multi-line block, with packagePath "./cmd/partitur" and testName
+      "TestBindingMissingHintPasteResolvesBinding". Reverting the snippet must re-break the
+      behavioral test (mutation killed).
+
+      Step 6 — prove it holds. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/validate/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./cmd/partitur/
+        go test -count=1 -run '^TestBindingMissingHintPasteResolvesBinding$' -v ./cmd/partitur/
+        go test -count=1 -run '^TestValidateRendersOrderedBlocksAndExitsThree$' -v ./cmd/partitur/
+        go test -count=1 -run '^TestMissingBindingGuidance$' -v ./internal/validate/
+        go test -count=1 -run '^(TestValidateBindingMissingRendersGuidance|TestValidateEndToEnd)$' -v ./cmd/partitur/
+
+      Then run the two mutation criteria (`existing-hint-mutations-still-pass`,
+      `paste-ready-mutation-proof`); they spawn subprocess builds and are slow — do not truncate and
+      do not report a timed-out command as a pass.
+
+      Step 7 — confirm the scope. Report `git status --porcelain` and `git diff` IN FULL. Exactly
+      five files may appear: internal/validate/run.go, internal/validate/run_test.go,
+      cmd/partitur/main_test.go, cmd/partitur/e2e_test.go, cmd/partitur/cast_guidance_mutation_test.go.
+      Nothing under docs/, README.md, cmd/partitur/main.go, .github/, go.mod, go.sum, partitur.yaml,
+      or .partitur/. Do not commit; the run captures the change set. In your report, say explicitly
+      that README.md and the Quickstart still show the old escaped example and were left out of scope.
+
+      Then run every acceptance command below yourself and report each result.
     outputs:
-      - id: marker-change
+      - id: paste-ready-hint-change-set
         kind: change_set
     acceptance:
       hard:
-        - id: marker-written
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet
+          run: ["sh", "-c", "go vet ./internal/validate/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./cmd/partitur/"]
+          timeout_min: 10
+        - id: paste-ready-binding-resolves
+          run: ["sh", "-c", "grep -q -e 'func TestBindingMissingHintPasteResolvesBinding(' cmd/partitur/e2e_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestBindingMissingHintPasteResolvesBinding$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestBindingMissingHintPasteResolvesBinding' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: rendering-invariant-intact
+          run: ["sh", "-c", "log=$(mktemp); go test -count=1 -run '^TestValidateRendersOrderedBlocksAndExitsThree$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -15 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestValidateRendersOrderedBlocksAndExitsThree' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: wording-mirrors-pass
+          run: ["sh", "-c", "log=$(mktemp); go test -count=1 -run '^TestMissingBindingGuidance$' -v ./internal/validate/ > \"$log\" 2>&1; s1=$?; go test -count=1 -run '^(TestValidateBindingMissingRendersGuidance|TestValidateEndToEnd)$' -v ./cmd/partitur/ >> \"$log\" 2>&1; s2=$?; tail -40 \"$log\"; test $s1 -eq 0 && test $s2 -eq 0 && test \"$(grep -c -e '--- PASS: TestMissingBindingGuidance' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestValidateBindingMissingRendersGuidance' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestValidateEndToEnd' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: existing-hint-mutations-still-pass
+          run: ["sh", "-c", "log=$(mktemp); go test -tags=mutation -count=1 -timeout=30m -run '^(TestMutationOnboardingHints|TestMutationBindingMissingGuidance)$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -50 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestMutationOnboardingHints' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestMutationBindingMissingGuidance' \"$log\")\" -ge 1"]
+          timeout_min: 40
+        - id: paste-ready-mutation-proof
+          run: ["sh", "-c", "grep -q -e 'paste_ready_snippet_load_bearing' cmd/partitur/cast_guidance_mutation_test.go || { echo MISSING-MUTATION-CASE; exit 1; }; log=$(mktemp); go test -tags=mutation -count=1 -timeout=15m -run '^TestMutationBindingMissingGuidance$/paste_ready_snippet_load_bearing$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -25 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestMutationBindingMissingGuidance/paste_ready_snippet_load_bearing' \"$log\")\" -ge 1"]
+          timeout_min: 20
+        - id: spec-and-ledger-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/ README.md)\""]
+          timeout_min: 5
+        - id: production-code-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ cmd/ | grep -v -e '_test\\.go$' | grep -v -e 'internal/validate/run\\.go$')\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -v -e 'internal/validate/run\\.go$' | grep -v -e 'internal/validate/run_test\\.go$' | grep -v -e 'cmd/partitur/main_test\\.go$' | grep -v -e 'cmd/partitur/e2e_test\\.go$' | grep -v -e 'cmd/partitur/cast_guidance_mutation_test\\.go$')\""]
+          timeout_min: 5
 
-  - id: check
+  - id: confirm
     part: verifier
-    needs: [write-marker]
+    needs: [fix-paste-ready-cast-hint]
     grants: [repo_read, shell]
     instruction: |
-      Confirm that reference-workflow/marker.txt holds exactly the line
-      `partitur reference workflow` followed by one LF byte, and nothing else.
-      Report what you observed. Change no file.
-    inputs: [marker-change]
+      Confirm the paste-ready hint fix. Change no file. Report in English.
+
+      The ways this can be wrong are: the writer can have changed the WRONG LAYER — editing
+      cmd/partitur/main.go's renderHint (Shape A) or any production file other than
+      internal/validate/run.go; it can have made the behavioral test pass with `strconv.Unquote`,
+      which is a FALSE GREEN because the unfixed multi-line constant also Unquotes to valid YAML; it
+      can have weakened the snippet so it no longer parses or no longer resolves the binding; it can
+      have dropped one of the three mutation-anchor substrings and silently broken an existing
+      TestMutationBindingMissingGuidance case; it can have "helpfully" refreshed README.md or the
+      Quickstart (out of scope this run); it can have renamed a test; and it can have reported a
+      timed-out or truncated mutation run as a pass.
+
+      1. SCOPE, BY READING THE WHOLE DIFF. Run `git status --porcelain` and `git diff`, quote BOTH
+      in full. Exactly five files may appear: internal/validate/run.go, internal/validate/run_test.go,
+      cmd/partitur/main_test.go, cmd/partitur/e2e_test.go, cmd/partitur/cast_guidance_mutation_test.go.
+      Any change to cmd/partitur/main.go, any other file under internal/ or cmd/, to docs/,
+      docs/DESIGN.md, docs/DESIGN.clause-staging.json, README.md, .github/, go.mod, go.sum,
+      partitur.yaml, or .partitur/ is a scope violation — say so rather than passing.
+
+      2. THE RENDERER IS UNTOUCHED. Confirm cmd/partitur/main.go still contains
+      `fmt.Fprintf(w, " hint=%q", entry.Hint)` byte-for-byte and that
+      TestValidateRendersOrderedBlocksAndExitsThree is unchanged. This is what proves Shape B (the
+      one-physical-line `%q` invariant was preserved), not Shape A.
+
+      3. THE SNIPPET IS `%q`-SAFE AND RESOLVES. Read the new snippet in internal/validate/run.go.
+      Confirm it is one physical line, contains no `"` and no `\`, and keeps the prose prefix plus
+      the three anchor substrings (`.partitur/cast.yaml (project)`,
+      `~/.config/partitur/cast.yaml (user-global)`,
+      `bindings.<part>.performer must name an entry in performers`). Then, YOURSELF, build partitur,
+      make a temp repo with an unbound part, run `validate`, copy the DISPLAYED bytes after the
+      marker VERBATIM (do not unescape by hand) into `.partitur/cast.yaml`, re-run `validate`, and
+      confirm the binding_missing entry is gone. Quote both runs.
+
+      4. THE BEHAVIORAL TEST DOES NOT UNQUOTE. Read TestBindingMissingHintPasteResolvesBinding and
+      confirm it takes the DISPLAYED bytes and does NOT call strconv.Unquote (nor otherwise
+      un-escape `\n`/`\"` programmatically). Say so explicitly. If it Unquotes, the run is a false
+      green — fail it.
+
+      5. THE MUTATION PROVES THE FIX IS LOAD-BEARING. Re-run the `paste-ready-mutation-proof`
+      criterion and quote the PASS line. Confirm the mutation's `after` restores the multi-line
+      block and that killing it depends on the behavioral test not Unquoting (point 4). Separately
+      verify the behavioral test would RED on the unfixed constant: run its awk/extract logic — or
+      the whole test — against `git show <base>:internal/validate/run.go`'s constant written into a
+      scratch tree, and confirm it fails. Quote that.
+
+      6. NO REGRESSION OF #465. Re-run `existing-hint-mutations-still-pass` and quote the two PASS
+      lines (TestMutationOnboardingHints, TestMutationBindingMissingGuidance). Confirm the wording
+      mirrors were updated and pass (`wording-mirrors-pass`).
+
+      7. README WAS LEFT ALONE — AND THE GAP WAS NAMED. Confirm README.md is byte-unchanged. The
+      writer's report must have said README.md line ~78 and the Quickstart still show the old escaped
+      example and are a deliberate out-of-scope follow-up. If it did not, say so.
+
+      8. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
+
+        go build ./...
+        go vet ./internal/validate/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./cmd/partitur/
+        go test -count=1 -run '^TestBindingMissingHintPasteResolvesBinding$' -v ./cmd/partitur/
+        go test -count=1 -run '^(TestValidateBindingMissingRendersGuidance|TestValidateEndToEnd)$' -v ./cmd/partitur/
+        go test -count=1 -run '^TestMissingBindingGuidance$' -v ./internal/validate/
+
+      If any point above does not hold, say so plainly rather than passing it.
+    inputs: [paste-ready-hint-change-set]
     acceptance:
       hard:
-        - id: marker-is-reference-workflow
-          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 10
+        - id: vet
+          run: ["sh", "-c", "go vet ./internal/validate/ && go vet ./cmd/partitur/ && go vet -tags=mutation ./cmd/partitur/"]
+          timeout_min: 10
+        - id: paste-ready-binding-resolves
+          run: ["sh", "-c", "grep -q -e 'func TestBindingMissingHintPasteResolvesBinding(' cmd/partitur/e2e_test.go || { echo MISSING-TEST; exit 1; }; log=$(mktemp); go test -count=1 -run '^TestBindingMissingHintPasteResolvesBinding$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -30 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestBindingMissingHintPasteResolvesBinding' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: rendering-invariant-intact
+          run: ["sh", "-c", "log=$(mktemp); go test -count=1 -run '^TestValidateRendersOrderedBlocksAndExitsThree$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -15 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestValidateRendersOrderedBlocksAndExitsThree' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: wording-mirrors-pass
+          run: ["sh", "-c", "log=$(mktemp); go test -count=1 -run '^TestMissingBindingGuidance$' -v ./internal/validate/ > \"$log\" 2>&1; s1=$?; go test -count=1 -run '^(TestValidateBindingMissingRendersGuidance|TestValidateEndToEnd)$' -v ./cmd/partitur/ >> \"$log\" 2>&1; s2=$?; tail -40 \"$log\"; test $s1 -eq 0 && test $s2 -eq 0 && test \"$(grep -c -e '--- PASS: TestMissingBindingGuidance' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestValidateBindingMissingRendersGuidance' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestValidateEndToEnd' \"$log\")\" -ge 1"]
+          timeout_min: 10
+        - id: existing-hint-mutations-still-pass
+          run: ["sh", "-c", "log=$(mktemp); go test -tags=mutation -count=1 -timeout=30m -run '^(TestMutationOnboardingHints|TestMutationBindingMissingGuidance)$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -50 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestMutationOnboardingHints' \"$log\")\" -ge 1 && test \"$(grep -c -e '--- PASS: TestMutationBindingMissingGuidance' \"$log\")\" -ge 1"]
+          timeout_min: 40
+        - id: paste-ready-mutation-proof
+          run: ["sh", "-c", "grep -q -e 'paste_ready_snippet_load_bearing' cmd/partitur/cast_guidance_mutation_test.go || { echo MISSING-MUTATION-CASE; exit 1; }; log=$(mktemp); go test -tags=mutation -count=1 -timeout=15m -run '^TestMutationBindingMissingGuidance$/paste_ready_snippet_load_bearing$' -v ./cmd/partitur/ > \"$log\" 2>&1; status=$?; tail -25 \"$log\"; test $status -eq 0 && test \"$(grep -c -e '--- PASS: TestMutationBindingMissingGuidance/paste_ready_snippet_load_bearing' \"$log\")\" -ge 1"]
+          timeout_min: 20
+        - id: spec-and-ledger-untouched
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/ README.md)\""]
+          timeout_min: 5
+        - id: production-code-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ cmd/ | grep -v -e '_test\\.go$' | grep -v -e 'internal/validate/run\\.go$')\""]
+          timeout_min: 5
+        - id: change-scope
+          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -v -e 'internal/validate/run\\.go$' | grep -v -e 'internal/validate/run_test\\.go$' | grep -v -e 'cmd/partitur/main_test\\.go$' | grep -v -e 'cmd/partitur/e2e_test\\.go$' | grep -v -e 'cmd/partitur/cast_guidance_mutation_test\\.go$')\""]
+          timeout_min: 5
       human_gate: always
 
 policy:
-  allowed_paths: ["reference-workflow/marker.txt"]
+  allowed_paths:
+    - "internal/validate/run.go"
+    - "internal/validate/run_test.go"
+    - "cmd/partitur/main_test.go"
+    - "cmd/partitur/e2e_test.go"
+    - "cmd/partitur/cast_guidance_mutation_test.go"
   side_effects: []
   budget:
-    active_wall_clock_min: 15
-    retries_per_movement: 0
+    active_wall_clock_min: 180
+    retries_per_movement: 1
   amendment:
     auto: "off"
