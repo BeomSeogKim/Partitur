@@ -1,152 +1,24 @@
 score: "0.2"
-name: kill-order-approver-first
+name: reference-workflow
 revision: 1
 status: finalized
 
 goal: |
-  Fix issue #471, and nothing else. In
-  `cmd/partitur/prepare_quiesce_harness_test.go`, the
-  `TestHumanApprovalPreparedToObservedKillCuts/prepare.prepared_to_observed/observed` fixture kills
-  AND REAPS the prepared driver before it kills the released human approver. The approver is a live
-  production `approve` process that, past its `amendment.approval_prepared` receipt, polls
-  `CompleteOrAbandonPrepare` every 25ms. In the window between the driver's reap and the approver's
-  kill, that poll sees the prepare as fenced, sweeps it, and durably appends `amendment.approved`.
-  The pending prepare is then gone, the ordinary mutation at `:233` is ACCEPTED, and
-  `assertPrepareBarrier` fails with:
-
-    prepare_quiesce_harness_test.go:233: ordinary mutation while prepare is pending = <nil>,
-    want prepare_pending refusal
-
-  This run applies FIX DIRECTION (1) from the issue: SWAP the two statements so the approver is dead
-  before the driver is reaped. That is TWO LINES OF TEST CODE in ONE FILE. Nothing else ships.
-
-  FORBIDDEN in this run, even if it would pass every test: any change to production code, to the
-  faultpoint catalogue, to `docs/DESIGN.md` or any other specification or ledger document, to the
-  registered kill-harness record name, to the subtest name, to the sibling cross-edge tests, or to
-  any assertion. No retries, no `t.Eventually`-style polling, no loosened assertion, no new
-  faultpoint. Fix direction (2) (an event-gated kill via a new faultpoint) is REJECTED for now
-  because the catalogue is locked.
+  Exercise one real, recovery-capable Partitur write attempt against this repository,
+  and let `apply` carry its result onto the checkout.
 
 context: |
-  ROUTING: THIS IS A TEST-ONLY ORDERING FIX. IT IS NOT A PRODUCTION DEFECT AND NOT A SPEC CHANGE.
-
-  The production behaviour under test is CORRECT and must not move. A live approver that finds its
-  prepare fenced is SUPPOSED to sweep and approve it — that is the recovery contract
-  (`internal/runstore/prepare.go:288-291`, driven from
-  `internal/amendmentexec/dispositioner.go:121`). The defect is that the TEST arranges for exactly
-  that legitimate production path to run inside the window it wants to observe. The test asks "is
-  the prepare still pending after both processes die?" while leaving one of the two processes alive
-  and working. Fixing production code here would be fixing the wrong thing. If you come to believe
-  a production change is required, STOP and say so in your report rather than editing anything
-  outside the one test file.
-
-  THE SEAM, LOCATED ON THIS TREE (confirm in step 0 before editing).
-  `cmd/partitur/prepare_quiesce_harness_test.go:223-235`:
-
-      t.Run("prepare.prepared_to_observed/observed", func(t *testing.T) {
-          repository, environment, runID, driver, approver := preparedHumanApproval(...)
-          defer driver.stop(t)
-          defer approver.stop(t)
-          releasePausedReceipt(t, approver)          // :227 — approver becomes a live poller
-          driver.releaseProbe(t)
-          driver.waitReceipt(t, "prepare.quiesce_observed")
-          assertQuiesceRound(t, repository, runID, 1)
-          driver.kill(t)                             // :231 — kills AND Waits() the driver
-          killPausedRun(t, approver)                 // :232 — kills AND Waits() the approver
-          assertPrepareBarrier(t, repository, runID) // :233 — the failing assertion
-          assertRecoveryFixedPoint(...)
-      })
-
-  THE REQUIRED END STATE, STATED EXACTLY. Lines :231 and :232 are SWAPPED, so the block reads:
-
-          assertQuiesceRound(t, repository, runID, 1)
-          killPausedRun(t, approver)
-          driver.kill(t)
-          assertPrepareBarrier(t, repository, runID)
-
-  and NOTHING ELSE in the file changes. Both helpers kill and then `Wait()` their process
-  (`killPausedRun`, cmd/partitur/routed_proposal_kill_harness_test.go:85-95;
-  `(*preparedLiveRun).kill`, prepare_quiesce_harness_test.go:521-535), so after the swap the
-  approver is REAPED — not merely signalled — before the driver's own reap opens the fence window.
-  There is no live poller left to take it.
-
-  WHY THE SWAP IS SUFFICIENT, AND WHY IT DOES NOT INVERT THE FLAKE. The race needs a live approver
-  AND a dead-and-reaped driver at the same time. The approver only reaches the fence path because
-  the driver's lease is gone. Killing the approver first removes the only process that could take
-  the fence path, and the driver — which never polls `CompleteOrAbandonPrepare` — cannot approve
-  anything while the approver dies. The dependency is one-directional, so the swapped order has no
-  symmetric hazard.
-
-  THE PRECEDENT. `cmd/partitur/supersession_kill_matrix_test.go:359-500`
-  (`killLiveApproverAtSupersessionEndpoint` / `killSupersessionCommandAtEndpoint`) is the pattern
-  this repository already treats as correct: the live approver is killed at a NAMED endpoint and is
-  dead before the driver is touched. The swap brings the human-approval observed cut into line with
-  it. Read that function before editing so you can say in your report that the orders now agree.
-
-  WHAT THE CATALOGUE EXPECTS, AND WHY THE NAME MAY NOT MOVE. The observed cut is a REGISTERED kill
-  record: `cmd/partitur/kill_harness_test.go:640` defines
-  `humanApprovalFixture = "TestHumanApprovalPreparedToObservedKillCuts/"` and :655 registers
-
-      {faultpoint.EdgePreparePreparedToObserved, killEndpointRight,
-       humanApprovalFixture + "prepare.prepared_to_observed/observed"},
-
-  which `TestKillHarnessCatalogCrossCheck` (kill_harness_test.go:396) and `TestE2CatalogCountClaims`
-  (:457) reconcile against Appendix E via `receiptKillHarnessRecords`. The harness re-runs this test
-  in a subprocess filtered by
-  `^(TestPrepareQuiesceDriverKillCuts|TestHumanApprovalPreparedToObservedKillCuts)$`
-  (kill_harness_test.go:860) — which is the second CI draw the issue mentions. RENAMING the test
-  function or the subtest would silently UNDISCHARGE a catalogue record. Do not rename either. A
-  criterion greps both the registration line and the `t.Run` line.
-
-  DO NOT TOUCH THE SIBLINGS. `cmd/partitur/cross_edge_pending_prepare_test.go:84-85` and
-  `cmd/partitur/cross_edge_cancellation_test.go:197-198` use the SAME driver-first order. They are
-  safe TODAY only because their approver is still paused at its receipt and therefore still holds
-  the state lock — they are one `releasePausedReceipt` away from the same flake. That is a real
-  latent hazard and it is DELIBERATELY OUT OF SCOPE for this run: a fence criterion requires both
-  files byte-unchanged. Name the hazard in your report; do not fix it here.
-
-  MEASURED BASELINE, AND WHAT THE STRESS CRITERION CAN AND CANNOT PROVE. READ THIS.
-  The issue's repro is 3/50 failures with `-count=50`, `GOMAXPROCS=1`, `nice -n 19`, and 20 CPU
-  burners on macOS arm64; 30/30 pass unloaded; the control
-  (`TestCrossEdgePrepareCheckProductionSubprocess`, whose approver is never released) passes 50/50
-  under identical load. The full 50-iteration pass measured ~287s.
-
-  The `flaky-test-stress` criterion below runs `-count=50` under `GOMAXPROCS=1` but WITHOUT external
-  burners, because acceptance runs in a sandbox where spawning 20 competing processes is neither
-  reproducible nor polite. It is therefore CONFIRMATORY, NOT PROBATIVE: at 3/50 under load and 0/30
-  unloaded, a green 50-run without burners is weak evidence on its own and you must NOT report it as
-  "the flake is fixed". THE STRUCTURAL PROOF IS `kill-order-swapped`, which reads the source and
-  asserts the ordering directly. Say exactly this in your report: the stress run is a regression
-  fence; the ordering criterion is the lock.
-
-  NO MUTATION PROOF IS REQUIRED, AND NONE MAY BE ADDED. This run's change is a two-line reordering
-  of two statements inside one test. There is no predicate to mutate, no branch to invert, and
-  `internal/**` is frozen, so the usual "prove the change is load-bearing by mutation" step does not
-  apply and adding a `-tags=mutation` test would itself be an out-of-scope file change. The
-  load-bearing evidence for this run is, in order: (a) `kill-order-swapped` reads the shipped source
-  and fails unless the approver kill precedes the driver kill inside this exact subtest — VERIFIED
-  to red on unfixed main and green on the swap; (b) `flaky-test-stress`; (c)
-  `catalogue-record-still-discharged`. VERIFIER: do not demand a mutation criterion; its absence is
-  a deliberate, stated exemption, not an oversight.
-
-  RED-FIRST HONESTY. Only ONE criterion reds on unfixed main: `kill-order-swapped`. Everything else
-  — build, vet, the full faultprobe suite, the catalogue discharge, and every fence — is GREEN on an
-  untouched tree and its job is to STAY green. The `flaky-test-stress` criterion may well be green
-  on unfixed main too (the flake is ~6% under load and ~0% unloaded); that is expected and is
-  precisely why it is labelled confirmatory. Do not claim the stress criterion reproduced the flake
-  unless you actually saw it fail, and quote the failure verbatim if you did.
-
-  SCORE PLACEMENT. This score temporarily replaces the committed reference-workflow score because
-  `partitur run` reads only `<repo>/partitur.yaml` and takes no score operand (#435). It, and the
-  cast commit that precedes it, are reverted before the pull request; only the two-line change to
-  `cmd/partitur/prepare_quiesce_harness_test.go` is meant to land.
+  This is the COMPLETION.md section 5 reference-workflow reading. The writer must
+  change only reference-workflow/marker.txt; its base content is deliberately different
+  from the required result so that the captured change set is not a no-op, and so that
+  the checkout `apply` runs against initially differs from the candidate.
 
 verification:
   expectation:
-    intent: pass-existing-tests
+    intent: none
     apply_gate:
       require: [verified, approved]
-  final_movement: confirm
+  final_movement: check
 
 parts:
   writer:
@@ -156,235 +28,43 @@ parts:
     read_only: true
 
 movements:
-  - id: swap-kill-order-approver-first
+  - id: write-marker
     part: writer
     needs: []
     grants: [repo_read, repo_write, shell]
     instruction: |
-      Swap the kill order in the human-approval observed cut. Everything you write is English. The
-      seam, the required end state, and the out-of-scope list are in this score's context; implement
-      them, do not redesign them, and do not touch anything outside the one test file.
+      Replace the entire contents of reference-workflow/marker.txt with exactly one line:
+      partitur reference workflow
 
-      Step 0 — CONFIRM THE GROUND, cheaply. Report the output of each, verbatim:
-
-        git status --porcelain
-        grep -n 'func TestHumanApprovalPreparedToObservedKillCuts' cmd/partitur/prepare_quiesce_harness_test.go
-        sed -n '223,235p' cmd/partitur/prepare_quiesce_harness_test.go
-        grep -n 'func killPausedRun' cmd/partitur/routed_proposal_kill_harness_test.go
-        grep -n 'func (child \*preparedLiveRun) kill' cmd/partitur/prepare_quiesce_harness_test.go
-        grep -n 'humanApprovalFixture = ' cmd/partitur/kill_harness_test.go
-        grep -n 'prepare.prepared_to_observed/observed' cmd/partitur/kill_harness_test.go
-        grep -n 'driver.kill(t)' cmd/partitur/cross_edge_pending_prepare_test.go cmd/partitur/cross_edge_cancellation_test.go
-
-      You must see the test function at prepare_quiesce_harness_test.go:202, the observed subtest at
-      :223 with `driver.kill(t)` at :231 IMMEDIATELY BEFORE `killPausedRun(t, approver)` at :232,
-      both helpers calling `Wait()` after `Process.Kill()`, the catalogue constant at
-      kill_harness_test.go:640 and its registration at :655, and the driver-first order in both
-      cross-edge siblings.
-
-      `git status --porcelain` MUST be empty. If it lists anything, STOP and say so: the fence
-      criteria (`production-code-untouched`, `change-scope`) cannot distinguish a stray file from
-      your own work. Likewise STOP if any anchor drifted.
-
-      Step 1 — READ THE PRECEDENT. Read
-      cmd/partitur/supersession_kill_matrix_test.go:359-500 and state in one or two sentences, in
-      your report, where in that function the live approver dies relative to the driver, and that
-      the swap you are about to make brings the human-approval observed cut into agreement with it.
-
-      Step 2 — RED FIRST, BUT AT THE SOURCE LEVEL. Before editing, run the `kill-order-swapped`
-      acceptance command below on the UNTOUCHED tree and quote its output verbatim. It must FAIL,
-      and its diagnostic line must show `k` greater than `d` (the approver kill after the driver
-      kill). That is this run's only red. Do not attempt to reproduce the 3/50 runtime flake — the
-      context explains why the sandbox cannot, and a failed reproduction attempt is not evidence.
-
-      Step 3 — make the swap. In cmd/partitur/prepare_quiesce_harness_test.go, inside
-      `TestHumanApprovalPreparedToObservedKillCuts`'s `prepare.prepared_to_observed/observed`
-      subtest ONLY, exchange lines :231 and :232 so `killPausedRun(t, approver)` precedes
-      `driver.kill(t)`. Add a SHORT comment above the pair saying why the approver must die first —
-      that a released approver polls `CompleteOrAbandonPrepare` every 25ms and would take the fence
-      path once the driver is reaped, durably approving the prepare the barrier assertion is about
-      to test. Keep it to two or three lines and match the file's existing comment voice.
-
-      Change NOTHING else. Not the `defer` order (both defers are idempotent stops and stay as they
-      are). Not the `prepare.prepared_to_observed/prepared` subtest at :213-221 — its approver was
-      never released, so it is not affected and must stay byte-identical. Not
-      `assertPrepareBarrier`, not any helper, not any other file.
-
-      Step 4 — prove it holds. Run and report the tail of each:
-
-        go build ./...
-        go vet ./cmd/partitur/
-        go vet -tags=faultprobe ./cmd/partitur/
-        GOMAXPROCS=1 go test -tags=faultprobe -count=1 -run '^TestHumanApprovalPreparedToObservedKillCuts$' -v ./cmd/partitur/
-        go test -tags=faultprobe -count=1 ./cmd/partitur/
-
-      Then run the `flaky-test-stress` and `catalogue-record-still-discharged` acceptance commands
-      and report their tails. The 50-iteration stress takes roughly five minutes; do not truncate it
-      and do not report a timed-out command as a pass.
-
-      Step 5 — confirm the scope. Report `git status --porcelain` and `git diff` IN FULL (the diff
-      is a handful of lines; quote all of it). Exactly ONE file may appear:
-      cmd/partitur/prepare_quiesce_harness_test.go. NOTHING under internal/, no other file under
-      cmd/partitur/, nothing in docs/, .github/, go.mod, go.sum, partitur.yaml, or .partitur/. Do
-      not commit; the run captures the change set.
-
-      In your report, say explicitly: that the stress criterion is CONFIRMATORY and the ordering
-      criterion is the lock (the context explains why); that the cross-edge siblings carry the same
-      latent hazard and were deliberately left alone; and that no mutation proof was added, by the
-      stated exemption.
-
-      Then run every acceptance command below yourself and report each result.
+      The line must end with one LF byte. Do not edit, add, remove, or rename any other file.
     outputs:
-      - id: kill-order-change-set
+      - id: marker-change
         kind: change_set
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: vet
-          run: ["sh", "-c", "go vet ./cmd/partitur/ && go vet -tags=faultprobe ./cmd/partitur/"]
-          timeout_min: 10
-        - id: kill-order-swapped
-          run: ["sh", "-c", "f=cmd/partitur/prepare_quiesce_harness_test.go; tf=$(grep -nF 'func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {' $f | cut -d: -f1); test -n \"$tf\" || exit 1; s=$(awk -v t=$tf -v p='prepare.prepared_to_observed/observed' 'NR>t && index($0,p) {print NR; exit}' $f); test -n \"$s\" || exit 1; e=$(awk -v s=$s -v p='assertPrepareBarrier(' 'NR>s && index($0,p) {print NR; exit}' $f); test -n \"$e\" || exit 1; r=$(awk -v s=$s -v e=$e -v p='releasePausedReceipt(t, approver)' 'NR>s && NR<e && index($0,p) {print NR; exit}' $f); k=$(awk -v s=$s -v e=$e -v p='killPausedRun(t, approver)' 'NR>s && NR<e && index($0,p) {print NR; exit}' $f); d=$(awk -v s=$s -v e=$e -v p='driver.kill(t)' 'NR>s && NR<e && index($0,p) {print NR; exit}' $f); kn=$(awk -v s=$s -v e=$e -v p='killPausedRun(t, approver)' 'NR>s && NR<e && index($0,p) {n++} END {print n+0}' $f); dn=$(awk -v s=$s -v e=$e -v p='driver.kill(t)' 'NR>s && NR<e && index($0,p) {n++} END {print n+0}' $f); echo \"observed-cut block: test=$tf subtest=$s barrier=$e release=$r approver_kill=$k driver_kill=$d approver_kills=$kn driver_kills=$dn\"; test -n \"$r\" && test -n \"$k\" && test -n \"$d\" && test \"$kn\" -eq 1 && test \"$dn\" -eq 1 && test \"$r\" -lt \"$k\" && test \"$k\" -lt \"$d\""]
-          timeout_min: 5
-        - id: flaky-test-stress
-          run: ["sh", "-c", "grep -qF 'func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {' cmd/partitur/prepare_quiesce_harness_test.go && GOMAXPROCS=1 go test -tags=faultprobe -count=1 -timeout=5m -run '^TestHumanApprovalPreparedToObservedKillCuts$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestHumanApprovalPreparedToObservedKillCuts ' | grep -qx 1 && GOMAXPROCS=1 go test -tags=faultprobe -count=50 -timeout=14m -run '^TestHumanApprovalPreparedToObservedKillCuts$' ./cmd/partitur/"]
-          timeout_min: 15
-        - id: catalogue-record-still-discharged
-          run: ["sh", "-c", "grep -qF 'humanApprovalFixture = \"TestHumanApprovalPreparedToObservedKillCuts/\"' cmd/partitur/kill_harness_test.go && grep -qF 'humanApprovalFixture + \"prepare.prepared_to_observed/observed\"' cmd/partitur/kill_harness_test.go && grep -qF '^(TestPrepareQuiesceDriverKillCuts|TestHumanApprovalPreparedToObservedKillCuts)$' cmd/partitur/kill_harness_test.go && grep -qF 't.Run(\"prepare.prepared_to_observed/observed\", func(t *testing.T) {' cmd/partitur/prepare_quiesce_harness_test.go && log=$(mktemp) && go test -tags=faultprobe -count=1 -v ./cmd/partitur/ > $log 2>&1; status=$?; tail -20 $log; test $status -eq 0 && test \"$(grep -cF -e '--- PASS: TestKillHarnessCatalogCrossCheck ' $log)\" -ge 1 && test \"$(grep -cF -e '--- PASS: TestE2CatalogCountClaims ' $log)\" -ge 1 && test \"$(grep -cF -e '--- PASS: TestHumanApprovalPreparedToObservedKillCuts/prepare.prepared_to_observed/observed ' $log)\" -ge 1"]
-          timeout_min: 30
-        - id: cross-edge-siblings-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/cross_edge_pending_prepare_test.go cmd/partitur/cross_edge_cancellation_test.go)\""]
-          timeout_min: 5
-        - id: production-code-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ cmd/ | grep -vE 'cmd/partitur/prepare_quiesce_harness_test\\.go$')\""]
-          timeout_min: 5
-        - id: spec-and-ledger-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
-          timeout_min: 5
-        - id: change-scope
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -vE 'cmd/partitur/prepare_quiesce_harness_test\\.go$')\""]
-          timeout_min: 5
+        - id: marker-written
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
 
-  - id: confirm
+  - id: check
     part: verifier
-    needs: [swap-kill-order-approver-first]
+    needs: [write-marker]
     grants: [repo_read, shell]
     instruction: |
-      Confirm the kill-order swap. Change no file. Report in English.
-
-      The ways this can be wrong are: the writer can have fixed the WRONG LAYER, touching production
-      code (`internal/runstore/prepare.go`, `internal/amendmentexec/dispositioner.go`) or the
-      faultpoint catalogue instead of the test's ordering; it can have weakened or deleted the
-      `assertPrepareBarrier` assertion, added a retry or a sleep, or renamed the test or subtest —
-      any of which silently undischarges a registered catalogue record; it can have "helpfully"
-      fixed the two cross-edge siblings, which this run explicitly excludes; it can have reordered
-      the `defer`s or edited the adjacent `prepared` subtest; it can have reported a green stress run
-      as proof the flake is fixed when the sandbox cannot reproduce the loaded baseline at all; and
-      it can have reported a timed-out or truncated command as a pass.
-
-      1. SCOPE, BY READING THE WHOLE DIFF. Run `git status --porcelain` and `git diff`, quote BOTH
-      in full. Exactly one file may appear: cmd/partitur/prepare_quiesce_harness_test.go. Any change
-      under internal/, to any other file in cmd/partitur/, to docs/, docs/DESIGN.md,
-      docs/DESIGN.clause-staging.json, .github/, go.mod, go.sum, partitur.yaml, or .partitur/ is a
-      scope violation — say so rather than passing.
-
-      2. THE DIFF IS THE SWAP AND ONLY THE SWAP. The diff must be the exchange of
-      `driver.kill(t)` and `killPausedRun(t, approver)` inside the
-      `prepare.prepared_to_observed/observed` subtest, plus at most a two-or-three-line explanatory
-      comment. Confirm by reading:
-        - `assertPrepareBarrier(t, repository, runID)` is still called, unchanged, right after the
-          two kills, and `assertPrepareBarrier` itself (prepare_quiesce_harness_test.go:844-868) is
-          byte-unchanged — it must still require `runstate.ErrIllegalTransition` AND the substring
-          `prepare_pending`;
-        - `assertRecoveryFixedPoint(...)` is unchanged;
-        - the two `defer`s are unchanged;
-        - the sibling `prepare.prepared_to_observed/prepared` subtest (:213-221) is byte-unchanged;
-        - no sleep, no retry loop, no `-count`/timing hack, no new helper.
-
-      3. THE ORDERING IS REAL, NOT JUST GREPPABLE. Read the swapped block yourself. Confirm that
-      `killPausedRun` (cmd/partitur/routed_proposal_kill_harness_test.go:85-95) both kills AND
-      `Wait()`s, so the approver process is REAPED before `driver.kill` runs — a signal without a
-      reap would leave the 25ms poll alive and the fix would be cosmetic. Quote both helpers.
-      Then say, in your own words, why the swapped order has no symmetric hazard (the driver never
-      polls `CompleteOrAbandonPrepare`, so it cannot approve the prepare while the approver dies).
-
-      4. THE NAMES DID NOT MOVE. Confirm `TestHumanApprovalPreparedToObservedKillCuts` and the
-      subtest string `prepare.prepared_to_observed/observed` are unchanged, that
-      cmd/partitur/kill_harness_test.go is byte-unchanged, that its registration at :655 still names
-      that exact path, and that the subprocess filter at :860 still matches the test. Re-run the
-      `catalogue-record-still-discharged` criterion yourself and quote the three PASS lines it
-      requires.
-
-      5. THE SIBLINGS WERE LEFT ALONE — AND THE HAZARD WAS NAMED. Confirm
-      cmd/partitur/cross_edge_pending_prepare_test.go and cmd/partitur/cross_edge_cancellation_test.go
-      are byte-unchanged. Read both kill sites (:84-85 and :197-198) and say whether their approver
-      is still paused at its receipt (and therefore still holding the state lock) — that is the only
-      reason they are safe. The writer's report must have named this latent hazard as out of scope;
-      if it did not, say so.
-
-      6. THE EVIDENCE IS WEIGHTED HONESTLY. The writer must have said that `flaky-test-stress` is
-      CONFIRMATORY — run without the 20 burners and `nice -n 19` of the issue's baseline, against a
-      flake measured at 3/50 loaded and 0/30 unloaded — and that `kill-order-swapped` is the
-      structural lock. If the report claims the stress run proves the flake is fixed, say so
-      plainly. Separately: verify that `kill-order-swapped` would actually RED on unfixed main.
-      The cheapest honest check is `git stash` free: run the criterion's awk pipeline against
-      `git show <base>:cmd/partitur/prepare_quiesce_harness_test.go` written to a temp file, and
-      confirm it reports the approver kill AFTER the driver kill. Quote that.
-
-      7. NO MUTATION PROOF IS EXPECTED. This run states an explicit exemption: a two-line statement
-      reordering has no predicate to mutate and `internal/**` is frozen. Do NOT fail the run for the
-      absence of a mutation criterion, and do NOT ask for one. If you believe the exemption is
-      wrong, say why in one paragraph and pass or fail on the other points.
-
-      8. RE-RUN THE EVIDENCE YOURSELF. Run and report the tail of each:
-
-        go build ./...
-        go vet ./cmd/partitur/
-        go vet -tags=faultprobe ./cmd/partitur/
-        go test -tags=faultprobe -count=1 ./cmd/partitur/
-        GOMAXPROCS=1 go test -tags=faultprobe -count=50 -timeout=14m -run '^TestHumanApprovalPreparedToObservedKillCuts$' ./cmd/partitur/
-
-      If any point above does not hold, say so plainly rather than passing it.
-    inputs: [kill-order-change-set]
+      Confirm that reference-workflow/marker.txt holds exactly the line
+      `partitur reference workflow` followed by one LF byte, and nothing else.
+      Report what you observed. Change no file.
+    inputs: [marker-change]
     acceptance:
       hard:
-        - id: build
-          run: ["go", "build", "./..."]
-          timeout_min: 10
-        - id: vet
-          run: ["sh", "-c", "go vet ./cmd/partitur/ && go vet -tags=faultprobe ./cmd/partitur/"]
-          timeout_min: 10
-        - id: kill-order-swapped
-          run: ["sh", "-c", "f=cmd/partitur/prepare_quiesce_harness_test.go; tf=$(grep -nF 'func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {' $f | cut -d: -f1); test -n \"$tf\" || exit 1; s=$(awk -v t=$tf -v p='prepare.prepared_to_observed/observed' 'NR>t && index($0,p) {print NR; exit}' $f); test -n \"$s\" || exit 1; e=$(awk -v s=$s -v p='assertPrepareBarrier(' 'NR>s && index($0,p) {print NR; exit}' $f); test -n \"$e\" || exit 1; r=$(awk -v s=$s -v e=$e -v p='releasePausedReceipt(t, approver)' 'NR>s && NR<e && index($0,p) {print NR; exit}' $f); k=$(awk -v s=$s -v e=$e -v p='killPausedRun(t, approver)' 'NR>s && NR<e && index($0,p) {print NR; exit}' $f); d=$(awk -v s=$s -v e=$e -v p='driver.kill(t)' 'NR>s && NR<e && index($0,p) {print NR; exit}' $f); kn=$(awk -v s=$s -v e=$e -v p='killPausedRun(t, approver)' 'NR>s && NR<e && index($0,p) {n++} END {print n+0}' $f); dn=$(awk -v s=$s -v e=$e -v p='driver.kill(t)' 'NR>s && NR<e && index($0,p) {n++} END {print n+0}' $f); echo \"observed-cut block: test=$tf subtest=$s barrier=$e release=$r approver_kill=$k driver_kill=$d approver_kills=$kn driver_kills=$dn\"; test -n \"$r\" && test -n \"$k\" && test -n \"$d\" && test \"$kn\" -eq 1 && test \"$dn\" -eq 1 && test \"$r\" -lt \"$k\" && test \"$k\" -lt \"$d\""]
-          timeout_min: 5
-        - id: flaky-test-stress
-          run: ["sh", "-c", "grep -qF 'func TestHumanApprovalPreparedToObservedKillCuts(t *testing.T) {' cmd/partitur/prepare_quiesce_harness_test.go && GOMAXPROCS=1 go test -tags=faultprobe -count=1 -timeout=5m -run '^TestHumanApprovalPreparedToObservedKillCuts$' -v ./cmd/partitur/ | grep -c '^--- PASS: TestHumanApprovalPreparedToObservedKillCuts ' | grep -qx 1 && GOMAXPROCS=1 go test -tags=faultprobe -count=50 -timeout=14m -run '^TestHumanApprovalPreparedToObservedKillCuts$' ./cmd/partitur/"]
-          timeout_min: 15
-        - id: catalogue-record-still-discharged
-          run: ["sh", "-c", "grep -qF 'humanApprovalFixture = \"TestHumanApprovalPreparedToObservedKillCuts/\"' cmd/partitur/kill_harness_test.go && grep -qF 'humanApprovalFixture + \"prepare.prepared_to_observed/observed\"' cmd/partitur/kill_harness_test.go && grep -qF '^(TestPrepareQuiesceDriverKillCuts|TestHumanApprovalPreparedToObservedKillCuts)$' cmd/partitur/kill_harness_test.go && grep -qF 't.Run(\"prepare.prepared_to_observed/observed\", func(t *testing.T) {' cmd/partitur/prepare_quiesce_harness_test.go && log=$(mktemp) && go test -tags=faultprobe -count=1 -v ./cmd/partitur/ > $log 2>&1; status=$?; tail -20 $log; test $status -eq 0 && test \"$(grep -cF -e '--- PASS: TestKillHarnessCatalogCrossCheck ' $log)\" -ge 1 && test \"$(grep -cF -e '--- PASS: TestE2CatalogCountClaims ' $log)\" -ge 1 && test \"$(grep -cF -e '--- PASS: TestHumanApprovalPreparedToObservedKillCuts/prepare.prepared_to_observed/observed ' $log)\" -ge 1"]
-          timeout_min: 30
-        - id: cross-edge-siblings-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- cmd/partitur/cross_edge_pending_prepare_test.go cmd/partitur/cross_edge_cancellation_test.go)\""]
-          timeout_min: 5
-        - id: production-code-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- internal/ cmd/ | grep -vE 'cmd/partitur/prepare_quiesce_harness_test\\.go$')\""]
-          timeout_min: 5
-        - id: spec-and-ledger-untouched
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- docs/ .github/ go.mod go.sum partitur.yaml .partitur/)\""]
-          timeout_min: 5
-        - id: change-scope
-          run: ["sh", "-c", "test -z \"$(git status --porcelain -- . | grep -vE 'cmd/partitur/prepare_quiesce_harness_test\\.go$')\""]
-          timeout_min: 5
+        - id: marker-is-reference-workflow
+          run: ["sh", "-c", "printf 'partitur reference workflow\\n' | cmp -s - reference-workflow/marker.txt"]
       human_gate: always
 
 policy:
-  allowed_paths:
-    - "cmd/partitur/prepare_quiesce_harness_test.go"
+  allowed_paths: ["reference-workflow/marker.txt"]
   side_effects: []
   budget:
-    active_wall_clock_min: 180
-    retries_per_movement: 1
+    active_wall_clock_min: 15
+    retries_per_movement: 0
   amendment:
     auto: "off"
