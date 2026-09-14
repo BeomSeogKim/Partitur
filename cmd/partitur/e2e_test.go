@@ -40,7 +40,7 @@ const runVendorRetryBeforeProposalEnvironment = "PARTITUR_RUN_VENDOR_RETRY_BEFOR
 
 const validateInstallHint = "install the four Partitur binaries with `make install` or `go install ./cmd/partitur ./cmd/partitur-adapter-codex ./cmd/partitur-adapter-claude ./cmd/partitur-trampoline`, then put the Go bin dir (`$(go env GOBIN)` or `$(go env GOPATH)/bin`) on `PATH` so `partitur-trampoline` is available"
 const validateEnforcementHint = "set `allow_advisory_enforcement: true` to accept unmet dimensions as per-attempt advisories, or clear each unmet dimension by adding the missing grants or `allowed_paths: [\"**\"]`"
-const validateBindingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml:\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer"
+const validateBindingHint = "write the missing binding in .partitur/cast.yaml (project) or ~/.config/partitur/cast.yaml (user-global): bindings.<part>.performer must name an entry in performers; paste this minimal cast into .partitur/cast.yaml: {cast: '0.1', performers: {performer: {adapter: codex, model: your-model}}, bindings: {<part>: {performer: performer}}}"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(initTestCommandEnvironment) == "1" {
@@ -1460,6 +1460,41 @@ func TestValidateEndToEnd(t *testing.T) {
 			)
 		}
 	})
+}
+
+func TestBindingMissingHintPasteResolvesBinding(t *testing.T) {
+	repository := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	writeValidateInputs(t, repository, e2eScore("interview"), e2eCast(map[string]string{}))
+	t.Chdir(repository)
+
+	code, stdout, stderr := invokeCommand("validate")
+	if code != 3 || stdout != "" {
+		t.Fatalf("initial validate exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	const marker = "paste this minimal cast into .partitur/cast.yaml:"
+	line := strings.TrimSuffix(stderr, "\n")
+	markerIndex := strings.Index(line, marker)
+	closingQuote := strings.LastIndex(line, "\"")
+	if markerIndex < 0 || closingQuote < markerIndex+len(marker) {
+		t.Fatalf("binding_missing hint missing paste marker or closing quote: %q", stderr)
+	}
+	displayedSnippet := line[markerIndex+len(marker) : closingQuote]
+	displayedSnippet = strings.TrimSpace(displayedSnippet)
+	displayedSnippet = strings.ReplaceAll(displayedSnippet, "<part>", "interview")
+	if err := os.WriteFile(
+		filepath.Join(repository, ".partitur", "cast.yaml"),
+		[]byte(displayedSnippet),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, stderr = invokeCommand("validate")
+	if strings.Contains(stderr, `pointer="/bindings/interview" detail="binding_missing"`) ||
+		strings.Contains(stderr, "cast: rule=") {
+		t.Fatalf("displayed hint snippet did not resolve binding: snippet=%q stderr=%q", displayedSnippet, stderr)
+	}
 }
 
 func runValidateFakeAdapter() {

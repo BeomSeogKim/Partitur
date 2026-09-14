@@ -56,6 +56,14 @@ func TestMutationBindingMissingGuidance(t *testing.T) {
 			packagePath: "./cmd/partitur",
 			testName:    "TestValidateBindingMissingRendersGuidance",
 		},
+		{
+			name:        "paste_ready_snippet_load_bearing",
+			source:      "internal/validate/run.go",
+			before:      "{cast: '0.1', performers: {performer: {adapter: codex, model: your-model}}, bindings: {<part>: {performer: performer}}}",
+			after:       `\ncast: \"0.1\"\nperformers:\n  performer:\n    adapter: codex\n    model: your-model\nbindings:\n  <part>:\n    performer: performer`,
+			packagePath: "./cmd/partitur",
+			testName:    "TestBindingMissingHintPasteResolvesBinding",
+		},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			result := assertPrepareQuiesceMutationKilled(
