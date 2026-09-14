@@ -376,9 +376,13 @@ actions. Stable input identities and content hashes are retained verbatim. Every
 whether in an envelope, payload, projection, or action, is replaced with `<timestamp>`, but each
 timestamp field's required presence is retained and event order remains the journal's sequence
 order. Before normalization, every clamped `execution.stopped` independently proves its
-`charged_duration` equals `min(max(0, observed_at - wall_start), remaining_at_start)`. The
-timestamp-derived `charged_duration` and its accumulated projected budget values are then replaced
-with declared sentinels, retaining their keys and the `charging` and `reason` classification. This
+`charged_duration` equals `min(checkpoint_ms + 35000, remaining_at_start)`, where `checkpoint_ms`
+is the interval's latest opener-written `execution.elapsed_checkpointed.cumulative_elapsed_ms`, or
+zero when it has none; the same check requires the recorded `accounting_grace_ms`, requires
+`elapsed_checkpoint_event_id` exactly when a checkpoint existed, and rejects a sampled
+`observed_at`. The checkpoint-derived `charged_duration` and its accumulated projected budget
+values are then replaced with declared sentinels, retaining their keys and the `charging` and
+`reason` classification. This
 means checks 3 and 4 do not prove independent recoveries charged the same amount; they prove each
 charge obeys the formula while all non-derived semantic consequences remain equal. Diagnostics are
 excluded entirely: `log` and `progress` events and command stdout/stderr are not inputs to the
