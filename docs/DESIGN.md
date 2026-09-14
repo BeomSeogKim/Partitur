@@ -3465,7 +3465,14 @@ operation. Its projection uses the same event application and score-derived move
 `resume` and `apply`; it is not a second state model. A missing selected run, missing or unreadable
 pinned snapshot, malformed journal prefix, or an event the core cannot project is a refused
 precondition or recovery halt as applicable — `status` never guesses a state from the root score,
-current cast, worktree, or a manifest.
+current cast, worktree, or a manifest. For a run whose journal records an authority owner, `status`
+additionally takes one bounded, side-effect-free sample of the host process table to compare that
+recorded owner's recorded process identity against the live table; it takes no lease and no lock,
+creates nothing, repairs nothing, and writes nothing, and reports the sample's result beside the
+projection rather than folding it into any lifecycle, recovery, application, or promotion state. When
+no run id is selected, the read-only discovery scan skips a discovered run whose journal cannot be
+projected — unreadable discovered input — and reports the set it skipped on the observable surface
+below, rather than halting observation of the runs it could read.
 
 `--json` writes exactly one UTF-8 JSON document followed by `\n`, and writes no prose to stdout.
 The top-level `schema` is the required literal `partitur/status+json;v=1`. It is the stable
@@ -3505,7 +3512,11 @@ closed-object rule and does not override the preceding additive-field rule. The 
   promotion: { state: NOT_PROMOTED | PROMOTING | PROMOTED | RECOVERY_REQUIRED },
   enforcement_advisories: [{ attempt_id, dimensions }],
   journal: { integrity: INTACT | TAIL_UNPARSEABLE, truncated_seq?, discarded_bytes? },
-  recovery: { state: NOT_REQUIRED | RECOVERY_REQUIRED, reason? }
+  recovery: { state: NOT_REQUIRED | RECOVERY_REQUIRED, reason? },
+  authority: { epoch, owner: null | { pid, start_identity } },
+  recorded_owner_process_match: MATCHING | GONE_OR_REUSED | UNVERIFIABLE | NOT_APPLICABLE,
+  match_unavailable_reason?,
+  observation: { skipped_unreadable_runs: [{ id, reason: JOURNAL_CORRUPT | UNSUPPORTED_EVENT_TYPE }] }
 }
 ```
 
@@ -3519,12 +3530,35 @@ multiple review criteria; a version that admits them must revise this status con
 silently selecting or flattening evidence. Fields inapplicable to a grade are omitted, not filled
 with a misleading empty identifier. `enforcement_advisories` is the per-attempt record of the §4
 predicate's explicitly allowed advisory exceptions; a fail-closed rejection has no successful
-attempt observation to disguise as an advisory.
+attempt observation to disguise as an advisory. `authority` projects the run's journal authority:
+`epoch` is the granted authority epoch and `owner` is `null` unless the journal records an owner, in
+which case it carries that owner's recorded process identity. `recorded_owner_process_match` reports
+the bounded process-table sample as one of `MATCHING`, `GONE_OR_REUSED`, `UNVERIFIABLE`, or
+`NOT_APPLICABLE`; it compares the recorded owner tuple against the live table and is neither a
+liveness signal nor the §6 driver-authority test, whose compare-and-set additionally requires a
+nonterminal run, a matching journal epoch, and an existing `driver.lease` whose epoch and token
+match. `NOT_APPLICABLE` is the verdict when no owner is projected — a never-granted, fenced, cleared,
+or terminal-historical owner — and performs no probe; `MATCHING` means a local non-zombie process
+currently presents the recorded tuple; `GONE_OR_REUSED` means that tuple is absent, a zombie, or
+mismatched; `UNVERIFIABLE` is any other read or compare failure, carries `match_unavailable_reason`,
+and is never rewritten as matching or gone. On a host whose recorded process identity has no boot or
+host discriminator — darwin records only a process start time — a `MATCHING` verdict may be a
+cross-boot or cross-host collision rather than the original process, so cross-boot collision is not
+impossible; the token therefore never manufactures recovery state, and a false `MATCHING` degrades
+to exactly the projection `status` reports today, with forced PID reuse still open (§1).
+`observation.skipped_unreadable_runs` lists each discovered run the read-only scan could not project,
+as `{ id, reason }` ordered by run id, where `reason` is the closed enum `JOURNAL_CORRUPT` or
+`UNSUPPORTED_EVENT_TYPE` and never the raw error text; it is present even when empty and is empty when
+a run id was selected explicitly, because no scan ran.
 
 Without `--json`, `status` renders the same projection as deterministic lines: the run id and
 lifecycle, pinned score head, journal integrity and recovery state, application and promotion
 states, then its pending decisions and each movement with its attempts, marks, and enforcement
-advisories. A mark line is never bare: it renders, for example, `VERIFIED (2 criteria: lint
+advisories. When the run's journal records an authority owner, the text surface additionally renders
+that recorded owner and its `recorded_owner_process_match` verdict; without a recorded owner the line
+is unchanged. When the discovery scan skipped unreadable runs, the text surface renders one `Skipped
+unreadable runs: N (id: REASON, …)` line; when it skipped none, no such line appears.
+A mark line is never bare: it renders, for example, `VERIFIED (2 criteria: lint
 [sha256:...], tests [sha256:...]; tree abc123; rev 4; after 1 failed attempt)`, and appends
 `findings <instance>; review outcome <outcome>` for REVIEWED and `gate decision <id>` for APPROVED.
 Thus the human surface retains the same evidence binding as the JSON surface rather than collapsing
@@ -3534,7 +3568,10 @@ a grade into a reassuring label.
 authoritative journal. It takes neither a driver lease nor the repository state lock; it never
 creates a directory, repairs a tail, rebuilds a checkpoint, or writes a journal event. It uses
 `status`'s read-only selection and replay path, including the pinned-score seed used to identify
-the unique active run, rather than constructing a second lifecycle model. Its stream is the
+the unique active run, rather than constructing a second lifecycle model. That reused selection is
+fail-closed: `logs` identifies the unique active run through the fail-closed read path, not the
+status-only tolerant discovery scan, so unlike `status` it does not skip an unreadable discovered
+run. Its stream is the
 complete durable sequence of the B.7 `log` and `progress` observations in journal order; it does
 not render state-transition, recovery, or other journal rows as if they were adapter output.
 
@@ -3573,6 +3610,9 @@ only defect is an unparseable final line. Those facts are data: callers read `ru
 `application.state`, `promotion.state`, and `journal.integrity`, so `status --json | jq ...` remains
 usable under `set -e`. A genuine Application or Promotion `RECOVERY_REQUIRED` therefore retains its
 authoritative `recovery.state: RECOVERY_REQUIRED` and cause while `status` remains observational.
+The recorded-owner process-match sample and a non-empty `observation.skipped_unreadable_runs` set are
+data: neither changes the status exit class nor manufactures `recovery.state: RECOVERY_REQUIRED`, and
+a produced report carrying either still exits 0.
 
 An unparseable final line is reported as `journal.integrity: TAIL_UNPARSEABLE`, with its would-be
 sequence and discarded byte count, but does **not** manufacture `recovery.state: RECOVERY_REQUIRED`.
