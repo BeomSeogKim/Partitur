@@ -69,6 +69,57 @@ func TestMutationBudgetDisclosureAssemblyIsLoadBearing(t *testing.T) {
 	)
 }
 
+func TestMutationAuthorityAssemblyIsLoadBearing(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStatusMutationKilled(
+		t,
+		"TestStatusDisclosesDeadOwnerAuthority",
+		environment,
+		"Authority:             authorityProjection(state),",
+		"Authority:             Authority{},",
+		"internal/status/status.go",
+		"internal/status",
+		".",
+	)
+}
+
+func TestMutationAuthorityEpochCopyIsLoadBearing(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStatusMutationKilled(
+		t,
+		"TestStatusAuthorityFencedVsNeverGrantedDistinguishable",
+		environment,
+		"projection := Authority{Epoch: state.Authority.Epoch}",
+		"projection := Authority{Epoch: 0}",
+		"internal/status/status.go",
+		"internal/status",
+		".",
+	)
+}
+
+func TestMutationAuthorityOwnerNilBranchIsLoadBearing(t *testing.T) {
+	environment, err := mutationtest.SnapshotGoEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStatusMutationKilled(
+		t,
+		"TestStatusTerminalRunDoesNotPaintOwner",
+		environment,
+		"if state.Authority.Owner != nil && !terminal(string(state.Run)) {",
+		"if state.Authority.Owner != nil {",
+		"internal/status/status.go",
+		"internal/status",
+		".",
+	)
+}
+
 func TestMutationScanContainmentIsLoadBearing(t *testing.T) {
 	environment, err := mutationtest.SnapshotGoEnvironment()
 	if err != nil {
