@@ -23,12 +23,13 @@ import (
 )
 
 var (
-	ErrNoActiveRun     = errors.New("no active run")
-	ErrRunNotFound     = errors.New("run not found")
-	ErrInvalidRunID    = errors.New("invalid run id")
-	ErrSnapshot        = errors.New("run score snapshot is unavailable")
-	ErrSnapshotInvalid = errors.New("run score snapshot is invalid")
-	ErrRequiredInput   = errors.New("required run input is unreadable")
+	ErrNoActiveRun      = errors.New("no active run")
+	ErrRunStoreNotFound = errors.New("no Partitur run store")
+	ErrRunNotFound      = errors.New("run not found")
+	ErrInvalidRunID     = errors.New("invalid run id")
+	ErrSnapshot         = errors.New("run score snapshot is unavailable")
+	ErrSnapshotInvalid  = errors.New("run score snapshot is invalid")
+	ErrRequiredInput    = errors.New("required run input is unreadable")
 )
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
@@ -287,7 +288,14 @@ func unreadableDiscovered(err error) bool {
 }
 
 func readRun(store *runstore.Store, runID runstate.RunID, observationScan bool) (Report, error) {
-	journal := filepath.Join(storeRoot(store), ".partitur", "runs", string(runID), "journal.jsonl")
+	root := storeRoot(store)
+	runs := filepath.Join(root, ".partitur", "runs")
+	if _, err := os.Stat(runs); errors.Is(err, fs.ErrNotExist) {
+		return Report{}, fmt.Errorf("%w at %s; parent directories are never searched; cd to the repository that owns the run", ErrRunStoreNotFound, root)
+	} else if err != nil {
+		return Report{}, fmt.Errorf("%w: inspect run store: %v", ErrRequiredInput, err)
+	}
+	journal := filepath.Join(runs, string(runID), "journal.jsonl")
 	if _, err := os.Stat(journal); errors.Is(err, fs.ErrNotExist) {
 		return Report{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
 	} else if err != nil {

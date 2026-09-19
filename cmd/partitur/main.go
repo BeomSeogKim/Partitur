@@ -1125,7 +1125,9 @@ func resume(ctx context.Context, requestedID string) (recoveryCommandResult, err
 		switch {
 		case selectionErr == nil:
 			runID = runstate.RunID(report.Run.ID)
-		case errors.Is(selectionErr, statusprojection.ErrInvalidRunID), errors.Is(selectionErr, statusprojection.ErrRunNotFound):
+		case errors.Is(selectionErr, statusprojection.ErrInvalidRunID),
+			errors.Is(selectionErr, statusprojection.ErrRunStoreNotFound),
+			errors.Is(selectionErr, statusprojection.ErrRunNotFound):
 			return recoveryCommandResult{}, resumeSelectionError{err: selectionErr}
 		}
 	}
@@ -1340,6 +1342,7 @@ func statusErrorCode(err error) int {
 	case errors.Is(err, statusprojection.ErrInvalidRunID):
 		return 1
 	case errors.Is(err, statusprojection.ErrNoActiveRun),
+		errors.Is(err, statusprojection.ErrRunStoreNotFound),
 		errors.Is(err, statusprojection.ErrRunNotFound),
 		errors.Is(err, statusprojection.ErrSnapshot),
 		errors.Is(err, statusprojection.ErrRequiredInput),
