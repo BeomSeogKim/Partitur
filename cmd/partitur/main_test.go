@@ -324,6 +324,46 @@ func TestStatusUnprojectableJournalExitsFive(t *testing.T) {
 	}
 }
 
+func TestMisAnchoredCommandNamesTheAnchorNotTheRun(t *testing.T) {
+	repository, _ := resumeFixture(t, "")
+	scratch := t.TempDir()
+	commands := []struct {
+		name string
+		args func(string) []string
+	}{
+		{name: "status", args: func(runID string) []string { return []string{"status", runID} }},
+		{name: "resume", args: func(runID string) []string { return []string{"resume", runID} }},
+		{name: "cancel", args: func(runID string) []string { return []string{"cancel", runID} }},
+		{name: "amend", args: func(runID string) []string {
+			return []string{"amend", runID, "--patch", "missing-patch.json", "--reason", "fixture"}
+		}},
+	}
+
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			t.Run("mis-anchored", func(t *testing.T) {
+				t.Chdir(scratch)
+				var stdout, stderr bytes.Buffer
+				code := run(command.args("run-1"), &stdout, &stderr)
+				want := fmt.Sprintf("precondition refused: detail=%q\n", "no Partitur run store at "+scratch+"; parent directories are never searched; cd to the repository that owns the run")
+				if code != 2 || stdout.Len() != 0 || stderr.String() != want {
+					t.Fatalf("exit=%d stdout=%q stderr=%q, want exit 2, empty stdout, stderr %q", code, stdout.String(), stderr.String(), want)
+				}
+			})
+
+			t.Run("missing-run", func(t *testing.T) {
+				t.Chdir(repository)
+				var stdout, stderr bytes.Buffer
+				code := run(command.args("fabricated-run"), &stdout, &stderr)
+				want := "precondition refused: detail=\"run not found: fabricated-run\"\n"
+				if code != 2 || stdout.Len() != 0 || stderr.String() != want {
+					t.Fatalf("exit=%d stdout=%q stderr=%q, want exit 2, empty stdout, stderr %q", code, stdout.String(), stderr.String(), want)
+				}
+			})
+		})
+	}
+}
+
 func TestObservationUnclassifiedReadErrorsAreRefused(t *testing.T) {
 	for _, args := range [][]string{{"status", "run-1"}, {"logs", "run-1"}} {
 		t.Run(args[0], func(t *testing.T) {
