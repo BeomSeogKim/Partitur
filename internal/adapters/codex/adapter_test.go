@@ -22,14 +22,13 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/scratchroot"
 )
 
 const (
 	helperEnv = "PARTITUR_CODEX_TEST_HELPER"
-	// commandScratch is attemptScratchDirectory(executeTestRunID, executeTestAttemptID).
-	commandScratch = "/tmp/puAaCOEHxBe26PKl08mx5Apw/cAaBfXQS0fe-EVqvN7xI0Vg"
 	// executeTestRunID must differ from criterionexec's fixture run id: both packages
-	// derive the same global /tmp/p<compactRunID> run root from it, and `go test ./...`
+	// derive the same global run root from it, and `go test ./...`
 	// runs them in parallel, so a shared id makes the two contend for one directory.
 	executeTestRunID     = "01a08e10-7c41-7b6e-8f2a-5d3c9b1e40a7"
 	executeTestAttemptID = "01a05f5d-04b4-7def-8456-abcdef123456"
@@ -94,6 +93,16 @@ func TestAttemptScratchLayoutMatchesCriterionRunLayout(t *testing.T) {
 	}
 }
 
+func TestAttemptScratchLivesUnderSharedPartiturRoot(t *testing.T) {
+	scratch, err := attemptScratchDirectory(executeTestRunID, executeTestAttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(scratch, "/tmp/partitur/") {
+		t.Fatalf("attempt scratch = %q, want it under /tmp/partitur", scratch)
+	}
+}
+
 func TestPrepareAttemptScratchRejectsContainmentInBothDirections(t *testing.T) {
 	runID := "01a08a3b-2950-70b3-8b5e-b4de30516598"
 	attemptID := "01a08a3c-2950-70b3-8b5e-b4de30516598"
@@ -117,6 +126,21 @@ func TestPrepareAttemptScratchRejectsContainmentInBothDirections(t *testing.T) {
 	}
 	if _, err := prepareAttemptScratch(workdir, runID, attemptID); err == nil || !strings.Contains(err.Error(), "must not contain") {
 		t.Fatalf("scratch containing workdir error = %v", err)
+	}
+}
+
+func TestPrepareAttemptScratchRejectsUnsafeSharedRoot(t *testing.T) {
+	if err := os.Mkdir(scratchroot.Directory(), 0o700); err != nil && !os.IsExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(scratchroot.Directory(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(scratchroot.Directory(), 0o700) })
+
+	_, err := prepareAttemptScratch(t.TempDir(), executeTestRunID, executeTestAttemptID)
+	if err == nil || !strings.Contains(err.Error(), "secure shared scratch root") {
+		t.Fatalf("prepare attempt scratch error = %v, want shared-root rejection", err)
 	}
 }
 
@@ -200,7 +224,7 @@ func TestBuildCommandGrantCombinations(t *testing.T) {
 					Network: network,
 				}
 
-				command, err := buildCommand(request, commandScratch, true)
+				command, err := buildCommand(request, true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -238,7 +262,7 @@ func TestBuildCommandGrantCombinations(t *testing.T) {
 				}
 
 				addDirs := allFlagValues(command.args, "--add-dir")
-				wantDirs := []string{commandScratch, "/artifacts", "/external/shared"}
+				wantDirs := []string{scratchroot.Directory(), "/artifacts", "/external/shared"}
 				if !slices.Equal(addDirs, wantDirs) {
 					t.Errorf("--add-dir values = %#v, want %#v", addDirs, wantDirs)
 				}
@@ -252,7 +276,7 @@ func TestBuildCommandReadOnlyMovement(t *testing.T) {
 
 	request := testRequest("/workspace", "/artifacts")
 	request.Grants.PathsRO = []string{"/reference/**"}
-	command, err := buildCommand(request, commandScratch, true)
+	command, err := buildCommand(request, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +284,7 @@ func TestBuildCommandReadOnlyMovement(t *testing.T) {
 		t.Fatalf("dir = %q", command.dir)
 	}
 	assertFlagValue(t, command.args, "-C", "/artifacts")
-	if got, want := allFlagValues(command.args, "--add-dir"), []string{commandScratch}; !slices.Equal(got, want) {
+	if got, want := allFlagValues(command.args, "--add-dir"), []string{scratchroot.Directory()}; !slices.Equal(got, want) {
 		t.Fatalf("--add-dir values = %#v, want %#v", got, want)
 	}
 	configs := allFlagValues(command.args, "-c")
@@ -284,7 +308,7 @@ func TestBuildCommandResumeEffortAndUnknownExtension(t *testing.T) {
 		"codex": json.RawMessage(`{"effort":"high","future_field":42}`),
 	}
 
-	command, err := buildCommand(request, commandScratch, true)
+	command, err := buildCommand(request, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +324,7 @@ func TestBuildCommandResumeEffortAndUnknownExtension(t *testing.T) {
 		}
 	}
 
-	fresh, err := buildCommand(request, commandScratch, false)
+	fresh, err := buildCommand(request, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +340,7 @@ func TestBuildCommandEscapesEffort(t *testing.T) {
 	request.Extensions = map[string]json.RawMessage{
 		"codex": json.RawMessage(`{"effort":"high\"value"}`),
 	}
-	command, err := buildCommand(request, commandScratch, true)
+	command, err := buildCommand(request, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +365,7 @@ func TestBuildCommandRejectsMalformedKnownFields(t *testing.T) {
 			if test.extend != nil {
 				request.Extensions = map[string]json.RawMessage{"codex": test.extend}
 			}
-			if _, err := buildCommand(request, commandScratch, true); err == nil {
+			if _, err := buildCommand(request, true); err == nil {
 				t.Fatal("expected error")
 			}
 		})

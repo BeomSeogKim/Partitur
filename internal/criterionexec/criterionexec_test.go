@@ -23,6 +23,7 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/faultpoint"
 	"github.com/BeomSeogKim/Partitur/internal/launch"
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/scratchroot"
 )
 
 const (
@@ -107,7 +108,7 @@ func TestRunProvidesSocketSafeCriterionTemporaryDirectory(t *testing.T) {
 	result := Run(config, criterionRequest(t, "bind-unix-socket"))
 	stdout, _ := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(config.RunID), "attempts", string(config.AttemptID), "criteria", "criterion", "stdout"))
 	temporary, _, _ := strings.Cut(string(stdout), "\n")
-	if strings.HasPrefix(temporary, "/tmp/p") {
+	if strings.HasPrefix(temporary, scratchroot.Directory()+"/") {
 		t.Cleanup(func() {
 			if err := os.RemoveAll(filepath.Dir(temporary)); err != nil {
 				t.Fatal(err)
@@ -118,10 +119,50 @@ func TestRunProvidesSocketSafeCriterionTemporaryDirectory(t *testing.T) {
 		stderr, _ := os.ReadFile(filepath.Join(root, ".partitur", "runs", string(config.RunID), "attempts", string(config.AttemptID), "criteria", "criterion", "stderr"))
 		t.Fatalf("criterion result = %#v\nstdout=%s\nstderr=%s", result, stdout, stderr)
 	}
-	if !strings.HasPrefix(temporary, "/tmp/p") {
+	if !strings.HasPrefix(temporary, scratchroot.Directory()+"/") {
 		t.Fatalf("criterion TMPDIR = %q, want the short criterion namespace", temporary)
 	}
 	t.Logf("bound unix socket under %d-byte TMPDIR on %s", len([]byte(temporary)), runtime.GOOS)
+}
+
+func TestCriterionTemporaryLivesUnderSharedPartiturRoot(t *testing.T) {
+	temporary, err := AttemptTemporaryDirectory(criterionTestRunID, criterionTestAttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(temporary, "/tmp/partitur/") {
+		t.Fatalf("criterion temporary = %q, want it under /tmp/partitur", temporary)
+	}
+}
+
+func TestDeepestCriterionTemporaryPathAcceptsAUnixSocketBind(t *testing.T) {
+	temporary, err := createAttemptTemporaryDirectory(criterionTestRunID, criterionTestAttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = CleanupRunTemporary(criterionTestRunID) })
+
+	socket := filepath.Join(temporary, "53072.pipe")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listen unix socket %q (%d bytes): %v", socket, len([]byte(socket)), err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+}
+
+func TestCreateAttemptTemporaryDirectoryRejectsUnsafeSharedRoot(t *testing.T) {
+	if err := os.Mkdir(scratchroot.Directory(), 0o700); err != nil && !os.IsExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(scratchroot.Directory(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(scratchroot.Directory(), 0o700) })
+
+	_, err := createAttemptTemporaryDirectory(criterionTestRunID, criterionTestAttemptID)
+	if err == nil || !strings.Contains(err.Error(), "secure shared temporary root") {
+		t.Fatalf("create attempt temporary directory error = %v, want shared-root rejection", err)
+	}
 }
 
 func TestConcurrentAttemptsUseDistinctCriterionTemporaryDirectories(t *testing.T) {

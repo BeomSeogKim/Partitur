@@ -16,6 +16,7 @@ import (
 
 	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
 	"github.com/BeomSeogKim/Partitur/internal/protocol"
+	"github.com/BeomSeogKim/Partitur/internal/scratchroot"
 )
 
 const (
@@ -136,7 +137,7 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 	}
 	environment := childEnvironment(os.Environ(), scratch)
 
-	command, err := buildCommand(request, scratch, true)
+	command, err := buildCommand(request, true)
 	if err != nil {
 		return failed(protocol.FailureProtocolError, err.Error()), nil
 	}
@@ -159,7 +160,7 @@ func (a *Adapter) Execute(ctx context.Context, request *protocol.ExecuteRequest,
 		if err := sink.Log("warn", "Codex session hint was stale; retrying without it"); err != nil {
 			return failed(protocol.FailureProtocolError, "emit retry event"), nil
 		}
-		command, err = buildCommand(request, scratch, false)
+		command, err = buildCommand(request, false)
 		if err != nil {
 			return failed(protocol.FailureProtocolError, err.Error()), nil
 		}
@@ -293,7 +294,7 @@ type commandSpec struct {
 	resumeID string
 }
 
-func buildCommand(request *protocol.ExecuteRequest, scratch string, includeResume bool) (commandSpec, error) {
+func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (commandSpec, error) {
 	if request == nil {
 		return commandSpec{}, errors.New("execute request is required")
 	}
@@ -330,7 +331,10 @@ func buildCommand(request *protocol.ExecuteRequest, scratch string, includeResum
 		"--ignore-rules",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"--add-dir", scratch,
+		// This lets an attempt write another concurrent run's scratch subtree.
+		// Isolation between concurrent runs is filesystem-permission-enforced,
+		// rather than sandbox-enforced.
+		"--add-dir", scratchroot.Directory(),
 	}
 	// Ignoring user config preserves CODEX_HOME authentication but cannot
 	// remove managed policy or every integration built into the executable.

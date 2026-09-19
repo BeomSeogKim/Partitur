@@ -14,9 +14,8 @@ import (
 	"syscall"
 
 	"github.com/BeomSeogKim/Partitur/internal/runstate"
+	"github.com/BeomSeogKim/Partitur/internal/scratchroot"
 )
-
-const criterionTemporaryBase = "/tmp"
 
 // AttemptTemporaryDirectory returns the short, attempt-exclusive directory
 // exported to criterion commands as TMPDIR, TMP, and TEMP.
@@ -40,6 +39,9 @@ func createAttemptTemporaryDirectory(runID runstate.RunID, attemptID runstate.At
 	runTemporary, err := RunTemporaryDirectory(runID)
 	if err != nil {
 		return "", err
+	}
+	if err := ensurePrivateTemporaryDirectory(scratchroot.Directory()); err != nil {
+		return "", fmt.Errorf("secure shared temporary root: %w", err)
 	}
 	if err := ensurePrivateTemporaryDirectory(runTemporary); err != nil {
 		return "", fmt.Errorf("secure run temporary root: %w", err)
@@ -97,7 +99,7 @@ func RunTemporaryDirectory(runID runstate.RunID) (string, error) {
 }
 
 func runTemporaryDirectory(compactRunID string) string {
-	return filepath.Join(criterionTemporaryBase, "p"+compactRunID)
+	return filepath.Join(scratchroot.Directory(), "p"+compactRunID)
 }
 
 func compactTemporaryID(value string) (string, error) {
