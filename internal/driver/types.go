@@ -65,9 +65,9 @@ type AttemptExecution struct {
 	Control           *cancellation.Watcher
 }
 
-// AcceptanceBudgetTerminalization supplies the already-open acceptance
-// interval close to the shared budget terminal sequence. Live execution owns a
-// measured close; recovery supplies its authoritative clamped close.
+// AcceptanceBudgetTerminalization supplies an already-open execution interval
+// close to the shared budget terminal sequence. Live execution owns a measured
+// close; recovery supplies its authoritative clamped close.
 type AcceptanceBudgetTerminalization struct {
 	RepositoryRoot string
 	RunID          runstate.RunID

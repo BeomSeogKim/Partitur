@@ -1131,7 +1131,33 @@ func ExecuteAttempt(
 	})
 	executeCause := context.Cause(executeContext)
 	cancel()
+	var budgetExhausted *ActiveBudgetExhaustedError
+	activeBudgetDeadline := errors.Is(err, context.DeadlineExceeded) && errors.As(executeCause, &budgetExhausted)
 	err = activeBudgetError(err, executeCause)
+	if activeBudgetDeadline {
+		return TerminalizeAcceptanceBudget(ctx, AcceptanceBudgetTerminalization{
+			RepositoryRoot: execution.RepositoryRoot,
+			RunID:          execution.RunID,
+			AttemptID:      attempt.AttemptID,
+			Authority:      authority,
+			Control:        control,
+			Probe:          dependencies.probe,
+			StoreFactory:   dependencies.storeFactory,
+			Close: func() error {
+				adapterDuration := dependencies.now().Sub(adapterOpened).Milliseconds()
+				if adapterDuration < 0 {
+					adapterDuration = 0
+				}
+				_, err := appendEvent(runstate.EventExecutionStopped, map[string]any{
+					"interval_id":      adapterInterval,
+					"reason":           "budget_exhausted",
+					"charging":         "measured",
+					"charged_duration": adapterDuration,
+				}, "execution.adapter.stopped")
+				return err
+			},
+		})
+	}
 	if approvalPrepared {
 		if err != nil {
 			return stopped(result, err)

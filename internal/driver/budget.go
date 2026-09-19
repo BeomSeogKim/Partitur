@@ -7,9 +7,7 @@ import (
 )
 
 // ActiveBudgetExhaustedError names the run's own active wall-clock budget as
-// the deadline that fired. It is a diagnostic signal only: the attempt was not
-// terminalized, the outcome stays INTERRUPTED, and the terminal chain required
-// by DESIGN.md:2338-2350 remains unimplemented under issue #447.
+// the deadline that fired.
 type ActiveBudgetExhaustedError struct {
 	RemainingAtStartMS int64
 }
