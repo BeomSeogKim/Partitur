@@ -211,7 +211,8 @@ func TestCriterionRecoveryPreservesCompletedLaunchEvidence(t *testing.T) {
 	}
 
 	code, stdout, stderr := runCriterionCommand(t, partitur, repository, environment, "resume", string(runID))
-	if code != 0 && code != 4 || stdout != "" || stderr != "" {
+	wantStderr := expectedResumeTerminalDiagnostic(t, readCriterionJournal(t, repository, runID), code)
+	if code != 0 && code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	first, err := os.ReadFile(filepath.Join(repository, ".partitur", "runs", string(runID), "journal.jsonl"))
@@ -220,7 +221,8 @@ func TestCriterionRecoveryPreservesCompletedLaunchEvidence(t *testing.T) {
 	}
 
 	code, stdout, stderr = runCriterionCommand(t, partitur, repository, environment, "resume", string(runID))
-	if code != 0 && code != 4 || stdout != "" || stderr != "" {
+	wantStderr = expectedResumeTerminalDiagnostic(t, readCriterionJournal(t, repository, runID), code)
+	if code != 0 && code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("fixed-point replay exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	second, err := os.ReadFile(filepath.Join(repository, ".partitur", "runs", string(runID), "journal.jsonl"))
@@ -579,7 +581,8 @@ func criterionCompleted(t *testing.T, events []runstate.Event) bool {
 func assertCriterionRecoveryFixedPoint(t *testing.T, binary, repository string, environment []string, runID runstate.RunID) {
 	t.Helper()
 	code, stdout, stderr := runCriterionCommand(t, binary, repository, environment, "resume", string(runID))
-	if code != 0 && code != 4 || stdout != "" || stderr != "" {
+	wantStderr := expectedResumeTerminalDiagnostic(t, readCriterionJournal(t, repository, runID), code)
+	if code != 0 && code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	first, err := os.ReadFile(filepath.Join(repository, ".partitur", "runs", string(runID), "journal.jsonl"))
@@ -608,7 +611,8 @@ func assertCriterionRecoveryFixedPoint(t *testing.T, binary, repository string, 
 		}
 	}
 	code, stdout, stderr = runCriterionCommand(t, binary, repository, environment, "resume", string(runID))
-	if code != 0 && code != 4 || stdout != "" || stderr != "" {
+	wantStderr = expectedResumeTerminalDiagnostic(t, readCriterionJournal(t, repository, runID), code)
+	if code != 0 && code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("fixed-point replay exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	second, err := os.ReadFile(filepath.Join(repository, ".partitur", "runs", string(runID), "journal.jsonl"))
@@ -618,6 +622,34 @@ func assertCriterionRecoveryFixedPoint(t *testing.T, binary, repository string, 
 	if !bytes.Equal(first, second) {
 		t.Fatal("fixed-point replay appended duplicate durable events")
 	}
+}
+
+func expectedResumeTerminalDiagnostic(t *testing.T, events []runstate.Event, code int) string {
+	t.Helper()
+	if code != 4 {
+		return ""
+	}
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		state := ""
+		switch event.Type {
+		case runstate.EventRunFailed:
+			state = "FAILED"
+		case runstate.EventRunCancelled:
+			state = "CANCELLED"
+		default:
+			continue
+		}
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("run terminal: state=%q reason=%q\n", state, payload.Reason)
+	}
+	t.Fatal("resume exit 4 without a terminal journal event")
+	return ""
 }
 
 func runCriterionCommand(t *testing.T, binary, repository string, environment []string, arguments ...string) (int, string, string) {

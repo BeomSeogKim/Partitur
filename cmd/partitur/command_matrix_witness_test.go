@@ -2634,7 +2634,13 @@ func witnessTerminalResumeCleanup(t *testing.T, terminal string, wantCode int) {
 
 	code, stdout, stderr := invokeCommand("resume", "run-1")
 
-	if code != wantCode || stdout != "" || stderr != "" {
+	wantStderr := ""
+	if terminal == "FAILED" {
+		wantStderr = "run terminal: state=\"FAILED\" reason=\"fixture\"\n"
+	} else if terminal == "CANCELLED" {
+		wantStderr = "run terminal: state=\"CANCELLED\" reason=\"\"\n"
+	}
+	if code != wantCode || stdout != "" || stderr != wantStderr {
 		t.Fatalf("terminal=%s exit=%d stdout=%q stderr=%q, want exit %d", terminal, code, stdout, stderr, wantCode)
 	}
 	assertCommandWitnessJournalDelta(t, store, before)

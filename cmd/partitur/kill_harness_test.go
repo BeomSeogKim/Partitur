@@ -1143,6 +1143,32 @@ func readHarnessEvents(t *testing.T, repository, runID string) []runstate.Event 
 	return journal.Events
 }
 
+func expectedResumeTerminalDiagnostic(t *testing.T, repository, runID string) string {
+	t.Helper()
+	events := readHarnessEvents(t, repository, runID)
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		state := ""
+		switch event.Type {
+		case runstate.EventRunFailed:
+			state = "FAILED"
+		case runstate.EventRunCancelled:
+			state = "CANCELLED"
+		default:
+			continue
+		}
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("run terminal: state=%q reason=%q\n", state, payload.Reason)
+	}
+	t.Fatal("resume exit 4 without a terminal journal event")
+	return ""
+}
+
 func hashMismatchScore() map[string]any {
 	score := runScore()
 	criterion := score["movements"].([]any)[0].(map[string]any)["acceptance"].(map[string]any)["hard"].([]any)[0].(map[string]any)
@@ -1895,7 +1921,11 @@ func assertRecoveryFixedPoint(t *testing.T, binary, repository string, environme
 		}
 		return
 	}
-	if code != 0 && code != 4 || stdout != "" || stderr != "" {
+	wantStderr := ""
+	if code == 4 {
+		wantStderr = expectedResumeTerminalDiagnostic(t, repository, runID)
+	}
+	if code != 0 && code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	journal := filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl")
@@ -1938,7 +1968,11 @@ func assertFixedPointReplayResult(
 	fixture fixedPointFixture,
 ) {
 	t.Helper()
-	if code != 0 && code != 4 || stdout != "" || stderr != "" {
+	wantStderr := ""
+	if code == 4 {
+		wantStderr = expectedResumeTerminalDiagnostic(t, repository, runID)
+	}
+	if code != 0 && code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("fixed-point replay exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	journal := filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl")

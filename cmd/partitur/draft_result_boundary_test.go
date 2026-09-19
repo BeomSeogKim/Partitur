@@ -506,7 +506,8 @@ func assertDraftResultRecoveryFixedPoint(
 ) {
 	t.Helper()
 	code, stdout, stderr := runCommandBinaryWithin(t, 10*time.Second, binary, repository, environment, "resume", runID)
-	if code != 4 || stdout != "" || stderr != "" {
+	wantStderr := expectedResumeTerminalDiagnostic(t, repository, runID)
+	if code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	journal := filepath.Join(repository, ".partitur", "runs", runID, "journal.jsonl")
@@ -516,7 +517,7 @@ func assertDraftResultRecoveryFixedPoint(
 	}
 	assertExpectedFailure(t, first, expected)
 	code, stdout, stderr = runCommandBinaryWithin(t, 10*time.Second, binary, repository, environment, "resume", runID)
-	if code != 4 || stdout != "" || stderr != "" {
+	if code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("fixed-point replay exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	second, err := os.ReadFile(journal)
