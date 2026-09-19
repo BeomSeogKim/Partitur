@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-)
 
-const attemptScratchBase = "/tmp"
+	"github.com/BeomSeogKim/Partitur/internal/scratchroot"
+)
 
 func attemptScratchDirectory(runID, attemptID string) (string, error) {
 	run, err := compactScratchID(runID, 'u')
@@ -25,13 +25,16 @@ func attemptScratchDirectory(runID, attemptID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(attemptScratchBase, "p"+run, attempt), nil
+	return filepath.Join(scratchroot.Directory(), "p"+run, attempt), nil
 }
 
 func prepareAttemptScratch(workdir, runID, attemptID string) (string, error) {
 	scratch, err := attemptScratchDirectory(runID, attemptID)
 	if err != nil {
 		return "", err
+	}
+	if err := ensurePrivateScratchDirectory(scratchroot.Directory()); err != nil {
+		return "", fmt.Errorf("secure shared scratch root: %w", err)
 	}
 	if err := ensurePrivateScratchDirectory(filepath.Dir(scratch)); err != nil {
 		return "", fmt.Errorf("secure run scratch root: %w", err)
