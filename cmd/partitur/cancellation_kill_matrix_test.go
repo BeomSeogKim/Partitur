@@ -294,14 +294,15 @@ func assertCancellationTerminalRetainsFencedLease(t *testing.T, repository, runI
 func assertCancellationRecoveryFixedPoint(t *testing.T, binary, repository string, environment []string, runID string, predicates cancellationFixturePredicates) {
 	t.Helper()
 	code, stdout, stderr := runCommandBinaryWithin(t, 30*time.Second, binary, repository, environment, "resume", runID)
-	if code != 4 || stdout != "" || stderr != "" {
+	wantStderr := expectedResumeTerminalDiagnostic(t, repository, runID)
+	if code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("cancellation recovery exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	journal := readHarnessJournal(t, repository, runID)
 	assertCancellationJournalEffects(t, journal, predicates)
 	assertCancellationDurableFixedPoint(t, repository, runID, predicates)
 	code, stdout, stderr = runCommandBinaryWithin(t, 30*time.Second, binary, repository, environment, "resume", runID)
-	if code != 4 || stdout != "" || stderr != "" {
+	if code != 4 || stdout != "" || stderr != wantStderr {
 		t.Fatalf("cancellation fixed-point replay exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if replay := readHarnessJournal(t, repository, runID); !bytes.Equal(journal, replay) {

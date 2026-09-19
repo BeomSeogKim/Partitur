@@ -90,7 +90,11 @@ func assertBlockingDescriptorBindsProposalRecord(t *testing.T, blocked runstate.
 func resumeProposalPublication(t *testing.T, binary, repository string, environment []string, runID runstate.RunID, wantCode int) {
 	t.Helper()
 	code, stdout, stderr := runCommandBinary(t, binary, repository, environment, "resume", string(runID))
-	if code != wantCode || stdout != "" || stderr != "" {
+	wantStderr := ""
+	if wantCode == 4 {
+		wantStderr = expectedResumeTerminalDiagnostic(t, repository, string(runID))
+	}
+	if code != wantCode || stdout != "" || stderr != wantStderr {
 		t.Fatalf("proposal-publication recovery exit=%d stdout=%q stderr=%q, want exit=%d", code, stdout, stderr, wantCode)
 	}
 }

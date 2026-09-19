@@ -1259,8 +1259,8 @@ func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 	}{
 		{name: "succeeded", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeSucceeded}, wantCode: 0},
 		{name: "quiescent", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeQuiescent}, wantCode: 0},
-		{name: "failed", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}, wantCode: 4},
-		{name: "cancelled", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeCancelled}, wantCode: 4},
+		{name: "failed", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeFailed}, wantCode: 4, wantStderr: "run terminal: state=\"FAILED\" reason=\"\"\n"},
+		{name: "cancelled", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeCancelled}, wantCode: 4, wantStderr: "run terminal: state=\"CANCELLED\" reason=\"\"\n"},
 		{name: "live owner refusal", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeRefused}, wantCode: 2, wantStderr: "precondition refused: detail=\"driver authority is already held\"\n"},
 		{name: "halt", result: recoveryexec.Result{Outcome: recoveryexec.OutcomeHalted, Decision: recovery.Decision{Halt: recovery.HaltRootSnapshotDivergence}}, wantCode: 5, wantStderr: "recovery halted: run_id=\"run-1\" reason=\"root_snapshot_divergence\"\n"},
 		{name: "no outcome is operational interruption", result: recoveryexec.Result{}, wantCode: 6, wantStderr: "run interrupted: run_id=\"run-1\" state=\"nonterminal\" resume=\"partitur resume run-1\" detail=\"recovery produced no command outcome\"\n"},
@@ -1279,6 +1279,32 @@ func TestResumeMapsOnlyExecutorOutcomesAndNeverWritesStdout(t *testing.T) {
 			}
 			if stderr.String() != test.wantStderr {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestResumeWritesTerminalDiagnosticOnFailedAndCancelled(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		outcome recoveryexec.Outcome
+		reason  string
+	}{
+		{name: "failed", outcome: recoveryexec.OutcomeFailed, reason: "fixture failed"},
+		{name: "cancelled", outcome: recoveryexec.OutcomeCancelled, reason: "fixture cancelled"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runResume("run-1", &stdout, &stderr, func(context.Context, string) (recoveryCommandResult, error) {
+				return recoveryCommandResult{
+					runID:  "run-1",
+					result: recoveryexec.Result{Outcome: test.outcome},
+					reason: test.reason,
+				}, nil
+			})
+			wantStderr := fmt.Sprintf("run terminal: state=%q reason=%q\n", test.outcome, test.reason)
+			if code != 4 || stdout.String() != "" || stderr.String() != wantStderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q, want exit=4 stdout=%q stderr=%q", code, stdout.String(), stderr.String(), "", wantStderr)
 			}
 		})
 	}
@@ -1815,7 +1841,7 @@ func TestResumeKeepsTerminalWriterScoreIdempotent(t *testing.T) {
 	}
 	t.Chdir(root)
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.Len() != 0 {
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.String() != "run terminal: state=\"FAILED\" reason=\"fixture\"\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	after, err := os.ReadFile(journal)
@@ -1853,18 +1879,19 @@ func TestCancelTerminalizesNonterminalWriterScore(t *testing.T) {
 
 func TestResumeTreatsTerminalProjectionIdempotently(t *testing.T) {
 	for _, test := range []struct {
-		state string
-		code  int
+		state      string
+		code       int
+		wantStderr string
 	}{
 		{state: "SUCCEEDED", code: 0},
-		{state: "FAILED", code: 4},
-		{state: "CANCELLED", code: 4},
+		{state: "FAILED", code: 4, wantStderr: "run terminal: state=\"FAILED\" reason=\"fixture\"\n"},
+		{state: "CANCELLED", code: 4, wantStderr: "run terminal: state=\"CANCELLED\" reason=\"\"\n"},
 	} {
 		t.Run(test.state, func(t *testing.T) {
 			root, _ := resumeFixture(t, test.state)
 			t.Chdir(root)
 			var stdout, stderr bytes.Buffer
-			if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != test.code || stdout.Len() != 0 || stderr.Len() != 0 {
+			if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != test.code || stdout.Len() != 0 || stderr.String() != test.wantStderr {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
@@ -2187,7 +2214,7 @@ func TestResumeTerminalCleanupRemovesEveryC1Residue(t *testing.T) {
 
 	t.Chdir(root)
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.Len() != 0 {
+	if code := run([]string{"resume", "run-1"}, &stdout, &stderr); code != 4 || stdout.Len() != 0 || stderr.String() != "run terminal: state=\"FAILED\" reason=\"fixture\"\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	for _, residue := range []string{

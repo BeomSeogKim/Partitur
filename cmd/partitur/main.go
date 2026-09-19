@@ -85,6 +85,7 @@ type statusReader func(string) (statusprojection.Report, error)
 type recoveryCommandResult struct {
 	runID  runstate.RunID
 	result recoveryexec.Result
+	reason string
 }
 
 type resumeRunner func(context.Context, string) (recoveryCommandResult, error)
@@ -1024,6 +1025,7 @@ func runResume(requestedID string, stdout, stderr io.Writer, resume resumeRunner
 	case recoveryexec.OutcomeSucceeded, recoveryexec.OutcomeQuiescent:
 		return 0
 	case recoveryexec.OutcomeFailed, recoveryexec.OutcomeCancelled:
+		fmt.Fprintf(stderr, "run terminal: state=%q reason=%q\n", result.Outcome, commandResult.reason)
 		return 4
 	case recoveryexec.OutcomeRefused:
 		fmt.Fprintln(stderr, "precondition refused: detail=\"driver authority is already held\"")
@@ -1128,7 +1130,36 @@ func resume(ctx context.Context, requestedID string) (recoveryCommandResult, err
 		}
 	}
 	result, err := executeRecovery(ctx, store, runID)
-	return recoveryCommandResult{runID: runID, result: result}, err
+	commandResult := recoveryCommandResult{runID: runID, result: result}
+	if result.Outcome == recoveryexec.OutcomeFailed || result.Outcome == recoveryexec.OutcomeCancelled {
+		commandResult.reason = terminalReason(store, runID, result.Outcome)
+	}
+	return commandResult, err
+}
+
+func terminalReason(store *runstore.Store, runID runstate.RunID, outcome recoveryexec.Outcome) string {
+	journal, err := store.ReadJournal(runID)
+	if err != nil {
+		return ""
+	}
+	want := runstate.EventRunFailed
+	if outcome == recoveryexec.OutcomeCancelled {
+		want = runstate.EventRunCancelled
+	}
+	for index := len(journal.Events) - 1; index >= 0; index-- {
+		event := journal.Events[index]
+		if event.Type != want {
+			continue
+		}
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return ""
+		}
+		return payload.Reason
+	}
+	return ""
 }
 
 type cancelSelectionError struct {

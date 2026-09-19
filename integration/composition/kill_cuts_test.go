@@ -345,7 +345,8 @@ func nextPoint(scanner *bufio.Scanner) (faultpoint.PointID, int, error) {
 func assertRecoveryFixedPoint(t *testing.T, binary, repository string, environment []string, runID string) {
 	t.Helper()
 	code, stdout, stderr := runCommand(t, binary, repository, environment, "resume", runID)
-	if (code != 0 && code != 4) || stdout != "" || stderr != "" {
+	wantStderr := expectedResumeTerminalDiagnostic(t, readJournal(t, repository, runID), code)
+	if (code != 0 && code != 4) || stdout != "" || stderr != wantStderr {
 		t.Fatalf("resume exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	first := readJournal(t, repository, runID)
@@ -353,12 +354,53 @@ func assertRecoveryFixedPoint(t *testing.T, binary, repository string, environme
 		t.Fatalf("failed recovery has no run.failed: %s", first)
 	}
 	code, stdout, stderr = runCommand(t, binary, repository, environment, "resume", runID)
-	if (code != 0 && code != 4) || stdout != "" || stderr != "" {
+	wantStderr = expectedResumeTerminalDiagnostic(t, readJournal(t, repository, runID), code)
+	if (code != 0 && code != 4) || stdout != "" || stderr != wantStderr {
 		t.Fatalf("fixed-point replay exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if second := readJournal(t, repository, runID); !bytes.Equal(first, second) {
 		t.Fatal("fixed-point replay appended duplicate durable events")
 	}
+}
+
+func expectedResumeTerminalDiagnostic(t *testing.T, journal []byte, code int) string {
+	t.Helper()
+	if code != 4 {
+		return ""
+	}
+	events := make([]runstate.Event, 0)
+	scanner := bufio.NewScanner(bytes.NewReader(journal))
+	for scanner.Scan() {
+		var event runstate.Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		state := ""
+		switch event.Type {
+		case runstate.EventRunFailed:
+			state = "FAILED"
+		case runstate.EventRunCancelled:
+			state = "CANCELLED"
+		default:
+			continue
+		}
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("run terminal: state=%q reason=%q\n", state, payload.Reason)
+	}
+	t.Fatal("resume exit 4 without a terminal journal event")
+	return ""
 }
 
 func readJournal(t *testing.T, repository, runID string) []byte {
