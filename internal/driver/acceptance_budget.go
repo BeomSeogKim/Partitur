@@ -11,9 +11,10 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/successor"
 )
 
-// TerminalizeAcceptanceBudget closes an active acceptance interval, records
-// the core-owned exhausted attempt, then realizes its already-recorded terminal
-// disposition. Both live execution and criterion recovery use this sequence.
+// TerminalizeAcceptanceBudget closes an active execution interval, records the
+// core-owned exhausted attempt, then realizes its already-recorded terminal
+// disposition. Adapter execution, acceptance, and criterion recovery use this
+// sequence.
 func TerminalizeAcceptanceBudget(ctx context.Context, terminalization AcceptanceBudgetTerminalization) Result {
 	result := Result{RunID: terminalization.RunID}
 	if terminalization.RepositoryRoot == "" || terminalization.RunID == "" || terminalization.AttemptID == "" ||

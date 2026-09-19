@@ -1957,18 +1957,59 @@ func TestLiveAcceptanceBudgetExhaustionTerminalizesAttemptBeforeMovement(t *test
 func TestLiveAdapterBudgetDeadlineNamesTheActiveBudget(t *testing.T) {
 	const remainingMS int64 = 50
 	result := executeAttemptWithContextEndingAdapter(t, context.Background(), remainingMS, nil)
-	if result.Outcome != OutcomeInterrupted || result.Reason != "" {
-		t.Fatalf("budget result = %+v, want INTERRUPTED with no reason", result)
+	if result.Outcome != OutcomeFailed || result.Reason != successor.KindBudgetExhausted || result.Err != nil {
+		t.Fatalf("budget result = %+v, want FAILED budget_exhausted", result)
 	}
-	var exhausted *ActiveBudgetExhaustedError
-	if !errors.As(result.Err, &exhausted) {
-		t.Fatalf("returned error = %T %v, want *ActiveBudgetExhaustedError", result.Err, result.Err)
+}
+
+func TestAdapterBudgetExhaustionTakesTheTerminalPath(t *testing.T) {
+	const remainingMS int64 = 50
+	result, events := executeAttemptWithContextEndingAdapterAndJournal(t, context.Background(), remainingMS, nil)
+	if result.Outcome != OutcomeFailed || result.Reason != successor.KindBudgetExhausted || result.Err != nil {
+		t.Fatalf("budget result = %+v, want FAILED budget_exhausted", result)
 	}
-	if exhausted.RemainingAtStartMS != remainingMS {
-		t.Fatalf("remaining_at_start_ms = %d, want %d", exhausted.RemainingAtStartMS, remainingMS)
+	want := []runstate.EventType{
+		runstate.EventExecutionStopped,
+		runstate.EventAttemptFailed,
+		runstate.EventMovementFailed,
+		runstate.EventRunFailed,
 	}
-	if !errors.Is(result.Err, context.DeadlineExceeded) {
-		t.Fatalf("returned error = %v, want context deadline exceeded in error chain", result.Err)
+	if len(events) < len(want) {
+		t.Fatalf("journal events = %v, want terminal suffix %v", events, want)
+	}
+	adapterInterval := ""
+	for _, event := range events {
+		if event.Type != runstate.EventExecutionStarted {
+			continue
+		}
+		payload := decodeDriverPayload(t, event)
+		if payload["phase"] == "adapter" {
+			adapterInterval, _ = payload["interval_id"].(string)
+		}
+	}
+	if adapterInterval == "" {
+		t.Fatal("adapter execution.started is absent")
+	}
+	terminal := events[len(events)-len(want):]
+	for index, event := range terminal {
+		if event.Type != want[index] {
+			t.Fatalf("terminal event types = %v, want %v", terminal, want)
+		}
+		payload := decodeDriverPayload(t, event)
+		switch event.Type {
+		case runstate.EventExecutionStopped:
+			if payload["interval_id"] != adapterInterval || payload["reason"] != successor.KindBudgetExhausted || payload["charging"] != "measured" {
+				t.Fatalf("adapter execution.stopped = %#v", payload)
+			}
+		case runstate.EventAttemptFailed:
+			if payload["kind"] != successor.KindBudgetExhausted {
+				t.Fatalf("attempt.failed = %#v", payload)
+			}
+		case runstate.EventMovementFailed, runstate.EventRunFailed:
+			if payload["reason"] != successor.KindBudgetExhausted {
+				t.Fatalf("%s = %#v", event.Type, payload)
+			}
+		}
 	}
 }
 
@@ -1997,6 +2038,11 @@ func TestLiveAdapterNonBudgetContextEndingsStayOrdinaryInterruptions(t *testing.
 }
 
 func executeAttemptWithContextEndingAdapter(t *testing.T, ctx context.Context, remainingMS int64, inFlight func()) Result {
+	result, _ := executeAttemptWithContextEndingAdapterAndJournal(t, ctx, remainingMS, inFlight)
+	return result
+}
+
+func executeAttemptWithContextEndingAdapterAndJournal(t *testing.T, ctx context.Context, remainingMS int64, inFlight func()) (Result, []runstate.Event) {
 	t.Helper()
 	preparation := prepareRunnableFixture(t, sliceScore(), sliceCast())
 	started, err := workspace.Start(preparation, faultpoint.Nop{})
@@ -2029,11 +2075,16 @@ func executeAttemptWithContextEndingAdapter(t *testing.T, ctx context.Context, r
 	}
 	dependencies := readerSuccessDependencies(t)
 	dependencies.client = &contextEndingAdapterFixture{inFlight: inFlight}
-	return ExecuteAttempt(ctx, AttemptExecution{
+	result := ExecuteAttempt(ctx, AttemptExecution{
 		RepositoryRoot: preparation.RepositoryRoot, Score: input.Score, Cast: input.Cast,
 		RunID: started.RunID, Attempt: attempt, BaseTree: input.BaseTree, CandidateTree: input.BaseTree,
 		Authority: authority, PerformerID: "worker", SelectionReason: "initial", RemainingMS: remainingMS,
 	}, executionDependenciesFrom(dependencies))
+	journal, err := store.ReadJournal(started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result, journal.Events
 }
 
 func TestExecuteAttemptRecordsWaitingHumanAsBlockedTerminal(t *testing.T) {
