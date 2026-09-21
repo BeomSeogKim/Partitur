@@ -252,6 +252,84 @@ Working across several repositories? Cast layers `.partitur/cast.yaml` over
 lines. Keeping the advisory entry a dedicated, separately named performer — selected per repository
 rather than inherited — is what §3 asks for.
 
+### Solo: one part, no gate
+
+Use this path for one well-specified task that should finish in one session when you will review the
+diff yourself. The complete score is:
+
+```yaml
+score: "0.2"
+name: document-validation
+revision: 1
+status: finalized
+
+goal: Document how to validate a Partitur score and cast.
+
+verification:
+  expectation:
+    intent: pass-existing-tests
+    apply_gate:
+      waived: true
+      reason: The user will review the resulting diff before keeping it.
+
+parts:
+  writer:
+    capabilities: [repo_read, repo_write, shell]
+
+movements:
+  - id: document-validation
+    part: writer
+    grants: [repo_read, repo_write, shell]
+    instruction: |
+      Add a concise README section explaining that `partitur validate` checks
+      both partitur.yaml and the resolved cast before a run. Match the existing
+      voice and edit no other file.
+    outputs:
+      - id: documentation-change
+        kind: change_set
+    acceptance:
+      hard:
+        - id: build
+          run: ["go", "build", "./..."]
+        - id: vet
+          run: ["go", "vet", "./..."]
+        - id: test
+          run: ["go", "test", "./..."]
+
+policy:
+  allowed_paths: ["**"]
+  budget:
+    active_wall_clock_min: 20
+```
+
+A single Codex performer is enough for this score:
+
+```yaml
+cast: "0.1"
+performers:
+  codex:
+    adapter: codex
+    model: gpt-5.6-sol
+bindings:
+  writer:
+    performer: codex
+```
+
+For a Claude performer, add `allow_advisory_enforcement: true` because that adapter reports
+`network_grants: false` while this movement does not grant network access.
+
+Run and apply it in two commands, using the run id printed by the first:
+
+```bash
+partitur run
+partitur apply <run-id>
+```
+
+Bare `status` refuses once the run is terminal, so pass the run id: `partitur status <run-id>`.
+Waiving the apply gate forbids a `final_movement`, so there is no verifier movement. This movement
+declares no `human_gate` of its own (the default is `never`), so acceptance is the only check before
+apply. Use the gated path above when you need the verifier movement or human approval.
+
 ## Status
 
 **Runnable, barely packaged.** The whole loop has executed end to end: a score compiles, movements
