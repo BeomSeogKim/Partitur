@@ -433,8 +433,15 @@ func completeAutoApprovalAndContinue(
 	pending := *decision.Action.PendingSuccessor
 	input.Projection.Scheduler.PendingSuccessor = &pending
 	c4 := recovery.PlanScheduler(recovery.Input{Projection: input.Projection, Observations: observations})
-	if c4.Action == nil || c4.Action.Kind != recovery.ActionMaterializeSuccessor ||
-		c4.Action.PendingSuccessor == nil || *c4.Action.PendingSuccessor != pending {
+	// This is where §6's
+	// `budget.own-deadline-quiesce-closes-exhausted-and-defers-the-decision`
+	// leaves the budget's terminal decision. A deadline that fired while this
+	// driver's own prepare was pending leaves the run at zero remaining budget, so
+	// the between-unit selector takes RC-RESUME-045 instead of the successor C.1
+	// recorded; liveMaterializeSuccessor below owns that path.
+	if c4.CaseID != recovery.CaseBudgetExhausted &&
+		(c4.Action == nil || c4.Action.Kind != recovery.ActionMaterializeSuccessor ||
+			c4.Action.PendingSuccessor == nil || *c4.Action.PendingSuccessor != pending) {
 		return interrupted(result, errors.New("driver: post-auto-commit C.4 did not receive C.1 successor"))
 	}
 	run, err := workspace.ReconstructRun(store, authority, input)
@@ -1133,7 +1140,28 @@ func ExecuteAttempt(
 	cancel()
 	var budgetExhausted *ActiveBudgetExhaustedError
 	activeBudgetDeadline := errors.Is(err, context.DeadlineExceeded) && errors.As(executeCause, &budgetExhausted)
-	if activeBudgetDeadline {
+	closeAdapterBudgetInterval := func() error {
+		adapterDuration := dependencies.now().Sub(adapterOpened).Milliseconds()
+		if adapterDuration < 0 {
+			adapterDuration = 0
+		}
+		_, err := appendEvent(runstate.EventExecutionStopped, map[string]any{
+			"interval_id":      adapterInterval,
+			"reason":           "budget_exhausted",
+			"charging":         "measured",
+			"charged_duration": adapterDuration,
+		}, "execution.adapter.stopped")
+		return err
+	}
+	// §6's `budget.own-deadline-quiesce-closes-exhausted-and-defers-the-decision`
+	// governs a deadline that fires while a prepare this driver itself reported is
+	// pending. The mutation barrier admits the interval close and refuses
+	// attempt.failed, and C.1's RC-RESUME-007 never steps past a pending prepare,
+	// so the deadline is discharged by the measured budget close below, the live
+	// driver completes its own prepare rather than leaving it to recovery, and the
+	// between-unit scheduler takes the budget path once the settlement has lifted
+	// the barrier.
+	if activeBudgetDeadline && !approvalPrepared {
 		return TerminalizeAcceptanceBudget(ctx, AcceptanceBudgetTerminalization{
 			RepositoryRoot: execution.RepositoryRoot,
 			RunID:          execution.RunID,
@@ -1142,23 +1170,15 @@ func ExecuteAttempt(
 			Control:        control,
 			Probe:          dependencies.probe,
 			StoreFactory:   dependencies.storeFactory,
-			Close: func() error {
-				adapterDuration := dependencies.now().Sub(adapterOpened).Milliseconds()
-				if adapterDuration < 0 {
-					adapterDuration = 0
-				}
-				_, err := appendEvent(runstate.EventExecutionStopped, map[string]any{
-					"interval_id":      adapterInterval,
-					"reason":           "budget_exhausted",
-					"charging":         "measured",
-					"charged_duration": adapterDuration,
-				}, "execution.adapter.stopped")
-				return err
-			},
+			Close:          closeAdapterBudgetInterval,
 		})
 	}
 	if approvalPrepared {
-		if err != nil {
+		if activeBudgetDeadline {
+			if closeErr := closeAdapterBudgetInterval(); closeErr != nil {
+				return stopped(result, closeErr)
+			}
+		} else if err != nil {
 			return stopped(result, err)
 		}
 		if cancelled, handled := cancellationResult(ctx, result, control); handled {
