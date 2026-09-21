@@ -318,6 +318,13 @@ bindings:
 For a Claude performer, add `allow_advisory_enforcement: true` because that adapter reports
 `network_grants: false` while this movement does not grant network access.
 
+Under the Codex adapter on macOS, a test that binds a Unix socket cannot run inside the attempt
+sandbox (`operation not permitted` on bind), so a writer cast on Codex cannot self-verify such a
+package in-attempt—in this repository, `internal/criterionexec` and `integration/criterionexec`.
+Acceptance criteria run outside the sandbox and remain authoritative, so tell the writer to report
+which suites it could not run rather than stop on that error, and let acceptance cover them. The
+Claude adapter does not have this limit (#478).
+
 Run and apply it in two commands, using the run id printed by the first:
 
 ```bash
