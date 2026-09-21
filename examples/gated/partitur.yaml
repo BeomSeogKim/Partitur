@@ -1,0 +1,96 @@
+score: "0.2"
+name: document-path-grants-condition
+revision: 1
+status: finalized
+
+goal: |
+  State in docs/CONCEPT.md the exact condition under which `partitur validate`
+  demands the `path_grants` enforcement dimension, and cover that condition
+  with a named test.
+
+verification:
+  expectation:
+    intent: write-basic-tests
+    apply_gate:
+      require: [verified, approved]
+  final_movement: verify
+
+parts:
+  writer:
+    capabilities: [repo_read, repo_write, shell]
+  verifier:
+    capabilities: [repo_read, shell]
+    read_only: true
+
+movements:
+  - id: implement
+    part: writer
+    grants: [repo_read, repo_write, shell]
+    instruction: |
+      A movement granting `repo_read` or `repo_write` owes `path_grants` unless
+      its `policy.allowed_paths` is exactly `["**"]` — a list that narrows
+      nothing, such as `["**", "src/**"]`, still owes it.
+
+      Add one paragraph stating that condition to docs/CONCEPT.md, in the voice
+      of the surrounding text, and add a test named
+      `TestPathGrantsDemandedWhenAllowedPathsAreNotExactlyDoubleStar` to
+      internal/cast that fails if the condition stops holding. Edit no other
+      file.
+
+      Report every test suite you could not run inside the attempt sandbox
+      instead of stopping on it; the acceptance criteria below run outside the
+      sandbox and are authoritative.
+    outputs:
+      - id: change-set
+        kind: change_set
+    acceptance:
+      hard:
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 5
+        - id: vet
+          run: ["go", "vet", "./..."]
+          timeout_min: 5
+        - id: test
+          run: ["go", "test", "-count=1", "./..."]
+          timeout_min: 15
+
+  - id: verify
+    part: verifier
+    needs: [implement]
+    grants: [repo_read, shell]
+    instruction: |
+      The change is already the base of your tree, so `git diff HEAD` is empty.
+      Judge the state of the tree, not a diff.
+
+      Read docs/CONCEPT.md and the new test, then report whether the paragraph
+      states the condition the goal names — including that a list which narrows
+      nothing still owes `path_grants` — and whether the test would actually
+      fail if the condition stopped holding. Name any defect with its file,
+      line, and a counter-example. Change no file.
+    inputs: [change-set]
+    acceptance:
+      hard:
+        - id: suite
+          run: ["go", "test", "-count=1", "./..."]
+          timeout_min: 15
+        - id: named-test-passes
+          run:
+            - sh
+            - -c
+            - >-
+              go test -count=1 -v
+              -run '^TestPathGrantsDemandedWhenAllowedPathsAreNotExactlyDoubleStar$'
+              ./internal/cast/
+              | grep -q '^--- PASS: TestPathGrantsDemandedWhenAllowedPathsAreNotExactlyDoubleStar'
+          timeout_min: 5
+        - id: concept-mentions-path-grants
+          run: ["grep", "-q", "path_grants", "docs/CONCEPT.md"]
+          timeout_min: 1
+      human_gate: always
+
+policy:
+  allowed_paths: ["**"]
+  budget:
+    active_wall_clock_min: 45
+    retries_per_movement: 1

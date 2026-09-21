@@ -336,6 +336,8 @@ Bare `status` refuses once the run is terminal, so pass the run id: `partitur st
 Waiving the apply gate forbids a `final_movement`, so there is no verifier movement. This movement
 declares no `human_gate` of its own (the default is `never`), so acceptance is the only check before
 apply. Use the gated path above when you need the verifier movement or human approval.
+[`examples/`](examples/) holds this shape and two gated ones as runnable directories, with a
+guide to which shape suits which task and a test that keeps all three valid.
 
 ## Status
 
