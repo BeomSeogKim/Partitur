@@ -1,0 +1,12 @@
+cast: "0.1"
+performers:
+  sol:
+    adapter: codex
+    model: gpt-5.6-sol
+  fable:
+    adapter: claude
+    model: claude-fable-5
+    allow_advisory_enforcement: true
+bindings:
+  writer:   { performer: sol, fallbacks: [fable] }
+  verifier: { performer: fable, fallbacks: [sol] }

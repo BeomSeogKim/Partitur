@@ -1,0 +1,55 @@
+score: "0.2"
+name: confirm-and-remove-dead-branch
+revision: 1
+status: finalized
+
+goal: |
+  Remove the unreachable error branch in internal/runstore, after confirming by
+  reading the callers that nothing can reach it.
+
+verification:
+  expectation:
+    intent: pass-existing-tests
+    apply_gate:
+      waived: true
+      reason: The operator reviews the diff at the movement gate and applies by hand.
+
+parts:
+  writer:
+    capabilities: [repo_read, repo_write, shell]
+
+movements:
+  - id: confirm-and-remove
+    part: writer
+    grants: [repo_read, repo_write, shell]
+    instruction: |
+      One error branch in internal/runstore is never reached, because every
+      caller has already rejected that input. First confirm this by reading all
+      of its callers; if any caller can reach it, change nothing and say so.
+      Otherwise remove the branch and only the identifiers your removal leaves
+      unused. Do not remove pre-existing dead code you did not orphan, and edit
+      no other package.
+
+      Report every test suite you could not run inside the attempt sandbox
+      instead of stopping on it; the acceptance criteria below run outside the
+      sandbox and are authoritative.
+    outputs:
+      - id: change-set
+        kind: change_set
+    acceptance:
+      hard:
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 5
+        - id: vet
+          run: ["go", "vet", "./..."]
+          timeout_min: 5
+        - id: test
+          run: ["go", "test", "-count=1", "./..."]
+          timeout_min: 15
+      human_gate: always
+
+policy:
+  allowed_paths: ["**"]
+  budget:
+    active_wall_clock_min: 25
