@@ -1,0 +1,53 @@
+score: "0.2"
+name: name-the-retry-condition
+revision: 1
+status: finalized
+
+goal: |
+  Replace the unexplained retry guard in internal/recoveryexec with a named
+  condition, so the reason a retry is skipped is readable at the call site.
+
+verification:
+  expectation:
+    intent: pass-existing-tests
+    apply_gate:
+      waived: true
+      reason: The operator reviews the diff in the working tree before keeping it.
+
+parts:
+  writer:
+    capabilities: [repo_read, repo_write, shell]
+
+movements:
+  - id: name-the-condition
+    part: writer
+    grants: [repo_read, repo_write, shell]
+    instruction: |
+      In internal/recoveryexec, the retry guard is an inline boolean expression with
+      no name. Extract it into a single predicate function whose name states the
+      condition it tests, and call that function at every site that repeats the
+      expression. Behaviour must not change: no criterion, threshold, or branch
+      order may move. Add no new exported identifier and edit no other package.
+
+      Report every test suite you could not run inside the attempt sandbox
+      instead of stopping on it; the acceptance criteria below run outside the
+      sandbox and are authoritative.
+    outputs:
+      - id: change-set
+        kind: change_set
+    acceptance:
+      hard:
+        - id: build
+          run: ["go", "build", "./..."]
+          timeout_min: 5
+        - id: vet
+          run: ["go", "vet", "./..."]
+          timeout_min: 5
+        - id: test
+          run: ["go", "test", "-count=1", "./..."]
+          timeout_min: 15
+
+policy:
+  allowed_paths: ["**"]
+  budget:
+    active_wall_clock_min: 25
