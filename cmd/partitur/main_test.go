@@ -1183,18 +1183,6 @@ func TestRunPrintsDurableIDOnceBeforeTerminalOutcome(t *testing.T) {
 				"resume_condition=\"ready\" " +
 				"detail=\"driver lease unavailable\"\n",
 		},
-		{
-			name:    "active budget interruption",
-			outcome: driver.OutcomeInterrupted,
-			err:     &driver.ActiveBudgetExhaustedError{RemainingAtStartMS: 60_000},
-			code:    6,
-			stderr: "run interrupted: " +
-				"run_id=\"019d0000-0000-7000-8000-000000000001\" " +
-				"state=\"nonterminal\" " +
-				"resume=\"partitur resume 019d0000-0000-7000-8000-000000000001\" " +
-				"resume_condition=\"legal; recovery must reconcile the open adapter interval before deciding the next durable action\" " +
-				"detail=\"active execution budget expired: remaining_at_start_ms=60000; live budget terminalization was not recorded\"\n",
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

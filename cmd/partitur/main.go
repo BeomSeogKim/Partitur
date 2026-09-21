@@ -1538,18 +1538,13 @@ func errorText(err error) string {
 }
 
 func renderRunInterruption(w io.Writer, result driver.Result) {
-	resumeCondition := "ready"
-	var exhausted *driver.ActiveBudgetExhaustedError
-	if errors.As(result.Err, &exhausted) {
-		resumeCondition = "legal; recovery must reconcile the open adapter interval before deciding the next durable action"
-	}
 	fmt.Fprintf(
 		w,
 		"run interrupted: run_id=%q state=%q resume=%q resume_condition=%q detail=%q\n",
 		result.RunID,
 		"nonterminal",
 		"partitur resume "+string(result.RunID),
-		resumeCondition,
+		"ready",
 		errorText(result.Err),
 	)
 }
