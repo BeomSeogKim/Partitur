@@ -1133,7 +1133,26 @@ func ExecuteAttempt(
 	cancel()
 	var budgetExhausted *ActiveBudgetExhaustedError
 	activeBudgetDeadline := errors.Is(err, context.DeadlineExceeded) && errors.As(executeCause, &budgetExhausted)
-	if activeBudgetDeadline {
+	closeAdapterBudgetInterval := func() error {
+		adapterDuration := dependencies.now().Sub(adapterOpened).Milliseconds()
+		if adapterDuration < 0 {
+			adapterDuration = 0
+		}
+		_, err := appendEvent(runstate.EventExecutionStopped, map[string]any{
+			"interval_id":      adapterInterval,
+			"reason":           "budget_exhausted",
+			"charging":         "measured",
+			"charged_duration": adapterDuration,
+		}, "execution.adapter.stopped")
+		return err
+	}
+	// A prepare this driver has already reported raises §6's mutation barrier:
+	// the barrier admits the interval close and refuses attempt.failed, and
+	// C.1's RC-RESUME-007 never steps past a pending prepare. The deadline is
+	// therefore discharged by the measured close below, the live driver settles
+	// the prepare it already knows about rather than leaving it to recovery, and
+	// the between-unit scheduler takes §6's budget path once the barrier lifts.
+	if activeBudgetDeadline && !approvalPrepared {
 		return TerminalizeAcceptanceBudget(ctx, AcceptanceBudgetTerminalization{
 			RepositoryRoot: execution.RepositoryRoot,
 			RunID:          execution.RunID,
@@ -1142,23 +1161,15 @@ func ExecuteAttempt(
 			Control:        control,
 			Probe:          dependencies.probe,
 			StoreFactory:   dependencies.storeFactory,
-			Close: func() error {
-				adapterDuration := dependencies.now().Sub(adapterOpened).Milliseconds()
-				if adapterDuration < 0 {
-					adapterDuration = 0
-				}
-				_, err := appendEvent(runstate.EventExecutionStopped, map[string]any{
-					"interval_id":      adapterInterval,
-					"reason":           "budget_exhausted",
-					"charging":         "measured",
-					"charged_duration": adapterDuration,
-				}, "execution.adapter.stopped")
-				return err
-			},
+			Close:          closeAdapterBudgetInterval,
 		})
 	}
 	if approvalPrepared {
-		if err != nil {
+		if activeBudgetDeadline {
+			if closeErr := closeAdapterBudgetInterval(); closeErr != nil {
+				return stopped(result, closeErr)
+			}
+		} else if err != nil {
 			return stopped(result, err)
 		}
 		if cancelled, handled := cancellationResult(ctx, result, control); handled {
