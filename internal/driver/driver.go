@@ -1133,7 +1133,6 @@ func ExecuteAttempt(
 	cancel()
 	var budgetExhausted *ActiveBudgetExhaustedError
 	activeBudgetDeadline := errors.Is(err, context.DeadlineExceeded) && errors.As(executeCause, &budgetExhausted)
-	err = activeBudgetError(err, executeCause)
 	if activeBudgetDeadline {
 		return TerminalizeAcceptanceBudget(ctx, AcceptanceBudgetTerminalization{
 			RepositoryRoot: execution.RepositoryRoot,
