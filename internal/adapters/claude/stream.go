@@ -10,7 +10,9 @@ import (
 	"github.com/BeomSeogKim/Partitur/internal/adapterkit"
 )
 
-const maxProgressSummary = 512
+// maxProgressSummary is the specification's event-message bound: log/progress
+// messages are truncated to 4 KiB on a valid UTF-8 boundary.
+const maxProgressSummary = adapterkit.MaxEventMessageBytes
 
 type streamState struct {
 	sink          adapterkit.EventSink
@@ -112,9 +114,6 @@ func (s *streamState) captureSession(sessionID string) {
 
 func summarizeText(value string) string {
 	value = strings.TrimSpace(value)
-	if newline := strings.IndexByte(value, '\n'); newline >= 0 {
-		value = value[:newline]
-	}
 	return adapterkit.TruncateUTF8(value, maxProgressSummary)
 }
 

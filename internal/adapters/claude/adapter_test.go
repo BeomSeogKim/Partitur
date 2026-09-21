@@ -173,7 +173,7 @@ func TestStreamParsing(t *testing.T) {
 	state := streamState{sink: sink}
 	lines := []string{
 		`{"type":"system","subtype":"init","session_id":"secret-session"}`,
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it\nfull command should not be emitted"},{"type":"tool_use","name":"Read","input":{"file_path":"/private"}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it\nand a second line the progress event keeps"},{"type":"tool_use","name":"Read","input":{"file_path":"/private"}}]}}`,
 		`not-json`,
 		`{"type":"future","payload":"ignored"}`,
 		`{"type":"result","subtype":"success","is_error":false,"result":"done secret-session"}`,
@@ -190,7 +190,7 @@ func TestStreamParsing(t *testing.T) {
 	if state.detail != "done [REDACTED]" {
 		t.Fatalf("detail = %q", state.detail)
 	}
-	if got := sink.progress; !slices.Equal(got, []string{"assistant: Working on it", "tool: Read"}) {
+	if got := sink.progress; !slices.Equal(got, []string{"assistant: Working on it\nand a second line the progress event keeps", "tool: Read"}) {
 		t.Fatalf("progress = %#v", got)
 	}
 	if len(sink.logs) != 2 {

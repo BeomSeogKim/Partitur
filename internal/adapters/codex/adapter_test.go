@@ -381,7 +381,7 @@ func TestStreamParsing(t *testing.T) {
 		`{"type":"thread.started","thread_id":"secret-session"}`,
 		`{"type":"turn.started"}`,
 		`{"type":"item.started","item":{"id":"item-1","type":"command_execution","command":"env SECRET=value && rm -rf /private"}}`,
-		`{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"Working on it secret-session\nfull command should not be emitted"}}`,
+		`{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"Working on it secret-session\nand a second line the progress event keeps"}}`,
 		`not-json`,
 		`{"type":"future.event","payload":"ignored"}`,
 		`{"type":"turn.completed","usage":{"input_tokens":10}}`,
@@ -395,7 +395,7 @@ func TestStreamParsing(t *testing.T) {
 	if state.sessionID != "secret-session" || !state.sawResult || state.resultIsError {
 		t.Fatalf("unexpected state: %#v", state)
 	}
-	if got := sink.progress; !slices.Equal(got, []string{"tool: command_execution", "assistant: Working on it [REDACTED]"}) {
+	if got := sink.progress; !slices.Equal(got, []string{"tool: command_execution", "assistant: Working on it [REDACTED]\nand a second line the progress event keeps"}) {
 		t.Fatalf("progress = %#v", got)
 	}
 	if len(sink.logs) != 2 {

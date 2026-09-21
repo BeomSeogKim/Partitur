@@ -1150,14 +1150,22 @@ func terminalReason(store *runstore.Store, runID runstate.RunID, outcome recover
 	}
 	for index := len(journal.Events) - 1; index >= 0; index-- {
 		event := journal.Events[index]
-		if event.Type != want {
+		// A rejection at the final movement's human gate fails the run through
+		// movement.failed itself, so that event, and no run.failed, carries the
+		// run's terminal cause.
+		failedByMovement := want == runstate.EventRunFailed && event.Type == runstate.EventMovementFailed
+		if event.Type != want && !failedByMovement {
 			continue
 		}
 		var payload struct {
-			Reason string `json:"reason"`
+			Reason    string `json:"reason"`
+			RunFailed bool   `json:"run_failed"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return ""
+		}
+		if failedByMovement && !payload.RunFailed {
+			continue
 		}
 		return payload.Reason
 	}
