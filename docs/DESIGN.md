@@ -1270,7 +1270,7 @@ adjacent, coherent wire-form specimens.
 - `execute.request.brief.global_invariants` is a deterministic core-computed projection.
 - That projection is computed from the goal, finalized resolutions, and policy.
 - `execute.request.brief.global_invariants` is not a separate score field.
-- `execute.request.brief.outputs` contains this movement's declared outputs.
+- `execute.request.brief.outputs` contains this movement's declared outputs other than the core-synthesized `change_set`, which §5 excludes.
 - Only artifact ids in `execute.request.brief.outputs` may be emitted by the attempt.
 - `execute.request.inputs[].instance_id` is delivered, not merely hashed.
 - A.5 binds `execute.request.inputs[].instance_id`.

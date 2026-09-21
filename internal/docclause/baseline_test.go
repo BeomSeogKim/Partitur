@@ -21,8 +21,8 @@ type confirmedPacketPin struct {
 }
 
 const (
-	confirmedBaselineMarkedBlob                  = "82721709e9eaedd00e3a1fd57e31adc8e8c5d91c"
-	confirmedBaselineOrderedClassificationSHA256 = "632b976fc24899c3d281f57c8eddc9fdb0f8af1d43f63135972fdc914892885c"
+	confirmedBaselineMarkedBlob                  = "991c39db45bc2994727147e6368784b781bd2798"
+	confirmedBaselineOrderedClassificationSHA256 = "76891e312813e63e78f670f33d88ce1ba53ad8fbc3e78b1a0418bcadb2935e18"
 )
 
 func TestDesignStagingLedgerPinsCurrentUniverseAndActivatesBaseline(t *testing.T) {
@@ -113,170 +113,170 @@ func TestDesignStagingLedgerPinsCurrentUniverseAndActivatesBaseline(t *testing.T
 		6: {
 			DecisionCount: 136,
 			AnchorCount:   99,
-			SourceSHA256:  "af8a6f7e5ce1f5a2b2ab996dd3c0fb602a6936abf04541f221a3c2f546eaf517",
-			DecisionsHash: "ec7746549ab26365de88c60d605a1a2f36b5c200d528e7f17584614a1871ead4",
+			SourceSHA256:  "1e40fa6b2798e9291f46b658b4f7675ed9b211fe9ef82c340907e1d25715c899",
+			DecisionsHash: "a1194355328a68e5bba0ce2042bd421c1b60c0ed5ab3176b5249a302cd08370f",
 		},
 		7: {
 			DecisionCount: 143,
 			AnchorCount:   85,
 			SourceSHA256:  "e5bbfa264d6d487ed16734675ee14db0b41a2f3ef2334104fa8613c7c38da759",
-			DecisionsHash: "1477c278c4e156923a0b1a2d12b8eb0d11275dac5884b54167ee3a7558ed0dd2",
+			DecisionsHash: "4dc5fae7575f73f3614df5e39d210287bcd894a7f979c47592d305326601f839",
 		},
 		8: {
 			DecisionCount: 165,
 			AnchorCount:   101,
 			SourceSHA256:  "33869831cb05b76248b311fd4dadfed8afdf34a26919aef8a33b1890cfd2a30a",
-			DecisionsHash: "9be1b767da51b6431dfcc347a92cd03a4d2e028dc1d2d1a3353050af99f2a5c1",
+			DecisionsHash: "3a2c0c8848e531e7f3cb2c9c391c9cebafd8a27f26718ba06ebc0a1fb5addd07",
 		},
 		9: {
 			DecisionCount: 195,
 			AnchorCount:   132,
 			SourceSHA256:  "2632dd064b2e0338488dff1eec47ecd2fcfc25afc4a67016df5c2aab5a02c7c4",
-			DecisionsHash: "2f9ef9ac2c0f92a0c2bd49c7f25bfe924704f631793cc5f4d987c7c61e313433",
+			DecisionsHash: "c32f3cca4a416b1a37e9d0e739d904b5416bc254812d1c862ca9e33bcc06bcfd",
 		},
 		10: {
 			DecisionCount: 161,
 			AnchorCount:   110,
 			SourceSHA256:  "5db279996c5b21241a7fa9ea6438658ef2d6670edbdae392ffa4e0e20158abf0",
-			DecisionsHash: "dcf69e88654df6362d445645720641ce5921a587cd19947b13095388557d21b2",
+			DecisionsHash: "9c003cc1f7adcf6e9ab0785760ec48c99ad1b8f736e39d2cf13967b39b8335c4",
 		},
 		11: {
 			DecisionCount: 113,
 			AnchorCount:   80,
 			SourceSHA256:  "a235b06647f8d380df13fa1e00495f93277a6d13d71410ca61e109312ad93da4",
-			DecisionsHash: "af2f79c1dcc58d21e3a8006c8d6c11ad62f875f94333e80bdd70f66bb6dfaa16",
+			DecisionsHash: "65739f46c73fd2ebf609b0c9a6ac39ce94592b2048db351795ebda9e9b0decec",
 		},
 		12: {
 			DecisionCount: 103,
 			AnchorCount:   79,
 			SourceSHA256:  "6638e5bd1b65761f97236dd28eb6cc860f314b26c408fdbbb4b9e416e1434cfc",
-			DecisionsHash: "76773b7de2e78ef42ade9e8ad47bb51638590cd59da00403015dafc99efab750",
+			DecisionsHash: "72ae9ad21655241cb83b97aaa209b0986403870806be8fb80016f0ee89f07f11",
 		},
 		13: {
 			DecisionCount: 125,
 			AnchorCount:   72,
 			SourceSHA256:  "1a35dbc1dd8a37698eac5476deba9e3e65506bb0d8704e3e0048c1c1064da7cc",
-			DecisionsHash: "cb774c5b347c4c2059eb3d5654a10a8e7d5afdafb3e6d1eabf906ae8efabc7c0",
+			DecisionsHash: "52e43d23d90101ad5f8ae238eb0f18cc3de5bc4a3055ca6f937d5584c4be51e9",
 		},
 		14: {
 			DecisionCount: 126,
 			AnchorCount:   88,
 			SourceSHA256:  "ce25b97cdeafecc8e4112d3ede463b6409c5255b7258b6a58074019102108a23",
-			DecisionsHash: "66fb00b6f37176fb0f7d7190b47666c382fa14c6cd870d2c13ddce79d9debc47",
+			DecisionsHash: "a35eb6958676546ff014959ade4e39c47b67d6b32e61fcac7352edcb7cfc2892",
 		},
 		15: {
 			DecisionCount: 135,
 			AnchorCount:   99,
 			SourceSHA256:  "97ffeec2bf3a2437d8d90316a6fc49c5141e58e069ad2eccc16d65b1f0f26553",
-			DecisionsHash: "26a0a4acdfb26672d60376532942c2981b94cf42c77e46b75a7f15b5388a9afb",
+			DecisionsHash: "8981fe7d5135182897ca6b569eff3dfb6c6f78a2bc0cb83e0f90a2e1f9755652",
 		},
 		16: {
 			DecisionCount: 101,
 			AnchorCount:   79,
 			SourceSHA256:  "926d87fe7c9adefefcb50ffaa66960e346b012fe2479461d0ad0927906269b51",
-			DecisionsHash: "6b374dc2982ce0741aff58f4fc5a4b00ba0d2ef0220b32f743c585d57e12b7a0",
+			DecisionsHash: "4fa4cced3ab0a89602390d624c969362dd42df2c7bba01a6c76f4df050ee77d2",
 		},
 		17: {
 			DecisionCount: 145,
 			AnchorCount:   103,
 			SourceSHA256:  "2101bf6f087a231472ed623d6f9ce1bf87db72e9684e4913a242e472176e6e86",
-			DecisionsHash: "da48fae7ed6f2f65c54203d77bb682a65c18aa75641b60518057ae2f7ebd3558",
+			DecisionsHash: "ef02c5175719b01bd82dd3510b5cba0ee872a728b90043ce1ffe6a92195eb93c",
 		},
 		18: {
 			DecisionCount: 149,
 			AnchorCount:   106,
 			SourceSHA256:  "8e94477145553173a221d3c4d95002a0f2e4d275fc5d06bf5a7a5778901e75b4",
-			DecisionsHash: "99948e0e0a50e5cfc2904b951080f0622e88f92323aa7a93fb243d99c67ab85f",
+			DecisionsHash: "614b5c68d7b9a8dea746009f9b54a95a0d0e4419eeb10c7830cc046814d01673",
 		},
 		19: {
 			DecisionCount: 139,
 			AnchorCount:   102,
 			SourceSHA256:  "ed82e7eb21f8bb7266b6283a2cf3fd934f5c0185e543102c782a1b10f257e468",
-			DecisionsHash: "e6de6bb1c2b02f081b1030ba0479a5d977df69e28afda786dbce5c74a08fa037",
+			DecisionsHash: "890e4cfab58439304727809ad83a13005f2e525e09a58cc26b07aa64822754da",
 		},
 		20: {
 			DecisionCount: 111,
 			AnchorCount:   81,
 			SourceSHA256:  "b46c30565afe97367ba1a043aee1fc371aab87b553b037a047eacf101dbf6465",
-			DecisionsHash: "19834a9c05a4695c5aebaf822a04c8b550725c5ead84b309960f3beefd318d2b",
+			DecisionsHash: "c0e8c6d15653548c4f7215d167c3459140cef41e2d24830ce4850ef00de06aba",
 		},
 		21: {
 			DecisionCount: 137,
 			AnchorCount:   93,
 			SourceSHA256:  "eb40b5d56e5947cc3c11728c82b5244c6ee97232a1e03fc811194f7ea8f5fbab",
-			DecisionsHash: "4571d1c44d3a11d15a727123f7fdc7dc37c02d602c549727f594b1339bc4a7f9",
+			DecisionsHash: "f1d766a2e70d7c7b98c0d3f8ae78a1530161ecc4d6455c9ea3f1b04cbe81f0ad",
 		},
 		22: {
 			DecisionCount: 143,
 			AnchorCount:   99,
 			SourceSHA256:  "fd99529197a1468846b3ee2c966dbdf6fcfd26659d355b5dda04630be3605ae1",
-			DecisionsHash: "ff542c3f5cbc512777de942e245032303b7385cfdf559032ce1b665a13400d11",
+			DecisionsHash: "f5af9a51f7a10a02a74adc4846955fcde6bc9b7dd1d6a6ef5ec6aba9b6c20a8e",
 		},
 		23: {
 			DecisionCount: 116,
 			AnchorCount:   73,
 			SourceSHA256:  "2f9e088ac24e933312919afb31ee2af01af24635caee359c4bcb77e9e0e4b34c",
-			DecisionsHash: "99eedef8be86d51a6e63414e4444a0842ce285c2fd82ecf9699c77471696a12b",
+			DecisionsHash: "51bd033285d21921d0b73d6cf25742b723ce5f0cd76e5a690ca1b032fff0e8e3",
 		},
 		24: {
 			DecisionCount: 110,
 			AnchorCount:   78,
 			SourceSHA256:  "567989e6230055f231620eb2bd6073ea195a6759dcbc43e9cd706a582bce74fd",
-			DecisionsHash: "044fde272a9dc91fcf834f2d6bb2e51ab3eea53feb564073df1f221bff46ae1d",
+			DecisionsHash: "ddbab90fe7fbe24b9c7393893c2c3ec4cab94d24c6a170cb5d858d18365ddde5",
 		},
 		25: {
 			DecisionCount: 94,
 			AnchorCount:   72,
 			SourceSHA256:  "573cb0b2ad8481a51e944415c694a50573df67ab0f1acff73b3846805c530b1e",
-			DecisionsHash: "b536d7127bc4ad50154adef82e99817b3cf196763d4509de682d69a2ce6d6119",
+			DecisionsHash: "6fb0bb3d00005e979d4908010dd7bdff329f1fa09ffe5640b2ed8ab57614edc7",
 		},
 		26: {
 			DecisionCount: 102,
 			AnchorCount:   67,
 			SourceSHA256:  "9c2cbefc570dd0354455bc6c079f223e3a05114fb5779b6b9bc4a4d74ee1876c",
-			DecisionsHash: "2996a3b7eaea722531a8e3b81b75678f634f7e1cd0c5fb878472cafbdb1d7198",
+			DecisionsHash: "7add7690795f920b28e7489c9b56d473f8af63005baab30e98d628a81d2925b9",
 		},
 		27: {
 			DecisionCount: 89,
 			AnchorCount:   58,
 			SourceSHA256:  "e721a41d6ffcb80433fff8a85f97d1fcfdb326dc9e2bc35c0c3c6aa09d3ff7bf",
-			DecisionsHash: "c1370cfb04e5e8b6a7a1de94ef6cfde3e81269d51ad6ce1fa91d0be4c708a22d",
+			DecisionsHash: "d7ac9ba3dce58ccbdf0633291cc59b18d1e7133321f47c2946a6d44d2e957170",
 		},
 		28: {
 			DecisionCount: 70,
 			AnchorCount:   50,
 			SourceSHA256:  "a36cd524808fe4d5b8a0e949e58bbb4632149e5f51bb55d04d0f709a0fc953d0",
-			DecisionsHash: "f4870b287ca2a2fa38ed632b4e4f28d711e2aff93c955ee7f890e76b6c21c6f5",
+			DecisionsHash: "603e68c3db3c273792526bff0851da9a683fb825d0a3d60447660e5a91a5b632",
 		},
 		29: {
 			DecisionCount: 105,
 			AnchorCount:   61,
 			SourceSHA256:  "20692da3f94a329f6b6733b9b74c65f3ce85bbfb905d0aac9b45e30d1b50ce25",
-			DecisionsHash: "2e0e96ac61d8878f8d61ae1e2fbbda6e70f75712af1750845995d989c476cd6c",
+			DecisionsHash: "a66802a9c90205046418d8420063aecb9680472c2ee3d37e3ed568aab435a1f2",
 		},
 		30: {
 			DecisionCount: 171,
 			AnchorCount:   58,
 			SourceSHA256:  "940171e80deb832e35a5b89978d7689143659739f7ab7e36c2e3b29b83361d9e",
-			DecisionsHash: "76ed7a721985edf93be629f003e31e563b04caf15aad15b84bbef2f1bc7a3f64",
+			DecisionsHash: "a6a5b10e238d3e5b8d2515c1e7bb1034064aba43095b36b1d78f4f54eb98920f",
 		},
 		31: {
 			DecisionCount: 184,
 			AnchorCount:   40,
 			SourceSHA256:  "bd7176faa4eb123fac70cc12da0e25a5ae247881116942e6421b99f5144c5d2a",
-			DecisionsHash: "06620e87ef756dffd4c054a6d446d36d22f72b1f82721d4a7575ffd72c4bdf45",
+			DecisionsHash: "84bff41df7c8e1ac06509b2df04e2474a19928507dee209d4e21a7e8ec345f46",
 		},
 		32: {
 			DecisionCount: 195,
 			AnchorCount:   95,
 			SourceSHA256:  "e285bbf9cd4ba296e1a6da8ff1c0c94f03c0904c9c8f2fa6f35763f35c7787a8",
-			DecisionsHash: "10de6119d797e1029cb49335051a6092c398c47c68ab9df372c6e8918f92aa22",
+			DecisionsHash: "3f12a77668e325b25916ec670f2abf7a92ca1c323f482c22b7cb1d65bd981e1a",
 		},
 		33: {
 			DecisionCount: 121,
 			AnchorCount:   53,
 			SourceSHA256:  "26f5202c6f6dc0f2dbeac60938caae26979e13cbacbd354b63777fe3cd6e7c84",
-			DecisionsHash: "d9a091e9d951c90d5996fe1b96bdf3041143eeaa60666a8f25e8a6b4ea1f2212",
+			DecisionsHash: "e803b854b5d8393137b03690748179d70e9b58ddc6b67b4a9d84ac0078b6e900",
 		},
 	}
 	if err := validateStagingReviewProgress(regions, registry, reviewedOrdinals); err != nil {
