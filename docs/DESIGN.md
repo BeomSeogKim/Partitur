@@ -2329,6 +2329,19 @@ the recovery rule below.
   establishing who wrote it. Uniformity of the oracle's output is worth more here than the accuracy
   of one close, and the clamp below bounds what is given up.
 
+  A quiesce that the driver's **own budget deadline** forces is not that responsive-supersession
+  row. When the attempt's active budget deadline fires while a prepare the driver itself reported
+  is still pending, so that the mutation barrier below is up, the driver closes its adapter
+  interval with `execution.stopped {reason: budget_exhausted, charging: measured}`: it opened that
+  interval and holds its monotonic reading, and what ended the interval is exhaustion, not
+  supersession. It appends no terminal chain from the attempt, because the barrier refuses
+  `attempt.failed`, and it abandons no prepare, because the abandonment reasons are a closed set
+  that exhaustion is not among; it completes the prepare through the prepare procedure's steps
+  2–3 below, in the responsive driver's role. The budget's terminal decision is then the
+  between-unit scheduler's, taken through the exhaustion path below once the settlement has lifted
+  the barrier, as `RC-RESUME-045` takes it for a scheduler that resumes into a spent budget. The
+  table above names no row for this close.
+
   In each case `charging: clamped` and
 
   ```text
@@ -2369,6 +2382,9 @@ the recovery rule below.
   → movement.failed {budget_exhausted}
   → run.failed {budget_exhausted}
   ```
+
+  This chain does not run while a prepare the driver itself reported is pending; it is deferred
+  past the prepare's settlement on the terms the own-deadline quiesce clause above fixes.
 
   This is distinct from a **criterion timeout**: a per-criterion `timeout_min` reached while run
   budget remains yields criterion `ERROR` on the ordinary quality path (§7). When the two deadlines

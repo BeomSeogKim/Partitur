@@ -62,7 +62,7 @@ func TestConfirmedReceiptsMergeWithoutDuplicateAnchors(t *testing.T) {
 	}{
 		{"adapter.launch-control-isolation", 5, 6},
 		{"blocking-proposal.rejected-path", 7, 8},
-		{"subject.repo-write-is-core-created-tree", 13, 14},
+		{"acceptance.fixed-order-stream", 13, 14},
 	}
 	for _, want := range continuations {
 		var tailEnd, headStart int
