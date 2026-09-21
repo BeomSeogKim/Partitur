@@ -32,6 +32,17 @@ Agents are getting good at *playing*. Nobody is *conducting*. Partitur is the la
 
 ## Quickstart
 
+Install the released binaries — no Go toolchain needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BeomSeogKim/Partitur/main/install.sh | sh
+```
+
+The script picks the archive for your platform (macOS and Linux, arm64 and amd64), verifies its
+sha256 against the release checksums, and puts all four binaries in `$HOME/.local/bin` — set
+`PARTITUR_INSTALL_DIR` to install elsewhere, or `PARTITUR_VERSION=vX.Y.Z` to pin a release. To build
+from source instead, use the Go toolchain.
+
 Partitur is four binaries. The core resolves the adapters and the trampoline from `PATH`, so install
 all four:
 

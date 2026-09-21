@@ -1,0 +1,81 @@
+# Partitur — release build.
+#
+# One archive per os/arch holding all four runtime binaries, because the core
+# resolves the adapters and the trampoline from PATH: a partial install is a
+# broken install.
+version: 2
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  # Only cmd/partitur carries a `version` variable, so it is the only build
+  # with an -X ldflag; the other three take the shared defaults.
+  - id: partitur
+    binary: partitur
+    main: ./cmd/partitur
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  - id: partitur-adapter-codex
+    binary: partitur-adapter-codex
+    main: ./cmd/partitur-adapter-codex
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: partitur-adapter-claude
+    binary: partitur-adapter-claude
+    main: ./cmd/partitur-adapter-claude
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: partitur-trampoline
+    binary: partitur-trampoline
+    main: ./cmd/partitur-trampoline
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: partitur
+    ids:
+      - partitur
+      - partitur-adapter-codex
+      - partitur-adapter-claude
+      - partitur-trampoline
+    formats: [tar.gz]
+    name_template: "partitur_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  draft: false
