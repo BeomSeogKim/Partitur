@@ -195,7 +195,7 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			start:          "**Adapter-method field clauses.**",
 			end:            "**Validation probing.**",
 			carrierMarker:  "**Adapter-method field clauses.**",
-			carrierHash:    "6b026743bb12d09c9cca538df0bcfb70339bd5d2d9d95ac3f1a04e91d79fbb26",
+			carrierHash:    "7a216765ba3474b4a3695cb842dc547a931497039e245bc861f7639d6aa7ac39",
 			referenceCount: 6,
 			carrierAssignments: []int{
 				7, 3, 1, 1, 1, 2, 1, 1, 1, 0, 2, 1, 3, 1, 1, 3, 1, 1, 1, 2, 2,
