@@ -105,7 +105,8 @@ func emptyYAML(value any) bool {
 
 func writeYAMLScalar(out *bytes.Buffer, value any, indent int) {
 	if text, ok := value.(string); ok && strings.Contains(text, "\n") {
-		out.WriteString("|-\n")
+		out.WriteString(blockChompingIndicator(text))
+		out.WriteByte('\n')
 		for _, line := range strings.Split(text, "\n") {
 			out.WriteString(strings.Repeat("  ", indent))
 			out.WriteString(line)
@@ -115,6 +116,18 @@ func writeYAMLScalar(out *bytes.Buffer, value any, indent int) {
 	}
 	out.WriteString(yamlScalarValue(value))
 	out.WriteByte('\n')
+}
+
+func blockChompingIndicator(value string) string {
+	trailingNewlines := len(value) - len(strings.TrimRight(value, "\n"))
+	switch {
+	case trailingNewlines == 0:
+		return "|-"
+	case trailingNewlines == 1:
+		return "|"
+	default:
+		return "|+"
+	}
 }
 
 func yamlScalarValue(value any) string {
