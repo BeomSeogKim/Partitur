@@ -353,13 +353,13 @@ func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (command
 
 func buildSettings(request *protocol.ExecuteRequest) ([]byte, error) {
 	allow := []string{"Read", "Glob", "Grep"}
-	output, err := absolutePattern(request.Workdir, filepath.Join(request.OutputDir, "**"))
+	output, err := absolutePermissionPattern(request.Workdir, filepath.Join(request.OutputDir, "**"))
 	if err != nil {
 		return nil, fmt.Errorf("resolve output grant: %w", err)
 	}
 	allow = append(allow, "Edit("+output+")", "Write("+output+")")
 	for _, pattern := range request.Grants.PathsRW {
-		resolved, err := absolutePattern(request.Workdir, pattern)
+		resolved, err := absolutePermissionPattern(request.Workdir, pattern)
 		if err != nil {
 			return nil, fmt.Errorf("resolve write grant %q: %w", pattern, err)
 		}
@@ -374,6 +374,14 @@ func buildSettings(request *protocol.ExecuteRequest) ([]byte, error) {
 		allow = append(allow, "WebFetch", "WebSearch")
 	}
 	return json.Marshal(claudeSettings{Permissions: claudePermissions{Allow: unique(allow)}})
+}
+
+func absolutePermissionPattern(workdir, pattern string) (string, error) {
+	resolved, err := absolutePattern(workdir, pattern)
+	if err != nil {
+		return "", err
+	}
+	return "/" + resolved, nil
 }
 
 func absolutePattern(workdir, pattern string) (string, error) {
