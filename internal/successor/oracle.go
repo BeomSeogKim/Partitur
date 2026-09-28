@@ -76,6 +76,14 @@ func Classify(input ClassificationInput) (runstate.Disposition, error) {
 			return retryDisposition(ChargeQualityRetry), nil
 		}
 		return terminalDisposition(reasonForBudget(input.RemainingTimeMS, "retries_exhausted")), nil
+	case failurePerformerScoped:
+		if input.HasUnvisitedFallback && input.RemainingTimeMS > 0 {
+			return retryDisposition(ChargeFallback), nil
+		}
+		if input.RetriesConsumed < input.RetriesPerMovement && input.RemainingTimeMS > 0 {
+			return retryDisposition(ChargeQualityRetry), nil
+		}
+		return terminalDisposition(terminalReason), nil
 	case failureImmediatelyTerminal:
 		return terminalDisposition(terminalReason), nil
 	default:
@@ -88,6 +96,7 @@ type failureClass uint8
 const (
 	failureInfrastructure failureClass = iota + 1
 	failureQuality
+	failurePerformerScoped
 	failureImmediatelyTerminal
 )
 
@@ -103,7 +112,9 @@ func classifyFailure(failure FailureCase) (failureClass, string, error) {
 		return failureInfrastructure, "", nil
 	case KindTaskFailed:
 		return failureQuality, "", nil
-	case KindGrantDenied, KindProtocolError, KindBudgetExhausted:
+	case KindProtocolError:
+		return failurePerformerScoped, failure.AttemptKind, nil
+	case KindGrantDenied, KindBudgetExhausted:
 		return failureImmediatelyTerminal, failure.AttemptKind, nil
 	default:
 		return 0, "", fmt.Errorf("%w: %q", ErrUnknownFailureCase, failure.AttemptKind)

@@ -80,7 +80,7 @@ func TestClassifyQuality(t *testing.T) {
 }
 
 func TestClassifyImmediatelyTerminalNeverConsultsBudget(t *testing.T) {
-	for _, kind := range []string{KindGrantDenied, KindProtocolError, KindBudgetExhausted} {
+	for _, kind := range []string{KindGrantDenied, KindBudgetExhausted} {
 		t.Run(kind, func(t *testing.T) {
 			got, err := Classify(ClassificationInput{
 				Failure:              attemptFailure(kind),
@@ -93,6 +93,46 @@ func TestClassifyImmediatelyTerminalNeverConsultsBudget(t *testing.T) {
 			want := terminalDisposition(kind)
 			if got != want {
 				t.Fatalf("Classify() = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestClassifyProtocolErrorIsPerformerScoped(t *testing.T) {
+	cases := []struct {
+		name  string
+		input ClassificationInput
+		want  runstate.Disposition
+	}{
+		{
+			name:  "unvisited fallback with time charges fallback",
+			input: ClassificationInput{Failure: attemptFailure(KindProtocolError), HasUnvisitedFallback: true, RetriesPerMovement: 1, RemainingTimeMS: 1},
+			want:  retryDisposition(ChargeFallback),
+		},
+		{
+			name:  "no fallback with a retry remaining charges quality retry",
+			input: ClassificationInput{Failure: attemptFailure(KindProtocolError), RetriesPerMovement: 1, RemainingTimeMS: 1},
+			want:  retryDisposition(ChargeQualityRetry),
+		},
+		{
+			name:  "neither fallback nor retry terminalizes protocol error",
+			input: ClassificationInput{Failure: attemptFailure(KindProtocolError), RetriesConsumed: 1, RetriesPerMovement: 1, RemainingTimeMS: 1},
+			want:  terminalDisposition(KindProtocolError),
+		},
+		{
+			name:  "zero time keeps the protocol error reason",
+			input: ClassificationInput{Failure: attemptFailure(KindProtocolError), HasUnvisitedFallback: true, RetriesPerMovement: 1},
+			want:  terminalDisposition(KindProtocolError),
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := Classify(test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("Classify() = %+v, want %+v", got, test.want)
 			}
 		})
 	}

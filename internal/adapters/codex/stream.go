@@ -46,10 +46,20 @@ func (s *streamState) consume(line []byte) error {
 	var event streamEvent
 	if err := json.Unmarshal(line, &event); err != nil || strings.TrimSpace(event.Type) == "" {
 		s.incompatible = true
-		return s.sink.Log("warn", "ignored malformed Codex stream event")
+		if err := s.sink.Log("warn", "ignored malformed Codex stream event"); err != nil {
+			return fmt.Errorf("malformed Codex stream event: %w", err)
+		}
+		return nil
 	}
 	s.sawParseable = true
+	if err := s.consumeEvent(event); err != nil {
+		eventType := s.sanitize(adapterkit.TruncateUTF8(event.Type, 128))
+		return fmt.Errorf("Codex stream event type %q: %w", eventType, err)
+	}
+	return nil
+}
 
+func (s *streamState) consumeEvent(event streamEvent) error {
 	switch event.Type {
 	case "thread.started", "session.started":
 		sessionID := event.ThreadID

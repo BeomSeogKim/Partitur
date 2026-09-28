@@ -42,7 +42,7 @@ func (i invocationResult) result() *protocol.ExecuteResult {
 		return failed(protocol.FailureAdapterUnavailable, "Codex CLI is unavailable")
 	}
 	if strings.Contains(errorText(i.err), "read vendor stdout") {
-		return failed(protocol.FailureProtocolError, "process Codex stream")
+		return failed(protocol.FailureProtocolError, i.streamFailureDetail())
 	}
 	if i.stream.incompatible && i.err != nil && !i.stream.sawResult {
 		return failed(protocol.FailureProtocolError, "Codex returned an incompatible structured stream")
@@ -123,6 +123,13 @@ func (i invocationResult) failureDetail() string {
 	if detail == "" {
 		detail = "Codex task failed"
 	}
+	return adapterkit.TruncateUTF8(i.stream.sanitize(detail), maxFailureDetail)
+}
+
+// streamFailureDetail keeps the adapter's own diagnostic — the stream event it
+// could not process and why — so the journaled detail can be reproduced.
+func (i invocationResult) streamFailureDetail() string {
+	detail := "process Codex stream: " + i.err.Error()
 	return adapterkit.TruncateUTF8(i.stream.sanitize(detail), maxFailureDetail)
 }
 

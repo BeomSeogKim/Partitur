@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -756,6 +757,23 @@ func TestExecuteFailureFixtures(t *testing.T) {
 	}
 }
 
+func TestExecuteStreamProtocolErrorNamesOffendingEvent(t *testing.T) {
+	workdir := t.TempDir()
+	outputDir := t.TempDir()
+	configureHelper(t, "success", outputDir, "", "")
+
+	result, err := New(io.Discard).Execute(context.Background(), executeTestRequest(workdir, outputDir), &failingProgressSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != protocol.OutcomeFailed || result.Failure == nil ||
+		result.Failure.Kind != protocol.FailureProtocolError ||
+		!strings.Contains(result.Failure.Detail, `"item.started"`) ||
+		!strings.Contains(result.Failure.Detail, "progress sink closed") {
+		t.Fatalf("execute result = %#v", result.Failure)
+	}
+}
+
 func TestExecuteMissingBinary(t *testing.T) {
 	t.Setenv(binaryEnv, filepath.Join(t.TempDir(), "missing-codex"))
 	result, err := New(io.Discard).Execute(context.Background(), executeTestRequest(t.TempDir(), t.TempDir()), &recordingSink{})
@@ -920,6 +938,14 @@ func executeTestRequest(workdir, outputDir string) *protocol.ExecuteRequest {
 	request.RunID = executeTestRunID
 	request.AttemptID = executeTestAttemptID
 	return request
+}
+
+type failingProgressSink struct {
+	recordingSink
+}
+
+func (s *failingProgressSink) Progress(string) error {
+	return errors.New("progress sink closed")
 }
 
 type recordingSink struct {
