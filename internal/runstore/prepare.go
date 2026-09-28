@@ -396,15 +396,21 @@ func (transaction *Txn) validatePrepareSnapshot(prepare runstate.PendingPrepare)
 		return fmt.Errorf("%w: read prepared snapshot: %v", ErrMissingPinnedSnapshot, err)
 	}
 	if Hash(rawHash(contents)) != prepare.NewHead.FileHash {
-		return ErrMissingPinnedSnapshot
+		return fmt.Errorf("%w: prepared snapshot file hash mismatch", ErrMissingPinnedSnapshot)
 	}
 	compiled, diagnostics := score.Compile(contents)
-	if len(diagnostics) != 0 || compiled.Revision() != prepare.NewHead.Revision {
-		return ErrMissingPinnedSnapshot
+	if len(diagnostics) != 0 || compiled == nil {
+		return fmt.Errorf("%w: prepared snapshot compile or revision mismatch: diagnostics=%v", ErrMissingPinnedSnapshot, diagnostics)
+	}
+	if compiled.Revision() != prepare.NewHead.Revision {
+		return fmt.Errorf("%w: prepared snapshot compile or revision mismatch: revision=%d want=%d", ErrMissingPinnedSnapshot, compiled.Revision(), prepare.NewHead.Revision)
 	}
 	hash, err := compiled.Hash()
-	if err != nil || Hash(hash) != prepare.NewHead.SemanticHash {
-		return ErrMissingPinnedSnapshot
+	if err != nil {
+		return fmt.Errorf("%w: hash prepared snapshot semantics: %v", ErrMissingPinnedSnapshot, err)
+	}
+	if Hash(hash) != prepare.NewHead.SemanticHash {
+		return fmt.Errorf("%w: prepared snapshot semantic hash mismatch", ErrMissingPinnedSnapshot)
 	}
 	return nil
 }

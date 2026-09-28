@@ -65,12 +65,12 @@ func TestBuildCommandGrantCombinations(t *testing.T) {
 					"Read",
 					"Glob",
 					"Grep",
-					"Edit(/artifacts/**)",
-					"Write(/artifacts/**)",
-					"Edit(/workspace/src/**)",
-					"Write(/workspace/src/**)",
-					"Edit(/external/shared/**)",
-					"Write(/external/shared/**)",
+					"Edit(//artifacts/**)",
+					"Write(//artifacts/**)",
+					"Edit(//workspace/src/**)",
+					"Write(//workspace/src/**)",
+					"Edit(//external/shared/**)",
+					"Write(//external/shared/**)",
 				}
 				for _, permission := range wantBase {
 					if !slices.Contains(settings.Permissions.Allow, permission) {
@@ -130,14 +130,39 @@ func TestBuildCommandReadOnlyMovement(t *testing.T) {
 		"Read",
 		"Glob",
 		"Grep",
-		"Edit(/artifacts/**)",
-		"Write(/artifacts/**)",
+		"Edit(//artifacts/**)",
+		"Write(//artifacts/**)",
 	}
 	if !slices.Equal(settings.Permissions.Allow, want) {
 		t.Fatalf("permissions = %#v, want %#v", settings.Permissions.Allow, want)
 	}
 	if got := allFlagValues(command.args, "--add-dir"); !slices.Equal(got, []string{"/artifacts"}) {
 		t.Fatalf("--add-dir values = %#v", got)
+	}
+}
+
+func TestBuildSettingsWritesAbsoluteRulesWithDoubleSlash(t *testing.T) {
+	t.Parallel()
+
+	request := testRequest("/workspace", "/artifacts")
+	request.Grants = protocol.Grants{
+		PathsRW: []string{"/external/shared/**"},
+		Shell:   true,
+	}
+	encoded, err := buildSettings(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := decodeSettings(t, string(encoded))
+
+	for _, permission := range settings.Permissions.Allow {
+		if (strings.HasPrefix(permission, "Edit(/") || strings.HasPrefix(permission, "Write(/")) &&
+			!strings.HasPrefix(permission, "Edit(//") && !strings.HasPrefix(permission, "Write(//") {
+			t.Errorf("absolute path permission has one leading slash: %q", permission)
+		}
+	}
+	if !slices.Contains(settings.Permissions.Allow, "Bash") {
+		t.Errorf("bare Bash permission changed or missing: %#v", settings.Permissions.Allow)
 	}
 }
 
