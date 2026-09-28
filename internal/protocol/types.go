@@ -175,6 +175,7 @@ type ExecuteRequest struct {
 	AttemptID         string                     `json:"attempt_id"`
 	ScoreRevision     int                        `json:"score_revision"`
 	Model             string                     `json:"model"`
+	InheritRepoRules  bool                       `json:"inherit_repo_rules"`
 	Brief             Brief                      `json:"brief"`
 	Inputs            []ArtifactRef              `json:"inputs"`
 	Feedback          []Feedback                 `json:"feedback"`

@@ -31,6 +31,11 @@ func (c *Cast) projectionValue() map[string]any {
 			"model":                      performer.Model,
 			"allow_advisory_enforcement": performer.AllowAdvisoryEnforcement,
 		}
+		// Projected only when it departs from the default, so casts that
+		// never name the option keep their existing identity.
+		if !performer.InheritRepoRules {
+			value["inherit_repo_rules"] = false
+		}
 		if performer.Extensions != nil {
 			value["extensions"] = cloneMap(performer.Extensions)
 		}

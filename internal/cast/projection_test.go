@@ -79,3 +79,33 @@ func TestNilResolvedCastHasNoProjection(t *testing.T) {
 		t.Fatal("nil cast hash succeeded")
 	}
 }
+
+func TestResolvedCastProjectionRecordsOnlyAnOptOutOfRepoRules(t *testing.T) {
+	t.Parallel()
+	resolved := mustResolve(t, Layer{
+		Origin: "project",
+		Data: encodeFixture(t, map[string]any{
+			"cast": "0.1",
+			"performers": map[string]any{
+				"inheriting": map[string]any{
+					"adapter":            "claude",
+					"model":              "model",
+					"inherit_repo_rules": true,
+				},
+				"isolated": map[string]any{
+					"adapter":            "codex",
+					"model":              "model",
+					"inherit_repo_rules": false,
+				},
+			},
+		}),
+	})
+	projection, err := resolved.ProjectionBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"bindings":{},"cast":"0.1","performers":{"inheriting":{"adapter":"claude","allow_advisory_enforcement":false,"model":"model"},"isolated":{"adapter":"codex","allow_advisory_enforcement":false,"inherit_repo_rules":false,"model":"model"}}}`
+	if string(projection) != want {
+		t.Fatalf("projection = %s, want %s", projection, want)
+	}
+}

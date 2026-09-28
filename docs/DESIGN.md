@@ -929,7 +929,7 @@ normative:
 default is "absent", see Appendix A.1's “Omitted vs explicit defaults”.
 
 For the cast: `performers.<id>.adapter` and `.model` are required; `allow_advisory_enforcement`
-defaults to `false`; `extensions` defaults to absent; `bindings.<part>.performer` is required and
+defaults to `false`; `inherit_repo_rules` defaults to `true`; `extensions` defaults to absent; `bindings.<part>.performer` is required and
 `.fallbacks` defaults to `[]`. Every bound performer must exist, every part must have a binding, and
 a fallback chain must be duplicate-free and must not contain its own primary.
 
@@ -1292,6 +1292,9 @@ adjacent, coherent wire-form specimens.
 - The wire budget field is not `active_wall_clock_min`.
 - A minutes-only wire field could not carry the remainder losslessly.
 - `execute.request.extensions`, when present, contains only the namespace matching this adapter's id.
+- `execute.request.inherit_repo_rules` is the performer's cast `inherit_repo_rules`; when it is
+  `false`, the adapter suppresses the repository's own agent rule files, such as `AGENTS.md` or
+  `CLAUDE.md`, where its vendor permits.
 - `execute.result.failure` is present when `outcome` is `failed`.
 - For waiting-human results and their complete blocking set, see §4's “Blocking handshake for
   questions and proposals”.
@@ -1324,6 +1327,7 @@ execute(request) -> streams `event` notifications, then returns result
   request: {
     run_id, movement_id, attempt_id, score_revision,
     model,
+    inherit_repo_rules,
     brief: {
       goal,
       context?,
@@ -4886,7 +4890,7 @@ a defect.
 |---|---|
 | `partitur/score` | The whole validated score AST after defaults. Used for `score_hash`, `base_hash`, and snapshot identity. |
 | `partitur/score-subtree` | `{selector, value}` — the stable selector of §9 **is** part of the preimage, alongside the subtree value. Two different pointers holding equal values are different facts, so hashing the value alone would let an impact entry claim the wrong location. Used for `before_hash` / `after_hash` in `actual_impact`. |
-| `partitur/resolved-cast` | The fully resolved cast AST after layering (§1), with `performers` and `bindings` sorted by id and every effective default materialized. Used for `resolved_cast_hash` in `run.started`. |
+| `partitur/resolved-cast` | The fully resolved cast AST after layering (§1), with `performers` and `bindings` sorted by id and every effective default materialized, except a performer's `inherit_repo_rules`, which is projected only when `false` so that casts that never name it keep their identity. Used for `resolved_cast_hash` in `run.started`. |
 | `partitur/criterion-spec` | A.4.1 — a tagged union over criterion kinds. |
 | `partitur/acceptance-spec` | A.4.2 — the effective compiled acceptance plan. |
 | `partitur/change-set` | `{base_tree, result_tree}` |
@@ -5539,6 +5543,8 @@ field or payload in the adjacent coherent specimen.
   without enforcement.
 - `adapter.probed.execution_dependency_hash` is the A.5 identity of the now-fixed exact request
   shape.
+- `adapter.probed.inherit_repo_rules`, when present, is the Boolean
+  `execute.request.inherit_repo_rules` this attempt's request carries.
 
 ```text
 performer.selected {
@@ -5566,7 +5572,8 @@ adapter.probed {
   ],
   advisory_dimensions: [dimension],
   execution_dependency_hash,
-  identity_versions
+  identity_versions,
+  inherit_repo_rules?
 }
 ```
 

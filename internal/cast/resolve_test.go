@@ -194,10 +194,12 @@ func TestCastDefaultsHaveEffectiveViewGoldens(t *testing.T) {
 			"plan": map[string]any{"performer": "primary"},
 		},
 	}
+	explicitPerformer := performerFixture("adapter", "model", boolPointer(false))
+	explicitPerformer["inherit_repo_rules"] = true
 	explicit := map[string]any{
 		"cast": "0.1",
 		"performers": map[string]any{
-			"primary": performerFixture("adapter", "model", boolPointer(false)),
+			"primary": explicitPerformer,
 		},
 		"bindings": map[string]any{
 			"plan": map[string]any{
@@ -215,6 +217,7 @@ func TestCastDefaultsHaveEffectiveViewGoldens(t *testing.T) {
 	wantPerformers := []PerformerView{{
 		ID: "primary", Adapter: "adapter", Model: "model",
 		AllowAdvisoryEnforcement: false,
+		InheritRepoRules:         true,
 		Extensions:               nil,
 	}}
 	wantBindings := []BindingView{{
@@ -306,6 +309,12 @@ func TestCastSchemaConformance(t *testing.T) {
 		{"advisory_not_null", func(root map[string]any) {
 			objectAtKey(root, "performers", "primary")["allow_advisory_enforcement"] = nil
 		}, "/performers/primary/allow_advisory_enforcement", "must_not_be_null"},
+		{"inherit_repo_rules_boolean", func(root map[string]any) {
+			objectAtKey(root, "performers", "primary")["inherit_repo_rules"] = "false"
+		}, "/performers/primary/inherit_repo_rules", "expected_boolean"},
+		{"inherit_repo_rules_not_null", func(root map[string]any) {
+			objectAtKey(root, "performers", "primary")["inherit_repo_rules"] = nil
+		}, "/performers/primary/inherit_repo_rules", "must_not_be_null"},
 		{"extensions_object", func(root map[string]any) {
 			objectAtKey(root, "performers", "primary")["extensions"] = []any{}
 		}, "/performers/primary/extensions", "expected_object"},
@@ -787,4 +796,28 @@ func compileScore(t *testing.T, parts ...string) *score.Score {
 		t.Fatalf("score.Compile = %#v, %#v", compiled, diagnostics)
 	}
 	return compiled
+}
+
+func TestInheritRepoRulesDefaultsTrueAndAcceptsFalse(t *testing.T) {
+	t.Parallel()
+	document := map[string]any{
+		"cast": "0.1",
+		"performers": map[string]any{
+			"inheriting": performerFixture("claude", "model", nil),
+			"isolated": map[string]any{
+				"adapter":            "codex",
+				"model":              "model",
+				"inherit_repo_rules": false,
+			},
+		},
+	}
+	resolved := mustResolve(t, Layer{Origin: "project", Data: encodeFixture(t, document)})
+	inheriting, ok := resolved.Performer("inheriting")
+	if !ok || !inheriting.InheritRepoRules {
+		t.Fatalf("default performer = %#v, want InheritRepoRules true", inheriting)
+	}
+	isolated, ok := resolved.Performer("isolated")
+	if !ok || isolated.InheritRepoRules {
+		t.Fatalf("explicit performer = %#v, want InheritRepoRules false", isolated)
+	}
 }

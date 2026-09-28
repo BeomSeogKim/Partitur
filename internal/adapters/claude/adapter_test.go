@@ -821,3 +821,25 @@ func readLines(t *testing.T, path string) []string {
 	}
 	return strings.Split(strings.TrimSpace(string(data)), "\n")
 }
+
+func TestBuildCommandStripsRepositoryRulesOnlyWhenNotInherited(t *testing.T) {
+	t.Parallel()
+	for _, inherit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inherit_%t", inherit), func(t *testing.T) {
+			t.Parallel()
+			request := testRequest("/workspace", "/artifacts")
+			request.InheritRepoRules = inherit
+			command, err := buildCommand(request, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := slices.Contains(command.args, "--setting-sources"); got == inherit {
+				t.Fatalf("--setting-sources present = %t with inherit_repo_rules %t: %#v",
+					got, inherit, command.args)
+			}
+			if !inherit {
+				assertFlagValue(t, command.args, "--setting-sources", "")
+			}
+		})
+	}
+}

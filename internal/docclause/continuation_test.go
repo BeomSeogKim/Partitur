@@ -61,7 +61,7 @@ func TestConfirmedReceiptsMergeWithoutDuplicateAnchors(t *testing.T) {
 		secondOrd int
 	}{
 		{"adapter.launch-control-isolation", 5, 6},
-		{"blocking-proposal.rejected-path", 7, 8},
+		{"blocking-proposal.route-order", 7, 8},
 		{"acceptance.fixed-order-stream", 13, 14},
 	}
 	for _, want := range continuations {

@@ -1481,7 +1481,7 @@ func payloadFields(eventType EventType) (required, optional []string, known bool
 	case EventAttemptStarted:
 		return []string{"attempt_number", "adapter_process", "granted_authority", "identity_versions"}, []string{"base_composition_hash", "review_subject_input"}, true
 	case EventAdapterProbed:
-		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "truncated_resolutions", "delivered_resolutions", "delivered_feedback", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, nil, true
+		return []string{"adapter_version", "capabilities", "enforcement", "negotiated_features", "truncated_resolutions", "delivered_resolutions", "delivered_feedback", "advisory_dimensions", "execution_dependency_hash", "identity_versions"}, []string{"inherit_repo_rules"}, true
 	case EventPerformerCompleted:
 		return []string{"session_hint_stored"}, nil, true
 	case EventAttemptCompleted, EventVerificationPassed, EventAttemptCancelled, EventAttemptSuperseded:
@@ -2123,6 +2123,7 @@ func validatePayloadTypes(eventType EventType, payload map[string]any) error {
 		strings = []string{"adapter_version", "execution_dependency_hash"}
 		objects = []string{"capabilities", "enforcement", "identity_versions"}
 		arrays = append([]string{"negotiated_features", "truncated_resolutions", "advisory_dimensions"}, optionalNames(payload, "delivered_resolutions", "delivered_feedback")...)
+		bools = optionalNames(payload, "inherit_repo_rules")
 	case EventAttemptStarted:
 		strings = optionalNames(payload, "base_composition_hash")
 		objects = append([]string{"adapter_process", "granted_authority", "identity_versions"}, optionalNames(payload, "review_subject_input")...)

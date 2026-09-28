@@ -1178,3 +1178,25 @@ func adapterGitText(t *testing.T, directory string, arguments ...string) string 
 	}
 	return strings.TrimSpace(string(output))
 }
+
+func TestBuildCommandStripsRepositoryRulesOnlyWhenNotInherited(t *testing.T) {
+	t.Parallel()
+	for _, inherit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inherit_%t", inherit), func(t *testing.T) {
+			t.Parallel()
+			request := testRequest("/workspace", "/artifacts")
+			request.InheritRepoRules = inherit
+			command, err := buildCommand(request, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := slices.Contains(command.args, "--ignore-rules"); got == inherit {
+				t.Fatalf("--ignore-rules present = %t with inherit_repo_rules %t: %#v",
+					got, inherit, command.args)
+			}
+			if !slices.Contains(command.args, "--ignore-user-config") {
+				t.Fatalf("--ignore-user-config missing: %#v", command.args)
+			}
+		})
+	}
+}

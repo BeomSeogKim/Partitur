@@ -199,12 +199,12 @@ func TestAppendixBRemainingDecomposition(t *testing.T) {
 		{
 			name: "B2", start: "## B.2 Attempt lifecycle and performer selection", end: "## B.3 Evidence",
 			carrierMarkers:     []string{"**`performer.selected` and `adapter.probed` field clauses.**", "**Remaining B.2 field clauses.**"},
-			carrierHash:        "fb7a7d6922eb83265016e390a4e4221af180594112e935fb3dc1b5f34a2f6281",
-			carrierAssignments: []int{1, 2, 1, 2, 1, 1, 3, 1, 2, 2, 1, 1, 1, 2, 10, 1, 3, 3, 7, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 5},
+			carrierHash:        "93f965626fe8a5641a649adb802b3e34d11fb9294d39dc3f4c63ee989191d44c",
+			carrierAssignments: []int{1, 2, 1, 2, 1, 1, 3, 1, 2, 2, 1, 2, 1, 2, 10, 1, 3, 3, 7, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 5},
 			skipPayload:        "attempt.started",
 			payloads: []payloadExpectation{
 				{name: "performer.selected", hash: "b4ee5a3e746190d356b8868591f8e5c6058a433e605530ba2fc66dd8f1b3d349"},
-				{name: "adapter.probed", hash: "df96c702d3e14ad4d8dfa6477be12d7d8b0a2da3adbbe17c10d14452ce5bcb7c"},
+				{name: "adapter.probed", hash: "6b8d072bf4b56ff131b88f56559b71820057c6628aa3ea032e923f200c332314"},
 				{name: "performer.completed", hash: "c258d143811d8a8d83397c61aafbe46caa79f59fa77be9062f2399b783a958a2"},
 				{name: "attempt.completed", hash: "9984a7192f28cf55bc380439f8a6a3ef7fe99ebf5428c54f6bd8956c2fcc6903"},
 				{name: "attempt.blocked", hash: "b0ccf2c59e9578d6f59654ebda4544b87fa1509889bf555251193fd596d4d539"},

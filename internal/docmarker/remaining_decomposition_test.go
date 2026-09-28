@@ -195,11 +195,11 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			start:          "**Adapter-method field clauses.**",
 			end:            "**Validation probing.**",
 			carrierMarker:  "**Adapter-method field clauses.**",
-			carrierHash:    "7a216765ba3474b4a3695cb842dc547a931497039e245bc861f7639d6aa7ac39",
+			carrierHash:    "6b1be7638368a494d91fb4def557b73b299a8267072e97ef299f18ce2f9abf91",
 			referenceCount: 6,
 			carrierAssignments: []int{
 				7, 3, 1, 1, 1, 2, 1, 1, 1, 0, 2, 1, 3, 1, 1, 3, 1, 1, 1, 2, 2,
-				0, 2, 1, 0, 0, 2, 1, 1, 0, 3,
+				0, 2, 1, 0, 0, 2, 2, 1, 0, 3,
 			},
 			relocatedCarriers: map[int][]string{
 				10: {
@@ -222,7 +222,7 @@ func TestRemainingFenceDecomposition(t *testing.T) {
 			},
 			specimens: []remainingSpecimenExpectation{
 				{language: "text", prefix: "probe() -> {\n", hash: "6b3a469e2260c0ff61eba49c64e199045008154f49aa6dca160e8dc3c59ac2bb"},
-				{language: "text", prefix: "execute(request) -> streams `event` notifications", hash: "211c14a07c39e6f5943491fb634db41d76ed4519383c3e21d7d9d97f75159053"},
+				{language: "text", prefix: "execute(request) -> streams `event` notifications", hash: "36617e33ad13a4fa3eb544aa95b2058b5c13d028e590aa8b212691cba3077d92"},
 				{language: "text", prefix: "cancel(attempt_id) ->", hash: "e0a1ee505422a22289df57eb0662c372c5b1a485f4d96effe5dd4c1c33d2a472"},
 			},
 		},
