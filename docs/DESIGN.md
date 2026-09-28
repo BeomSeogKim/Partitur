@@ -1055,13 +1055,14 @@ The classified input is the **failure case**: an `attempt.failed`'s `kind`, or a
 The remaining inputs are all projected from the journal: whether an unvisited fallback remains,
 `retries_consumed` against `retries_per_movement`, and `remaining_time`.
 
-Appendix D partitions those failure cases into three classes and owns that membership; a case
+Appendix D partitions those failure cases into four classes and owns that membership; a case
 belonging to none is a defect there, not one for this rule to guess at. What each class selects:
 
 | Class (Appendix D) | `charged` | `terminal_reason` when `none` |
 |---|---|---|
 | Infrastructure | `fallback` if an unvisited fallback remains **and** `remaining_time > 0`; otherwise `none` | `budget_exhausted` if `remaining_time == 0`, else `fallbacks_exhausted` |
 | Quality | `quality_retry` if `retries_consumed < retries_per_movement` **and** `remaining_time > 0`; otherwise `none` | `budget_exhausted` if `remaining_time == 0`, else `retries_exhausted` |
+| Performer-scoped | `fallback` if an unvisited fallback remains **and** `remaining_time > 0`; else `quality_retry` if `retries_consumed < retries_per_movement` **and** `remaining_time > 0`; otherwise `none` | that kind's own `movement.failed` reason |
 | Immediately terminal | always `none` | that kind's own `movement.failed` reason |
 
 **The immediately-terminal class never consults the budget**, so a zero budget cannot overwrite its
@@ -1069,10 +1070,9 @@ reason. A `grant_denied` that coincides with an exhausted budget stays `grant_de
 specific cause, it is true independently of the budget, and reporting `budget_exhausted` there would
 hide a policy violation behind an accounting one.
 
-For zero remaining time and retry-cap exhaustion, see the table above. `protocol_error` triggers
-neither retry nor fallback in v0.2 (uniform rule; a cast-level opt-in may come later). For
-quality-failure disposition, see the Quality row above. A different model is not the fix for a failed
-test; amendments and humans are.
+For zero remaining time and retry-cap exhaustion, see the table above. `protocol_error` is performer-scoped:
+one adapter's unreadable stream says nothing about another performer. For quality-failure disposition,
+see the Quality row above. A different model is not the fix for a failed test; amendments and humans are.
 
 The result is written into the failure event's `disposition` (B.0) **atomically with the failure**. A
 failure charges only when it authorizes another attempt — otherwise `retries_consumed` could exceed
@@ -7042,9 +7042,10 @@ restated:
 |---|---|
 | Infrastructure | `adapter_unavailable`, `model_unavailable`, `provider_timeout`, `rate_limited`, `authentication` |
 | Quality | `task_failed`, and every `acceptance.failed` |
-| Immediately terminal | `grant_denied`, `protocol_error`, `budget_exhausted` |
+| Performer-scoped | `protocol_error` |
+| Immediately terminal | `grant_denied`, `budget_exhausted` |
 
-The three classes are exhaustive over **every** attempt-failure kind this appendix declares — the
+The four classes are exhaustive over **every** attempt-failure kind this appendix declares — the
 adapter kinds above and the core-determined kinds below — plus `acceptance.failed`. A failure case in
 none of them is a defect in this appendix.
 
@@ -7061,8 +7062,7 @@ none of them is a defect in this appendix.
 **`movement.failed` reasons:** `retries_exhausted`, `fallbacks_exhausted`,
 `budget_exhausted`, `human_gate_rejected`, `grant_denied`, `protocol_error`,
 `composition_unresolvable`, `composition_failed`. `protocol_error` and `grant_denied` need their own terminal path
-because §3.1 classes them immediately terminal — without it the movement would have no
-way to end.
+because §3.1 can end a movement on them under their own reason.
 
 **`run.failed` reasons:** `movement_failed`, `budget_exhausted`, `composition_unresolvable`,
 `composition_failed`.
