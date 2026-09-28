@@ -65,6 +65,7 @@ func performerView(id string, value performer) PerformerView {
 		Adapter:                  value.Adapter,
 		Model:                    value.Model,
 		AllowAdvisoryEnforcement: value.AllowAdvisoryEnforcement,
+		InheritRepoRules:         value.InheritRepoRules,
 		Extensions:               cloneMap(value.Extensions),
 	}
 }

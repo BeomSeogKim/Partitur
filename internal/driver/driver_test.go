@@ -4589,3 +4589,36 @@ func sliceCast() map[string]any {
 		},
 	}
 }
+
+func TestExecuteRequestAndAdapterProbedCarryInheritRepoRules(t *testing.T) {
+	castDocument := sliceCast()
+	castDocument["performers"].(map[string]any)["isolated"] = map[string]any{
+		"adapter": "codex", "model": "gpt-5.6-sol", "inherit_repo_rules": false,
+	}
+	castDocument["bindings"].(map[string]any)["reader"] = map[string]any{
+		"performer": "worker", "fallbacks": []any{"isolated"},
+	}
+	fixture := newResolvedRequestFixtureForCast(t, sliceScore(), castDocument, "inspect")
+
+	inheriting, state := fixture.executeWaitingAs("worker", "initial")
+	resolveOnlyPendingQuestion(t, fixture.store, fixture.started.RunID, state)
+	isolated, _ := fixture.executeWaitingAs("isolated", "fallback")
+	if !inheriting.InheritRepoRules || isolated.InheritRepoRules {
+		t.Fatalf("inherit_repo_rules delivered = %t/%t, want true/false",
+			inheriting.InheritRepoRules, isolated.InheritRepoRules)
+	}
+
+	journal, err := fixture.store.ReadJournal(fixture.started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded []any
+	for _, event := range journal.Events {
+		if event.Type == runstate.EventAdapterProbed {
+			recorded = append(recorded, decodeDriverPayload(t, event)["inherit_repo_rules"])
+		}
+	}
+	if want := []any{true, false}; !reflect.DeepEqual(recorded, want) {
+		t.Fatalf("adapter.probed inherit_repo_rules = %#v, want %#v", recorded, want)
+	}
+}

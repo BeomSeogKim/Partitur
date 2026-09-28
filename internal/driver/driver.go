@@ -687,15 +687,16 @@ func ExecuteAttempt(
 		return stopped(result, err)
 	}
 	request := protocol.ExecuteRequest{
-		RunID:         string(startResult.RunID),
-		MovementID:    movement.ID,
-		AttemptID:     string(attempt.AttemptID),
-		ScoreRevision: int(execution.Score.Revision()),
-		Model:         performer.Model,
-		Brief:         brief,
-		Workdir:       attempt.Worktree,
-		OutputDir:     attempt.OutputDir,
-		Grants:        grants,
+		RunID:            string(startResult.RunID),
+		MovementID:       movement.ID,
+		AttemptID:        string(attempt.AttemptID),
+		ScoreRevision:    int(execution.Score.Revision()),
+		Model:            performer.Model,
+		InheritRepoRules: performer.InheritRepoRules,
+		Brief:            brief,
+		Workdir:          attempt.Worktree,
+		OutputDir:        attempt.OutputDir,
+		Grants:           grants,
 		Budget: protocol.Budget{
 			RemainingMS: remainingMS,
 		},
@@ -793,6 +794,7 @@ func ExecuteAttempt(
 			"advisory_dimensions":       advisory,
 			"execution_dependency_hash": executionHash,
 			"identity_versions":         executionVersions,
+			"inherit_repo_rules":        request.InheritRepoRules,
 		}, "attempt.adapter_probed")
 	}
 	recordIdentity := func(

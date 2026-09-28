@@ -947,3 +947,19 @@ func runSucceededPayload() map[string]any {
 		"identity_versions": testIdentityVersions(),
 	}
 }
+
+func TestAdapterProbedInheritRepoRulesIsAnOptionalBoolean(t *testing.T) {
+	for _, value := range []any{true, false} {
+		payload := adapterProbedPayload()
+		payload["inherit_repo_rules"] = value
+		if err := ValidateEvent(fixtureEvent(EventAdapterProbed, payload, attemptEnvelope)); err != nil {
+			t.Fatalf("inherit_repo_rules %v rejected: %v", value, err)
+		}
+	}
+	payload := adapterProbedPayload()
+	payload["inherit_repo_rules"] = "true"
+	err := ValidateEvent(fixtureEvent(EventAdapterProbed, payload, attemptEnvelope))
+	if !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("string inherit_repo_rules error = %v, want invalid event", err)
+	}
+}

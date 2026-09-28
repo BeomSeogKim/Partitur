@@ -45,6 +45,7 @@ type PerformerView struct {
 	Adapter                  string
 	Model                    string
 	AllowAdvisoryEnforcement bool
+	InheritRepoRules         bool
 	Extensions               map[string]any
 }
 
@@ -108,6 +109,7 @@ type performer struct {
 	Adapter                  string
 	Model                    string
 	AllowAdvisoryEnforcement bool
+	InheritRepoRules         bool
 	Extensions               map[string]any
 	Origin                   string
 }

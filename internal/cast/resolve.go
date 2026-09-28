@@ -119,12 +119,16 @@ func (d *layerDecoder) decodePerformers(value any) (map[string]performer, bool) 
 			continue
 		}
 		d.fields(entry, pointer,
-			"adapter", "model", "allow_advisory_enforcement", "extensions")
+			"adapter", "model", "allow_advisory_enforcement", "inherit_repo_rules", "extensions")
 		adapter, _ := d.requiredString(entry, pointer, "adapter")
 		model, _ := d.requiredString(entry, pointer, "model")
 		advisory := false
 		if value := d.optionalBool(entry, pointer, "allow_advisory_enforcement"); value != nil {
 			advisory = *value
+		}
+		inheritRepoRules := true
+		if value := d.optionalBool(entry, pointer, "inherit_repo_rules"); value != nil {
+			inheritRepoRules = *value
 		}
 		var extensions map[string]any
 		if value, present := entry["extensions"]; present {
@@ -136,6 +140,7 @@ func (d *layerDecoder) decodePerformers(value any) (map[string]performer, bool) 
 			Adapter:                  adapter,
 			Model:                    model,
 			AllowAdvisoryEnforcement: advisory,
+			InheritRepoRules:         inheritRepoRules,
 			Extensions:               extensions,
 			Origin:                   d.origin,
 		}

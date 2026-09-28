@@ -323,7 +323,6 @@ func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (command
 		"--verbose",
 		"--model", request.Model,
 		"--permission-mode", "dontAsk",
-		"--setting-sources", "",
 		"--safe-mode",
 		"--strict-mcp-config",
 		"--no-chrome",
@@ -333,6 +332,12 @@ func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (command
 	// Empty setting sources and safe mode suppress user/project settings,
 	// hooks, plugins, MCP servers, and related ambient customizations where
 	// Claude permits it. Managed policy and inherited credentials may remain.
+	// Setting sources are emptied only when the performer opts out of the
+	// repository's own rules; otherwise Claude's default sources, including
+	// the repository's CLAUDE.md, load.
+	if !request.InheritRepoRules {
+		args = append(args, "--setting-sources", "")
+	}
 	for _, directory := range addDirectories(request) {
 		args = append(args, "--add-dir", directory)
 	}

@@ -328,7 +328,6 @@ func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (command
 		"-C", childDir,
 		"--skip-git-repo-check",
 		"--ignore-user-config",
-		"--ignore-rules",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
 		// This lets an attempt write another concurrent run's scratch subtree.
@@ -338,6 +337,11 @@ func buildCommand(request *protocol.ExecuteRequest, includeResume bool) (command
 	}
 	// Ignoring user config preserves CODEX_HOME authentication but cannot
 	// remove managed policy or every integration built into the executable.
+	// Repository rules (AGENTS.md) are ignored only when the performer opts
+	// out of inheriting them.
+	if !request.InheritRepoRules {
+		args = append(args, "--ignore-rules")
+	}
 	if request.Grants.Network {
 		args = append(args,
 			"-c", "sandbox_workspace_write.network_access=true",
