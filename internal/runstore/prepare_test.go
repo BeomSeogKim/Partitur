@@ -371,6 +371,72 @@ func TestCompleteOrAbandonPrepareRejectsMissingOrMismatchedSnapshot(t *testing.T
 	}
 }
 
+func TestValidatePrepareSnapshotDistinguishesFailedCheck(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		detail string
+		mutate func(*testing.T, *Store, *runstate.PendingPrepare)
+	}{
+		{
+			name:   "file unreadable",
+			detail: "read prepared snapshot",
+			mutate: func(t *testing.T, store *Store, prepare *runstate.PendingPrepare) {
+				t.Helper()
+				path := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "scores", "revision-2.yaml")
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:   "file hash mismatch",
+			detail: "prepared snapshot file hash mismatch",
+			mutate: func(t *testing.T, store *Store, _ *runstate.PendingPrepare) {
+				t.Helper()
+				path := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "scores", "revision-2.yaml")
+				contents, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(contents, []byte("# changed\n")...), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:   "compile or revision mismatch",
+			detail: "prepared snapshot compile or revision mismatch",
+			mutate: func(t *testing.T, store *Store, prepare *runstate.PendingPrepare) {
+				t.Helper()
+				path := filepath.Join(store.RepositoryRoot(), ".partitur", "runs", "run-1", "scores", "revision-2.yaml")
+				contents := []byte("not: a score\n")
+				if err := os.WriteFile(path, contents, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				prepare.NewHead.FileHash = Hash(rawHash(contents))
+			},
+		},
+		{
+			name:   "semantic hash mismatch",
+			detail: "prepared snapshot semantic hash mismatch",
+			mutate: func(_ *testing.T, _ *Store, prepare *runstate.PendingPrepare) {
+				prepare.NewHead.SemanticHash = "sha256:wrong"
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, prepare := preparedCommitStore(t, nil)
+			test.mutate(t, store, &prepare)
+			err := store.Mutate("run-1", "", func(transaction *Txn) error {
+				return transaction.validatePrepareSnapshot(prepare)
+			})
+			if !errors.Is(err, ErrMissingPinnedSnapshot) || !strings.Contains(err.Error(), test.detail) {
+				t.Fatalf("error = %v, want ErrMissingPinnedSnapshot with detail %q", err, test.detail)
+			}
+		})
+	}
+}
+
 func TestPrepareCommitClassifiesEveryNonFenceTableRow(t *testing.T) {
 	t.Run("cancellation hands off before approval", func(t *testing.T) {
 		store, _ := preparedCommitStore(t, nil)
