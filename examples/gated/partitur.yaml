@@ -46,7 +46,7 @@ movements:
     acceptance:
       hard:
         - id: build
-          run: ["go", "build", "./..."]
+          run: ["go", "build", "-o", "/dev/null", "./..."]
           timeout_min: 5
         - id: vet
           run: ["go", "vet", "./..."]

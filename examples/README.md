@@ -4,7 +4,9 @@
 
 Three score shapes, each a complete `partitur.yaml` plus the `cast.yaml` that binds it.
 Copy a directory's `partitur.yaml` to your repository root and its `cast.yaml` to
-`.partitur/cast.yaml`, then edit the instruction and the acceptance commands.
+`.partitur/cast.yaml`, then edit the instruction and the acceptance commands. In a
+repository that has never run Partitur, do what [Before the first run](#before-the-first-run)
+lists first.
 
 `examples_test.go` compiles every score here and resolves every cast against it on each
 `go test ./...`, so an example that stops validating fails the build rather than rotting.
@@ -37,7 +39,7 @@ prose task and on a spec-reading change, the verifier caught one real defect eac
 machine criteria had passed. On small code removals it found nothing. Use it where a passing
 test suite does not settle whether the change is right.
 
-## Five rules these examples encode
+## Six rules these examples encode
 
 These came from runs that failed.
 
@@ -54,6 +56,63 @@ These came from runs that failed.
 5. **Match the enforcement dimensions to the adapter.** With `allowed_paths: ["**"]` the
    `codex` adapter needs no advisory flag; the `claude` adapter still reports no
    `network_grants`, so its performer needs `allow_advisory_enforcement: true`.
+6. **An acceptance criterion must not write into the workspace.** A file a criterion leaves in
+   the tree fails the attempt with `acceptance_mutated_workspace`, even when the command exits
+   0. `go build ./...` does exactly that when `./...` matches a single `main` package, as in a
+   fresh one-package module: it writes a binary named after the module. The scores here build
+   with `go build -o /dev/null ./...`, which compiles the same packages and writes nothing.
+
+## Before the first run
+
+Copying the two files is not enough in a repository that has never run Partitur: `run` refuses
+a dirty source repository, and a copied score and cast are untracked files. In the target
+repository:
+
+```bash
+partitur init
+cp <example>/partitur.yaml partitur.yaml
+cp <example>/cast.yaml .partitur/cast.yaml
+# edit the instruction, the acceptance commands, and the cast
+git add partitur.yaml .partitur/.gitignore .partitur/cast.yaml
+git commit -m "Add Partitur score and cast"
+```
+
+`init` writes `.partitur/.gitignore`, which keeps the `.partitur/runs/` and `.partitur/work/`
+that every run writes out of the tree the next run checks. It also writes a draft
+`partitur.yaml`; copy the example's over it. `init` never overwrites an existing
+`partitur.yaml`, so running it after the copy keeps the example's as well. Commit again after
+every later edit to the score or the cast.
+
+`name:` and every movement `id:` are free to rename, and worth renaming: `status` reports each
+movement by its `id`, so until you do, an unrelated task shows up as `name-the-condition`. A
+renamed movement `id:` must be renamed wherever `needs:` or `final_movement` names it too. Part
+names (`writer`, `verifier`) are the keys the cast binds, so rename them in both files or in
+neither.
+
+### On a Claude-only host
+
+Every cast here binds a `codex` performer first. On a host with only the Claude CLI, replace
+the `sol` performer with a second `claude` one, so the binding still has a fallback (rule 4):
+
+```yaml
+cast: "0.1"
+performers:
+  opus:
+    adapter: claude
+    model: claude-opus-5-5
+    allow_advisory_enforcement: true
+  fable:
+    adapter: claude
+    model: claude-fable-5
+    allow_advisory_enforcement: true
+bindings:
+  writer: { performer: opus, fallbacks: [fable] }
+```
+
+For `gated/`, bind `verifier` the same way. Keep `allow_advisory_enforcement: true` on every
+`claude` performer: the `claude` adapter reports `network_grants: false`, so without the flag
+`validate` refuses the score, and with it each attempt records an `unmet=["network_grants"]`
+advisory instead (rule 5).
 
 ## Running one
 
